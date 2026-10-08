@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "divesafe"
+version = "0.1.0"
+description = "Agentic environmental risk assessment and decision support for recreational diving."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110,<1",
+  "pydantic>=2.6,<3",
+  "pydantic-settings>=2.2,<3",
+  "uvicorn>=0.29,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/divesafe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "safety: tests that protect the deterministic safety hierarchy (must never be skipped)",
+  "integration: tests that need external services (database, network)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+plugins = ["pydantic.mypy"]

@@ -1,0 +1,36 @@
+# Local development stack. Run from the repo root:
+#   docker compose -f docker/docker-compose.yml --env-file .env up --build
+# POSTGRES_PASSWORD must be set in .env (no default). Ports bind to loopback only.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: divesafe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: divesafe
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U divesafe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      DIVESAFE_DATABASE_URL: postgresql://divesafe:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/divesafe
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

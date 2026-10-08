@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Every session loads the project rules and the architecture overview.
+  "instructions": ["AGENTS.md", "docs/architecture.md"]
+}
