@@ -59,3 +59,4 @@ docker compose -f docker/docker-compose.yml --env-file .env up --build
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
 Contributor and AI-agent rules are in [AGENTS.md](AGENTS.md).
+# divesafe-ai
