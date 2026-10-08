@@ -120,11 +120,12 @@ has no built-in default and must be chosen per category with a documented reason
 
 ### Not yet done (connectors)
 
-- **Rate limiting and caching:** data.gov.my allows 4 requests/minute and Open-Meteo's free tier
-  under 10,000/day. Today each fetch is one request per source and compliance depends on the
-  caller. A per-host limiter and a short-TTL cache are needed before the API triggers fetches.
-- **Attribution display:** Open-Meteo requires attribution to DWD and Open-Meteo; every API
-  response and screen that shows its data must surface the `attribution` field.
+- **Rate limiting and caching (done, per process):** `CachingRateLimitedGetter` caches for 60 s
+  and enforces a per-host minimum interval (15 s for data.gov.my, 0.5 s for Open-Meteo). A
+  blocked call fails closed. The daily Open-Meteo quota (10,000) is not tracked, and limits are
+  not shared across workers.
+- **Attribution display (API done):** every assessment response includes `attributions`; any UI
+  must show them.
 - **data.gov.my licence** is still unverified (Terms of Use page not retrievable).
 - **Typed `data_kind`:** `is_forecast` currently means "model or forecast output"; observations,
   predictions and notices are not yet distinguished by a typed field on `EvidenceItem`.

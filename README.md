@@ -11,11 +11,13 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 
 ## Status
 
-Foundation plus first data phase. The repository contains the architecture, engineering rules,
+Foundation, data connectors, assessment pipeline, human gate and API. The repository contains the architecture, engineering rules,
 the safety-critical core (domain types, fail-closed rules engine with reconciliation, LLM provider
 abstraction, config, API skeleton), and two connectors for Pulau Redang, Malaysia (Open-Meteo
 marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
-service. Wind, tides, rules, agents, RAG and the human interface are not implemented yet.
+service, an assessment pipeline, the human decision gate and a FastAPI interface. Wind, tides,
+reviewed rules, agents, RAG, durable storage (PostgreSQL) and a web UI are not implemented yet.
+Until wind and tide sources exist, every assessment is `INSUFFICIENT EVIDENCE` by design.
 
 Marine data is Open-Meteo.com (CC BY 4.0, non-commercial use only), with wave models from DWD
 and others.
@@ -51,6 +53,28 @@ docker compose -f docker/docker-compose.yml --env-file .env up --build
 > **macOS note:** if `import divesafe` stops working in the venv, macOS may have flagged the
 > editable-install `.pth` file as hidden. Run `chflags -R nohidden .venv`. `pytest` is
 > configured with `pythonpath = ["src"]` and is unaffected.
+
+## API (development)
+
+```bash
+export DIVESAFE_AUTH_MODE=dev DIVESAFE_EVIDENCE_MAX_AGE_MINUTES=60 DIVESAFE_DECISION_MAX_AGE_MINUTES=120
+uvicorn divesafe.api.app:create_app --factory --port 8000
+curl -X POST localhost:8000/v1/assessments -H 'X-Dev-Actor: me' -H 'content-type: application/json' \
+  -d '{"site_id":"my-terengganu-pulau-redang","planned_start":"<future UTC time>","planned_duration_minutes":90,"max_depth_m":18}'
+```
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness (no auth) |
+| `POST /v1/assessments` | Gather evidence and create a `PENDING_HUMAN` assessment |
+| `GET /v1/assessments/{id}` | Read an assessment |
+| `POST /v1/assessments/{id}/decision` | Human accepts or overrides (rationale required for overrides) |
+| `POST /v1/assessments/{id}/actual-conditions` | Post-dive conditions (after a decision, once) |
+
+Without `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` the create endpoint returns 503: there is no default
+evidence age. Outside development use `DIVESAFE_AUTH_MODE=api_key` with
+`DIVESAFE_API_KEY_HASHES` (see `.env.example`). Records are in memory only and are lost on
+restart ([ADR 0006](docs/adr/0006-api-auth-and-repository.md)).
 
 ## Documentation
 

@@ -219,11 +219,12 @@ class AssessmentRecord(_Frozen):
             is_override = self.human_decision.decision != self.final_recommendation
             if self.human_decision.is_override != is_override:
                 raise ValueError("is_override must equal (human decision != recommendation)")
-            if (
-                self.actual_conditions is not None
-                and self.actual_conditions.reported_at < self.human_decision.decided_at
-            ):
-                raise ValueError("actual conditions are dated before the human decision")
+            if self.actual_conditions is not None:
+                reported = self.actual_conditions.reported_at
+                if reported < self.human_decision.decided_at:
+                    raise ValueError("actual conditions are dated before the human decision")
+                if reported < self.plan.planned_start:
+                    raise ValueError("actual conditions are dated before the planned dive")
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self

@@ -29,6 +29,8 @@ from divesafe.domain import (
 )
 from divesafe.orchestration import (
     AlreadyDecidedError,
+    DecisionRequiredError,
+    InvalidPlanError,
     UnsafeConfigurationError,
     assess_dive,
     decide,
@@ -156,7 +158,7 @@ def test_pipeline_refuses_a_policy_with_no_required_evidence() -> None:
 
 def test_plan_for_a_different_site_is_refused() -> None:
     other = PLAN.model_copy(update={"site_id": "elsewhere"})
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidPlanError):
         _run(plan=other)
 
 
@@ -204,8 +206,10 @@ def test_original_record_is_not_mutated_by_deciding() -> None:
 
 
 def test_actual_conditions_need_a_decision_and_can_be_reported_once() -> None:
-    actual = ActualConditions(reported_at=NOW, reported_by="leader", observations={"note": "calm"})
-    with pytest.raises(ValueError, match="require a recorded human decision"):
+    actual = ActualConditions(
+        reported_at=START + timedelta(hours=1), reported_by="leader", observations={"note": "calm"}
+    )
+    with pytest.raises(DecisionRequiredError, match="require a recorded human decision"):
         report_actual_conditions(_pending(), actual=actual)
     decided = decide(_pending(), decided_by="a", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW)
     done = report_actual_conditions(decided, actual=actual)
@@ -258,7 +262,7 @@ def test_zero_connectors_yields_insufficient_evidence_not_an_error() -> None:
 
 def test_a_dive_window_in_the_past_is_refused() -> None:
     past = PLAN.model_copy(update={"planned_start": NOW - timedelta(hours=1)})
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidPlanError):
         _run(plan=past)
 
 
@@ -287,3 +291,12 @@ def test_gate_round_trip_preserves_types_and_data() -> None:
     assert decided.evidence == _pending().evidence
     assert isinstance(decided.final_recommendation, Recommendation)
     assert AssessmentRecord.model_validate_json(decided.model_dump_json()) == decided
+
+
+def test_actual_conditions_cannot_predate_the_planned_dive() -> None:
+    decided = decide(_pending(), decided_by="a", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW)
+    before_dive = ActualConditions(
+        reported_at=NOW + timedelta(minutes=5), reported_by="a", observations={}
+    )  # after the decision (17:11) but before the 18:00 planned start
+    with pytest.raises(ValidationError):
+        report_actual_conditions(decided, actual=before_dive)

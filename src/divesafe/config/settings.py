@@ -25,11 +25,18 @@ class Settings(BaseSettings):
     llm_base_url: AnyHttpUrl | None = None
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
+    decision_max_age_minutes: int | None = Field(default=None, gt=0)
+
+    auth_mode: Literal["api_key", "dev"] = "api_key"
+    # JSON object mapping sha256 hex digest of an API key -> actor name. Never store raw keys.
+    api_key_hashes: SecretStr | None = None
 
     @model_validator(mode="after")
-    def _no_fake_llm_in_production(self) -> Settings:
+    def _production_guards(self) -> Settings:
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
+        if self.environment == "production" and self.auth_mode == "dev":
+            raise ValueError("dev authentication cannot be used in production")
         return self
 
 

@@ -7,13 +7,16 @@ Implemented so far: evidence gathering, deterministic risk, reconciliation, and 
 
 from divesafe.orchestration.human_gate import (
     AlreadyDecidedError,
+    DecisionRequiredError,
     decide,
     report_actual_conditions,
 )
-from divesafe.orchestration.pipeline import UnsafeConfigurationError, assess_dive
+from divesafe.orchestration.pipeline import InvalidPlanError, UnsafeConfigurationError, assess_dive
 
 __all__ = [
     "AlreadyDecidedError",
+    "DecisionRequiredError",
+    "InvalidPlanError",
     "UnsafeConfigurationError",
     "assess_dive",
     "decide",

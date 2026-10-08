@@ -68,19 +68,23 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 
 ### Pipeline limits (known gaps)
 
-- **No authentication:** `decided_by` and `reported_by` are free text that nobody verifies. The
-  gate functions must only be reachable behind an authenticated API that takes the actor from
-  the authenticated principal, never from the request body.
-- **Write-once is in memory only:** `decide()` refuses to replace a decision, but
-  `model_copy(update=...)` skips validators and two concurrent calls could both succeed.
-  Persistence must enforce write-once with a unique constraint or compare-and-set, and must
-  treat unvalidated copies as untrusted.
-- **No staleness check at decision time:** a human can accept a recommendation long after the
-  evidence was gathered. A maximum record age or an evidence re-check at decision time is needed.
-- **`now` is a parameter:** it must come from a server clock, not client input, or stale
-  evidence can look fresh.
+- **Authentication (interim):** the API takes the actor from an API key (or, in development
+  only, a header) and never from the request body ([ADR 0006](adr/0006-api-auth-and-repository.md)).
+  No roles: any authenticated actor may decide or override. `decide()` itself trusts its
+  caller, so it must only be reachable through the API.
+- **Write-once:** `check_successor` plus compare-and-set `replace` enforce it in the repository
+  contract (in-memory adapter tested, including concurrent writers). A durable adapter must meet
+  the same contract; unvalidated `model_copy` records are untrusted.
+- **Decision-time staleness:** `DIVESAFE_DECISION_MAX_AGE_MINUTES` rejects decisions on old
+  assessments, but there is no default (unset means no limit) and evidence is not re-checked.
+- **`now`** is the server clock in the API. `assess_dive` still takes it as a parameter, so
+  non-API callers must pass a trusted clock.
 - **Untrusted inputs:** `proposed`, `scenarios` and `explanation` must come only from the agent
   layer, which must delimit untrusted text. They are not sanitised here.
+- **Durability:** the only repository is in-memory, so a restart loses every assessment and
+  decision, and several workers would each hold different data. Run a single worker; the API
+  reports `storage` on `/health`, warns at startup and refuses to start in production.
+  Actual-conditions reporting has no role restriction.
 - **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
   0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty
   required set; unrequired-but-absent data, contradictory data and window coverage remain open

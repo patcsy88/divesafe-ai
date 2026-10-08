@@ -86,18 +86,20 @@ See [docs/adr/](adr/).
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Authentication and authorization** for decision/override endpoints (`decide()` and
-  `report_actual_conditions()` trust the caller-supplied identity today). This is a precondition
-  for exposing them outside development, because any caller could otherwise override a `NO-GO`;
-  `decided_by` must come from the auth context, never the request body; the actor recorded on a
-  `HumanDecision` must come from an authenticated identity.
-- **Append-only audit storage:** INSERT/SELECT-only DB role, record hashing, tests that updates
-  fail.
+- **Durable storage:** only an in-memory repository exists (no database was available to test
+  against). A PostgreSQL adapter must pass `tests/unit/test_repository_contract.py`, enforce
+  write-once with a unique id and conditional update, and use an INSERT/SELECT-only role plus
+  record hashing for audit integrity ([ADR 0006](adr/0006-api-auth-and-repository.md)).
+- **Roles and authorization:** API keys identify an actor but grant no roles (a production gate;
+  see ADR 0006). Who may override,
+  and whether a less severe override needs stronger authority, is not enforced. Key rotation and
+  revocation are manual (edit the configured hashes).
+- **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
+  No request-size or per-client rate limits beyond the provider-limit guard.
 - **Prompt construction helper** that delimits untrusted retrieved/connector text and validates
   structured output; a data-egress flag on LLM providers and personal-data minimization.
-- **Contradiction detection and validity-window coverage**
-  (see [risk-model.md](risk-model.md)).
+- **Contradiction detection and validity-window coverage** (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
-- **Connector rate limiting, caching and attribution display** (see data-sources.md).
 - **Per-category evidence quality policy and engine-level validity-window coverage**
   (see risk-model.md).
+- **Rate limiting is per process**, not shared across workers.

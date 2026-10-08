@@ -27,6 +27,10 @@ from divesafe.services import gather_evidence
 logger = logging.getLogger(__name__)
 
 
+class InvalidPlanError(ValueError):
+    """The dive plan is unusable (wrong site, or a window that has already started)."""
+
+
 class UnsafeConfigurationError(ValueError):
     """The pipeline was configured in a way that could yield a result on no evidence."""
 
@@ -47,9 +51,9 @@ async def assess_dive(
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
     if plan.site_id != site.id:
-        raise ValueError("plan.site_id does not match the site")
+        raise InvalidPlanError("plan.site_id does not match the site")
     if plan.planned_start < now:
-        raise ValueError("planned_start is in the past; assess a future dive window")
+        raise InvalidPlanError("planned_start is in the past; assess a future dive window")
 
     window_end = plan.planned_start + timedelta(minutes=plan.planned_duration_minutes)
     evidence = await gather_evidence(connectors, site, plan.planned_start, window_end, now)

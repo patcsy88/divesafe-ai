@@ -17,6 +17,10 @@ class AlreadyDecidedError(RuntimeError):
     """The record already holds a human decision (or actual conditions); it is not replaced."""
 
 
+class DecisionRequiredError(RuntimeError):
+    """Actual conditions need a recorded human decision first."""
+
+
 def _revalidated(record: AssessmentRecord, **changes: Any) -> AssessmentRecord:
     return AssessmentRecord.model_validate({**record.model_dump(), **changes})
 
@@ -45,7 +49,7 @@ def report_actual_conditions(
     record: AssessmentRecord, *, actual: ActualConditions
 ) -> AssessmentRecord:
     if record.human_decision is None:
-        raise ValueError("actual conditions require a recorded human decision")
+        raise DecisionRequiredError("actual conditions require a recorded human decision")
     if record.actual_conditions is not None:
         raise AlreadyDecidedError("actual conditions were already reported")
     return _revalidated(record, actual_conditions=actual.model_dump())
