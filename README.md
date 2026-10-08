@@ -11,10 +11,14 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 
 ## Status
 
-Foundation phase. The repository contains the architecture, engineering rules, and the
-safety-critical core (domain types, deterministic rules engine with reconciliation, LLM provider
-abstraction, config, API skeleton). Data connectors, agents, RAG and the human interface are
-not implemented yet.
+Foundation plus first data phase. The repository contains the architecture, engineering rules,
+the safety-critical core (domain types, fail-closed rules engine with reconciliation, LLM provider
+abstraction, config, API skeleton), and two connectors for Pulau Redang, Malaysia (Open-Meteo
+marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
+service. Wind, tides, rules, agents, RAG and the human interface are not implemented yet.
+
+Marine data is Open-Meteo.com (CC BY 4.0, non-commercial use only), with wave models from DWD
+and others.
 
 ## Safety hierarchy
 
@@ -32,7 +36,7 @@ A lower layer can never relax a higher one. See [docs/architecture.md](docs/arch
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-pytest                      # all tests
+pytest                      # all tests (offline; uses recorded fixtures)
 pytest -m safety            # safety-hierarchy tests only
 ruff check . && mypy        # lint and types
 uvicorn divesafe.api.app:create_app --factory --reload
@@ -43,6 +47,10 @@ With Docker (API + PostgreSQL/pgvector):
 ```bash
 docker compose -f docker/docker-compose.yml --env-file .env up --build
 ```
+
+> **macOS note:** if `import divesafe` stops working in the venv, macOS may have flagged the
+> editable-install `.pth` file as hidden. Run `chflags -R nohidden .venv`. `pytest` is
+> configured with `pythonpath = ["src"]` and is unaffected.
 
 ## Documentation
 

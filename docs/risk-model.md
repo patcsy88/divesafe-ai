@@ -50,6 +50,12 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
+## Non-numeric policy rules
+
+- `WarningNeedsHumanReadingRule` ([ADR 0005](adr/0005-warnings-need-human-reading.md)): any
+  marine warning or undated advisory in the dive window gives `INSUFFICIENT EVIDENCE`, because
+  applicability cannot be determined from free text.
+
 ## Human override policy ([ADR 0004](adr/0004-human-override-policy.md))
 
 A human may override any recommendation, including `NO-GO`, to a less severe outcome. The
@@ -62,8 +68,21 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 - **Contradictory evidence:** the engine checks presence and freshness only. Contradiction
   detection must be defined per category in the reviewed ruleset (no tolerance is invented in
   code). Until then, same-category conflicts are not detected.
-- **Validity window:** freshness uses `retrieved_at`. Coverage of the dive window by
-  `valid_at`/forecast horizon is not yet enforced.
+- **Validity window (must be done before any GO rule is accepted):** freshness uses
+  `retrieved_at` only. Coverage of the dive window by `valid_at` is enforced inside the marine
+  connector (all hours or nothing per category) but not by the engine, so other connectors and
+  the `no_active_warnings` item are not protected.
+- **Per-category quality policy:** category-only sufficiency lets coarse model currents
+  (about 8 km, `grid_distance_km` recorded) satisfy `currents`. `EvidencePolicy` needs reviewed,
+  per-category accepted data kinds and resolution. Until then model currents alone must not be
+  allowed to support a `GO`.
+- **Empty `required_categories`:** an engine with a `GO` rule and no required categories returns
+  `GO` on no evidence. Reject or flag this when the orchestrator is built.
+- **Connector `issues`** must be carried into the `AssessmentRecord` and shown to the user even
+  for categories that are not required.
+- **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
+  decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
+  belongs with the agents.
 - **Rule review metadata:** rules carry a citation; reviewer and review-date fields are not yet
   enforced.
 

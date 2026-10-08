@@ -28,6 +28,7 @@ packages = ["src/divesafe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src", "."]
 addopts = "-ra --strict-markers"
 markers = [
   "safety: tests that protect the deterministic safety hierarchy (must never be skipped)",

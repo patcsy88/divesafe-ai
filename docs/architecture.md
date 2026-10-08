@@ -97,4 +97,6 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Contradiction detection and validity-window coverage**
   (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
-- **Evidence value validation** per category in connectors.
+- **Connector rate limiting, caching and attribution display** (see data-sources.md).
+- **Per-category evidence quality policy and engine-level validity-window coverage**
+  (see risk-model.md).

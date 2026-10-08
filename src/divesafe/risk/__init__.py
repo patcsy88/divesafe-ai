@@ -9,6 +9,7 @@ from divesafe.risk.engine import (
     reconcile,
     severity,
 )
+from divesafe.risk.rules import WarningNeedsHumanReadingRule
 
 __all__ = [
     "DeterministicAssessment",
@@ -16,6 +17,7 @@ __all__ = [
     "Reconciliation",
     "RiskRulesEngine",
     "Rule",
+    "WarningNeedsHumanReadingRule",
     "reconcile",
     "severity",
 ]
