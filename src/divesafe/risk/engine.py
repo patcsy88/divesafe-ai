@@ -89,6 +89,10 @@ class RiskRulesEngine:
         self._policy = policy
         self._ruleset_version = ruleset_version
 
+    @property
+    def policy(self) -> EvidencePolicy:
+        return self._policy
+
     def assess(
         self, plan: DivePlan, evidence: Sequence[EvidenceItem], now: datetime
     ) -> DeterministicAssessment:

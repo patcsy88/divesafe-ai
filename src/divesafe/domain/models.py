@@ -98,7 +98,10 @@ class Scenario(_Frozen):
     confidence: float = Field(
         ge=0.0,
         le=1.0,
-        description="Reliability of this assessment. It is not a measure of dive safety.",
+        description=(
+            "Uncalibrated self-estimate of this scenario's reliability, not a measure of dive "
+            "safety and not comparable with a calibrated risk-model confidence."
+        ),
     )
 
 
@@ -144,10 +147,17 @@ class AssessmentRecord(_Frozen):
     proposed_recommendation: Recommendation | None
     final_recommendation: Recommendation
     llm_attempted_downgrade: bool
-    confidence: float = Field(
+    confidence: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="Reliability of this assessment. It is not a measure of dive safety.",
+        description=(
+            "Reliability of this assessment, not a measure of dive safety. None means it was "
+            "not computed (no risk model yet); it is never defaulted to a number."
+        ),
+    )
+    evidence_issues: tuple[str, ...] = Field(
+        default=(), description="Sources or categories that failed or were rejected."
     )
     scenarios: tuple[Scenario, ...] = ()
     explanation: str = ""
@@ -198,10 +208,22 @@ class AssessmentRecord(_Frozen):
         if self.llm_attempted_downgrade != expected_downgrade:
             raise ValueError("llm_attempted_downgrade is inconsistent with the proposal")
 
+        if self.evidence_issues and severity(self.deterministic_recommendation) < severity(
+            Recommendation.INSUFFICIENT_EVIDENCE
+        ):
+            raise ValueError("evidence issues require at least INSUFFICIENT EVIDENCE")
+
         if self.human_decision is not None:
+            if self.human_decision.decided_at < self.created_at:
+                raise ValueError("decided_at is before the assessment was created")
             is_override = self.human_decision.decision != self.final_recommendation
             if self.human_decision.is_override != is_override:
                 raise ValueError("is_override must equal (human decision != recommendation)")
+            if (
+                self.actual_conditions is not None
+                and self.actual_conditions.reported_at < self.human_decision.decided_at
+            ):
+                raise ValueError("actual conditions are dated before the human decision")
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self

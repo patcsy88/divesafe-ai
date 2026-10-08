@@ -86,7 +86,8 @@ See [docs/adr/](adr/).
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Authentication and authorization** for decision/override endpoints. This is a precondition
+- **Authentication and authorization** for decision/override endpoints (`decide()` and
+  `report_actual_conditions()` trust the caller-supplied identity today). This is a precondition
   for exposing them outside development, because any caller could otherwise override a `NO-GO`;
   `decided_by` must come from the auth context, never the request body; the actor recorded on a
   `HumanDecision` must come from an authenticated identity.

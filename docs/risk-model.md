@@ -50,6 +50,42 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
+## Pipeline guarantees (`divesafe.orchestration`)
+
+- `assess_dive` refuses a policy with no required categories (`UnsafeConfigurationError`), so a
+  `GO` rule can never fire on no evidence through the pipeline.
+- Failed or rejected sources never abort the assessment. They are recorded in
+  `AssessmentRecord.evidence_issues` and add an `evidence.connector_issues` rule result that
+  forces at least `INSUFFICIENT EVIDENCE`, even for categories that are not required.
+- `confidence` is `None` (not computed) until a risk model exists; it is never defaulted.
+- Every result is `PENDING_HUMAN`. `decide()` derives `is_override` from the decision, requires a
+  rationale for overrides, refuses to replace a recorded decision, and returns a new revalidated
+  record. `report_actual_conditions()` requires a decision and can be used once.
+
+- The record itself rejects: evidence issues with a deterministic result below `INSUFFICIENT
+  EVIDENCE`; a decision dated before the assessment; actual conditions dated before the decision.
+  The pipeline rejects a `planned_start` in the past.
+
+### Pipeline limits (known gaps)
+
+- **No authentication:** `decided_by` and `reported_by` are free text that nobody verifies. The
+  gate functions must only be reachable behind an authenticated API that takes the actor from
+  the authenticated principal, never from the request body.
+- **Write-once is in memory only:** `decide()` refuses to replace a decision, but
+  `model_copy(update=...)` skips validators and two concurrent calls could both succeed.
+  Persistence must enforce write-once with a unique constraint or compare-and-set, and must
+  treat unvalidated copies as untrusted.
+- **No staleness check at decision time:** a human can accept a recommendation long after the
+  evidence was gathered. A maximum record age or an evidence re-check at decision time is needed.
+- **`now` is a parameter:** it must come from a server clock, not client input, or stale
+  evidence can look fresh.
+- **Untrusted inputs:** `proposed`, `scenarios` and `explanation` must come only from the agent
+  layer, which must delimit untrusted text. They are not sanitised here.
+- **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
+  0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty
+  required set; unrequired-but-absent data, contradictory data and window coverage remain open
+  (see above).
+
 ## Non-numeric policy rules
 
 - `WarningNeedsHumanReadingRule` ([ADR 0005](adr/0005-warnings-need-human-reading.md)): any
@@ -76,10 +112,6 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   (about 8 km, `grid_distance_km` recorded) satisfy `currents`. `EvidencePolicy` needs reviewed,
   per-category accepted data kinds and resolution. Until then model currents alone must not be
   allowed to support a `GO`.
-- **Empty `required_categories`:** an engine with a `GO` rule and no required categories returns
-  `GO` on no evidence. Reject or flag this when the orchestrator is built.
-- **Connector `issues`** must be carried into the `AssessmentRecord` and shown to the user even
-  for categories that are not required.
 - **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
   decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
   belongs with the agents.
