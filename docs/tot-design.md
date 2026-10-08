@@ -43,7 +43,14 @@ confidence, and expected trend across the dive window.
 ToT output feeds the Risk Assessment agent as one input. The final recommendation is always
 `reconcile(rules_result, proposal)`.
 
-## Guardrails (planned unless noted)
+## Implementation status
+
+Implemented in `divesafe.agents.tot`: three scenarios, one level, one validated call each; kind
+assigned by code; an invalid scenario is dropped and reported; stored fields are the concise
+`Scenario` only. The "scenario C is more severe than the rules" guardrail needs no code: scenarios
+have no severity and only feed the risk agent, whose proposal `reconcile` can only tighten.
+
+## Guardrails
 
 Implemented: `Scenario.evidence_ids` must be non-empty and `AssessmentRecord` rejects cited IDs
 that are not in the record's evidence. The rest are implemented with the orchestrator.

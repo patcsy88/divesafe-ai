@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from divesafe.data import (
     UrllibJsonGetter,
 )
 from divesafe.domain import DataCategory
+from divesafe.models import LLMProvider, create_provider
 from divesafe.risk import EvidencePolicy, RiskRulesEngine, WarningNeedsHumanReadingRule
 from divesafe.services import AssessmentRepository, InMemoryAssessmentRepository
 
@@ -37,6 +39,9 @@ INTERIM_REQUIRED_CATEGORIES: frozenset[DataCategory] = frozenset(
 INTERIM_RULESET_VERSION = "interim-unreviewed-0"
 
 
+logger = logging.getLogger(__name__)
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -50,6 +55,7 @@ class AppState:
     clock: Callable[[], datetime]
     sites: Mapping[str, Site]
     decision_max_age: timedelta | None
+    provider: LLMProvider | None = None
 
 
 def build_engine(settings: Settings) -> RiskRulesEngine | None:
@@ -60,6 +66,25 @@ def build_engine(settings: Settings) -> RiskRulesEngine | None:
         INTERIM_REQUIRED_CATEGORIES, timedelta(minutes=settings.evidence_max_age_minutes)
     )
     return RiskRulesEngine([WarningNeedsHumanReadingRule()], policy, INTERIM_RULESET_VERSION)
+
+
+def build_provider(settings: Settings) -> LLMProvider | None:
+    """None disables the agent stage (the default `fake` setting). A real provider that has no
+    adapter fails loudly at startup instead of silently producing assessments without agents."""
+    if settings.llm_provider == "fake":
+        logger.warning("agent stage is OFF (DIVESAFE_LLM_PROVIDER=fake)")
+        return None
+    provider = create_provider(settings)
+    if provider.external and not settings.allow_external_llm:
+        raise RuntimeError(
+            "this LLM provider sends evidence and plan data off-machine; "
+            "set DIVESAFE_ALLOW_EXTERNAL_LLM=true to accept that"
+        )
+    logger.warning(
+        "agent stage is ON",
+        extra={"provider": provider.name, "model": provider.model, "external": provider.external},
+    )
+    return provider
 
 
 def build_default_state(settings: Settings) -> AppState:
@@ -76,4 +101,5 @@ def build_default_state(settings: Settings) -> AppState:
             if settings.decision_max_age_minutes is not None
             else None
         ),
+        provider=build_provider(settings),
     )

@@ -57,7 +57,7 @@ class _Frozen(BaseModel):
 class EvidenceItem(_Frozen):
     """One traceable fact. Every claim in a recommendation must point at one of these."""
 
-    id: str = Field(min_length=1)
+    id: str = Field(pattern=r"^[A-Za-z0-9:._-]{1,128}$")
     category: DataCategory
     source: str = Field(min_length=1, description="Connector or document the fact came from.")
     source_version: str | None = None
@@ -103,6 +103,31 @@ class Scenario(_Frozen):
             "safety and not comparable with a calibrated risk-model confidence."
         ),
     )
+
+
+class Finding(_Frozen):
+    """One specialist agent's evidence-referenced reading of its domain. Not a recommendation."""
+
+    agent: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    risk_factors: tuple[str, ...] = ()
+    conflicting_signals: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Uncalibrated self-estimate; not a measure of dive safety.",
+    )
+    no_evidence: bool = False
+
+    @model_validator(mode="after")
+    def _evidence_matches_flag(self) -> Finding:
+        if self.no_evidence and (self.evidence_ids or self.confidence is not None):
+            raise ValueError("a no-evidence finding cannot cite evidence or claim confidence")
+        if not self.no_evidence and not self.evidence_ids:
+            raise ValueError("a finding must cite evidence or be marked no_evidence")
+        return self
 
 
 class HumanDecision(_Frozen):
@@ -159,9 +184,22 @@ class AssessmentRecord(_Frozen):
     evidence_issues: tuple[str, ...] = Field(
         default=(), description="Sources or categories that failed or were rejected."
     )
+    findings: tuple[Finding, ...] = ()
     scenarios: tuple[Scenario, ...] = ()
-    explanation: str = ""
+    proposal_evidence_ids: tuple[str, ...] = Field(
+        default=(), description="Evidence the LLM proposal cited. Empty when there is no proposal."
+    )
+    explanation: str = Field(
+        default="",
+        description=(
+            "LLM-generated prose. Unverified and untrusted: render as plain text. It never feeds "
+            "a decision except through the proposal, which can only tighten the result."
+        ),
+    )
     model_version: str | None = None
+    agent_issues: tuple[str, ...] = Field(
+        default=(), description="LLM agent calls that failed or were rejected."
+    )
     ruleset_version: str = Field(min_length=1)
     data_versions: dict[str, str] = Field(default_factory=dict)
     human_decision: HumanDecision | None = None
@@ -170,6 +208,14 @@ class AssessmentRecord(_Frozen):
     @property
     def status(self) -> Literal["PENDING_HUMAN", "DECIDED"]:
         return "DECIDED" if self.human_decision is not None else "PENDING_HUMAN"
+
+    @property
+    def llm_tightened(self) -> bool:
+        """True when an unverified LLM proposal made the result more severe than the rules."""
+        proposed = self.proposed_recommendation
+        return proposed is not None and severity(proposed) > severity(
+            self.deterministic_recommendation
+        )
 
     @property
     def overrides_to_less_severe(self) -> bool:
@@ -185,6 +231,10 @@ class AssessmentRecord(_Frozen):
 
         cited = {i for r in self.rule_results for i in r.evidence_ids}
         cited |= {i for s in self.scenarios for i in s.evidence_ids}
+        cited |= {i for f in self.findings for i in f.evidence_ids}
+        cited |= set(self.proposal_evidence_ids)
+        if self.proposal_evidence_ids and self.proposed_recommendation is None:
+            raise ValueError("proposal_evidence_ids require a proposal")
         unknown = cited - set(ids)
         if unknown:
             raise ValueError(f"cited evidence ids not present in the record: {sorted(unknown)}")

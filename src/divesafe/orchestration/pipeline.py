@@ -12,15 +12,18 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
+from divesafe.agents import run_agent_stage
 from divesafe.data import Connector, Site
 from divesafe.domain import (
     AssessmentRecord,
     DivePlan,
+    Finding,
     Recommendation,
     RuleResult,
     Scenario,
     most_severe,
 )
+from divesafe.models import LLMProvider
 from divesafe.risk import RiskRulesEngine, reconcile
 from divesafe.services import gather_evidence
 
@@ -47,9 +50,12 @@ async def assess_dive(
     scenarios: tuple[Scenario, ...] = (),
     explanation: str = "",
     model_version: str | None = None,
+    provider: LLMProvider | None = None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
+    if provider is not None and (proposed is not None or scenarios or explanation):
+        raise ValueError("pass either a provider or explicit agent output, not both")
     if plan.site_id != site.id:
         raise InvalidPlanError("plan.site_id does not match the site")
     if plan.planned_start < now:
@@ -69,7 +75,24 @@ async def assess_dive(
             )
         )
     deterministic = most_severe(tuple(r.outcome for r in rule_results))
+
+    findings: tuple[Finding, ...] = ()
+    agent_issues: tuple[str, ...] = ()
+    proposal_ids: tuple[str, ...] = ()
+    if provider is not None:
+        stage = await run_agent_stage(provider, plan, evidence.items, rule_results, deterministic)
+        proposed, scenarios = stage.proposed, stage.scenarios
+        explanation, model_version = stage.explanation, stage.model_version
+        findings, agent_issues = stage.findings, stage.issues
+        proposal_ids = stage.proposal_evidence_ids
+
     reconciled = reconcile(deterministic, proposed)
+    if reconciled.llm_attempted_downgrade and proposed is not None:
+        # Do not keep persuasive prose that argues against the recorded result.
+        explanation = (
+            f"The LLM proposed {proposed.value}, which is less severe than the rules, "
+            "so its rationale was discarded."
+        )
 
     record = AssessmentRecord(
         id=assessment_id,
@@ -83,9 +106,12 @@ async def assess_dive(
         llm_attempted_downgrade=reconciled.llm_attempted_downgrade,
         confidence=None,
         evidence_issues=evidence.issues,
+        findings=findings,
+        proposal_evidence_ids=proposal_ids,
         scenarios=scenarios,
         explanation=explanation,
         model_version=model_version,
+        agent_issues=agent_issues,
         ruleset_version=assessment.ruleset_version,
         data_versions=evidence.data_versions,
     )
@@ -95,6 +121,7 @@ async def assess_dive(
             "assessment_id": assessment_id,
             "final": record.final_recommendation.value,
             "issues": len(evidence.issues),
+            "agent_issues": len(agent_issues),
         },
     )
     return record

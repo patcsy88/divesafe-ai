@@ -69,7 +69,11 @@ def _hash(key: str) -> str:
 
 
 def _build(
-    warnings: Any = WARNINGS, *, max_age: timedelta | None = None, engine: bool = True
+    warnings: Any = WARNINGS,
+    *,
+    max_age: timedelta | None = None,
+    engine: bool = True,
+    provider: Any = None,
 ) -> tuple[TestClient, _Clock, InMemoryAssessmentRepository]:
     clock, repo = _Clock(), InMemoryAssessmentRepository()
     rules = RiskRulesEngine(
@@ -88,6 +92,7 @@ def _build(
         clock=clock,
         sites=SITES,
         decision_max_age=max_age,
+        provider=provider,
     )
     return TestClient(create_app(state)), clock, repo
 
@@ -382,3 +387,35 @@ def test_observations_with_excessive_depth_or_count_are_rejected_up_front() -> N
     assert stored["record"]["actual_conditions"] is None  # nothing half-stored
     ok = client.post(url, json={"observations": {"visibility": {"m": 12}}}, headers=AUTH_A)
     assert ok.status_code == 200
+
+
+# --- agents over HTTP ----------------------------------------------------------------------
+
+
+def test_view_says_when_no_llm_was_used() -> None:
+    client, _, _ = _build()
+    assert "No LLM agents" in _create(client)["agent_note"]
+
+
+def test_view_labels_agent_output_as_llm_generated_and_advisory() -> None:
+    from tests.agent.scripted_llm import scripted
+
+    from divesafe.models import FakeProvider
+
+    client, _, _ = _build(provider=FakeProvider(scripted(recommendation="GO")))
+    body = _create(client)
+    assert "LLM-generated" in body["agent_note"] and "never relax" in body["agent_note"]
+    assert body["record"]["findings"] and len(body["record"]["scenarios"]) == 3
+    assert body["record"]["proposed_recommendation"] == "GO"
+    assert body["record"]["final_recommendation"] == "INSUFFICIENT EVIDENCE"  # not relaxed
+    assert body["record"]["llm_attempted_downgrade"] is True
+
+
+def test_a_failing_llm_still_returns_a_pending_assessment_with_the_issue_count() -> None:
+    from divesafe.models import FakeProvider
+
+    client, _, _ = _build(provider=FakeProvider("garbage"))
+    body = _create(client)
+    assert body["status"] == "PENDING_HUMAN"
+    assert body["record"]["final_recommendation"] == "INSUFFICIENT EVIDENCE"
+    assert "failed or were rejected" in body["agent_note"]

@@ -96,8 +96,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   revocation are manual (edit the configured hashes).
 - **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
   No request-size or per-client rate limits beyond the provider-limit guard.
-- **Prompt construction helper** that delimits untrusted retrieved/connector text and validates
-  structured output; a data-egress flag on LLM providers and personal-data minimization.
+- **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
+  egress flag exist (ADR 0007), but no adapter does, and real-model behaviour is unmeasured.
+  Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
 - **Contradiction detection and validity-window coverage** (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
 - **Per-category evidence quality policy and engine-level validity-window coverage**

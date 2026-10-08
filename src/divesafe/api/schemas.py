@@ -47,6 +47,25 @@ def _shape_exceeds(root: Any, *, max_depth: int, max_nodes: int) -> bool:
     return False
 
 
+def _agent_note(record: AssessmentRecord) -> str:
+    if record.model_version is None:
+        if record.explanation or record.scenarios or record.proposed_recommendation is not None:
+            return "Agent output of unknown origin was attached; treat it as unverified."
+        return "No LLM agents were used for this assessment."
+    note = (
+        "Findings, scenarios and the explanation are LLM-generated summaries of the evidence. "
+        "They can add caution but never relax a rule result, and they may be wrong."
+    )
+    if record.agent_issues:
+        note += f" {len(record.agent_issues)} agent call(s) failed or were rejected."
+        names = sorted(
+            {i.split(":")[1] for i in record.agent_issues if i.startswith("specialist:")}
+        )
+        if names:
+            note += f" Missing specialist findings: {', '.join(names)}."
+    return note
+
+
 class _Request(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -84,9 +103,11 @@ class AssessmentView(BaseModel):
     record: AssessmentRecord
     status: Literal["PENDING_HUMAN", "DECIDED"]
     overrides_to_less_severe: bool
+    llm_tightened: bool
     confidence_note: str
     outcome_note: str
     status_note: str
+    agent_note: str
     attributions: tuple[str, ...]
     notice: str = DISCLAIMER
 
@@ -101,6 +122,11 @@ class AssessmentView(BaseModel):
             if r.rule_id.startswith("evidence.required.")
         )
         outcome_note = _OUTCOME_NOTES[record.final_recommendation]
+        if record.llm_tightened:
+            outcome_note = (
+                f"Rules alone: {record.deterministic_recommendation.value}. An unverified LLM "
+                f"proposal raised this to {record.final_recommendation.value}. "
+            ) + outcome_note
         if missing:
             outcome_note += f" Missing or stale evidence: {', '.join(missing)}."
         if record.evidence_issues:
@@ -114,6 +140,7 @@ class AssessmentView(BaseModel):
         return cls(
             record=record,
             outcome_note=outcome_note,
+            agent_note=_agent_note(record),
             status_note=(
                 "Awaiting a human decision. Do not act on this result yet."
                 if record.status == "PENDING_HUMAN"
@@ -124,6 +151,7 @@ class AssessmentView(BaseModel):
             ),
             status=record.status,
             overrides_to_less_severe=record.overrides_to_less_severe,
+            llm_tightened=record.llm_tightened,
             confidence_note=(
                 "Confidence was not computed (no risk model yet). Do not read this as high or low."
                 if record.confidence is None

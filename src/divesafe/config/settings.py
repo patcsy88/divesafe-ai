@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
     llm_base_url: AnyHttpUrl | None = None
+    # Hosted providers receive evidence and plan data. Off unless explicitly allowed.
+    allow_external_llm: bool = False
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     decision_max_age_minutes: int | None = Field(default=None, gt=0)

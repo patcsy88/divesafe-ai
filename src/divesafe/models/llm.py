@@ -42,6 +42,9 @@ class LLMResponse(BaseModel):
 class LLMProvider(Protocol):
     name: str
     model: str
+    # True when prompts leave this machine (hosted APIs). Callers must then send only public
+    # evidence and plan data, never actor identities or free-text decision content.
+    external: bool
 
     async def complete(self, request: LLMRequest) -> LLMResponse: ...
 
@@ -55,6 +58,9 @@ _REGISTRY: dict[str, ProviderFactory] = {}
 
 
 def register_provider(name: str, factory: ProviderFactory) -> None:
+    """Import-time registration. Re-registering a name is refused."""
+    if name in _REGISTRY:
+        raise ValueError(f"LLM provider '{name}' is already registered")
     _REGISTRY[name] = factory
 
 
@@ -72,15 +78,19 @@ class FakeProvider:
     """Deterministic provider for tests and offline development."""
 
     name = "fake"
+    external = False
 
-    def __init__(self, reply: str = "", model: str = "fake-model") -> None:
+    def __init__(
+        self, reply: str | Callable[[LLMRequest], str] = "", model: str = "fake-model"
+    ) -> None:
         self.model = model
         self._reply = reply
         self.requests: list[LLMRequest] = []
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(request)
-        return LLMResponse(text=self._reply, provider=self.name, model=self.model)
+        text = self._reply(request) if callable(self._reply) else self._reply
+        return LLMResponse(text=text, provider=self.name, model=self.model)
 
 
 register_provider("fake", lambda settings: FakeProvider(model=settings.llm_model or "fake-model"))

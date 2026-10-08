@@ -7,7 +7,9 @@
 - Agents **do not fetch data** (connectors do) and **do not decide** (`reconcile` does).
 - Agents call the LLM only through `LLMProvider`. Prompts request structured output validated
   by Pydantic; invalid output is rejected, never repaired by guessing.
-- Every claim must cite `EvidenceItem` IDs. An uncited claim is dropped by validation.
+- Every output must cite at least one valid `EvidenceItem` ID from the evidence it was given;
+  an output with no valid citation is rejected whole. Claims are not individually bound to ids,
+  and invented numbers in prose are not detected, so prose is untrusted (ADR 0007).
 - Agents are stateless; all state lives in the orchestrator's run context and the audit record.
 
 ## Agents
@@ -47,3 +49,18 @@ Propose, Human Gate, Validate, Learn):
 `tests/agent` uses `FakeProvider` with scripted outputs. Required cases: hostile or
 contradictory LLM output cannot lower severity; uncited claims are dropped; provider swap does
 not change the final recommendation for identical deterministic inputs.
+
+## Implementation status (2026-10-09)
+
+Implemented in `divesafe.agents` and wired into `assess_dive(provider=...)`; see
+[ADR 0007](adr/0007-agent-and-prompt-layer.md) for bounds, validation and the prompt layer.
+
+- Specialists: `weather`, `ocean_conditions`, `tide_current`, `site_intelligence`, `prediction`.
+  Evidence categories per specialist are in `agents/specialists.py`. `site_intelligence` always
+  reports "no evidence" until RAG and site data exist, and `tide_current` only sees currents
+  until a verified tide source exists.
+- The Risk Assessment agent returns a proposal that `reconcile` can only tighten.
+- Not implemented: RAG retrieval, a statistical Prediction model, real provider adapters, the
+  Learn stage, and re-running agents after a human decision.
+- Verified only with a scripted fake LLM. Behaviour with a real model (instruction-following,
+  injection resistance, JSON reliability, cost, latency) is unmeasured.

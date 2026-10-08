@@ -90,6 +90,18 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   required set; unrequired-but-absent data, contradictory data and window coverage remain open
   (see above).
 
+### Agent output (ADR 0007)
+
+- A proposal can only tighten the result; a less severe one is discarded and flagged. A failed,
+  skipped or rejected agent stage leaves the deterministic result standing, with the reasons in
+  `agent_issues`.
+- `explanation`, `findings` and `scenarios` are LLM-generated and unverified. The API labels
+  them. Specialist and scenario `confidence` values are uncalibrated self-estimates and are not
+  the record `confidence`, which stays `None`.
+- Known gap: only a scripted fake LLM has been used, so injection resistance and output
+  reliability of real models are unmeasured. An evaluation set (tests/evaluation) is needed
+  before any real provider is trusted for even advisory output.
+
 ## Non-numeric policy rules
 
 - `WarningNeedsHumanReadingRule` ([ADR 0005](adr/0005-warnings-need-human-reading.md)): any
