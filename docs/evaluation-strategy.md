@@ -37,6 +37,8 @@
 ## Human-in-the-loop and learning
 
 - Track acceptance vs override rate and override rationales to find rule or UX gaps.
+- Track the less severe override rate (`overrides_to_less_severe`), split by `NO-GO` and by
+  other recommendations, and review those rationales. See ADR 0004.
 - Compare recommendations with submitted actual conditions to measure forecast reliability.
 - Findings produce reviewed rule/model change proposals, never automatic changes.
 

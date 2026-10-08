@@ -86,13 +86,15 @@ See [docs/adr/](adr/).
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Authentication and authorization** for decision/override endpoints; the actor recorded on a
+- **Authentication and authorization** for decision/override endpoints. This is a precondition
+  for exposing them outside development, because any caller could otherwise override a `NO-GO`;
+  `decided_by` must come from the auth context, never the request body; the actor recorded on a
   `HumanDecision` must come from an authenticated identity.
 - **Append-only audit storage:** INSERT/SELECT-only DB role, record hashing, tests that updates
   fail.
 - **Prompt construction helper** that delimits untrusted retrieved/connector text and validates
   structured output; a data-egress flag on LLM providers and personal-data minimization.
-- **Contradiction detection, validity-window coverage and override policy**
+- **Contradiction detection and validity-window coverage**
   (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
 - **Evidence value validation** per category in connectors.

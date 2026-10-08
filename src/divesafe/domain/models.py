@@ -103,6 +103,10 @@ class Scenario(_Frozen):
 
 
 class HumanDecision(_Frozen):
+    """The human's decision. Any override, including to a less severe outcome, is allowed
+    (ADR 0004) but needs an identified decision-maker and a non-blank rationale.
+    """
+
     decided_by: str
     decision: Recommendation
     decided_at: AwareDatetime
@@ -156,6 +160,12 @@ class AssessmentRecord(_Frozen):
     @property
     def status(self) -> Literal["PENDING_HUMAN", "DECIDED"]:
         return "DECIDED" if self.human_decision is not None else "PENDING_HUMAN"
+
+    @property
+    def overrides_to_less_severe(self) -> bool:
+        """True when the human chose a less severe outcome than the system recommended."""
+        d = self.human_decision
+        return d is not None and severity(d.decision) < severity(self.final_recommendation)
 
     @model_validator(mode="after")
     def _check_consistency(self) -> AssessmentRecord:

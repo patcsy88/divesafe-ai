@@ -50,6 +50,13 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
+## Human override policy ([ADR 0004](adr/0004-human-override-policy.md))
+
+A human may override any recommendation, including `NO-GO`, to a less severe outcome. The
+system's recommendation is never altered; the override is a separate `HumanDecision` that needs
+an identified decision-maker and a non-blank rationale. Less severe overrides are flagged
+(`AssessmentRecord.overrides_to_less_severe`) for review and evaluation.
+
 ## Known gaps (tracked, not yet implemented)
 
 - **Contradictory evidence:** the engine checks presence and freshness only. Contradiction
@@ -57,8 +64,6 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   code). Until then, same-category conflicts are not detected.
 - **Validity window:** freshness uses `retrieved_at`. Coverage of the dive window by
   `valid_at`/forecast horizon is not yet enforced.
-- **Override policy:** whether a human may override `NO-GO` to a less severe outcome (and what
-  extra approval that needs) is an open product/safety decision.
 - **Rule review metadata:** rules carry a citation; reviewer and review-date fields are not yet
   enforced.
 

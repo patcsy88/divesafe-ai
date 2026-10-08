@@ -11,8 +11,9 @@ so the rules below are strict. Read `docs/architecture.md` before changing desig
    produced. Agent and LLM output is a *proposal*; it can never relax a deterministic result.
 3. **Uncertainty:** missing, stale or contradictory required evidence yields
    `INSUFFICIENT EVIDENCE`. Never fill gaps with assumptions or invented values.
-4. **Human decides:** the system recommends; a human accepts or overrides. Every override
-   needs a rationale and is recorded.
+4. **Human decides:** the system recommends; a human accepts or overrides, including to a
+   less severe outcome (ADR 0004). Every override needs an identified decision-maker and a
+   rationale, and is recorded. The system's own recommendation is never changed by an override.
 5. **No invented thresholds:** do not hard-code numeric safety limits (wave height, current
    speed, visibility, etc.) from memory. Thresholds live in versioned, reviewed rule
    definitions with a cited source (`docs/risk-model.md`).

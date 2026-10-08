@@ -222,3 +222,46 @@ def test_actual_conditions_require_a_human_decision() -> None:
 def test_scenarios_must_cite_evidence() -> None:
     with pytest.raises(ValidationError):
         Scenario(kind=ScenarioKind.MARGINAL, summary="s", evidence_ids=(), confidence=0.5)
+
+
+# --- ADR 0004: humans may override to a less severe outcome ------------------------------
+
+
+@pytest.mark.parametrize("chosen", [R.GO, R.CAUTION, R.INSUFFICIENT_EVIDENCE])
+def test_human_may_override_no_go_to_less_severe_with_rationale(chosen: Recommendation) -> None:
+    record = _record(human_decision=_human(chosen, override=True, rationale="Leader assessed."))
+    assert record.overrides_to_less_severe is True
+    assert record.final_recommendation == R.NO_GO
+    assert record.deterministic_recommendation == R.NO_GO
+
+
+def test_less_severe_override_without_rationale_is_still_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _human(R.GO, override=True, rationale="  ")
+
+
+def test_accepting_or_tightening_is_not_a_less_severe_override() -> None:
+    assert _record(human_decision=_human(R.NO_GO, override=False)).overrides_to_less_severe is False
+    assert _record().overrides_to_less_severe is False
+
+
+def _caution_record(**overrides: object) -> AssessmentRecord:
+    evidence = make_evidence(WAVES)
+    rule = RuleResult(rule_id="r", outcome=R.CAUTION, rationale="x", evidence_ids=(evidence.id,))
+    return _record(
+        rule_results=(rule,),
+        deterministic_recommendation=R.CAUTION,
+        final_recommendation=R.CAUTION,
+        **overrides,
+    )
+
+
+def test_tightening_beyond_the_recommendation_is_an_override_needing_rationale() -> None:
+    with pytest.raises(ValidationError):
+        _caution_record(human_decision=_human(R.NO_GO, override=False))
+    with pytest.raises(ValidationError):
+        _human(R.NO_GO, override=True, rationale=None)
+    record = _caution_record(
+        human_decision=_human(R.NO_GO, override=True, rationale="Poor visibility on briefing.")
+    )
+    assert record.overrides_to_less_severe is False
