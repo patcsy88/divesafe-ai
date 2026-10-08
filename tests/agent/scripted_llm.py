@@ -113,7 +113,12 @@ def engine(*, with_warning_rule: bool) -> RiskRulesEngine:
     rules: list[Any] = [_GoRule()]
     if with_warning_rule:
         rules.append(WarningNeedsHumanReadingRule())
-    return RiskRulesEngine(rules, EvidencePolicy(LIVE, timedelta(hours=1)), "synthetic")
+    return RiskRulesEngine(
+        rules,
+        EvidencePolicy(LIVE, timedelta(hours=1)),
+        "synthetic",
+        required_factors=frozenset(),  # synthetic GO rules; real rulesets keep the default
+    )
 
 
 class _Getter:
@@ -130,6 +135,7 @@ def run_pipeline(
     warnings: Any = WARNINGS,
     with_warning_rule: bool = True,
     connectors: Sequence[Any] | None = None,
+    risk_engine: RiskRulesEngine | None = None,
     **extra: Any,
 ) -> AssessmentRecord:
     used = (
@@ -146,7 +152,7 @@ def run_pipeline(
             plan=PLAN,
             site=REDANG_ISLAND,
             connectors=used,
-            engine=engine(with_warning_rule=with_warning_rule),
+            engine=risk_engine or engine(with_warning_rule=with_warning_rule),
             now=NOW,
             provider=provider,
             **extra,

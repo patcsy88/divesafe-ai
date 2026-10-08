@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from divesafe.domain import DataCategory, DivePlan, EvidenceItem
+from divesafe.domain import DataCategory, DataKind, DivePlan, EvidenceItem
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -34,5 +34,6 @@ def make_evidence(
         retrieved_at=NOW - age,
         valid_at=NOW,
         is_forecast=False,
+        data_kind=DataKind.OBSERVATION,  # synthetic test fixture
         value=dict(value),
     )

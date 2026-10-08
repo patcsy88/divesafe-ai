@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from divesafe.domain import DataCategory, DivePlan, EvidenceItem, Recommendation, RuleResult
+from divesafe.domain import (
+    DataCategory,
+    DivePlan,
+    EvidenceItem,
+    Recommendation,
+    RiskFactorKind,
+    RuleResult,
+)
 
 _NEEDS_HUMAN_READING = frozenset({"warning", "advisory_without_validity"})
 
@@ -36,4 +43,5 @@ class WarningNeedsHumanReadingRule:
                 "to this site cannot be determined automatically. A human must read it."
             ),
             evidence_ids=tuple(hits),
+            factor=RiskFactorKind.MARINE_WARNING,
         )

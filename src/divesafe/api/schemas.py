@@ -129,13 +129,17 @@ class AssessmentView(BaseModel):
             ) + outcome_note
         if missing:
             outcome_note += f" Missing or stale evidence: {', '.join(missing)}."
+        if record.unevaluated_factors:
+            names = ", ".join(k.value for k in record.unevaluated_factors)
+            outcome_note += f" Not evaluated (no validated threshold): {names}."
         if record.evidence_issues:
             outcome_note += (
                 f" {len(record.evidence_issues)} source issue(s) are listed in the record."
             )
         if record.ruleset_version.startswith("interim"):
             outcome_note += (
-                " The ruleset is interim and unreviewed; it is not a validated safety rule set."
+                " The ruleset is interim and unreviewed: its limits are placeholders, so no dive "
+                "can currently return GO. More data alone will not change that."
             )
         return cls(
             record=record,

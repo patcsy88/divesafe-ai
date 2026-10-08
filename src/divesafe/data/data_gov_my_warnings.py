@@ -31,8 +31,14 @@ from divesafe.data.base import FetchResult
 from divesafe.data.errors import ConnectorResponseError
 from divesafe.data.http import JsonGetter
 from divesafe.data.parsing import as_dict, bounded_text, clip, parse_naive
-from divesafe.data.sites import Site
-from divesafe.domain import DataCategory, EvidenceItem
+from divesafe.domain import (
+    DataCategory,
+    DataKind,
+    DataQuality,
+    DiveSite,
+    EvidenceItem,
+    TransformationStep,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +58,7 @@ class DataGovMyWarningConnector:
         self._getter = getter
 
     async def fetch(
-        self, site: Site, window_start: datetime, window_end: datetime, now: datetime
+        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult:
         if window_end <= window_start:
             raise ValueError("window_end must be after window_start")
@@ -70,7 +76,7 @@ class DataGovMyWarningConnector:
     def parse(
         self,
         payload: object,
-        site: Site,
+        site: DiveSite,
         window_start: datetime,
         window_end: datetime,
         now: datetime,
@@ -131,7 +137,21 @@ class DataGovMyWarningConnector:
                     source_version=SOURCE_VERSION,
                     retrieved_at=now,
                     valid_at=(valid_from or issued).astimezone(UTC),
+                    valid_until=valid_to.astimezone(UTC) if valid_to else None,
                     is_forecast=False,
+                    data_kind=DataKind.NOTICE,
+                    quality=DataQuality.UNASSESSED,
+                    quality_notes=(
+                        "free-text, multi-region; applicability to the site is not determined",
+                        "timestamps carry no timezone in the source; UTC+08:00 is inferred",
+                    ),
+                    transformations=(
+                        TransformationStep(
+                            step="timezone",
+                            detail="naive source times read as UTC+08:00 and converted to UTC",
+                        ),
+                        TransformationStep(step="text bounded", detail="fields length-checked"),
+                    ),
                     value={
                         "kind": "advisory_without_validity" if undated else "warning",
                         "title_en": bounded_text(issue.get("title_en"), "title_en"),
@@ -165,7 +185,13 @@ class DataGovMyWarningConnector:
                     source_version=SOURCE_VERSION,
                     retrieved_at=now,
                     valid_at=now,
+                    valid_until=window_end.astimezone(UTC),
                     is_forecast=False,
+                    data_kind=DataKind.NOTICE,
+                    quality_notes=("absence of a warning in this feed; not proof of calm",),
+                    transformations=(
+                        TransformationStep(step="absence", detail="no overlapping dated warning"),
+                    ),
                     value={
                         "kind": "no_active_warnings",
                         "meaning": (

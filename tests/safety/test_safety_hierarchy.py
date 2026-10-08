@@ -27,7 +27,7 @@ class _FixedRule:
 
 def _engine(*rules: _FixedRule, required: frozenset[DataCategory] = frozenset()) -> RiskRulesEngine:
     policy = EvidencePolicy(required_categories=required, max_age=timedelta(hours=1))
-    return RiskRulesEngine(rules, policy, ruleset_version="test")
+    return RiskRulesEngine(rules, policy, ruleset_version="test", required_factors=frozenset())
 
 
 def test_severity_order() -> None:

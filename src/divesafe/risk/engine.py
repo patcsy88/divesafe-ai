@@ -19,22 +19,26 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Protocol
 
 from divesafe.domain import (
     DataCategory,
     DivePlan,
     EvidenceItem,
     Recommendation,
+    RiskAssessment,
+    RiskFactorKind,
     RuleResult,
     most_severe,
     severity,
+    unevaluated_factors,
 )
+from divesafe.domain.risk_types import THRESHOLD_FACTORS
+from divesafe.risk.interfaces import Rule
 
 __all__ = [
-    "DeterministicAssessment",
     "EvidencePolicy",
     "Reconciliation",
+    "RiskAssessment",
     "RiskRulesEngine",
     "Rule",
     "reconcile",
@@ -42,15 +46,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-
-class Rule(Protocol):
-    """A pure, deterministic check. Returns None when the rule does not apply."""
-
-    rule_id: str
-    citation: str
-
-    def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult | None: ...
 
 
 @dataclass(frozen=True)
@@ -64,13 +59,6 @@ class EvidencePolicy:
 
 
 @dataclass(frozen=True)
-class DeterministicAssessment:
-    recommendation: Recommendation
-    rule_results: tuple[RuleResult, ...]
-    ruleset_version: str
-
-
-@dataclass(frozen=True)
 class Reconciliation:
     final: Recommendation
     deterministic: Recommendation
@@ -79,13 +67,20 @@ class Reconciliation:
 
 
 class RiskRulesEngine:
-    def __init__(self, rules: Sequence[Rule], policy: EvidencePolicy, ruleset_version: str) -> None:
+    def __init__(
+        self,
+        rules: Sequence[Rule],
+        policy: EvidencePolicy,
+        ruleset_version: str,
+        required_factors: frozenset[RiskFactorKind] = THRESHOLD_FACTORS,
+    ) -> None:
         if not ruleset_version.strip():
             raise ValueError("ruleset_version must be set")
         for rule in rules:
             if not rule.citation.strip():
                 raise ValueError(f"rule '{rule.rule_id}' has no source citation")
         self._rules = tuple(rules)
+        self._required_factors = required_factors
         self._policy = policy
         self._ruleset_version = ruleset_version
 
@@ -95,7 +90,7 @@ class RiskRulesEngine:
 
     def assess(
         self, plan: DivePlan, evidence: Sequence[EvidenceItem], now: datetime
-    ) -> DeterministicAssessment:
+    ) -> RiskAssessment:
         results = [*self._sufficiency_results(evidence, now)]
         for rule in self._rules:
             results.extend(self._run_rule(rule, plan, evidence))
@@ -109,14 +104,36 @@ class RiskRulesEngine:
                 )
             )
 
+        uncovered = unevaluated_factors(tuple(results), self._required_factors)
+        if uncovered and most_severe(tuple(r.outcome for r in results)) in (
+            Recommendation.GO,
+            Recommendation.CAUTION,
+        ):
+            results.append(
+                RuleResult(
+                    rule_id="ruleset.threshold_factors_uncovered",
+                    outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                    rationale=(
+                        "GO and CAUTION need a VALIDATED rule for every required factor; "
+                        "not evaluated: " + ", ".join(f.value for f in uncovered)
+                    ),
+                )
+            )
+
         recommendation = most_severe(tuple(r.outcome for r in results))
-        return DeterministicAssessment(recommendation, tuple(results), self._ruleset_version)
+        return RiskAssessment(
+            recommendation=recommendation,
+            rule_results=tuple(results),
+            unevaluated_factors=uncovered,
+            ruleset_version=self._ruleset_version,
+            evaluated_at=now,
+        )
 
     @staticmethod
     def _run_rule(rule: Rule, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> list[RuleResult]:
         try:
             result = rule.evaluate(plan, evidence)
-        except Exception:
+        except Exception:  # fail closed on ANY rule failure, so this catch is deliberately broad
             logger.exception("rule raised", extra={"rule_id": rule.rule_id})
             return [
                 RuleResult(
@@ -140,6 +157,7 @@ class RiskRulesEngine:
                 rule_id=f"evidence.required.{category.value}",
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale=f"No fresh '{category.value}' evidence is available.",
+                factor=RiskFactorKind.DATA_FRESHNESS,
             )
             for category in sorted(self._policy.required_categories, key=lambda c: c.value)
             if category not in fresh

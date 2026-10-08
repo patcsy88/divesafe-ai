@@ -1,5 +1,55 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // Every session loads the project rules and the architecture overview.
-  "instructions": ["AGENTS.md", "docs/architecture.md"]
+  // Every session loads the project constitution and the architecture overview.
+  "instructions": ["AGENTS.md", "docs/architecture.md"],
+
+  // OpenCode V2 permissions: ordered rules, the last matching rule wins.
+  // Shell asks by default; routine inspection and the project's test/lint tools are allowed;
+  // pushing is never allowed. Destructive commands fall under the default "ask".
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "ask" },
+
+    { "action": "shell", "resource": "git status", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git status", "effect": "allow" },
+    { "action": "shell", "resource": "git status *", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git status *", "effect": "allow" },
+    { "action": "shell", "resource": "git diff", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git diff", "effect": "allow" },
+    { "action": "shell", "resource": "git diff *", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git diff *", "effect": "allow" },
+    { "action": "shell", "resource": "git log", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git log", "effect": "allow" },
+    { "action": "shell", "resource": "git log *", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git log *", "effect": "allow" },
+    { "action": "shell", "resource": "git show", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git show", "effect": "allow" },
+    { "action": "shell", "resource": "git show *", "effect": "allow" },
+    { "action": "shell", "resource": "rtk git show *", "effect": "allow" },
+
+    { "action": "shell", "resource": "pytest *", "effect": "allow" },
+    { "action": "shell", "resource": ".venv/bin/pytest *", "effect": "allow" },
+    { "action": "shell", "resource": "ruff check *", "effect": "allow" },
+    { "action": "shell", "resource": ".venv/bin/ruff check *", "effect": "allow" },
+    { "action": "shell", "resource": "mypy *", "effect": "allow" },
+    { "action": "shell", "resource": ".venv/bin/mypy *", "effect": "allow" },
+
+    { "action": "shell", "resource": "rm *", "effect": "ask" },
+    { "action": "shell", "resource": "git reset *", "effect": "ask" },
+    { "action": "shell", "resource": "rtk git reset *", "effect": "ask" },
+    { "action": "shell", "resource": "git clean *", "effect": "ask" },
+    { "action": "shell", "resource": "rtk git clean *", "effect": "ask" },
+    { "action": "shell", "resource": "git rebase *", "effect": "ask" },
+    { "action": "shell", "resource": "rtk git rebase *", "effect": "ask" },
+    { "action": "shell", "resource": "git checkout *", "effect": "ask" },
+    { "action": "shell", "resource": "rtk git checkout *", "effect": "ask" },
+    { "action": "shell", "resource": "git restore *", "effect": "ask" },
+    { "action": "shell", "resource": "rtk git restore *", "effect": "ask" },
+    { "action": "shell", "resource": "git branch -D *", "effect": "ask" },
+
+    // The rtk plugin rewrites `git ...` to `rtk git ...` before permissions are checked, so deny both.
+    { "action": "shell", "resource": "git push", "effect": "deny" },
+    { "action": "shell", "resource": "git push *", "effect": "deny" },
+    { "action": "shell", "resource": "rtk git push", "effect": "deny" },
+    { "action": "shell", "resource": "rtk git push *", "effect": "deny" }
+  ]
 }

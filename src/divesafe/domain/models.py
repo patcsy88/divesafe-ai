@@ -9,7 +9,17 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, Field, model_validator
+
+from divesafe.domain.base import Frozen as _Frozen
+from divesafe.domain.provenance import (
+    NOT_MEASURED,
+    DataKind,
+    DataQuality,
+    GeoPoint,
+    TransformationStep,
+)
+from divesafe.domain.risk_types import THRESHOLD_FACTORS, RiskFactorKind, ThresholdStatus
 
 
 class Recommendation(StrEnum):
@@ -50,10 +60,6 @@ class DataCategory(StrEnum):
     LOCAL_GUIDANCE = "local_guidance"
 
 
-class _Frozen(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
 class EvidenceItem(_Frozen):
     """One traceable fact. Every claim in a recommendation must point at one of these."""
 
@@ -62,9 +68,31 @@ class EvidenceItem(_Frozen):
     source: str = Field(min_length=1, description="Connector or document the fact came from.")
     source_version: str | None = None
     retrieved_at: AwareDatetime
-    valid_at: AwareDatetime = Field(description="Time the observation or forecast refers to.")
-    is_forecast: bool
+    valid_at: AwareDatetime = Field(description="Start of the time the fact refers to.")
+    valid_until: AwareDatetime | None = Field(
+        default=None, description="End of the validity window; None means instantaneous."
+    )
+    is_forecast: bool = Field(description="True for any value that was not measured.")
+    data_kind: DataKind
+    location: GeoPoint | None = Field(
+        default=None, description="Where the data is for (e.g. the model grid cell), if known."
+    )
+    quality: DataQuality = DataQuality.UNASSESSED
+    quality_notes: tuple[str, ...] = ()
+    transformations: tuple[TransformationStep, ...] = ()
     value: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _consistent_provenance(self) -> EvidenceItem:
+        if self.valid_until is not None and self.valid_until < self.valid_at:
+            raise ValueError("valid_until is before valid_at")
+        if self.is_forecast != (self.data_kind in NOT_MEASURED):
+            raise ValueError(
+                f"is_forecast={self.is_forecast} contradicts data_kind={self.data_kind.value}"
+            )
+        if self.quality == DataQuality.REJECTED:
+            raise ValueError("rejected data must not be stored as evidence")
+        return self
 
 
 class DivePlan(_Frozen):
@@ -75,10 +103,36 @@ class DivePlan(_Frozen):
 
 
 class RuleResult(_Frozen):
+    """The evaluation of one risk factor by one rule (also exported as `RiskFactor`)."""
+
     rule_id: str = Field(min_length=1)
     outcome: Recommendation
     rationale: str
     evidence_ids: tuple[str, ...] = ()
+    factor: RiskFactorKind | None = None
+    threshold_status: ThresholdStatus | None = Field(
+        default=None,
+        description="None when the rule needs no numeric limit; otherwise where the limit stands.",
+    )
+
+    @model_validator(mode="after")
+    def _unvalidated_thresholds_cannot_support_go(self) -> RuleResult:
+        if self.outcome not in (Recommendation.GO, Recommendation.CAUTION):
+            return self
+        if self.threshold_status in (
+            ThresholdStatus.TBD,
+            ThresholdStatus.REQUIRES_DOMAIN_VALIDATION,
+        ):
+            raise ValueError("a rule with an unvalidated threshold cannot return GO or CAUTION")
+        if (
+            self.factor is not None
+            and self.factor in THRESHOLD_FACTORS
+            and self.threshold_status != ThresholdStatus.VALIDATED
+        ):
+            raise ValueError(
+                f"GO or CAUTION on '{self.factor.value}' requires a VALIDATED threshold"
+            )
+        return self
 
 
 class ScenarioKind(StrEnum):
@@ -181,6 +235,13 @@ class AssessmentRecord(_Frozen):
             "not computed (no risk model yet); it is never defaulted to a number."
         ),
     )
+    unevaluated_factors: tuple[RiskFactorKind, ...] = Field(
+        default=(),
+        description="Threshold-dependent factors with no validated rule: NOT assessed.",
+    )
+    confidence_method: str | None = Field(
+        default=None, description="How `confidence` was computed. Required whenever it is set."
+    )
     evidence_issues: tuple[str, ...] = Field(
         default=(), description="Sources or categories that failed or were rejected."
     )
@@ -225,6 +286,8 @@ class AssessmentRecord(_Frozen):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> AssessmentRecord:
+        if self.confidence is not None and not (self.confidence_method or "").strip():
+            raise ValueError("a confidence value requires a documented method")
         ids = [e.id for e in self.evidence]
         if len(ids) != len(set(ids)):
             raise ValueError("evidence ids must be unique")

@@ -26,8 +26,15 @@ from divesafe.data.base import FetchResult
 from divesafe.data.errors import ConnectorResponseError
 from divesafe.data.http import JsonGetter
 from divesafe.data.parsing import as_dict, clip, haversine_km, parse_naive
-from divesafe.data.sites import Site
-from divesafe.domain import DataCategory, EvidenceItem
+from divesafe.domain import (
+    DataCategory,
+    DataKind,
+    DataQuality,
+    DiveSite,
+    EvidenceItem,
+    GeoPoint,
+    TransformationStep,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +85,7 @@ class OpenMeteoMarineConnector:
         self._getter = getter
 
     async def fetch(
-        self, site: Site, window_start: datetime, window_end: datetime, now: datetime
+        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult:
         if window_end <= window_start:
             raise ValueError("window_end must be after window_start")
@@ -100,7 +107,7 @@ class OpenMeteoMarineConnector:
             raise ConnectorResponseError(f"unusable response: {clip(exc)}") from exc
 
     def parse(
-        self, payload: Any, site: Site, first: datetime, last: datetime, now: datetime
+        self, payload: Any, site: DiveSite, first: datetime, last: datetime, now: datetime
     ) -> FetchResult:
         body = as_dict(payload, "response")
         if body.get("error"):
@@ -152,6 +159,31 @@ class OpenMeteoMarineConnector:
                         retrieved_at=now,
                         valid_at=moment,
                         is_forecast=True,
+                        data_kind=DataKind.MODEL,
+                        location=GeoPoint(
+                            latitude=grid_lat,
+                            longitude=grid_lon,
+                            description="model grid cell chosen by the provider (sea preferred)",
+                        ),
+                        quality=DataQuality.DEGRADED,
+                        quality_notes=(
+                            f"regional model grid cell {grid_km} km from the requested point",
+                            "provider: coastal accuracy limited; not suitable for navigation",
+                        ),
+                        transformations=(
+                            TransformationStep(step="requested in UTC; hour timestamps parsed"),
+                            TransformationStep(
+                                step="unit check",
+                                detail=", ".join(f"{n}={units[n]}" for n in names),
+                            ),
+                            TransformationStep(
+                                step="range check", detail="finite, plausible range"
+                            ),
+                            TransformationStep(
+                                step="grid snap",
+                                detail=f"{grid_km} km from the requested point",
+                            ),
+                        ),
                         value={
                             "variables": values,
                             "units": {n: units[n] for n in names},

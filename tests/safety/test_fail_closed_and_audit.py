@@ -46,7 +46,9 @@ class _Rule:
 
 
 def _engine(*rules: _Rule, required: frozenset[DataCategory] = frozenset()) -> RiskRulesEngine:
-    return RiskRulesEngine(rules, EvidencePolicy(required, timedelta(hours=1)), "test")
+    return RiskRulesEngine(
+        rules, EvidencePolicy(required, timedelta(hours=1)), "test", required_factors=frozenset()
+    )
 
 
 # --- B1: never GO by absence -------------------------------------------------------------
@@ -147,6 +149,7 @@ def _record(**overrides: object) -> AssessmentRecord:
         "final_recommendation": R.NO_GO,
         "llm_attempted_downgrade": False,
         "confidence": 0.5,
+        "confidence_method": "synthetic test value",
         "ruleset_version": "test",
     }
     base.update(overrides)

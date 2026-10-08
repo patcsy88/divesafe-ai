@@ -19,6 +19,20 @@ in `divesafe.risk.engine` and by `AssessmentRecord` validation, and tested in `t
 Evidence value validation, contradiction detection and ToT guardrails are planned
 (see Known gaps).
 
+## Deterministic, probabilistic and human responsibilities
+
+| | DETERMINISTIC | PROBABILISTIC / AI | HUMAN |
+| --- | --- | --- | --- |
+| **What** | Validation, rules, hard constraints, calculations | Interpretation, prediction, scenario reasoning, explanation | The final decision |
+| **Code** | `domain` (validators), `data` (connectors), `risk` (engine, `reconcile`), `services` | `agents` (specialists, bounded ToT, risk proposal), `rag` (not built) | `orchestration.human_gate`, `api` decision endpoints |
+| **Authority** | Authoritative; the only source of `final_recommendation` | Advisory; a proposal that can only tighten, never relax | Accepts or overrides with rationale (ADR 0004) |
+| **Reproducible** | Yes, same input gives same output | No; stored with model and prompt versions | n/a; recorded with identity and time |
+| **Failure** | Fails closed to `INSUFFICIENT EVIDENCE` | Dropped and reported; deterministic result stands | n/a |
+| **Examples** | Unit and range checks, freshness, `WarningNeedsHumanReadingRule`, placeholder rules | Specialist findings, three scenarios, explanation | Diver, dive master or dive leader |
+
+Nothing in the AI column can change a result in the deterministic column; nothing is final until
+the human column acts.
+
 ## Components
 
 ```
@@ -58,6 +72,36 @@ APPLICATION             Dive Assessment API (FastAPI) | Human decision interface
 - Everything an agent says about conditions must cite `EvidenceItem` IDs.
 - Evidence carries source, version, retrieval time, valid time, and forecast/observation flag.
 - Freshness and required categories are enforced by the rules engine's `EvidencePolicy`.
+
+## Domain model
+
+`divesafe.domain` holds frozen Pydantic types and imports nothing else from the package. The
+project's concept names map onto it like this:
+
+| Concept | Type |
+| --- | --- |
+| DivePlan | `DivePlan` |
+| DiveSite | `DiveSite` (+ `SiteConstraint`, all `TBD` until validated) |
+| WeatherConditions, WaveConditions, OceanConditions, TidalConditions | typed conditions in `domain.conditions` (physical plausibility only, `None` = not available) |
+| EnvironmentalObservation | conditions plus the evidence id they came from; `observation_from_evidence` |
+| MarineWarning | the warning as published; applicability never decided |
+| Evidence | `EvidenceItem` (alias `Evidence`) with the provenance fields below |
+| RiskFactor | `RuleResult` (alias `RiskFactor`), tagged with a `RiskFactorKind` |
+| RiskAssessment | the engine's output; recommendation must equal the most severe result |
+| ConfidenceAssessment | all `None` by default; a number needs a documented method (shape only; the record enforces `confidence_method` itself) |
+| Recommendation | `GO`, `CAUTION`, `NO-GO`, `INSUFFICIENT EVIDENCE` |
+| HumanDecision | decider, decision, time, derived `is_override`, rationale |
+| PostDiveObservation | `ActualConditions` (alias `PostDiveObservation`) |
+
+## Data provenance
+
+Every `EvidenceItem` carries: `source` and `source_version`; `location` (`GeoPoint`, the data's
+location such as the model grid cell); `data_kind` (observation, forecast, model, prediction,
+notice, knowledge) with `is_forecast` forced to agree; `retrieved_at`; the validity window
+(`valid_at` to `valid_until`); `quality` (default `unassessed`, `rejected` data is refused) with
+`quality_notes`; and `transformations`, the steps from payload to stored value. The marine
+connector records unit and range checks and the grid snap; the warnings connector records the
+timezone inference. Provenance is stored in the audit record with the evidence.
 
 ## Audit record
 
@@ -104,3 +148,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Per-category evidence quality policy and engine-level validity-window coverage**
   (see risk-model.md).
 - **Rate limiting is per process**, not shared across workers.
+- **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
+  `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry
+  `rtk git ...` variants, including a deny for `rtk git push`. Verified by running the reviewer:
+  `git diff`, `git log` and `mypy` run; `git push`, `rm` and edits are denied; bare
+  `git status` is still denied for unknown reasons (use `git diff --staged`). Without the plugin
+  the extra rules are harmless. Re-verify after changing the plugin or OpenCode.

@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from divesafe.data import Connector, ConnectorError, FetchResult, Site
+from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
 from divesafe.domain import DataCategory, EvidenceItem
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def build_evidence_set(
 
 async def gather_evidence(
     connectors: Sequence[Connector],
-    site: Site,
+    site: DiveSite,
     window_start: datetime,
     window_end: datetime,
     now: datetime,

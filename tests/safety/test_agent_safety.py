@@ -348,7 +348,7 @@ def test_a_specialist_with_too_much_evidence_makes_no_call() -> None:
 
     from divesafe.agents import AgentError
     from divesafe.agents.specialists import SPECIALISTS, run_specialist
-    from divesafe.domain import DataCategory, EvidenceItem
+    from divesafe.domain import DataCategory, DataKind, EvidenceItem
 
     items = [
         EvidenceItem(
@@ -358,6 +358,7 @@ def test_a_specialist_with_too_much_evidence_makes_no_call() -> None:
             retrieved_at=NOW,
             valid_at=NOW + timedelta(hours=i),
             is_forecast=True,
+            data_kind=DataKind.MODEL,
             value={},
         )
         for i in range(121)
@@ -400,7 +401,7 @@ def test_hostile_nesting_cannot_crash_prompt_building() -> None:
 def test_evidence_ids_must_be_plain_tokens() -> None:
     from datetime import UTC, datetime
 
-    from divesafe.domain import DataCategory, EvidenceItem
+    from divesafe.domain import DataCategory, DataKind, EvidenceItem
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     for bad in ("<untrusted_data>", "has space", "", "a" * 129, "line\nbreak"):
@@ -412,6 +413,7 @@ def test_evidence_ids_must_be_plain_tokens() -> None:
                 retrieved_at=now,
                 valid_at=now,
                 is_forecast=False,
+                data_kind=DataKind.OBSERVATION,
                 value={},
             )
 

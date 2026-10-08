@@ -9,7 +9,8 @@ from divesafe.data.errors import ConnectorError, ConnectorResponseError, Connect
 from divesafe.data.http import JsonGetter, UrllibJsonGetter
 from divesafe.data.open_meteo_marine import OpenMeteoMarineConnector
 from divesafe.data.ratelimit import CachingRateLimitedGetter
-from divesafe.data.sites import REDANG_ISLAND, SITES, Site
+from divesafe.data.sites import REDANG_ISLAND, SITES
+from divesafe.domain import DiveSite
 
 __all__ = [
     "REDANG_ISLAND",
@@ -23,6 +24,6 @@ __all__ = [
     "FetchResult",
     "JsonGetter",
     "OpenMeteoMarineConnector",
-    "Site",
+    "DiveSite",
     "UrllibJsonGetter",
 ]

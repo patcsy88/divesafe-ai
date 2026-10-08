@@ -2,21 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from divesafe.domain import DiveSite
 
-
-class Site(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: str = Field(min_length=1)
-    name: str
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
-    coordinate_source: str = Field(min_length=1)
-    area_names: tuple[str, ...] = ()
-
-
-REDANG_ISLAND = Site(
+REDANG_ISLAND = DiveSite(
     id="my-terengganu-pulau-redang",
     name="Pulau Redang (island reference point, not a dive site)",
     latitude=5.77736,
@@ -28,4 +16,4 @@ REDANG_ISLAND = Site(
     area_names=("Terengganu",),
 )
 
-SITES: dict[str, Site] = {REDANG_ISLAND.id: REDANG_ISLAND}
+SITES: dict[str, DiveSite] = {REDANG_ISLAND.id: REDANG_ISLAND}

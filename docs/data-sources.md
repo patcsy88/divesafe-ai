@@ -98,6 +98,14 @@ reachable but not yet approved or implemented. Nothing here has been called from
 3. Is there access to official JUPEM tide data (licence or file export)? Still open.
 4. Wind is still a gap (not in the marine API).
 
+## Provenance recorded by connectors
+
+Both connectors fill every provenance field on `EvidenceItem` (see architecture.md): marine
+items are `data_kind=model`, `quality=degraded` with the grid-snap distance and a note that it is
+not a site measurement; warnings are `data_kind=notice`, `quality=unassessed` with the validity
+window and the timezone-inference step. Nothing claims `validated` quality, because no connector
+yet checks data against an independent source.
+
 ## Connector contract
 
 A connector in `divesafe.data` must:

@@ -56,7 +56,7 @@ def _payload(name: str) -> Any:
 
 def _engine(required: set[DataCategory]) -> RiskRulesEngine:
     policy = EvidencePolicy(frozenset(required), timedelta(hours=1))
-    return RiskRulesEngine([_GoRule()], policy, "synthetic")
+    return RiskRulesEngine([_GoRule()], policy, "synthetic", required_factors=frozenset())
 
 
 def _gather(marine: Any, warnings: Any):  # type: ignore[no-untyped-def]
@@ -116,7 +116,12 @@ def test_stale_connector_data_fails_closed() -> None:
 
 def _engine_with_warning_rule(required: set[DataCategory]) -> RiskRulesEngine:
     policy = EvidencePolicy(frozenset(required), timedelta(hours=1))
-    return RiskRulesEngine([_GoRule(), WarningNeedsHumanReadingRule()], policy, "synthetic")
+    return RiskRulesEngine(
+        [_GoRule(), WarningNeedsHumanReadingRule()],
+        policy,
+        "synthetic",
+        required_factors=frozenset(),
+    )
 
 
 def test_overlapping_warning_blocks_an_automatic_go() -> None:

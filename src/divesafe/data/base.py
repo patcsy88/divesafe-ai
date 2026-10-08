@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from divesafe.data.sites import Site
-from divesafe.domain import EvidenceItem
+from divesafe.domain import DiveSite, EvidenceItem
 
 
 @dataclass(frozen=True)
@@ -26,5 +25,5 @@ class Connector(Protocol):
     name: str
 
     async def fetch(
-        self, site: Site, window_start: datetime, window_end: datetime, now: datetime
+        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult: ...

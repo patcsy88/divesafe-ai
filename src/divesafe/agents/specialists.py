@@ -1,4 +1,4 @@
-"""Specialist agents: Weather, Ocean Conditions, Tide/Current, Site Intelligence, Prediction.
+"""Specialist agents: Weather, Ocean Conditions, Tide/Current, DiveSite Intelligence, Prediction.
 
 Each reads only the evidence categories of its domain and returns a `Finding`. A specialist with
 no evidence makes no LLM call and returns an explicit no-evidence finding, so it cannot invent

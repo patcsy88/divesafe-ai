@@ -83,7 +83,12 @@ def _engine(
     rules: list[Any] = [_GoRule()]
     if with_warning_rule:
         rules.append(WarningNeedsHumanReadingRule())
-    return RiskRulesEngine(rules, EvidencePolicy(required, timedelta(hours=1)), "synthetic")
+    return RiskRulesEngine(
+        rules,
+        EvidencePolicy(required, timedelta(hours=1)),
+        "synthetic",
+        required_factors=frozenset(),
+    )
 
 
 def _run(marine: Any = MARINE, warnings: Any = WARNINGS, **kwargs: Any) -> AssessmentRecord:
@@ -249,7 +254,12 @@ def test_connector_issues_do_not_soften_a_no_go() -> None:
         def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
             return RuleResult(rule_id=self.rule_id, outcome=R.NO_GO, rationale="synthetic")
 
-    engine = RiskRulesEngine([_NoGo()], EvidencePolicy(LIVE, timedelta(hours=1)), "synthetic")
+    engine = RiskRulesEngine(
+        [_NoGo()],
+        EvidencePolicy(LIVE, timedelta(hours=1)),
+        "synthetic",
+        required_factors=frozenset(),
+    )
     record = _run(warnings=ConnectorTransportError("HTTP 503"), engine=engine)
     assert record.final_recommendation == R.NO_GO
 

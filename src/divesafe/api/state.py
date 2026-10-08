@@ -14,13 +14,19 @@ from divesafe.data import (
     CachingRateLimitedGetter,
     Connector,
     DataGovMyWarningConnector,
+    DiveSite,
     OpenMeteoMarineConnector,
-    Site,
     UrllibJsonGetter,
 )
 from divesafe.domain import DataCategory
 from divesafe.models import LLMProvider, create_provider
-from divesafe.risk import EvidencePolicy, RiskRulesEngine, WarningNeedsHumanReadingRule
+from divesafe.risk import (
+    EvidencePolicy,
+    RiskRulesEngine,
+    Rule,
+    WarningNeedsHumanReadingRule,
+    placeholder_rules,
+)
 from divesafe.services import AssessmentRepository, InMemoryAssessmentRepository
 
 # Interim and unreviewed: no verified wind or tide source exists yet, so assessments are always
@@ -53,7 +59,7 @@ class AppState:
     engine: RiskRulesEngine | None
     authenticator: Authenticator
     clock: Callable[[], datetime]
-    sites: Mapping[str, Site]
+    sites: Mapping[str, DiveSite]
     decision_max_age: timedelta | None
     provider: LLMProvider | None = None
 
@@ -65,7 +71,8 @@ def build_engine(settings: Settings) -> RiskRulesEngine | None:
     policy = EvidencePolicy(
         INTERIM_REQUIRED_CATEGORIES, timedelta(minutes=settings.evidence_max_age_minutes)
     )
-    return RiskRulesEngine([WarningNeedsHumanReadingRule()], policy, INTERIM_RULESET_VERSION)
+    rules: list[Rule] = [WarningNeedsHumanReadingRule(), *placeholder_rules()]
+    return RiskRulesEngine(rules, policy, INTERIM_RULESET_VERSION)
 
 
 def build_provider(settings: Settings) -> LLMProvider | None:

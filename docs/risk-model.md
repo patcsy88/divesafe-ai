@@ -16,6 +16,34 @@ Two distinct mechanisms, ordered by authority.
   `GO < CAUTION < INSUFFICIENT EVIDENCE < NO-GO`.
 - **Versioning:** every ruleset has a `ruleset_version` stored in the audit record.
 
+### Risk factors and placeholders
+
+The engine must eventually evaluate (`RiskFactorKind`): wind, wave height, swell, swell period,
+current, tidal current, weather, marine warnings, forecast uncertainty, data freshness and
+site-specific constraints. Today only two are evaluated, and neither needs a number:
+marine warnings (`WarningNeedsHumanReadingRule`) and data freshness (the engine's evidence
+policy). Every threshold-dependent factor has a **placeholder** (`ThresholdTbdRule`): its limit
+is `TBD - REQUIRES DOMAIN VALIDATION`, it reports that the factor is NOT evaluated and returns
+`INSUFFICIENT EVIDENCE`. `RuleResult` refuses `GO` or `CAUTION` for a `TBD` or
+`REQUIRES DOMAIN VALIDATION` threshold, and `RiskAssessment.unevaluated_factors` (stored on the
+record and shown by the API) lists every factor with no `VALIDATED` rule.
+
+**Coverage guard.** `RiskRulesEngine` takes `required_factors` (default: every threshold factor).
+If the most severe result is `GO` or `CAUTION` while a required factor has no `VALIDATED` rule,
+the engine appends `ruleset.threshold_factors_uncovered` (`INSUFFICIENT EVIDENCE`). So `GO` or
+`CAUTION` is only reachable once a validated rule covers all required factors, even if the
+placeholders are left out of the ruleset. `RuleResult` also refuses `GO` or `CAUTION` for a
+threshold factor unless its threshold is `VALIDATED`, whether or not `threshold_status` was
+given. Passing `required_factors=frozenset()` disables the guard and is for synthetic tests only.
+
+Residual limits: a rule can still claim `VALIDATED` falsely, so reviewer sign-off on every rule
+that can produce `GO` or `CAUTION` is a process control, not a code guarantee. A numeric literal
+test scans every module under `risk/` (any float, any int outside the severity ranks 0-3,
+numeric-looking strings; it has a negative test proving it trips) but cannot see a limit loaded
+from a file or another package, so threshold sources must be named, versioned artefacts. The
+physical-plausibility bounds in `domain/conditions.py` (non-negative, 0-360) are not safety
+thresholds; no limit may be added there.
+
 ### Thresholds
 
 The engine ships **no numeric thresholds**. Thresholds (wave height, current speed, wind,
@@ -53,7 +81,8 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 ## Pipeline guarantees (`divesafe.orchestration`)
 
 - `assess_dive` refuses a policy with no required categories (`UnsafeConfigurationError`), so a
-  `GO` rule can never fire on no evidence through the pipeline.
+  `GO` rule cannot fire with an empty required-evidence policy through the pipeline. (It does not
+  prove a rule reads the categories the policy requires.)
 - Failed or rejected sources never abort the assessment. They are recorded in
   `AssessmentRecord.evidence_issues` and add an `evidence.connector_issues` rule result that
   forces at least `INSUFFICIENT EVIDENCE`, even for categories that are not required.
@@ -154,3 +183,17 @@ only keep or tighten an outcome.
 
 `tests/safety` must continue to prove: severity ordering; no relaxation by proposals; stale or
 missing evidence gives `INSUFFICIENT EVIDENCE`; hard `NO-GO` outranks everything.
+
+## Known gaps (domain and risk foundation)
+
+- **Evidence usability is not checked by the engine.** Freshness uses `retrieved_at` only. The
+  engine ignores `valid_at`/`valid_until` (so evidence for the wrong hour can count) and ignores
+  `quality` (DEGRADED model data fully satisfies a required category). `quality` is
+  self-asserted by a connector and is informational; nothing prevents a connector from claiming
+  `validated`. This must be closed, with a decision on whether DEGRADED data may support `GO`,
+  before the first validated rule is accepted. The coverage guard keeps `GO` unreachable until then.
+- **`ConfidenceAssessment`** documents the intended shape but is not wired into the record. The
+  record's own `confidence` is enforced instead: a number requires `confidence_method`.
+- **Rule exceptions and invalid citations:** a rule that raises becomes `INSUFFICIENT EVIDENCE`,
+  but a rule citing evidence ids that are not in the record makes record construction fail, which
+  the API reports as an opaque 500 rather than a visible `INSUFFICIENT EVIDENCE` assessment.

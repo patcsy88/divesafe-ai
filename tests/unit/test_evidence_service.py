@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from tests.conftest import make_evidence
 
-from divesafe.data import REDANG_ISLAND, ConnectorTransportError, FetchResult, Site
+from divesafe.data import REDANG_ISLAND, ConnectorTransportError, DiveSite, FetchResult
 from divesafe.domain import DataCategory
 from divesafe.services import DuplicateEvidenceError, build_evidence_set, gather_evidence
 
@@ -20,7 +20,7 @@ class _Ok:
         self._categories = categories
 
     async def fetch(
-        self, site: Site, window_start: datetime, window_end: datetime, now: datetime
+        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult:
         return FetchResult(tuple(make_evidence(c) for c in self._categories), ("note",))
 
@@ -29,7 +29,7 @@ class _Down:
     name = "down"
 
     async def fetch(
-        self, site: Site, window_start: datetime, window_end: datetime, now: datetime
+        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult:
         raise ConnectorTransportError("HTTP 503")
 

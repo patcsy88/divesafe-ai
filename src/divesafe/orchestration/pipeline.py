@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from divesafe.agents import run_agent_stage
-from divesafe.data import Connector, Site
+from divesafe.data import Connector, DiveSite
 from divesafe.domain import (
     AssessmentRecord,
     DivePlan,
@@ -42,7 +42,7 @@ async def assess_dive(
     *,
     assessment_id: str,
     plan: DivePlan,
-    site: Site,
+    site: DiveSite,
     connectors: Sequence[Connector],
     engine: RiskRulesEngine,
     now: datetime,
@@ -106,6 +106,7 @@ async def assess_dive(
         llm_attempted_downgrade=reconciled.llm_attempted_downgrade,
         confidence=None,
         evidence_issues=evidence.issues,
+        unevaluated_factors=assessment.unevaluated_factors,
         findings=findings,
         proposal_evidence_ids=proposal_ids,
         scenarios=scenarios,
