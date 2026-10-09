@@ -108,6 +108,47 @@ reachable but not yet approved or implemented. Nothing here has been called from
   data, as a plain-text link and never as HTML**. The API returns plain strings, not structured
   `{text, url}` pairs.
 
+### Tide source research (2026-10-09; nothing connected)
+
+Read from each provider's own pages. **No connector exists and none should be built until the
+licence question below is answered.** No key was created and no call was made to any of these.
+
+| Candidate | What it offers | Licence and cost, as stated | Verdict |
+| --- | --- | --- | --- |
+| **JUPEM** (Malaysia's official tide predictions) | Tide tables for 12 Peninsular Malaysia locations; a mobile app with a free 7-day forecast | Printed volume is paid; **no API or licensed data feed found** | Best fit by authority. Needs a licence or file export from JUPEM. |
+| **WorldTides** (`worldtides.info/api/v3`) | Tide heights, high/low extremes, datums, timezone, from station gauges and global models; the response names the dataset (`atlas`) and the actual point or station used (`responseLat/Lon`, `station`); `stationDistance=0` forces the global background model | API key required (**a credential you must create**); paid prepaid credits (1 credit per 7 days of heights or extremes), new accounts get free credits; copyright text must be reproduced; **see the two problems below** | **Not usable as-is.** |
+| **Stormglass** | Global tide extremes and sea level, with the station name and distance reported | API key; free plan **10 requests/day, not for commercial use** (one pricing page we read says 5,000/day and commercial use, a contradiction we could not resolve); its tide data sources and safety terms were **not read** | Unverified. Read its terms and source list before any decision. |
+| **Admiralty (UKHO) Tidal API** | Authoritative predictions | Covers the **British Isles and Ireland only** | Ruled out for Malaysia. |
+| **Open-Meteo `sea_level_height_msl`** | Hourly model sea level including tides | Same non-commercial terms as the rest of Open-Meteo | **Not a tide prediction** (datum is global mean sea level, about 8 km model, "not suitable for coastal navigation"). Deliberately not used. |
+
+**WorldTides: two problems, both from its own terms (updated 2026-07-12):**
+
+1. **A safety exclusion.** The terms say you "may not use this data if anyone or anything could
+   come to harm as a result of using it, including navigation or safety-critical operations", and
+   "do not use WorldTides as the only source for ... life-safety decisions". DiveSafe is decision
+   support for diving. Whether advice that a human can override counts as "safety-critical" is a
+   legal question we cannot settle; the safe reading is that it needs **written permission from
+   Brainware LLC**, which the terms invite for custom agreements.
+2. **A per-user licence.** "Each API request may only be used for a single user", and the data is
+   "licensed for use of individual spatial coordinates by an end user". Our response cache and any
+   shared assessment would reuse one paid call for several users.
+
+Other facts: the global background data is FES2014/FES2022 (AVISO+, satellite-derived) plus
+station-derived predictions from the University of Hawaii sea-level archive. No Malaysian
+authority is listed as a source, and the accuracy near Pulau Redang is **unknown** until the
+response's `atlas`, `responseLat/Lon` and station distance can be inspected with a real key.
+
+**What none of them provides: tidal streams.** These sources give water *height* and high/low
+times. The `tidal_current` risk factor needs the speed and direction of the tidal *stream*, which
+is what actually moves a diver, and none of these candidates supplies it. So even with a tide
+source connected, `tidal_current` stays unencodable. Tide height would support the `tides`
+evidence category and timing questions only.
+
+**Decisions needed before any connector (owner):** (a) ask JUPEM for a licence or export;
+(b) if WorldTides is preferred, obtain Brainware's written permission for this use and for sharing
+results across users, then register a key (kept in the environment, never in the repository);
+(c) decide whether tide height alone, without tidal streams, is worth connecting.
+
 ### Known limits that affect safety use
 
 - **data.gov.my states that marine forecast data is currently unavailable.** Warnings exist
