@@ -91,6 +91,7 @@ restart ([ADR 0006](docs/adr/0006-api-auth-and-repository.md)).
 | [docs/risk-model.md](docs/risk-model.md) | Rules engine, risk model, reconciliation |
 | [docs/data-sources.md](docs/data-sources.md) | Source categories and connector contract |
 | [docs/evaluation-strategy.md](docs/evaluation-strategy.md) | How the system is tested and evaluated |
+| [docs/domain-validation/](docs/domain-validation/README.md) | Pack for a dive professional to supply sourced, signed-off safety limits |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
 Contributor and AI-agent rules are in [AGENTS.md](AGENTS.md).

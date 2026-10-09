@@ -46,6 +46,10 @@ thresholds; no limit may be added there.
 
 ### Thresholds
 
+The pack a dive professional completes to supply them is in
+[domain-validation/](domain-validation/README.md): five decisions and per-factor forms with every
+limit blank, the data we actually hold for each factor, and a sign-off checklist.
+
 The engine ships **no numeric thresholds**. Thresholds (wave height, current speed, wind,
 visibility, temperature, depth/experience limits, and so on) must:
 
@@ -176,6 +180,15 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 - **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
   decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
   belongs with the agents.
+- **Rule scope, expiry and per-factor age (needed before any limit is encoded):** `Rule.evaluate`
+  receives only a `DivePlan` (site, start, duration, maximum depth). There is no diver
+  qualification, dive type, season, exposure direction, forecast margin or per-factor data age,
+  so a limit scoped to those cannot be represented, and a rule has no review expiry, so a stale
+  `VALIDATED` rule would keep permitting `GO`. The domain-validation pack collects all of these;
+  the software must gain a rule-definition model that carries scope, margin, source, reviewer and
+  an expiry that fails closed to `INSUFFICIENT EVIDENCE`, and a limit whose scope it cannot
+  represent must be refused, not widened. A second independent reviewer for any rule that can
+  allow `GO` or `CAUTION` is a process control, not a code guarantee.
 - **Rule review metadata:** rules carry a citation; reviewer and review-date fields are not yet
   enforced.
 
