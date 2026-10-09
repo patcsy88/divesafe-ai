@@ -41,7 +41,10 @@ a "No Advisory" tropical-cyclone message.
 ### A3. When sources disagree
 
 If two sources give different values for the same factor, the software currently does not detect
-it. Should the advice always become more cautious? by how much? ________________
+it. Should the advice always become more cautious? by how much? (Agreement between two sources
+only counts as confirmation if they are independent: some sources we use are built on the same
+upstream product, and the software records this. Please say how large a difference between
+independent sources should matter, per factor.) ________________
 
 ### A4. Data age and look-ahead
 

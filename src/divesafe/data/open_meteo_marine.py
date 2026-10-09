@@ -57,6 +57,16 @@ ATTRIBUTION = (
 )
 MAX_HOURS = 24 * 16
 
+# Upstream products, as Open-Meteo's own marine data-source table states them (read 2026-10-09):
+# currents and sea-surface temperature are the Copernicus Marine global physics analysis and
+# forecast (SMOC currents; SST). Wave values come from whichever of several wave models the
+# provider selects and the response does not say which, so their lineage is NOT known.
+COPERNICUS_PHYSICS = "copernicus-marine:GLOBAL_ANALYSISFORECAST_PHY_001_024"
+_UPSTREAM: dict[DataCategory, tuple[str, ...]] = {
+    DataCategory.CURRENTS: (COPERNICUS_PHYSICS,),
+    DataCategory.SEA_TEMPERATURE: (COPERNICUS_PHYSICS,),
+}
+
 # variable -> (category, expected unit, kind)
 _VARIABLES: dict[str, tuple[DataCategory, str, str]] = {
     "wave_height": (DataCategory.WAVES_SWELL, "m", "non_negative"),
@@ -70,6 +80,15 @@ _VARIABLES: dict[str, tuple[DataCategory, str, str]] = {
     "ocean_current_velocity": (DataCategory.CURRENTS, "km/h", "non_negative"),
     "ocean_current_direction": (DataCategory.CURRENTS, "°", "direction"),
 }
+
+
+def _lineage_note(category: DataCategory) -> str:
+    if category in _UPSTREAM:
+        return (
+            "derived from the Copernicus Marine physics product, so it is not independent of "
+            "a direct Copernicus Marine value"
+        )
+    return "the producing wave model is not reported, so the lineage is unknown"
 
 
 def _valid(kind: str, value: float) -> bool:
@@ -162,8 +181,11 @@ class OpenMeteoMarineConnector:
                             longitude=grid_lon,
                             description="model grid cell chosen by the provider (sea preferred)",
                         ),
+                        upstream=_UPSTREAM.get(category, ()),
+                        upstream_known=category in _UPSTREAM,
                         quality=DataQuality.DEGRADED,
                         quality_notes=(
+                            _lineage_note(category),
                             f"regional model grid cell {grid_km} km from the requested point",
                             "provider: coastal accuracy limited; not suitable for navigation",
                         ),

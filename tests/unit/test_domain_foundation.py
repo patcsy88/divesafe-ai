@@ -113,7 +113,7 @@ def test_negative_wave_height_in_evidence_is_unusable() -> None:
         valid_at=NOW,
         is_forecast=True,
         data_kind=DataKind.MODEL,
-        value={"variables": {"wave_height": -2.0}},
+        value={"variables": {"wave_height": -2.0}, "units": {"wave_height": "m"}},
     )
     with pytest.raises(ValidationError):
         observation_from_evidence(bad)
@@ -148,7 +148,56 @@ def test_a_complete_reading_reports_no_missing_fields() -> None:
 
 
 def test_unmapped_categories_have_no_typed_observation() -> None:
-    assert observation_from_evidence(make_evidence(DataCategory.WIND)) is None
+    for category in (DataCategory.TIDES, DataCategory.MARINE_WARNINGS, DataCategory.LOCAL_GUIDANCE):
+        assert observation_from_evidence(make_evidence(category)) is None
+
+
+def _marine_like(variables: dict[str, object], units: dict[str, object]) -> EvidenceItem:
+    return EvidenceItem(
+        id="x",
+        category=DataCategory.WAVES_SWELL,
+        source="t",
+        retrieved_at=NOW,
+        valid_at=NOW,
+        is_forecast=True,
+        data_kind=DataKind.MODEL,
+        value={"variables": variables, "units": units},
+    )
+
+
+@pytest.mark.parametrize("units", [{}, {"wave_height": "ft"}, {"wave_height": None}])
+def test_a_missing_or_different_unit_is_refused_never_converted(units: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="expected unit"):
+        observation_from_evidence(_marine_like({"wave_height": 1.0}, units))
+
+
+def test_wind_evidence_parses_into_canonical_weather_conditions() -> None:
+    from tests.safety.test_wind_evidence_safety import _evidence  # real recorded wind
+
+    wind = next(e for e in _evidence() if e.category == DataCategory.WIND)
+    observation = observation_from_evidence(wind)
+    assert observation is not None and isinstance(observation.conditions, WeatherConditions)
+    assert observation.conditions.wind_speed_kmh == wind.value["variables"]["wind_speed_10m"]
+    assert observation.conditions.wind_gust_kmh == wind.value["variables"]["wind_gusts_10m"]
+    assert (
+        observation.conditions.wind_direction_deg == wind.value["variables"]["wind_direction_10m"]
+    )
+
+
+def test_implausible_wind_is_refused() -> None:
+    from tests.safety.test_wind_evidence_safety import _evidence
+
+    wind = next(e for e in _evidence() if e.category == DataCategory.WIND)
+    bad = wind.model_copy(
+        update={
+            "value": {
+                **wind.value,
+                "variables": {**wind.value["variables"], "wind_speed_10m": -5.0},
+            }
+        }
+    )
+    with pytest.raises(ValidationError):
+        observation_from_evidence(bad)
 
 
 # --- (6) Recommendation enum ----------------------------------------------------------------

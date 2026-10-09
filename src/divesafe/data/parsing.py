@@ -38,7 +38,9 @@ def parse_naive(value: Any, label: str) -> datetime:
 
 
 def bounded_text(value: Any, label: str) -> str:
-    text = "" if value is None else str(value)
+    if value is not None and not isinstance(value, str):
+        raise ConnectorResponseError(f"{label} is not text")
+    text = value or ""
     if len(text) > MAX_TEXT:
         raise ConnectorResponseError(f"{label} is longer than {MAX_TEXT} characters")
     return text

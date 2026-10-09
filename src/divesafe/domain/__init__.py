@@ -11,6 +11,7 @@ from divesafe.domain.conditions import (
     WaveConditions,
     WeatherConditions,
 )
+from divesafe.domain.lineage import are_independent, can_corroborate
 from divesafe.domain.models import (
     ActualConditions,
     AssessmentRecord,
@@ -75,6 +76,8 @@ __all__ = [
     "RANGE_CHECK",
     "THRESHOLD_FACTORS",
     "UNIT_CHECK",
+    "are_independent",
+    "can_corroborate",
     "ActualConditions",
     "AssessmentRecord",
     "ConfidenceAssessment",

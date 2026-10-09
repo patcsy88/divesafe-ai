@@ -109,6 +109,43 @@ reachable but not yet approved or implemented. Nothing here has been called from
   data, as a plain-text link and never as HTML**. The API returns plain strings, not structured
   `{text, url}` pairs.
 
+### Further source research (2026-10-10; nothing connected)
+
+Prompted by a proposed multi-source stack. Read from the providers' own pages; no key created, no
+call made.
+
+- **Open-Meteo Marine and Copernicus Marine are not independent.** Open-Meteo's data-source table
+  lists the Copernicus physics product as its source of currents and sea-surface temperature (and
+  a Copernicus wave model among several wave sources). Their agreement would carry no information.
+  Recorded as lineage on every item (ADR 0010).
+- **Copernicus Marine** (physics product `GLOBAL_ANALYSISFORECAST_PHY_001_024`): 1/12 degree (about
+  9 km), hourly surface fields, updated daily at 08:00 UTC, 10-day forecast, a two-year sliding
+  history, NetCDF. Includes a surface-current dataset with wave and tidal drift (SMOC). Needs a
+  **registered account** to subset and download. Licence: free, worldwide, permits commercial use
+  and derived products, **requires attribution** ("Generated using E.U. Copernicus Marine Service
+  Information" with the product DOIs). Its value to DiveSafe is history for a site baseline, depth
+  levels and authoritative provenance, not an independent check on Open-Meteo's currents.
+  Adapter dependencies (`copernicusmarine`, `xarray`, `netCDF4`, `numpy`, `pandas`) need an ADR.
+- **MET Malaysia API** (`api.met.gov.my`, v2.1): **token required** (free registration);
+  documented limits 1,000 requests a day and 3 a minute. Datasets: general forecast, **marine
+  forecast by named waters** (for example Terengganu Waters), and warnings in five categories
+  including strong wind and rough seas. A marine forecast is something `data.gov.my` lacks. Our
+  source for this is a 2022 community copy of the documentation and the API home page, so
+  **current behaviour is unverified until a token is used**; the marine forecast needs a start
+  date of today or later (no history). MET also states its open data may be reused for any
+  purpose.
+- **Not verified:** GEBCO, EMODnet, Meteomatics.
+- **Open-Meteo `visibility` is atmospheric**, not underwater: its docs describe viewing distance
+  influenced by cloud, humidity and aerosols. It must never stand in for dive visibility.
+- **MET's published warning criteria are not diving limits.** The warning text quotes figures for
+  strong wind and rough seas; they are an official hazard signal (handled by
+  `WarningNeedsHumanReadingRule`), not thresholds to encode.
+
+- **Lineage claims to verify:** Open-Meteo's marine data-source table (docs page
+  `open-meteo.com/en/docs/marine-weather-api`, read 2026-10-09) is the only basis for recording
+  currents and sea-surface temperature as the Copernicus physics product; a domain reviewer has
+  not confirmed it. Warnings name `met-malaysia:warnings` but are **not** claimed complete.
+
 ### Tide source research (2026-10-09; nothing connected)
 
 Read from each provider's own pages. **No connector exists and none should be built until the

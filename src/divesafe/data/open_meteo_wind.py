@@ -147,6 +147,8 @@ class OpenMeteoWindConnector:
                     longitude=grid_lon,
                     description="model grid cell chosen by the provider (sea preferred)",
                 ),
+                upstream=(),
+                upstream_known=False,  # "best match" picks a model and does not say which
                 quality=DataQuality.DEGRADED,
                 quality_notes=(
                     f"regional model grid cell {grid_km} km from the requested point",

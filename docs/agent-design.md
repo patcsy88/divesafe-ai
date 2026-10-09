@@ -50,6 +50,13 @@ Propose, Human Gate, Validate, Learn):
 contradictory LLM output cannot lower severity; uncited claims are dropped; provider swap does
 not change the final recommendation for identical deterministic inputs.
 
+## Canonical input (ADR 0010)
+
+Agents read marine and wind evidence as canonical, unit-bearing conditions with lineage, the
+engine's judged quality and the connector's limitations, not provider-shaped payloads. They are
+told that agreement corroborates only between independent items (both lineages known, nothing
+shared). Free-text notices keep their raw text inside the untrusted block.
+
 ## Implementation status (2026-10-09)
 
 Implemented in `divesafe.agents` and wired into `assess_dive(provider=...)`; see

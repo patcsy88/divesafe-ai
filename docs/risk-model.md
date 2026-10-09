@@ -163,7 +163,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 
 ## Known gaps (tracked, not yet implemented)
 
-- **Contradictory evidence:** the engine checks presence and freshness only. Contradiction
+- **Contradictory evidence:** the engine checks presence and freshness only. Any future
+  disagreement or corroboration logic must use `can_corroborate` ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)),
+  so sources that share an upstream product, or whose lineage is unknown, never corroborate each
+  other. Contradiction
   detection must be defined per category in the reviewed ruleset (no tolerance is invented in
   code). Until then, same-category conflicts are not detected.
 - **Validity window and quality are now enforced** by the engine ([ADR 0008](adr/0008-evidence-usability.md)).

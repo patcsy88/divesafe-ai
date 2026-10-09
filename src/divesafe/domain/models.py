@@ -7,9 +7,9 @@ result, mislabels an override or cites unknown evidence cannot be constructed.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from divesafe.domain.base import Frozen as _Frozen
 from divesafe.domain.provenance import (
@@ -65,7 +65,9 @@ class EvidenceItem(_Frozen):
 
     id: str = Field(pattern=r"^[A-Za-z0-9:._-]{1,128}$")
     category: DataCategory
-    source: str = Field(min_length=1, description="Connector or document the fact came from.")
+    source: str = Field(
+        min_length=1, max_length=200, description="Connector or document the fact came from."
+    )
     source_version: str | None = None
     retrieved_at: AwareDatetime
     valid_at: AwareDatetime = Field(description="Start of the time the fact refers to.")
@@ -77,8 +79,24 @@ class EvidenceItem(_Frozen):
     location: GeoPoint | None = Field(
         default=None, description="Where the data is for (e.g. the model grid cell), if known."
     )
+    upstream: tuple[
+        Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9:._/-]{1,120}$")], ...
+    ] = Field(
+        default=(),
+        max_length=20,
+        description=(
+            "Upstream data products or models this value derives from, as the provider states "
+            "them. Two sources that share one are NOT independent evidence of each other."
+        ),
+    )
+    upstream_known: bool = Field(
+        default=False,
+        description="True only when `upstream` is the complete list. Unknown never corroborates.",
+    )
     quality: DataQuality = DataQuality.UNASSESSED
-    quality_notes: tuple[str, ...] = ()
+    quality_notes: tuple[Annotated[str, StringConstraints(max_length=500)], ...] = Field(
+        default=(), max_length=20
+    )
     transformations: tuple[TransformationStep, ...] = ()
     value: dict[str, Any]
 
@@ -96,11 +114,15 @@ class EvidenceItem(_Frozen):
             )
         if self.quality == DataQuality.REJECTED:
             raise ValueError("rejected data must not be stored as evidence")
+        if self.upstream_known and not self.upstream:
+            raise ValueError("upstream_known requires at least one named upstream product")
+        if self.upstream and len(set(self.upstream)) != len(self.upstream):
+            raise ValueError("upstream products must be unique")
         return self
 
 
 class DivePlan(_Frozen):
-    site_id: str = Field(min_length=1)
+    site_id: str = Field(pattern=r"^[A-Za-z0-9._-]{1,100}$")
     planned_start: AwareDatetime
     planned_duration_minutes: int = Field(gt=0)
     max_depth_m: float = Field(gt=0)

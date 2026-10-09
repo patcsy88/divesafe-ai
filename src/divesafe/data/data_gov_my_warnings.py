@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 ENDPOINT = "https://api.data.gov.my/weather/warning/"
 SOURCE = "data-gov-my-weather-warning"
 SOURCE_VERSION = "weather-api"
+# Named as the likely origin, but completeness is not claimed: no source states it is the only one.
+MET_WARNINGS = "met-malaysia:warnings"
 MALAYSIA_TIME = timezone(timedelta(hours=8), "MYT")
 PAGE_LIMIT = 100
 LOOKBACK = timedelta(days=30)
@@ -140,6 +142,8 @@ class DataGovMyWarningConnector:
                     valid_until=valid_to.astimezone(UTC) if valid_to else None,
                     is_forecast=False,
                     data_kind=DataKind.NOTICE,
+                    upstream=(MET_WARNINGS,),
+                    upstream_known=False,
                     quality=DataQuality.DEGRADED,
                     quality_notes=(
                         "free-text, multi-region; applicability to the site is not determined",
@@ -188,6 +192,8 @@ class DataGovMyWarningConnector:
                     valid_until=window_end.astimezone(UTC),
                     is_forecast=False,
                     data_kind=DataKind.NOTICE,
+                    upstream=(MET_WARNINGS,),
+                    upstream_known=False,
                     quality=DataQuality.DEGRADED,
                     quality_notes=("absence of a warning in this feed; not proof of calm",),
                     transformations=(
