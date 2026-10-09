@@ -45,26 +45,31 @@ with a source, and be reviewed.
   you leave any factor unassessed, the answer stays `INSUFFICIENT EVIDENCE` however good the
   weather looks. That is the intended safe behaviour, but it means a partial pack cannot unlock a
   recommendation.
-- **Three factors also need data we do not have.** Wind and tidal current have no data source at
-  all, and weather has only warning text connected. Signing limits for them will not help until
-  sources exist.
+- **Five factors also need data we do not have.** Wind, tidal current, weather, forecast
+  uncertainty and site constraints cannot be encoded until a data source exists.
 - **Decision A1 matters just as much.** Today the software refuses `GO` or `CAUTION` on the
   regional model data we hold, whatever the rules say.
 - **So the realistic first result is more `NO-GO` and `INSUFFICIENT EVIDENCE`,** not `GO`. A `NO-GO`
-  limit you supply can start protecting divers before everything else is in place.
+  limit you supply can feed the decision support before everything else is in place.
 
 ## What the software can apply today
 
-The software knows only a dive's **site, start time, duration and maximum depth**. It does **not**
-yet know the diver's qualification, whether the dive is shore, boat or drift, the season, or the
-direction a site is exposed to. It also has one global limit on data age, not one per factor, and
-no way to add a forecast margin to a limit.
+A signed-off limit is stored as a *rule definition* (see `docs/adr/0009-rule-definitions.md`).
+Today the software **can** apply a limit that is scoped to named **sites** and a **maximum
+depth**, written against a value it really holds, in that value's **unit**, with your **forecast
+margin**, the **direction that is worse**, up to three bands (no-go, caution, go), your **source**,
+reviewers and an **expiry date**. It applies the worst value over the dive window, including the nearest forecast sample on each
+side of it, and fails closed after the expiry.
 
-If you supply a limit whose scope the software cannot represent, it will **not** be encoded, or
-it will be encoded only for the narrower case the software can express and refused for the rest.
-The developer will tell you which. Representing qualification, dive type, season, exposure and
-per-factor age and margin is planned work (see `docs/risk-model.md`, Known gaps), not a switch
-that exists today. Please still record those conditions: they say how the limit was meant.
+It **cannot yet** apply a limit that depends on the **diver's qualification**, the **dive type**
+(shore, boat, drift), the **season**, the **direction a site is exposed to**, or a **per-factor
+data age**. A limit that depends on any of these is recorded as such and **refused**; it is never
+widened to cover cases you did not sign for.
+
+Only four factors can be encoded now, because only they have data: wave height, swell, swell
+period and current. Wind, tidal current, weather, forecast uncertainty and site constraints have
+no data source, so no definition for them can be built until one exists. Please still answer for
+them; your answers decide what data we must find.
 
 ## What we can and cannot give you
 

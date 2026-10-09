@@ -40,6 +40,19 @@ from divesafe.domain.provenance import (
 )
 from divesafe.domain.quality import RANGE_CHECK, UNIT_CHECK, effective_quality
 from divesafe.domain.risk_types import THRESHOLD_FACTORS, RiskFactorKind, ThresholdStatus
+from divesafe.domain.rule_definition import (
+    FACTOR_METRICS,
+    SUPPORTED_METRICS,
+    Comparison,
+    Limit,
+    Metric,
+    Person,
+    Review,
+    RuleDefinition,
+    RuleScope,
+    SourceCitation,
+    WorseWhen,
+)
 from divesafe.domain.site import DiveSite, SiteConstraint
 
 Evidence = EvidenceItem
@@ -47,6 +60,17 @@ RiskFactor = RuleResult
 PostDiveObservation = ActualConditions
 
 __all__ = [
+    "FACTOR_METRICS",
+    "SUPPORTED_METRICS",
+    "Comparison",
+    "Limit",
+    "Metric",
+    "Person",
+    "Review",
+    "RuleDefinition",
+    "RuleScope",
+    "SourceCitation",
+    "WorseWhen",
     "NOT_MEASURED",
     "RANGE_CHECK",
     "THRESHOLD_FACTORS",

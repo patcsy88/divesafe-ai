@@ -87,7 +87,7 @@ questions. Add one rule form per limit you supply.
 
 **Questions:**
 
-1. Which wave quantity do you use? Available: significant height, wind-wave height and swell height. A maximum or individual wave height is not available.
+1. Which wave quantity do you use? Available as data: significant height, wind-wave height and swell height. Only significant height can be encoded as a limit today. A maximum or individual wave height is not available.
 2. What limit, per diver level and dive type, for entry/exit and for the surface?
 3. How much should the system add for the model being coarse and not site-specific?
 4. Is there a sheltered or exposed side of the site that changes the limit?

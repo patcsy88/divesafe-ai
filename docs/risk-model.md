@@ -180,15 +180,14 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 - **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
   decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
   belongs with the agents.
-- **Rule scope, expiry and per-factor age (needed before any limit is encoded):** `Rule.evaluate`
-  receives only a `DivePlan` (site, start, duration, maximum depth). There is no diver
-  qualification, dive type, season, exposure direction, forecast margin or per-factor data age,
-  so a limit scoped to those cannot be represented, and a rule has no review expiry, so a stale
-  `VALIDATED` rule would keep permitting `GO`. The domain-validation pack collects all of these;
-  the software must gain a rule-definition model that carries scope, margin, source, reviewer and
-  an expiry that fails closed to `INSUFFICIENT EVIDENCE`, and a limit whose scope it cannot
-  represent must be refused, not widened. A second independent reviewer for any rule that can
-  allow `GO` or `CAUTION` is a process control, not a code guarantee.
+- **Rule scope, expiry and per-factor age:** partly addressed by
+  [ADR 0009](adr/0009-rule-definitions.md): a `RuleDefinition` now carries sites, maximum depth,
+  unit, forecast margin, worse direction, source, reviewers, read-back and an expiry that the
+  engine enforces. Still not representable, and refused when listed: diver qualification, dive
+  type, season, exposure direction and per-factor data age. Only four factors have a data source
+  (wave height, swell, swell period, current), one primary metric each. A reviewer is a string, so
+  the signed document is the only evidence of review; the ruleset file is code-equivalent and its
+  hash is recorded with every assessment.
 - **Rule review metadata:** rules carry a citation; reviewer and review-date fields are not yet
   enforced.
 

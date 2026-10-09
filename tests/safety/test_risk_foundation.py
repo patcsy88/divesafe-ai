@@ -51,6 +51,7 @@ class _Fixed:
     ) -> None:
         self.rule_id = rule_id
         self._outcome, self._factor, self._status = outcome, factor, status
+        self.expires_at = NOW + timedelta(days=3650)  # synthetic: a validated rule must expire
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
         return RuleResult(

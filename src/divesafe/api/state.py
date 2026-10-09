@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,10 +19,16 @@ from divesafe.data import (
     OpenMeteoMarineConnector,
     UrllibJsonGetter,
 )
-from divesafe.domain import DataCategory
+from divesafe.domain import DataCategory, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
+from divesafe.orchestration import (
+    RulesetError,
+    load_ruleset_bytes,
+    read_ruleset_file,
+)
 from divesafe.risk import (
     EvidencePolicy,
+    FactorScopeRule,
     RiskRulesEngine,
     Rule,
     WarningNeedsHumanReadingRule,
@@ -64,15 +71,51 @@ class AppState:
     provider: LLMProvider | None = None
 
 
-def build_engine(settings: Settings) -> RiskRulesEngine | None:
-    """None when no evidence max age is configured: there is deliberately no default."""
+def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEngine | None:
+    """None when no evidence max age is configured: there is deliberately no default.
+
+    With `ruleset_path` the signed-off definitions in that file are loaded. Any refusal (invalid,
+    unreviewed, expired, duplicate) stops startup: silently ignoring a signed limit would be worse
+    than not starting. Placeholders remain only for factors that have no definition.
+    """
     if settings.evidence_max_age_minutes is None:
         return None
     policy = EvidencePolicy(
         INTERIM_REQUIRED_CATEGORIES, timedelta(minutes=settings.evidence_max_age_minutes)
     )
-    rules: list[Rule] = [WarningNeedsHumanReadingRule(), *placeholder_rules()]
-    return RiskRulesEngine(rules, policy, INTERIM_RULESET_VERSION)
+    rules: list[Rule] = [WarningNeedsHumanReadingRule()]
+    version = INTERIM_RULESET_VERSION
+    covered: set[RiskFactorKind] = set()
+    if settings.ruleset_path is not None:
+        try:
+            data = read_ruleset_file(settings.ruleset_path)
+            if (
+                settings.ruleset_sha256 is not None
+                and hashlib.sha256(data).hexdigest() != settings.ruleset_sha256
+            ):
+                raise RuntimeError("the ruleset file does not match DIVESAFE_RULESET_SHA256")
+            loaded = load_ruleset_bytes(data, now or utc_now(), known_sites=SITES.keys())
+        except RulesetError as exc:
+            raise RuntimeError(f"the ruleset cannot be loaded: {exc}") from exc
+        if not loaded.is_clean:
+            raise RuntimeError(f"the ruleset has refused definitions: {loaded.describe_refusals()}")
+        logger.warning(
+            "ruleset loaded",
+            extra={
+                "ruleset_version": loaded.version,
+                "ruleset_sha256": loaded.sha256,
+                "definitions": len(loaded.rules),
+            },
+        )
+        rules.extend(loaded.rules)
+        covered = {rule.factor for rule in loaded.rules}
+        rules.extend(
+            FactorScopeRule(f, [r for r in loaded.rules if r.factor == f])
+            for f in sorted(covered, key=lambda k: k.value)
+        )
+        version = loaded.identity
+    rules.extend(r for r in placeholder_rules() if r.factor not in covered)
+    return RiskRulesEngine(rules, policy, version)
 
 
 def build_provider(settings: Settings) -> LLMProvider | None:

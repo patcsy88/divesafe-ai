@@ -126,6 +126,12 @@ stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 
 See [docs/adr/](adr/).
 
+## Rule definitions
+
+Signed-off limits are data (`domain.RuleDefinition`, ADR 0009), applied by `risk.DefinitionRule`,
+expired by the engine and loaded from a reviewed file by `orchestration.load_ruleset`
+(`DIVESAFE_RULESET_PATH`; any refusal stops startup). The repository ships none.
+
 ## Known gaps
 
 Tracked items not yet built (each needs an ADR or design before implementation):

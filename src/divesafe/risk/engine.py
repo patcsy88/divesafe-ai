@@ -31,6 +31,7 @@ from divesafe.domain import (
     RiskAssessment,
     RiskFactorKind,
     RuleResult,
+    ThresholdStatus,
     effective_quality,
     most_severe,
     severity,
@@ -196,7 +197,7 @@ class RiskRulesEngine:
                 )
             )
         for rule in self._rules:
-            results.extend(self._run_rule(rule, plan, evidence))
+            results.extend(self._run_rule(rule, plan, evidence, now))
 
         if not results:
             results.append(
@@ -242,8 +243,22 @@ class RiskRulesEngine:
         )
 
     @staticmethod
-    def _run_rule(rule: Rule, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> list[RuleResult]:
+    def _run_rule(
+        rule: Rule, plan: DivePlan, evidence: Sequence[EvidenceItem], now: datetime
+    ) -> list[RuleResult]:
+        expires_at: datetime | None = getattr(rule, "expires_at", None)
         try:
+            if expires_at is not None and now >= expires_at:
+                return [
+                    RuleResult(
+                        rule_id=f"rule.expired.{rule.rule_id}",
+                        outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                        rationale=(
+                            "The signed-off review of this rule has expired, so it is not "
+                            "applied until it is re-reviewed."
+                        ),
+                    )
+                ]
             result = rule.evaluate(plan, evidence)
         except Exception:  # fail closed on ANY rule failure, so this catch is deliberately broad
             logger.exception("rule raised", extra={"rule_id": rule.rule_id})
@@ -254,7 +269,18 @@ class RiskRulesEngine:
                     rationale="The rule failed to evaluate.",
                 )
             ]
-        return [] if result is None else [result]
+        if result is None:
+            return []
+        if result.threshold_status == ThresholdStatus.VALIDATED and expires_at is None:
+            # A validated limit must expire, or a stale review would keep permitting GO.
+            return [
+                RuleResult(
+                    rule_id=f"rule.validated_without_expiry.{rule.rule_id}",
+                    outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                    rationale="A VALIDATED result must come from a rule that declares an expiry.",
+                )
+            ]
+        return [result]
 
     @staticmethod
     def _window(plan: DivePlan) -> tuple[datetime, datetime]:
@@ -347,13 +373,30 @@ class RiskRulesEngine:
         unrelated to the dive window."""
         policy = self._policy
         start, end = self._window(plan)
-        pool = {
-            e.id
+        usable_items = [
+            e
             for e in evidence
             if timedelta(0) <= now - e.retrieved_at <= policy.max_age
             and effective_quality(e) in policy.accepted_quality
-            and (not policy.require_window_coverage or _relevant_to_window(e, start, end))
+        ]
+        pool = {
+            e.id
+            for e in usable_items
+            if not policy.require_window_coverage or _relevant_to_window(e, start, end)
         }
+        if policy.require_window_coverage:
+            # A dive between two samples is exposed to both, so the nearest instant on each side
+            # (per category) is legitimate evidence, exactly as DefinitionRule uses it.
+            for category in {e.category for e in usable_items}:
+                instants = [
+                    e for e in usable_items if e.category == category and e.valid_until is None
+                ]
+                before = [e for e in instants if e.valid_at < start]
+                after = [e for e in instants if e.valid_at > end]
+                if before:
+                    pool.add(max(before, key=lambda e: e.valid_at).id)
+                if after:
+                    pool.add(min(after, key=lambda e: e.valid_at).id)
         return [
             RuleResult(
                 rule_id=f"{CITES_UNUSABLE_PREFIX}{r.rule_id}",

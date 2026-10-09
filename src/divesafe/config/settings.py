@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
@@ -27,6 +28,10 @@ class Settings(BaseSettings):
     allow_external_llm: bool = False
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
+    # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.
+    ruleset_path: Path | None = None
+    # Optional pin: the app refuses to start if the ruleset file's SHA-256 differs from this.
+    ruleset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     decision_max_age_minutes: int | None = Field(default=None, gt=0)
 
     auth_mode: Literal["api_key", "dev"] = "api_key"
@@ -39,6 +44,12 @@ class Settings(BaseSettings):
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("dev authentication cannot be used in production")
+        if (
+            self.environment == "production"
+            and self.ruleset_path is not None
+            and self.ruleset_sha256 is None
+        ):
+            raise ValueError("a production ruleset must be pinned with DIVESAFE_RULESET_SHA256")
         return self
 
 
