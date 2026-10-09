@@ -131,6 +131,19 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   reliability of real models are unmeasured. An evaluation set (tests/evaluation) is needed
   before any real provider is trusted for even advisory output.
 
+### Evidence usability (ADR 0008)
+
+A required category is satisfied only by evidence that is fresh, of an accepted *effective*
+quality (`domain.effective_quality` caps a connector's claim: only a measured observation with
+unit and range checks and no limitations can be VALIDATED) and that covers the planned dive
+window (intervals must chain without a gap; instants are bracketed; notices and knowledge are
+exempt only for their own categories and only if they have not ended before the dive).
+An observation cannot be valid after it was retrieved. Degraded evidence can make a category
+sufficient but cannot support `GO` or `CAUTION` unless `degraded_may_support_go=True`, which the
+default and the production configuration do not set, and validated evidence must itself cover the
+window. A `GO` or `CAUTION` that cites stale or unaccepted evidence is downgraded. Rules still
+receive all evidence so hazard rules are never blinded.
+
 ## Non-numeric policy rules
 
 - `WarningNeedsHumanReadingRule` ([ADR 0005](adr/0005-warnings-need-human-reading.md)): any
@@ -149,14 +162,17 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 - **Contradictory evidence:** the engine checks presence and freshness only. Contradiction
   detection must be defined per category in the reviewed ruleset (no tolerance is invented in
   code). Until then, same-category conflicts are not detected.
-- **Validity window (must be done before any GO rule is accepted):** freshness uses
-  `retrieved_at` only. Coverage of the dive window by `valid_at` is enforced inside the marine
-  connector (all hours or nothing per category) but not by the engine, so other connectors and
-  the `no_active_warnings` item are not protected.
-- **Per-category quality policy:** category-only sufficiency lets coarse model currents
-  (about 8 km, `grid_distance_km` recorded) satisfy `currents`. `EvidencePolicy` needs reviewed,
-  per-category accepted data kinds and resolution. Until then model currents alone must not be
-  allowed to support a `GO`.
+- **Validity window and quality are now enforced** by the engine ([ADR 0008](adr/0008-evidence-usability.md)).
+  What remains before any `GO` rule is accepted:
+  - *Per-variable and per-location checks:* sufficiency is per category, so a covering item with a
+    different variable (wave height without swell period) or another grid cell still satisfies the
+    category. `grid_distance_km` is recorded but not limited. A reviewed required-variable and
+    location rule is needed.
+  - *A `GO` that cites nothing* passes the citation guard (an empty citation is a subset of any
+    pool). Real rules must cite evidence; consider enforcing it when the first real rule lands.
+  - *Per-category resolution and kind policy:* model currents at about 8 km are accepted as
+    DEGRADED evidence; whether that is good enough for `GO` is the owner decision
+    `degraded_may_support_go` (default `False`).
 - **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
   decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
   belongs with the agents.
@@ -186,12 +202,12 @@ missing evidence gives `INSUFFICIENT EVIDENCE`; hard `NO-GO` outranks everything
 
 ## Known gaps (domain and risk foundation)
 
-- **Evidence usability is not checked by the engine.** Freshness uses `retrieved_at` only. The
-  engine ignores `valid_at`/`valid_until` (so evidence for the wrong hour can count) and ignores
-  `quality` (DEGRADED model data fully satisfies a required category). `quality` is
-  self-asserted by a connector and is informational; nothing prevents a connector from claiming
-  `validated`. This must be closed, with a decision on whether DEGRADED data may support `GO`,
-  before the first validated rule is accepted. The coverage guard keeps `GO` unreachable until then.
+- **Evidence usability** is checked ([ADR 0008](adr/0008-evidence-usability.md)). Residual limits:
+  gaps inside a series of instants are not detected (a maximum gap would be an invented number);
+  nothing can earn VALIDATED for a future window (an observation cannot describe the future), so
+  `GO` needs the owner decision `degraded_may_support_go`, default `False`; a connector could
+  falsely add check steps, which is dormant while none claims VALIDATED; the quality caps and the
+  (kind, category) exemption list are policy that needs review.
 - **`ConfidenceAssessment`** documents the intended shape but is not wired into the record. The
   record's own `confidence` is enforced instead: a number requires `confidence_method`.
 - **Rule exceptions and invalid citations:** a rule that raises becomes `INSUFFICIENT EVIDENCE`,

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from divesafe.domain import AssessmentRecord, Recommendation
+from divesafe.risk.engine import ENGINE_RULE_PREFIXES
 
 DISCLAIMER = (
     "Decision support only. The final decision belongs to the diver, dive master or dive leader. "
@@ -116,19 +117,17 @@ class AssessmentView(BaseModel):
         attributions = sorted(
             {str(e.value["attribution"]) for e in record.evidence if "attribution" in e.value}
         )
-        missing = sorted(
-            r.rule_id.removeprefix("evidence.required.")
-            for r in record.rule_results
-            if r.rule_id.startswith("evidence.required.")
-        )
+        problems = [
+            r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
+        ]
         outcome_note = _OUTCOME_NOTES[record.final_recommendation]
         if record.llm_tightened:
             outcome_note = (
                 f"Rules alone: {record.deterministic_recommendation.value}. An unverified LLM "
                 f"proposal raised this to {record.final_recommendation.value}. "
             ) + outcome_note
-        if missing:
-            outcome_note += f" Missing or stale evidence: {', '.join(missing)}."
+        if problems:
+            outcome_note += " Evidence problems: " + " ".join(problems)
         if record.unevaluated_factors:
             names = ", ".join(k.value for k in record.unevaluated_factors)
             outcome_note += f" Not evaluated (no validated threshold): {names}."

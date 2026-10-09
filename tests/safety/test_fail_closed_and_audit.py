@@ -47,7 +47,10 @@ class _Rule:
 
 def _engine(*rules: _Rule, required: frozenset[DataCategory] = frozenset()) -> RiskRulesEngine:
     return RiskRulesEngine(
-        rules, EvidencePolicy(required, timedelta(hours=1)), "test", required_factors=frozenset()
+        rules,
+        EvidencePolicy(required, timedelta(hours=1), degraded_may_support_go=True),
+        "test",
+        required_factors=frozenset(),
     )
 
 

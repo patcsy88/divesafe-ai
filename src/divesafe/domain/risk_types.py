@@ -18,6 +18,7 @@ class RiskFactorKind(StrEnum):
     MARINE_WARNING = "marine_warning"
     FORECAST_UNCERTAINTY = "forecast_uncertainty"
     DATA_FRESHNESS = "data_freshness"
+    DATA_QUALITY = "data_quality"
     SITE_CONSTRAINT = "site_constraint"
 
 

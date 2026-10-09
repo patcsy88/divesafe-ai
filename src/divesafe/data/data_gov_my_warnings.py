@@ -140,7 +140,7 @@ class DataGovMyWarningConnector:
                     valid_until=valid_to.astimezone(UTC) if valid_to else None,
                     is_forecast=False,
                     data_kind=DataKind.NOTICE,
-                    quality=DataQuality.UNASSESSED,
+                    quality=DataQuality.DEGRADED,
                     quality_notes=(
                         "free-text, multi-region; applicability to the site is not determined",
                         "timestamps carry no timezone in the source; UTC+08:00 is inferred",
@@ -188,6 +188,7 @@ class DataGovMyWarningConnector:
                     valid_until=window_end.astimezone(UTC),
                     is_forecast=False,
                     data_kind=DataKind.NOTICE,
+                    quality=DataQuality.DEGRADED,
                     quality_notes=("absence of a warning in this feed; not proof of calm",),
                     transformations=(
                         TransformationStep(step="absence", detail="no overlapping dated warning"),

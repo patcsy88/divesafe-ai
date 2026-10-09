@@ -27,6 +27,8 @@ from divesafe.data.errors import ConnectorResponseError
 from divesafe.data.http import JsonGetter
 from divesafe.data.parsing import as_dict, clip, haversine_km, parse_naive
 from divesafe.domain import (
+    RANGE_CHECK,
+    UNIT_CHECK,
     DataCategory,
     DataKind,
     DataQuality,
@@ -173,12 +175,10 @@ class OpenMeteoMarineConnector:
                         transformations=(
                             TransformationStep(step="requested in UTC; hour timestamps parsed"),
                             TransformationStep(
-                                step="unit check",
+                                step=UNIT_CHECK,
                                 detail=", ".join(f"{n}={units[n]}" for n in names),
                             ),
-                            TransformationStep(
-                                step="range check", detail="finite, plausible range"
-                            ),
+                            TransformationStep(step=RANGE_CHECK, detail="finite, plausible range"),
                             TransformationStep(
                                 step="grid snap",
                                 detail=f"{grid_km} km from the requested point",

@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from divesafe.domain import DataCategory, DataKind, DivePlan, EvidenceItem
+from divesafe.domain import (
+    DataCategory,
+    DataKind,
+    DataQuality,
+    DivePlan,
+    EvidenceItem,
+)
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -33,7 +39,9 @@ def make_evidence(
         source="test",
         retrieved_at=NOW - age,
         valid_at=NOW,
-        is_forecast=False,
-        data_kind=DataKind.OBSERVATION,  # synthetic test fixture
+        valid_until=NOW + timedelta(days=1),  # synthetic: covers any test dive window
+        is_forecast=True,
+        data_kind=DataKind.FORECAST,  # synthetic test fixture
+        quality=DataQuality.DEGRADED,  # a forecast can never earn VALIDATED
         value=dict(value),
     )

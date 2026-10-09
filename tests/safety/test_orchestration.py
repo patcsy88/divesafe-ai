@@ -85,7 +85,7 @@ def _engine(
         rules.append(WarningNeedsHumanReadingRule())
     return RiskRulesEngine(
         rules,
-        EvidencePolicy(required, timedelta(hours=1)),
+        EvidencePolicy(required, timedelta(hours=1), degraded_may_support_go=True),  # synthetic
         "synthetic",
         required_factors=frozenset(),
     )

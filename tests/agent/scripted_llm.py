@@ -115,7 +115,7 @@ def engine(*, with_warning_rule: bool) -> RiskRulesEngine:
         rules.append(WarningNeedsHumanReadingRule())
     return RiskRulesEngine(
         rules,
-        EvidencePolicy(LIVE, timedelta(hours=1)),
+        EvidencePolicy(LIVE, timedelta(hours=1), degraded_may_support_go=True),  # synthetic GO
         "synthetic",
         required_factors=frozenset(),  # synthetic GO rules; real rulesets keep the default
     )

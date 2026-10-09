@@ -86,7 +86,9 @@ Severity order: `GO < CAUTION < INSUFFICIENT EVIDENCE < NO-GO`.
   is reported as not evaluated, and it cannot produce `GO` or `CAUTION`.
 - NEVER hard-code a limit from memory (wave height, current, wind, visibility, depth, ...). A
   test scans `risk/` for stray numeric literals.
-- Missing, stale, future-dated or contradictory required evidence yields `INSUFFICIENT EVIDENCE`.
+- Missing, stale, future-dated, out-of-window, unaccepted-quality or contradictory required
+  evidence yields `INSUFFICIENT EVIDENCE`. The engine judges `effective_quality`, never a
+  connector's claim; degraded data cannot support `GO` or `CAUTION` unless the policy says so (ADR 0008).
 - The engine is pure and deterministic: no I/O, no LLM, no randomness.
 
 ## 8. RAG boundaries

@@ -72,7 +72,9 @@ def _production_engine() -> RiskRulesEngine:
 
 
 def _engine(*rules: object, required: set[DataCategory] | None = None) -> RiskRulesEngine:
-    policy = EvidencePolicy(frozenset(required or set()), timedelta(hours=1))
+    policy = EvidencePolicy(
+        frozenset(required or set()), timedelta(hours=1), degraded_may_support_go=True
+    )
     return RiskRulesEngine(
         rules,  # type: ignore[arg-type]
         policy,

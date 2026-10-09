@@ -35,6 +35,7 @@ from divesafe.domain import (
     TidalConditions,
     WaveConditions,
     WeatherConditions,
+    effective_quality,
     observation_from_evidence,
 )
 from divesafe.orchestration import decide
@@ -271,7 +272,8 @@ def test_connector_evidence_is_traceable_end_to_end() -> None:
     assert warning.data_kind == DataKind.NOTICE and warning.is_forecast is False
     assert warning.valid_until is not None and warning.valid_until >= warning.valid_at
     assert any(t.step == "timezone" for t in warning.transformations)
-    assert warning.quality == DataQuality.UNASSESSED  # nothing claims it was checked
+    assert warning.quality == DataQuality.DEGRADED  # usable with stated limitations
+    assert effective_quality(warning) == DataQuality.DEGRADED
 
 
 # --- site, confidence, vocabulary ----------------------------------------------------------

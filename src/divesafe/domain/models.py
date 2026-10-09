@@ -86,6 +86,10 @@ class EvidenceItem(_Frozen):
     def _consistent_provenance(self) -> EvidenceItem:
         if self.valid_until is not None and self.valid_until < self.valid_at:
             raise ValueError("valid_until is before valid_at")
+        if self.data_kind == DataKind.OBSERVATION and (
+            (self.valid_until or self.valid_at) > self.retrieved_at
+        ):
+            raise ValueError("an observation cannot be valid after the time it was retrieved")
         if self.is_forecast != (self.data_kind in NOT_MEASURED):
             raise ValueError(
                 f"is_forecast={self.is_forecast} contradicts data_kind={self.data_kind.value}"

@@ -55,7 +55,11 @@ def _payload(name: str) -> Any:
 
 
 def _engine(required: set[DataCategory]) -> RiskRulesEngine:
-    policy = EvidencePolicy(frozenset(required), timedelta(hours=1))
+    policy = EvidencePolicy(
+        frozenset(required),
+        timedelta(hours=1),
+        degraded_may_support_go=True,  # synthetic GO
+    )
     return RiskRulesEngine([_GoRule()], policy, "synthetic", required_factors=frozenset())
 
 
@@ -115,7 +119,11 @@ def test_stale_connector_data_fails_closed() -> None:
 
 
 def _engine_with_warning_rule(required: set[DataCategory]) -> RiskRulesEngine:
-    policy = EvidencePolicy(frozenset(required), timedelta(hours=1))
+    policy = EvidencePolicy(
+        frozenset(required),
+        timedelta(hours=1),
+        degraded_may_support_go=True,  # synthetic GO
+    )
     return RiskRulesEngine(
         [_GoRule(), WarningNeedsHumanReadingRule()],
         policy,

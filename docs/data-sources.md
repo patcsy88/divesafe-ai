@@ -102,9 +102,11 @@ reachable but not yet approved or implemented. Nothing here has been called from
 
 Both connectors fill every provenance field on `EvidenceItem` (see architecture.md): marine
 items are `data_kind=model`, `quality=degraded` with the grid-snap distance and a note that it is
-not a site measurement; warnings are `data_kind=notice`, `quality=unassessed` with the validity
-window and the timezone-inference step. Nothing claims `validated` quality, because no connector
-yet checks data against an independent source.
+not a site measurement; warnings are `data_kind=notice`, `quality=degraded` (usable with stated
+limitations) with the validity window and the timezone-inference step. Both are graded `degraded` (usable with stated limitations); nothing
+claims `validated`, because no connector checks data against an independent source, and the
+engine caps any such claim on models, forecasts and notices anyway (ADR 0008). Marine items
+record their `unit check` and `range check` steps; being model data they stay `degraded`.
 
 ## Connector contract
 
