@@ -57,6 +57,9 @@ class Metric(Frozen):
     variable: str
     category: DataCategory
     unit: str
+    # Aspects of the factor this metric does NOT evaluate. Shown in every result that uses it, so a
+    # covered factor never looks fully assessed.
+    not_evaluated: tuple[str, ...] = ()
 
 
 _METRICS = (
@@ -64,18 +67,27 @@ _METRICS = (
     Metric(variable="swell_wave_height", category=DataCategory.WAVES_SWELL, unit="m"),
     Metric(variable="swell_wave_period", category=DataCategory.WAVES_SWELL, unit="s"),
     Metric(variable="ocean_current_velocity", category=DataCategory.CURRENTS, unit="km/h"),
+    Metric(
+        variable="wind_speed_10m",
+        category=DataCategory.WIND,
+        unit="km/h",
+        not_evaluated=("gusts", "direction"),
+    ),
 )
 SUPPORTED_METRICS: dict[str, Metric] = {m.variable: m for m in _METRICS}
 
 # Which metrics may express which factor. One primary metric per factor, so a definition on a
 # secondary quantity (for example wind-wave height) can never mark the whole factor as covered.
-# (The comment below still applies:) Wind, tides, weather, forecast uncertainty and site
-# constraints have no data source yet, so no definition for them can be built.
+# Tidal current, weather, forecast uncertainty and site constraints have no data source yet, so
+# no definition for them can be built.
 FACTOR_METRICS: dict[RiskFactorKind, frozenset[str]] = {
     RiskFactorKind.WAVE_HEIGHT: frozenset({"wave_height"}),
     RiskFactorKind.SWELL: frozenset({"swell_wave_height"}),
     RiskFactorKind.SWELL_PERIOD: frozenset({"swell_wave_period"}),
     RiskFactorKind.CURRENT: frozenset({"ocean_current_velocity"}),
+    # Wind speed is the primary metric. Gusts and direction are recorded in the evidence but cannot
+    # be encoded yet: a gust-only definition would mark the whole wind factor as covered.
+    RiskFactorKind.WIND: frozenset({"wind_speed_10m"}),
 }
 
 

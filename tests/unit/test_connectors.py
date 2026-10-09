@@ -86,6 +86,7 @@ def test_marine_request_never_asks_for_sea_level_or_tides() -> None:
     _, params = getter.calls[0]
     assert "sea_level" not in params["hourly"]
     assert params["timezone"] == "UTC"
+    assert params["cell_selection"] == "sea"
     assert getter.calls[0][0].startswith("https://")
 
 

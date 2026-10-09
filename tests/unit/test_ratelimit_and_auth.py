@@ -122,3 +122,98 @@ def test_cached_payload_cannot_be_corrupted_by_a_caller() -> None:
     first = _get(g, a="1")
     first["n"] = 999
     assert _get(g, a="1") == {"n": 1}
+
+
+# --- combined provider quota (Open-Meteo documents 600/min, 5,000/hour, 10,000/day) -------------
+
+from divesafe.data import OPEN_METEO_QUOTA, QuotaGroup  # noqa: E402
+
+MARINE = "https://marine-api.open-meteo.com/v1/marine"
+FORECAST = "https://api.open-meteo.com/v1/forecast"
+
+
+def _free(clock: _Clock, **extra: Any) -> CachingRateLimitedGetter:
+    return CachingRateLimitedGetter(
+        _Inner(), clock=clock, cache_ttl_seconds=0, min_interval_seconds={}, **extra
+    )
+
+
+def _call(g: CachingRateLimitedGetter, url: str, n: int) -> Any:
+    return asyncio.run(g.get_json(url, {"n": str(n)}))
+
+
+def test_the_documented_open_meteo_limits_are_the_defaults() -> None:
+    assert OPEN_METEO_QUOTA.limits == ((60.0, 600), (3600.0, 5000), (86400.0, 10000))
+    assert {"marine-api.open-meteo.com", "api.open-meteo.com"} <= OPEN_METEO_QUOTA.hosts
+
+
+def test_the_two_open_meteo_hosts_share_one_budget() -> None:
+    clock = _Clock()
+    group = QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 4),))
+    g = _free(clock, quotas=(group,))
+    for i in range(2):
+        _call(g, MARINE, i)
+        _call(g, FORECAST, i)
+    with pytest.raises(ConnectorTransportError, match="budget"):
+        _call(g, FORECAST, 99)
+    with pytest.raises(ConnectorTransportError, match="budget"):
+        _call(g, MARINE, 99)
+
+
+def test_the_budget_slides_and_recovers() -> None:
+    clock = _Clock()
+    g = _free(clock, quotas=(QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 2),)),))
+    _call(g, MARINE, 1)
+    _call(g, MARINE, 2)
+    with pytest.raises(ConnectorTransportError):
+        _call(g, MARINE, 3)
+    clock.t += 61
+    assert _call(g, MARINE, 4)  # the earlier calls have left the window
+
+
+def test_every_window_is_enforced_not_just_the_shortest() -> None:
+    clock = _Clock()
+    g = _free(clock, quotas=(QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 10), (3600.0, 3))),))
+    for i in range(3):
+        _call(g, MARINE, i)
+        clock.t += 120  # each call is outside the per-minute window of the others
+    with pytest.raises(ConnectorTransportError):
+        _call(g, MARINE, 9)  # but the hourly budget is spent
+
+
+def test_cache_hits_do_not_spend_budget() -> None:
+    clock = _Clock()
+    g = CachingRateLimitedGetter(
+        _Inner(),
+        clock=clock,
+        cache_ttl_seconds=60,
+        min_interval_seconds={},
+        quotas=(QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 1),)),),
+    )
+    first = _call(g, MARINE, 1)
+    for _ in range(5):
+        assert _call(g, MARINE, 1) == first  # served from cache, budget untouched
+
+
+def test_other_hosts_are_not_charged_to_the_open_meteo_budget() -> None:
+    clock = _Clock()
+    g = _free(clock, quotas=(QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 1),)),))
+    _call(g, MARINE, 1)
+    for i in range(5):
+        _call(g, "https://api.data.gov.my/weather/warning/", i)
+
+
+def test_a_blocked_call_never_reaches_the_provider() -> None:
+    clock = _Clock()
+    inner = _Inner()
+    g = CachingRateLimitedGetter(
+        inner,
+        clock=clock,
+        cache_ttl_seconds=0,
+        min_interval_seconds={},
+        quotas=(QuotaGroup("t", OPEN_METEO_QUOTA.hosts, ((60.0, 1),)),),
+    )
+    _call(g, MARINE, 1)
+    with pytest.raises(ConnectorTransportError):
+        _call(g, MARINE, 2)
+    assert inner.calls == 1

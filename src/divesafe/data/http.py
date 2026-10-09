@@ -18,7 +18,9 @@ from typing import IO, Any, Protocol
 from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
 
 USER_AGENT = "divesafe-ai/0.1 (non-commercial research; decision support only)"
-ALLOWED_HOSTS: frozenset[str] = frozenset({"marine-api.open-meteo.com", "api.data.gov.my"})
+ALLOWED_HOSTS: frozenset[str] = frozenset(
+    {"marine-api.open-meteo.com", "api.open-meteo.com", "api.data.gov.my"}
+)
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
 

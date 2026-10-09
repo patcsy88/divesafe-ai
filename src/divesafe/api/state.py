@@ -17,6 +17,7 @@ from divesafe.data import (
     DataGovMyWarningConnector,
     DiveSite,
     OpenMeteoMarineConnector,
+    OpenMeteoWindConnector,
     UrllibJsonGetter,
 )
 from divesafe.domain import DataCategory, RiskFactorKind
@@ -36,9 +37,9 @@ from divesafe.risk import (
 )
 from divesafe.services import AssessmentRepository, InMemoryAssessmentRepository
 
-# Interim and unreviewed: no verified wind or tide source exists yet, so assessments are always
-# INSUFFICIENT EVIDENCE. This is the honest state; see docs/data-sources.md. Replace through a
-# reviewed ruleset, not at runtime.
+# Interim and unreviewed: no verified tide source exists and no limit is signed off yet, so
+# assessments are always INSUFFICIENT EVIDENCE. This is the honest state; see
+# docs/data-sources.md. Replace through a reviewed ruleset, not at runtime.
 INTERIM_REQUIRED_CATEGORIES: frozenset[DataCategory] = frozenset(
     {
         DataCategory.WAVES_SWELL,
@@ -141,7 +142,11 @@ def build_default_state(settings: Settings) -> AppState:
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     return AppState(
         repository=InMemoryAssessmentRepository(),
-        connectors=[OpenMeteoMarineConnector(getter), DataGovMyWarningConnector(getter)],
+        connectors=[
+            OpenMeteoMarineConnector(getter),
+            OpenMeteoWindConnector(getter),
+            DataGovMyWarningConnector(getter),
+        ],
         engine=build_engine(settings),
         authenticator=build_authenticator(settings),
         clock=utc_now,

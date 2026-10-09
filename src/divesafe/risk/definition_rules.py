@@ -33,6 +33,8 @@ from divesafe.domain import (
     WorseWhen,
 )
 
+NOT_EVALUATED_MARKER = "Not evaluated by this rule:"
+
 _COMPARE = {
     Comparison.GREATER_THAN: lambda a, b: a > b,
     Comparison.GREATER_OR_EQUAL: lambda a, b: a >= b,
@@ -63,6 +65,9 @@ class DefinitionRule:
     def _result(
         self, outcome: Recommendation, rationale: str, ids: Sequence[str] = ()
     ) -> RuleResult:
+        aspects = SUPPORTED_METRICS[self._d.metric].not_evaluated
+        if aspects:
+            rationale += f" {NOT_EVALUATED_MARKER} {', '.join(aspects)}."
         return RuleResult(
             rule_id=self.rule_id,
             outcome=outcome,

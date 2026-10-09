@@ -45,8 +45,8 @@ with a source, and be reviewed.
   you leave any factor unassessed, the answer stays `INSUFFICIENT EVIDENCE` however good the
   weather looks. That is the intended safe behaviour, but it means a partial pack cannot unlock a
   recommendation.
-- **Five factors also need data we do not have.** Wind, tidal current, weather, forecast
-  uncertainty and site constraints cannot be encoded until a data source exists.
+- **Four factors also need data we do not have.** Tidal current, weather, forecast uncertainty
+  and site constraints cannot be encoded until a data source exists.
 - **Decision A1 matters just as much.** Today the software refuses `GO` or `CAUTION` on the
   regional model data we hold, whatever the rules say.
 - **So the realistic first result is more `NO-GO` and `INSUFFICIENT EVIDENCE`,** not `GO`. A `NO-GO`
@@ -66,9 +66,10 @@ It **cannot yet** apply a limit that depends on the **diver's qualification**, t
 data age**. A limit that depends on any of these is recorded as such and **refused**; it is never
 widened to cover cases you did not sign for.
 
-Only four factors can be encoded now, because only they have data: wave height, swell, swell
-period and current. Wind, tidal current, weather, forecast uncertainty and site constraints have
-no data source, so no definition for them can be built until one exists. Please still answer for
+Only five factors can be encoded now, because only they have data: wave height, swell, swell
+period, current and wind (wind **speed** at 10 m; gusts and direction are recorded but cannot yet be
+encoded). Tidal current, weather, forecast uncertainty and site constraints have no data source, so
+no definition for them can be built until one exists. Please still answer for
 them; your answers decide what data we must find.
 
 ## What we can and cannot give you

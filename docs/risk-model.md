@@ -184,8 +184,8 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   [ADR 0009](adr/0009-rule-definitions.md): a `RuleDefinition` now carries sites, maximum depth,
   unit, forecast margin, worse direction, source, reviewers, read-back and an expiry that the
   engine enforces. Still not representable, and refused when listed: diver qualification, dive
-  type, season, exposure direction and per-factor data age. Only four factors have a data source
-  (wave height, swell, swell period, current), one primary metric each. A reviewer is a string, so
+  type, season, exposure direction and per-factor data age. Only five factors have a data source
+  (wave height, swell, swell period, current, wind speed), one primary metric each. A reviewer is a string, so
   the signed document is the only evidence of review; the ruleset file is code-equivalent and its
   hash is recorded with every assessment.
 - **Rule review metadata:** rules carry a citation; reviewer and review-date fields are not yet

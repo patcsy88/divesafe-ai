@@ -1,6 +1,10 @@
 """Deterministic risk rules engine. Authoritative for hard safety constraints."""
 
-from divesafe.risk.definition_rules import DefinitionRule, FactorScopeRule
+from divesafe.risk.definition_rules import (
+    NOT_EVALUATED_MARKER,
+    DefinitionRule,
+    FactorScopeRule,
+)
 from divesafe.risk.engine import (
     EvidencePolicy,
     Reconciliation,
@@ -14,6 +18,7 @@ from divesafe.risk.placeholders import ThresholdTbdRule, placeholder_rules
 from divesafe.risk.rules import WarningNeedsHumanReadingRule
 
 __all__ = [
+    "NOT_EVALUATED_MARKER",
     "DefinitionRule",
     "FactorScopeRule",
     "EvidencePolicy",

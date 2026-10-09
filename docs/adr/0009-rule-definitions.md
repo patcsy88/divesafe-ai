@@ -22,8 +22,8 @@ confirmation, sign-off date and expiry. The model refuses to be built when it is
 - a band whose comparison contradicts `worse_when`, or bands out of order (a swapped or
   mis-transcribed limit, detected only for order, direction and unit errors);
 - a unit that differs from the data's unit (no conversion is ever done);
-- a factor or metric with no data source (wind, tidal current, weather, forecast uncertainty and
-  site constraints cannot be encoded yet);
+- a factor or metric with no data source (tidal current, weather, forecast uncertainty and site
+  constraints cannot be encoded yet; for wind only speed can be);
 - non-finite numbers, a negative margin, an empty site list.
 
 **`VALIDATED` needs the whole sign-off:** an independent reviewer (not the preparer) for any limit
@@ -77,7 +77,10 @@ test enforces that.
   at load, not at a dive.
 - The coverage guard still applies: one definition cannot unlock `GO` while other factors are
   unevaluated, and the degraded-data owner decision (ADR 0008) still applies.
-- Four factors can be encoded today (wave height, swell, swell period, current); five cannot.
+- Five factors can be encoded today (wave height, swell, swell period, current, wind speed); four
+  cannot (tidal current, weather, forecast uncertainty, site constraints). Wind gusts and direction
+  are recorded in evidence but cannot be encoded: a gust-only definition would mark the whole wind
+  factor as covered.
 
 ## Integrity of the file
 

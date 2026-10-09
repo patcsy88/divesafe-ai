@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from divesafe.data.errors import ConnectorResponseError
@@ -50,3 +50,29 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+def floor_hour(moment: datetime) -> datetime:
+    return moment.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+
+
+def ceil_hour(moment: datetime) -> datetime:
+    floored = floor_hour(moment)
+    return floored if floored == moment.astimezone(UTC) else floored + timedelta(hours=1)
+
+
+def check_grid_cell(latitude: object, longitude: object) -> tuple[float, float]:
+    """The provider's grid cell must be real, finite coordinates."""
+    ok = (
+        not isinstance(latitude, bool)
+        and not isinstance(longitude, bool)
+        and isinstance(latitude, int | float)
+        and isinstance(longitude, int | float)
+        and math.isfinite(latitude)
+        and math.isfinite(longitude)
+        and -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    )
+    if not ok:
+        raise ConnectorResponseError("missing or invalid grid cell coordinates")
+    return float(latitude), float(longitude)  # type: ignore[arg-type]

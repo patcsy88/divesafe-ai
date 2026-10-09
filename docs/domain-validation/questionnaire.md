@@ -65,11 +65,11 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** None. There is no verified wind source and the marine model we use does not provide wind. Wind can only appear inside the free text of a MET Malaysia warning, when a warning mentions it.
+**Data we hold:** Hourly regional model forecasts for wind at 10 m above the surface: wind speed (kilometres per hour, an instantaneous value), wind gusts (kilometres per hour, the maximum of the **preceding** hour) and wind direction (degrees; the convention, whether this is the direction the wind blows from, is not stated in the provider documentation we read and is to be verified before you rely on it). The provider chooses the underlying weather model automatically and does not tell us which one produced a value; resolution depends on that model. The values are model output for a grid cell the provider picks (we ask for a sea cell, so it may lie offshore of a shore entry or a lee shore, and the distance from the dive point is recorded), never a measurement at the dive site. A dive between two hourly values is judged on the worst of the surrounding values, and the wind result will always say that gusts and direction were not evaluated. Only wind speed can be encoded as a limit today. Wind can also appear in the free text of a MET Malaysia warning.
 
 **Questions:**
 
-1. Would you use wind speed, gusts, direction, or all three?
+1. Would you use wind speed, gusts, direction, or all three? (Only speed can be encoded today.)
 2. Does it matter more for boat transfers, surface conditions or shore entry?
 3. What is the wind limit for each diver level and dive type?
 4. Does direction relative to the site's exposure change the limit?

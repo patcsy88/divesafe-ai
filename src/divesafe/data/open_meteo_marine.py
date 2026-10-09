@@ -25,7 +25,15 @@ from typing import Any
 from divesafe.data.base import FetchResult
 from divesafe.data.errors import ConnectorResponseError
 from divesafe.data.http import JsonGetter
-from divesafe.data.parsing import as_dict, clip, haversine_km, parse_naive
+from divesafe.data.parsing import (
+    as_dict,
+    ceil_hour,
+    check_grid_cell,
+    clip,
+    floor_hour,
+    haversine_km,
+    parse_naive,
+)
 from divesafe.domain import (
     RANGE_CHECK,
     UNIT_CHECK,
@@ -43,7 +51,10 @@ logger = logging.getLogger(__name__)
 ENDPOINT = "https://marine-api.open-meteo.com/v1/marine"
 SOURCE = "open-meteo-marine"
 SOURCE_VERSION = "v1"
-ATTRIBUTION = "Marine data: Open-Meteo.com (CC BY 4.0), wave models from DWD and others."
+ATTRIBUTION = (
+    "Marine data by Open-Meteo.com (CC BY 4.0), https://open-meteo.com/, "
+    "with wave models from DWD and others."
+)
 MAX_HOURS = 24 * 16
 
 # variable -> (category, expected unit, kind)
@@ -71,15 +82,6 @@ def _valid(kind: str, value: float) -> bool:
     return True
 
 
-def _floor_hour(moment: datetime) -> datetime:
-    return moment.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
-
-
-def _ceil_hour(moment: datetime) -> datetime:
-    floored = _floor_hour(moment)
-    return floored if floored == moment.astimezone(UTC) else floored + timedelta(hours=1)
-
-
 class OpenMeteoMarineConnector:
     name = SOURCE
 
@@ -91,8 +93,8 @@ class OpenMeteoMarineConnector:
     ) -> FetchResult:
         if window_end <= window_start:
             raise ValueError("window_end must be after window_start")
-        first = _floor_hour(window_start)
-        last = _ceil_hour(window_end)
+        first = floor_hour(window_start)
+        last = ceil_hour(window_end)
         params = {
             "latitude": f"{site.latitude}",
             "longitude": f"{site.longitude}",
@@ -120,14 +122,7 @@ class OpenMeteoMarineConnector:
         units = as_dict(body.get("hourly_units"), "hourly_units")
         hourly = as_dict(body.get("hourly"), "hourly")
         times = _parse_times(hourly.get("time"))
-        grid_lat, grid_lon = body.get("latitude"), body.get("longitude")
-        if (
-            isinstance(grid_lat, bool)
-            or isinstance(grid_lon, bool)
-            or not isinstance(grid_lat, int | float)
-            or not isinstance(grid_lon, int | float)
-        ):
-            raise ConnectorResponseError("missing grid cell coordinates")
+        grid_lat, grid_lon = check_grid_cell(body.get("latitude"), body.get("longitude"))
         grid_km = round(haversine_km(site.latitude, site.longitude, grid_lat, grid_lon), 1)
 
         expected: list[datetime] = []

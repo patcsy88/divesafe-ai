@@ -33,7 +33,7 @@ reachable but not yet approved or implemented. Nothing here has been called from
 | `weather` (general) | data.gov.my Weather API (`/weather/forecast`) | Yes (MET Malaysia) | As above | Daily | State, district, town, division and "recreation centre" locations | Candidate, low value (daily text summary, Malay values) |
 | `waves_swell`, `sea_temperature`, `currents` (not `tides`) | Open-Meteo Marine API (`marine-api.open-meteo.com/v1/marine`), built on DWD, MeteoFrance, ECMWF and NCEP wave/ocean models | No (aggregator of agency model output) | Keyless for **non-commercial use only**; CC BY 4.0 with required attribution to DWD and Open-Meteo; under 10,000 calls/day, 5,000/hour, 600/min | Models update every 6-24 h | About 8-25 km grid; hourly | **Implemented** (`divesafe.data.open_meteo_marine`); regional model output only, never site-level or observed |
 | `tides` (official) | JUPEM tide predictions (Peninsular Malaysia, 12 locations; printed tables and the STAPS mobile app) | Yes | No API found; printed volume is paid | Annual tables | Station | **Gap**: no machine-readable source verified |
-| `wind` | Not covered by the marine API. Would come from Open-Meteo's separate forecast API (not yet reviewed) or MET Malaysia | | | | | **Gap** |
+| `wind` | Open-Meteo Forecast API (`api.open-meteo.com/v1/forecast`), hourly `wind_speed_10m`, `wind_gusts_10m`, `wind_direction_10m` from the provider's automatically selected national weather model | No (aggregator of agency model output) | Keyless for **non-commercial use only**; CC BY 4.0; link "Weather data by Open-Meteo.com" required next to displayed data; under 10,000 calls/day | Model-dependent (3-hourly to 6-hourly runs) | Model-dependent (docs: 1 to 55 km) | **Implemented** (`divesafe.data.open_meteo_wind`); model forecast, never site-level or observed |
 | `historical_observations` | none verified | | | | | **Gap** |
 | `site_information`, `local_guidance` | none; curated corpus to be written with provenance | | | | | **Gap** (RAG corpus) |
 
@@ -73,6 +73,41 @@ reachable but not yet approved or implemented. Nothing here has been called from
   omits query strings. Provider text echoed into issues is clipped and sanitised.
 - **Tests** use recorded real responses in `tests/fixtures` (see its README) and no live calls.
 
+### Wind connector behaviour (verified 2026-10-09)
+
+- Items are `data_kind=model`, `is_forecast=True` even for past hours, graded `degraded`, one per
+  UTC hour, all three variables together or nothing (any missing hour, null, wrong unit or
+  out-of-range value drops the whole category and is reported).
+- **Units are pinned** (`wind_speed_unit=kmh`) and checked; a different unit is rejected, never
+  converted. The request prefers sea grid cells and records the cell and its distance.
+- **Gusts are the maximum of the preceding hour;** speed and direction are instantaneous.
+- **The producing model is unknown:** "best match" selects a model per location and the response
+  does not name it. Recorded in every item's quality notes. Pinning a model would fix this but is
+  a choice that needs a reason and a reviewer.
+- **The direction convention is not stated** on the docs page read; do not build an exposure rule
+  on "from" or "to" until verified.
+- Same host family, licence and non-commercial limits as the marine API; a per-host minimum
+  interval protects the quota (`api.open-meteo.com`, 0.5 s).
+
+### Provider quota and attribution (wind and marine)
+
+- **Combined budget:** `CachingRateLimitedGetter` counts calls to both Open-Meteo hosts together
+  against the provider's documented free-tier limits (600 a minute, 5,000 an hour, 10,000 a day).
+  We could not verify whether the provider counts the two hosts together, so this is deliberately
+  conservative. An exhausted budget fails closed as a connector issue. Each assessment makes two
+  Open-Meteo calls, so the day budget is roughly 5,000 assessments. Cache hits are free.
+- **Not solved:** the budget is per process (several workers each get their own) and not per user,
+  so one authenticated user can still use it up for everyone (a denial of service, not a safety
+  failure). Per-user rate limits on `POST /v1/assessments`, single-flight de-duplication of
+  concurrent identical calls, and quantising the window so near-identical requests share a cache
+  entry are all still to do. A `planned_start` far outside the provider's forecast horizon makes
+  the provider answer 400 and still spends a call.
+- **Attribution:** every Open-Meteo item carries `Marine data by` or `Weather data by Open-Meteo.com
+  (CC BY 4.0), https://open-meteo.com/`, and the API returns them in `attributions`. The licence
+  requires a link next to displayed data, so **any client must render `attributions` beside the
+  data, as a plain-text link and never as HTML**. The API returns plain strings, not structured
+  `{text, url}` pairs.
+
 ### Known limits that affect safety use
 
 - **data.gov.my states that marine forecast data is currently unavailable.** Warnings exist
@@ -96,7 +131,8 @@ reachable but not yet approved or implemented. Nothing here has been called from
    DWD and Open-Meteo must be shown wherever its data is displayed.
 2. ~~First area~~ **Decided: Pulau Redang.** Specific dive-site coordinates still need a source.
 3. Is there access to official JUPEM tide data (licence or file export)? Still open.
-4. Wind is still a gap (not in the marine API).
+4. ~~Wind~~ **Connected** (Open-Meteo forecast model; see "Wind connector behaviour"). Whether it is
+   good enough to support a limit, and which model should be pinned, are professional decisions.
 
 ## Provenance recorded by connectors
 

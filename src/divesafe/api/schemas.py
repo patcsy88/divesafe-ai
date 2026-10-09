@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from divesafe.domain import AssessmentRecord, Recommendation
+from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import ENGINE_RULE_PREFIXES
 
 DISCLAIMER = (
@@ -46,6 +47,10 @@ def _shape_exceeds(root: Any, *, max_depth: int, max_nodes: int) -> bool:
         elif isinstance(item, list | tuple):
             stack.extend((v, depth + 1) for v in item)
     return False
+
+
+def _aspects_not_evaluated(rationale: str) -> str:
+    return rationale.split(NOT_EVALUATED_MARKER, 1)[1].strip().rstrip(".")
 
 
 def _agent_note(record: AssessmentRecord) -> str:
@@ -128,6 +133,15 @@ class AssessmentView(BaseModel):
             ) + outcome_note
         if problems:
             outcome_note += " Evidence problems: " + " ".join(problems)
+        partial = sorted(
+            {
+                f"{r.factor.value}: {_aspects_not_evaluated(r.rationale)}"
+                for r in record.rule_results
+                if r.factor is not None and NOT_EVALUATED_MARKER in r.rationale
+            }
+        )
+        if partial:
+            outcome_note += " Partly evaluated (aspects not evaluated): " + "; ".join(partial) + "."
         if record.unevaluated_factors:
             names = ", ".join(k.value for k in record.unevaluated_factors)
             outcome_note += f" Not evaluated (no validated threshold): {names}."
