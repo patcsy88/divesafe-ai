@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from tests.safety.test_rule_definitions import _iso, person, raw
 
 from divesafe.data import (
-    REDANG_ISLAND,
+    TIOMAN_ISLAND,
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
     OpenMeteoWindConnector,
@@ -26,14 +26,14 @@ from divesafe.services import gather_evidence
 pytestmark = pytest.mark.safety
 R = Recommendation
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-MARINE = json.loads((FIXTURES / "open_meteo_marine_redang_recorded_2026-10-08.json").read_text())
-WIND = json.loads((FIXTURES / "open_meteo_wind_redang_recorded_2026-10-08.json").read_text())
+MARINE = json.loads((FIXTURES / "open_meteo_marine_tioman_recorded_2026-10-08.json").read_text())
+WIND = json.loads((FIXTURES / "open_meteo_wind_tioman_recorded_2026-10-08.json").read_text())
 WARNINGS = json.loads((FIXTURES / "data_gov_my_warning_recorded_2026-10-09.json").read_text())
 NOW = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
 START = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
 END = datetime(2026, 10, 8, 20, 0, tzinfo=UTC)
 PLAN = DivePlan(
-    site_id=REDANG_ISLAND.id, planned_start=START, planned_duration_minutes=120, max_depth_m=18
+    site_id=TIOMAN_ISLAND.id, planned_start=START, planned_duration_minutes=120, max_depth_m=18
 )
 
 
@@ -51,7 +51,7 @@ def _evidence() -> list[Any]:
         OpenMeteoWindConnector(_Getter(WIND)),
         DataGovMyWarningConnector(_Getter(WARNINGS)),
     ]
-    gathered = asyncio.run(gather_evidence(connectors, REDANG_ISLAND, START, END, NOW))
+    gathered = asyncio.run(gather_evidence(connectors, TIOMAN_ISLAND, START, END, NOW))
     assert gathered.issues == ()
     return list(gathered.items)
 
@@ -62,7 +62,7 @@ def _wind_definition(**changes: Any) -> RuleDefinition:
         factor="wind",
         metric="wind_speed_10m",
         unit="km/h",
-        scope={"site_ids": [REDANG_ISLAND.id]},
+        scope={"site_ids": [TIOMAN_ISLAND.id]},
         forecast_margin=0.0,
         no_go_when={"comparison": ">", "value": 200.0},
         caution_when={"comparison": ">", "value": 100.0},
@@ -233,7 +233,7 @@ def test_the_api_note_reports_partly_evaluated_factors() -> None:
     from divesafe.api.schemas import AssessmentView
 
     wind_rule = DefinitionRule(
-        _wind_definition(scope={"site_ids": [REDANG_ISLAND.id]}, forecast_margin=0.0)
+        _wind_definition(scope={"site_ids": [TIOMAN_ISLAND.id]}, forecast_margin=0.0)
     )
     policy = EvidencePolicy(
         frozenset({DataCategory.WIND}), timedelta(hours=1), degraded_may_support_go=True

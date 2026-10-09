@@ -83,7 +83,7 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** Hourly regional model output: significant wave height (metres), plus wind-wave height, wave period (seconds) and wave direction (degrees; per the provider's documentation the direction the waves come FROM, to be verified before you rely on it). Grid cells are about 8 to 25 km across and the provider snaps to one cell (about 4 km from the Redang reference point in testing). The provider says coastal accuracy is limited and the data is not suitable for navigation. It is a forecast or model value, never a measurement at the dive site.
+**Data we hold:** Hourly regional model output: significant wave height (metres), plus wind-wave height, wave period (seconds) and wave direction (degrees; per the provider's documentation the direction the waves come FROM, to be verified before you rely on it). Grid cells are about 8 to 25 km across and the provider snaps to one cell (about 5 km from the Tioman reference point in the recordings we hold). The provider says coastal accuracy is limited and the data is not suitable for navigation. It is a forecast or model value, never a measurement at the dive site.
 
 **Questions:**
 
@@ -203,7 +203,7 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** Only one reference point: Pulau Redang, from a public geocoder. No dive sites are registered. There are no stored site descriptions, exposure, hazards, entry points or local rules.
+**Data we hold:** Only one reference point: Pulau Tioman, from a public geocoder. No dive sites are registered. There are no stored site descriptions, exposure, hazards, entry points or local rules.
 
 **Questions:**
 

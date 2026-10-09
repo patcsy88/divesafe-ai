@@ -14,7 +14,7 @@ from tests.safety.test_rule_definitions import EXPIRES, raw
 
 from divesafe.api.state import build_engine
 from divesafe.config import Settings
-from divesafe.data import REDANG_ISLAND
+from divesafe.data import TIOMAN_ISLAND
 from divesafe.domain import RiskFactorKind
 from divesafe.orchestration import (
     RulesetError,
@@ -24,10 +24,10 @@ from divesafe.orchestration import (
 )
 
 NOW_AFTER_SIGNOFF = NOW
-SITE = REDANG_ISLAND.id
+SITE = TIOMAN_ISLAND.id
 
 
-def redang(**changes: Any) -> dict[str, Any]:
+def tioman(**changes: Any) -> dict[str, Any]:
     """A synthetic definition scoped to the one registered site."""
     changes.setdefault("scope", {"site_ids": [SITE]})
     return raw(**changes)
@@ -142,7 +142,7 @@ def test_without_a_ruleset_the_engine_is_interim_with_placeholders_for_every_fac
 
 
 def test_a_loaded_definition_replaces_only_its_own_factors_placeholder(tmp_path: Path) -> None:
-    engine = build_engine(_settings(_write(tmp_path, _file(redang()))), now=NOW)
+    engine = build_engine(_settings(_write(tmp_path, _file(tioman()))), now=NOW)
     assert engine is not None
     ids = {getattr(r, "rule_id", "") for r in engine._rules}
     assert "definition.synthetic.wave_height" in ids
@@ -155,7 +155,7 @@ def test_the_production_engine_still_cannot_give_go_with_one_definition(tmp_path
 
     from divesafe.domain import DataCategory, DivePlan, Recommendation
 
-    engine = build_engine(_settings(_write(tmp_path, _file(redang()))), now=NOW)
+    engine = build_engine(_settings(_write(tmp_path, _file(tioman()))), now=NOW)
     assert engine is not None
     plan = DivePlan(
         site_id="site-a",
@@ -196,7 +196,7 @@ def test_startup_fails_if_the_ruleset_path_is_not_a_readable_file(tmp_path: Path
 
 def test_the_loaded_version_is_recorded_as_the_ruleset_version(tmp_path: Path) -> None:
     engine = build_engine(
-        _settings(_write(tmp_path, _file(redang(), version="synthetic-9"))), now=NOW
+        _settings(_write(tmp_path, _file(tioman(), version="synthetic-9"))), now=NOW
     )
     assert engine is not None and engine._ruleset_version.startswith("synthetic-9@")
     assert len(engine._ruleset_version.split("@")[1]) == 12  # the content hash prefix
@@ -224,7 +224,7 @@ def _bytes(*definitions: dict[str, Any], version: str = "synthetic-1") -> bytes:
 
 
 def test_duplicate_json_keys_are_rejected_not_resolved_to_the_last() -> None:
-    text = _file(redang()).replace(
+    text = _file(tioman()).replace(
         '"status": "VALIDATED"', '"status": "VALIDATED", "status": "VALIDATED"'
     )
     with pytest.raises(RulesetError, match="duplicate keys"):
@@ -236,17 +236,17 @@ def test_duplicate_json_keys_are_rejected_not_resolved_to_the_last() -> None:
 
 @pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
 def test_non_finite_literals_are_rejected_at_parse_time(literal: str) -> None:
-    text = _file(redang()).replace('"value": 3.0', f'"value": {literal}')
+    text = _file(tioman()).replace('"value": 3.0', f'"value": {literal}')
     with pytest.raises(RulesetError):
         load_ruleset(text, NOW_AFTER_SIGNOFF)
 
 
 def test_a_huge_integer_is_an_error_not_a_crash() -> None:
-    text = _file(redang()).replace('"value": 3.0', '"value": ' + "9" * 5000)
+    text = _file(tioman()).replace('"value": 3.0', '"value": ' + "9" * 5000)
     with pytest.raises(RulesetError):
         load_ruleset(text, NOW_AFTER_SIGNOFF)
     loaded = load_ruleset(
-        _file(redang()).replace('"value": 3.0', '"value": 1e999'), NOW_AFTER_SIGNOFF
+        _file(tioman()).replace('"value": 3.0', '"value": 1e999'), NOW_AFTER_SIGNOFF
     )
     assert not loaded.is_clean  # infinity after parsing is refused by the model
 
@@ -263,9 +263,9 @@ def test_the_version_label_has_a_strict_shape() -> None:
 
 
 def test_the_content_hash_identifies_exactly_what_was_loaded() -> None:
-    first = load_ruleset_bytes(_bytes(redang()), NOW_AFTER_SIGNOFF)
-    same = load_ruleset_bytes(_bytes(redang()), NOW_AFTER_SIGNOFF)
-    edited_limit = redang(no_go_when={"comparison": ">", "value": 3.5})
+    first = load_ruleset_bytes(_bytes(tioman()), NOW_AFTER_SIGNOFF)
+    same = load_ruleset_bytes(_bytes(tioman()), NOW_AFTER_SIGNOFF)
+    edited_limit = tioman(no_go_when={"comparison": ">", "value": 3.5})
     edited = load_ruleset_bytes(_bytes(edited_limit), NOW_AFTER_SIGNOFF)
     assert first.sha256 == same.sha256 and len(first.sha256) == 64
     assert edited.sha256 != first.sha256  # same version label, different content, different hash
@@ -273,24 +273,24 @@ def test_the_content_hash_identifies_exactly_what_was_loaded() -> None:
 
 
 def test_unknown_site_ids_are_refused_so_a_typo_cannot_silently_never_apply() -> None:
-    typo = redang(scope={"site_ids": ["my-terengganu-pulau-redng"]})
+    typo = tioman(scope={"site_ids": ["my-pahang-pulau-tiomn"]})
     loaded = load_ruleset(_file(typo), NOW_AFTER_SIGNOFF, known_sites=[SITE])
     assert not loaded.is_clean and "not registered" in loaded.refused[0].reason
-    assert load_ruleset(_file(redang()), NOW_AFTER_SIGNOFF, known_sites=[SITE]).is_clean
+    assert load_ruleset(_file(tioman()), NOW_AFTER_SIGNOFF, known_sites=[SITE]).is_clean
 
 
 def test_a_sign_off_dated_in_the_future_is_refused() -> None:
-    loaded = load_ruleset(_file(redang()), NOW_AFTER_SIGNOFF - timedelta(days=365))
+    loaded = load_ruleset(_file(tioman()), NOW_AFTER_SIGNOFF - timedelta(days=365))
     assert not loaded.is_clean
     assert any("future" in r.reason or "expired" in r.reason for r in loaded.refused)
 
 
 def test_hostile_ids_are_sanitised_and_error_output_is_bounded() -> None:
-    hostile = redang(id="evil\n\x1b[31mINJECT" + "x" * 500)
+    hostile = tioman(id="evil\n\x1b[31mINJECT" + "x" * 500)
     loaded = load_ruleset(_file(hostile), NOW_AFTER_SIGNOFF)
     ident = loaded.refused[0].definition_id
     assert "\n" not in ident and "\x1b" not in ident and len(ident) <= 60
-    many = [redang(id=f"synthetic.bad-{i}", unit="ft") for i in range(40)]
+    many = [tioman(id=f"synthetic.bad-{i}", unit="ft") for i in range(40)]
     detail = load_ruleset(_file(*many), NOW_AFTER_SIGNOFF).describe_refusals()
     assert detail.count("synthetic.bad-") <= 10 and "and 30 more" in detail
     assert len(detail) < 10_000
@@ -298,17 +298,17 @@ def test_hostile_ids_are_sanitised_and_error_output_is_bounded() -> None:
 
 def test_validation_messages_never_contain_the_submitted_metric_or_unit() -> None:
     secret = "SUBMITTED-SECRET-VALUE-456"
-    bad = redang(unit=secret)
+    bad = tioman(unit=secret)
     loaded = load_ruleset(_file(bad), NOW_AFTER_SIGNOFF)
     assert secret not in loaded.refused[0].reason
     unsupported = load_ruleset(
-        _file(redang(metric=secret.lower().replace("-", "_"))), NOW_AFTER_SIGNOFF
+        _file(tioman(metric=secret.lower().replace("-", "_"))), NOW_AFTER_SIGNOFF
     )
     assert secret.lower().replace("-", "_") not in unsupported.refused[0].reason
 
 
 def test_a_secondary_wave_metric_cannot_mark_total_wave_height_as_covered() -> None:
-    loaded = load_ruleset(_file(redang(metric="wind_wave_height")), NOW_AFTER_SIGNOFF)
+    loaded = load_ruleset(_file(tioman(metric="wind_wave_height")), NOW_AFTER_SIGNOFF)
     assert not loaded.is_clean and "no data source" in loaded.refused[0].reason
 
 
@@ -322,8 +322,8 @@ def test_reading_the_file_is_bounded_and_refuses_non_files(tmp_path: Path) -> No
     with pytest.raises(RulesetError, match="too large"):
         read_ruleset_file(big)
     ok = tmp_path / "ok.json"
-    ok.write_bytes(_bytes(redang()))
-    assert read_ruleset_file(ok) == _bytes(redang())
+    ok.write_bytes(_bytes(tioman()))
+    assert read_ruleset_file(ok) == _bytes(tioman())
 
 
 def test_unreadable_or_corrupt_files_stop_startup_with_a_fixed_message(tmp_path: Path) -> None:
@@ -334,7 +334,7 @@ def test_unreadable_or_corrupt_files_stop_startup_with_a_fixed_message(tmp_path:
 
 
 def test_the_pinned_hash_must_match_or_startup_fails(tmp_path: Path) -> None:
-    path = _write(tmp_path, _file(redang()))
+    path = _write(tmp_path, _file(tioman()))
     digest = load_ruleset_bytes(path.read_bytes(), NOW).sha256
     ok = Settings(evidence_max_age_minutes=60, ruleset_path=path, ruleset_sha256=digest)
     assert build_engine(ok, now=NOW) is not None
@@ -342,7 +342,7 @@ def test_the_pinned_hash_must_match_or_startup_fails(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="does not match"):
         build_engine(wrong, now=NOW)
     path.write_text(
-        _file(redang(no_go_when={"comparison": ">", "value": 3.5}))
+        _file(tioman(no_go_when={"comparison": ">", "value": 3.5}))
     )  # edited after review
     with pytest.raises(RuntimeError, match="does not match"):
         build_engine(ok, now=NOW)
@@ -356,7 +356,7 @@ def test_the_ruleset_pin_must_be_a_lowercase_sha256_hex_string() -> None:
 
 
 def test_a_hostile_extra_key_cannot_inject_into_the_error_text() -> None:
-    bad = redang()
+    bad = tioman()
     bad["evil\n\x1b[31mkey"] = 1
     loaded = load_ruleset(_file(bad), NOW_AFTER_SIGNOFF)
     reason = loaded.refused[0].reason
@@ -390,7 +390,7 @@ def test_production_requires_a_pinned_ruleset(tmp_path: Path) -> None:
 
 
 def test_each_covered_factor_gets_a_scope_rule_in_the_production_engine(tmp_path: Path) -> None:
-    engine = build_engine(_settings(_write(tmp_path, _file(redang()))), now=NOW)
+    engine = build_engine(_settings(_write(tmp_path, _file(tioman()))), now=NOW)
     assert engine is not None
     ids = {getattr(r, "rule_id", "") for r in engine._rules}
     assert "definition-scope.wave_height" in ids and "definition-scope.swell" not in ids

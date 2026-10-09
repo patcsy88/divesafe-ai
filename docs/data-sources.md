@@ -1,8 +1,8 @@
 # Data sources
 
-**Status (2026-10-09):** two connectors are implemented for Malaysia (Pulau Redang): Open-Meteo
+**Status (2026-10-09):** connectors are implemented for Malaysia (Pulau Tioman): Open-Meteo
 marine and data.gov.my warnings. Product-owner decisions: **non-commercial use only**; first
-area **Pulau Redang, Terengganu**. Do not add endpoints, API names or sample values until a
+area **Pulau Tioman, Pahang** (changed from Pulau Redang, Terengganu, on 2026-10-10). Do not add endpoints, API names or sample values until a
 source is verified and recorded here.
 
 ## Required categories
@@ -39,15 +39,16 @@ reachable but not yet approved or implemented. Nothing here has been called from
 
 ### Implemented behaviour worth knowing
 
-- **Site registry** (`divesafe.data.sites`): only `my-terengganu-pulau-redang`, an island-level
-  reference point (5.77736, 103.00759, from Open-Meteo's geocoder). No specific Redang dive
+- **Site registry** (`divesafe.data.sites`): only `my-pahang-pulau-tioman`, an island-level
+  reference point (2.7972, 104.166, from Open-Meteo's geocoder, GeoNames id 1734910, queried
+  2026-10-10). No specific Tioman dive
   sites are registered because none has a verified coordinate source.
 - **Marine connector:** all items are `is_forecast=True` and `data_type="model"`, even for hours already past, because they are model values, not observations. One `EvidenceItem` per category per UTC hour (`waves_swell`,
   `sea_surface_temperature` as `sea_temperature`, `currents`). It rejects, per category, any
   missing hour, null, unexpected unit or out-of-range value, reports it in `issues`, and
   emits nothing for that category. It does not request `sea_level_height_msl`, so `tides` can
-  never be satisfied by it. The provider snaps to a grid cell (about 4 km from the requested
-  Redang point in testing); the requested point, the cell and `grid_distance_km` are recorded in
+  never be satisfied by it. The provider snaps to a grid cell (about 4.6 km from the requested
+  Tioman point for marine data and 8.1 km for wind, in the recorded fixtures); the requested point, the cell and `grid_distance_km` are recorded in
   each item, with `spatial_scope` stating it is not the dive site. The window end is rounded up
   to the next hour.
 - **Warnings connector:** the endpoint 301-redirects without a trailing slash, so the
@@ -135,7 +136,7 @@ licence question below is answered.** No key was created and no call was made to
 
 Other facts: the global background data is FES2014/FES2022 (AVISO+, satellite-derived) plus
 station-derived predictions from the University of Hawaii sea-level archive. No Malaysian
-authority is listed as a source, and the accuracy near Pulau Redang is **unknown** until the
+authority is listed as a source, and the accuracy near Pulau Tioman is **unknown** until the
 response's `atlas`, `responseLat/Lon` and station distance can be inspected with a real key.
 
 **What none of them provides: tidal streams.** These sources give water *height* and high/low
@@ -170,7 +171,8 @@ results across users, then register a key (kept in the environment, never in the
 
 1. ~~Non-commercial only?~~ **Decided: non-commercial** (Open-Meteo free tier). Attribution to
    DWD and Open-Meteo must be shown wherever its data is displayed.
-2. ~~First area~~ **Decided: Pulau Redang.** Specific dive-site coordinates still need a source.
+2. ~~First area~~ **Decided: Pulau Tioman** (was Pulau Redang until 2026-10-10). Specific dive-site
+   coordinates still need a source.
 3. Is there access to official JUPEM tide data (licence or file export)? Still open.
 4. ~~Wind~~ **Connected** (Open-Meteo forecast model; see "Wind connector behaviour"). Whether it is
    good enough to support a limit, and which model should be pinned, are professional decisions.

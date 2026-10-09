@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from divesafe.data import REDANG_ISLAND, ConnectorResponseError, OpenMeteoWindConnector
+from divesafe.data import TIOMAN_ISLAND, ConnectorResponseError, OpenMeteoWindConnector
 from divesafe.data.http import ALLOWED_HOSTS
 from divesafe.data.ratelimit import DEFAULT_MIN_INTERVAL_SECONDS
 from divesafe.domain import (
@@ -25,7 +25,7 @@ from divesafe.domain import (
 )
 
 FIXTURE = (
-    Path(__file__).parent.parent / "fixtures" / "open_meteo_wind_redang_recorded_2026-10-08.json"
+    Path(__file__).parent.parent / "fixtures" / "open_meteo_wind_tioman_recorded_2026-10-08.json"
 )
 WIND = json.loads(FIXTURE.read_text())
 NOW = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
@@ -45,7 +45,7 @@ class _Getter:
 
 def _fetch(payload: Any = WIND, end: datetime = END):  # type: ignore[no-untyped-def]
     getter = _Getter(payload)
-    result = asyncio.run(OpenMeteoWindConnector(getter).fetch(REDANG_ISLAND, START, end, NOW))
+    result = asyncio.run(OpenMeteoWindConnector(getter).fetch(TIOMAN_ISLAND, START, end, NOW))
     return result, getter
 
 
@@ -107,7 +107,7 @@ def test_provenance_is_complete_and_states_every_known_limitation() -> None:
 def test_hours_already_past_are_still_model_values_not_observations() -> None:
     getter = _Getter(WIND)
     late = datetime(2026, 10, 8, 23, 59, tzinfo=UTC)
-    result = asyncio.run(OpenMeteoWindConnector(getter).fetch(REDANG_ISLAND, START, END, late))
+    result = asyncio.run(OpenMeteoWindConnector(getter).fetch(TIOMAN_ISLAND, START, END, late))
     assert result.items and all(
         i.is_forecast and i.data_kind == DataKind.MODEL for i in result.items
     )
@@ -224,11 +224,11 @@ def test_every_open_meteo_item_carries_the_required_attribution_wording_and_link
     from divesafe.data import OpenMeteoMarineConnector
 
     marine = json.loads(
-        (FIXTURE.parent / "open_meteo_marine_redang_recorded_2026-10-08.json").read_text()
+        (FIXTURE.parent / "open_meteo_marine_tioman_recorded_2026-10-08.json").read_text()
     )
     wind_result, _ = _fetch()
     marine_items = asyncio.run(
-        OpenMeteoMarineConnector(_Getter(marine)).fetch(REDANG_ISLAND, START, END, NOW)
+        OpenMeteoMarineConnector(_Getter(marine)).fetch(TIOMAN_ISLAND, START, END, NOW)
     ).items
     for item in (*wind_result.items, *marine_items):
         text = item.value["attribution"]

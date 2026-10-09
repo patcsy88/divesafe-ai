@@ -31,9 +31,9 @@ from divesafe.services import InMemoryAssessmentRepository
 pytestmark = pytest.mark.safety
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-MARINE = json.loads((FIXTURES / "open_meteo_marine_redang_recorded_2026-10-08.json").read_text())
+MARINE = json.loads((FIXTURES / "open_meteo_marine_tioman_recorded_2026-10-08.json").read_text())
 WARNINGS = json.loads((FIXTURES / "data_gov_my_warning_recorded_2026-10-09.json").read_text())
-SITE_ID = "my-terengganu-pulau-redang"
+SITE_ID = "my-pahang-pulau-tioman"
 T0 = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
 KEY_A, KEY_B = "key-for-alice-test-only", "key-for-bob-test-only"
 AUTH_A = {"Authorization": f"Bearer {KEY_A}"}

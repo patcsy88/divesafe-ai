@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from divesafe.data import (
-    REDANG_ISLAND,
+    TIOMAN_ISLAND,
     ConnectorTransportError,
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
@@ -45,7 +45,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 NOW = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
 START = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
 PLAN = DivePlan(
-    site_id=REDANG_ISLAND.id, planned_start=START, planned_duration_minutes=180, max_depth_m=18
+    site_id=TIOMAN_ISLAND.id, planned_start=START, planned_duration_minutes=180, max_depth_m=18
 )
 LIVE = frozenset(
     {
@@ -55,7 +55,7 @@ LIVE = frozenset(
         DataCategory.MARINE_WARNINGS,
     }
 )
-MARINE = json.loads((FIXTURES / "open_meteo_marine_redang_recorded_2026-10-08.json").read_text())
+MARINE = json.loads((FIXTURES / "open_meteo_marine_tioman_recorded_2026-10-08.json").read_text())
 WARNINGS = json.loads((FIXTURES / "data_gov_my_warning_recorded_2026-10-09.json").read_text())
 
 
@@ -99,7 +99,7 @@ def _run(marine: Any = MARINE, warnings: Any = WARNINGS, **kwargs: Any) -> Asses
     options: dict[str, Any] = {
         "assessment_id": "a-1",
         "plan": PLAN,
-        "site": REDANG_ISLAND,
+        "site": TIOMAN_ISLAND,
         "connectors": connectors,
         "engine": _engine(with_warning_rule=False),
         "now": NOW,

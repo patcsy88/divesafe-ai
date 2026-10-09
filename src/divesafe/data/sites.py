@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from divesafe.domain import DiveSite
 
-REDANG_ISLAND = DiveSite(
-    id="my-terengganu-pulau-redang",
-    name="Pulau Redang (island reference point, not a dive site)",
-    latitude=5.77736,
-    longitude=103.00759,
+TIOMAN_ISLAND = DiveSite(
+    id="my-pahang-pulau-tioman",
+    name="Pulau Tioman (island reference point, not a dive site)",
+    latitude=2.7972,
+    longitude=104.166,
     coordinate_source=(
-        "Open-Meteo geocoding API (GeoNames-derived), 'Pulau Redang', Terengganu, MY, "
-        "queried 2026-10-09. Island-level point only; specific dive sites are not yet registered."
+        "Open-Meteo geocoding API (GeoNames-derived), 'Tioman Island', feature type island, "
+        "Pahang, MY, GeoNames id 1734910, queried 2026-10-10. Island-level point only; specific "
+        "dive sites are not yet registered."
     ),
-    area_names=("Terengganu",),
+    area_names=("Pahang", "Tioman"),
 )
 
-SITES: dict[str, DiveSite] = {REDANG_ISLAND.id: REDANG_ISLAND}
+SITES: dict[str, DiveSite] = {TIOMAN_ISLAND.id: TIOMAN_ISLAND}

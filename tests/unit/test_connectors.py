@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from divesafe.data import (
-    REDANG_ISLAND,
+    TIOMAN_ISLAND,
     ConnectorResponseError,
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
@@ -30,7 +30,7 @@ def _load(name: str) -> Any:
     return json.loads((FIXTURES / name).read_text())
 
 
-MARINE = _load("open_meteo_marine_redang_recorded_2026-10-08.json")
+MARINE = _load("open_meteo_marine_tioman_recorded_2026-10-08.json")
 WARNINGS = _load("data_gov_my_warning_recorded_2026-10-09.json")
 WITH_ADVISORY = _load("data_gov_my_warning_incl_no_advisory_recorded_2026-10-09.json")
 
@@ -52,7 +52,7 @@ def _marine(payload: Any = MARINE) -> tuple[OpenMeteoMarineConnector, FakeGetter
 
 def _fetch_marine(payload: Any = MARINE):  # type: ignore[no-untyped-def]
     connector, getter = _marine(payload)
-    result = asyncio.run(connector.fetch(REDANG_ISLAND, START, END, NOW))
+    result = asyncio.run(connector.fetch(TIOMAN_ISLAND, START, END, NOW))
     return result, getter
 
 
@@ -75,8 +75,8 @@ def test_marine_provenance_is_complete_and_honest() -> None:
     assert item.valid_at.tzinfo is not None
     assert item.is_forecast is True
     assert item.value["data_type"] == "model"
-    assert item.value["grid_cell"] == [5.791664, 103.04167]  # differs from the requested point
-    assert item.value["requested_point"] == [5.77736, 103.00759]
+    assert item.value["grid_cell"] == [2.7916641, 104.125015]  # differs from the requested point
+    assert item.value["requested_point"] == [2.7972, 104.166]
     assert item.value["units"]["wave_height"] == "m"
     assert "Open-Meteo" in item.value["attribution"]
 
@@ -163,7 +163,7 @@ def test_marine_rejects_non_object_response() -> None:
 def _warnings(payload: Any = WARNINGS, start: datetime = START, end: datetime = END):  # type: ignore[no-untyped-def]
     getter = FakeGetter(payload)
     connector = DataGovMyWarningConnector(getter)
-    return asyncio.run(connector.fetch(REDANG_ISLAND, start, end, NOW)), getter
+    return asyncio.run(connector.fetch(TIOMAN_ISLAND, start, end, NOW)), getter
 
 
 def test_warnings_become_evidence_with_full_text_and_utc_times() -> None:
@@ -189,7 +189,10 @@ def test_warning_applicability_is_never_claimed() -> None:
     for item in result.items:
         assert item.value["applicability"].startswith("NOT DETERMINED")
     first = result.items[0]
-    assert first.value["matched_area_names"] == ["Terengganu"]  # informational only
+    assert first.value["matched_area_names"] == ["Pahang", "Tioman"]  # informational only
+    third = result.items[2]  # a thunderstorm notice that names Pahang but not Tioman
+    assert third.value["matched_area_names"] == ["Pahang"]
+    assert third.value["applicability"].startswith("NOT DETERMINED")  # a match never decides
 
 
 def test_warnings_outside_the_window_are_excluded() -> None:
@@ -271,7 +274,7 @@ def test_entry_with_only_one_validity_time_is_malformed() -> None:  # synthetic 
 def test_marine_model_hours_already_past_are_still_labelled_model_not_observation() -> None:
     connector, _ = _marine()
     late_now = datetime(2026, 10, 8, 23, 59, tzinfo=UTC)  # after every fixture hour
-    result = asyncio.run(connector.fetch(REDANG_ISLAND, START, END, late_now))
+    result = asyncio.run(connector.fetch(TIOMAN_ISLAND, START, END, late_now))
     assert result.items and all(
         i.is_forecast and i.value["data_type"] == "model" for i in result.items
     )
@@ -287,7 +290,7 @@ def test_marine_records_grid_snap_distance() -> None:
 def test_marine_window_end_is_rounded_up_to_cover_a_partial_hour() -> None:
     connector, _ = _marine()
     end = datetime(2026, 10, 8, 20, 30, tzinfo=UTC)
-    result = asyncio.run(connector.fetch(REDANG_ISLAND, START, end, NOW))
+    result = asyncio.run(connector.fetch(TIOMAN_ISLAND, START, end, NOW))
     hours = {i.valid_at.hour for i in result.items if i.category == DataCategory.CURRENTS}
     assert hours == {18, 19, 20, 21}
 
@@ -348,7 +351,7 @@ def test_warning_text_is_marked_untrusted_and_ids_depend_on_site() -> None:
     result, _ = _warnings()
     item = result.items[0]
     assert "text_en" in item.value["untrusted_text"]
-    other = REDANG_ISLAND.model_copy(update={"id": "other-site"})
+    other = TIOMAN_ISLAND.model_copy(update={"id": "other-site"})
     other_result = asyncio.run(
         DataGovMyWarningConnector(FakeGetter(WARNINGS)).fetch(other, START, END, NOW)
     )

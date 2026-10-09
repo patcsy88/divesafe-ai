@@ -13,7 +13,7 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 
 Foundation, data connectors, assessment pipeline, human gate and API. The repository contains the architecture, engineering rules,
 the safety-critical core (domain types, fail-closed rules engine with reconciliation, LLM provider
-abstraction, config, API skeleton), and two connectors for Pulau Redang, Malaysia (Open-Meteo
+abstraction, config, API skeleton), and connectors for Pulau Tioman, Malaysia (Open-Meteo
 marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
 service, an assessment pipeline, the human decision gate, a FastAPI interface, and an agent
 stage (five specialists, three bounded Tree-of-Thought scenarios and a risk proposal) that has
@@ -64,7 +64,7 @@ docker compose -f docker/docker-compose.yml --env-file .env up --build
 export DIVESAFE_AUTH_MODE=dev DIVESAFE_EVIDENCE_MAX_AGE_MINUTES=60 DIVESAFE_DECISION_MAX_AGE_MINUTES=120
 uvicorn divesafe.api.app:create_app --factory --port 8000
 curl -X POST localhost:8000/v1/assessments -H 'X-Dev-Actor: me' -H 'content-type: application/json' \
-  -d '{"site_id":"my-terengganu-pulau-redang","planned_start":"<future UTC time>","planned_duration_minutes":90,"max_depth_m":18}'
+  -d '{"site_id":"my-pahang-pulau-tioman","planned_start":"<future UTC time>","planned_duration_minutes":90,"max_depth_m":18}'
 ```
 
 | Endpoint | Purpose |

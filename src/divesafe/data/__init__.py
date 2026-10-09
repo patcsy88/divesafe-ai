@@ -14,11 +14,11 @@ from divesafe.data.ratelimit import (
     CachingRateLimitedGetter,
     QuotaGroup,
 )
-from divesafe.data.sites import REDANG_ISLAND, SITES
+from divesafe.data.sites import SITES, TIOMAN_ISLAND
 from divesafe.domain import DiveSite
 
 __all__ = [
-    "REDANG_ISLAND",
+    "TIOMAN_ISLAND",
     "SITES",
     "OPEN_METEO_QUOTA",
     "CachingRateLimitedGetter",

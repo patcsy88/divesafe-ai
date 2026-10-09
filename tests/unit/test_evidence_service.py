@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from tests.conftest import make_evidence
 
-from divesafe.data import REDANG_ISLAND, ConnectorTransportError, DiveSite, FetchResult
+from divesafe.data import TIOMAN_ISLAND, ConnectorTransportError, DiveSite, FetchResult
 from divesafe.domain import DataCategory
 from divesafe.services import DuplicateEvidenceError, build_evidence_set, gather_evidence
 
@@ -36,7 +36,7 @@ class _Down:
 
 def test_failed_connector_becomes_an_issue_not_silent_absence() -> None:
     evidence = asyncio.run(
-        gather_evidence([_Ok(DataCategory.WIND), _Down()], REDANG_ISLAND, NOW, NOW, NOW)
+        gather_evidence([_Ok(DataCategory.WIND), _Down()], TIOMAN_ISLAND, NOW, NOW, NOW)
     )
     assert evidence.categories == {DataCategory.WIND}
     assert any(i.startswith("down: ConnectorTransportError") for i in evidence.issues)
@@ -51,7 +51,7 @@ def test_unexpected_exceptions_are_not_swallowed() -> None:
             raise RuntimeError("bug")
 
     with pytest.raises(RuntimeError):
-        asyncio.run(gather_evidence([_Bug()], REDANG_ISLAND, NOW, NOW, NOW))  # type: ignore[list-item]
+        asyncio.run(gather_evidence([_Bug()], TIOMAN_ISLAND, NOW, NOW, NOW))  # type: ignore[list-item]
 
 
 def test_identical_duplicates_collapse_and_conflicts_are_rejected() -> None:

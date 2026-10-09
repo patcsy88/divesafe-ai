@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from divesafe.data import (
-    REDANG_ISLAND,
+    TIOMAN_ISLAND,
     ConnectorTransportError,
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
@@ -28,7 +28,7 @@ NOW = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
 START = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
 END = datetime(2026, 10, 8, 21, 0, tzinfo=UTC)
 PLAN = DivePlan(
-    site_id=REDANG_ISLAND.id, planned_start=START, planned_duration_minutes=60, max_depth_m=18
+    site_id=TIOMAN_ISLAND.id, planned_start=START, planned_duration_minutes=60, max_depth_m=18
 )
 
 
@@ -68,10 +68,10 @@ def _gather(marine: Any, warnings: Any):  # type: ignore[no-untyped-def]
         OpenMeteoMarineConnector(_Getter(marine)),
         DataGovMyWarningConnector(_Getter(warnings)),
     ]
-    return asyncio.run(gather_evidence(connectors, REDANG_ISLAND, START, END, NOW))
+    return asyncio.run(gather_evidence(connectors, TIOMAN_ISLAND, START, END, NOW))
 
 
-MARINE = _payload("open_meteo_marine_redang_recorded_2026-10-08.json")
+MARINE = _payload("open_meteo_marine_tioman_recorded_2026-10-08.json")
 WARNINGS = _payload("data_gov_my_warning_recorded_2026-10-09.json")
 LIVE = {
     DataCategory.WAVES_SWELL,

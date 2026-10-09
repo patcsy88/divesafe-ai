@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from divesafe.data import (
-    REDANG_ISLAND,
+    TIOMAN_ISLAND,
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
 )
@@ -29,12 +29,12 @@ from divesafe.risk import EvidencePolicy, RiskRulesEngine, WarningNeedsHumanRead
 
 R = Recommendation
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-MARINE = json.loads((FIXTURES / "open_meteo_marine_redang_recorded_2026-10-08.json").read_text())
+MARINE = json.loads((FIXTURES / "open_meteo_marine_tioman_recorded_2026-10-08.json").read_text())
 WARNINGS = json.loads((FIXTURES / "data_gov_my_warning_recorded_2026-10-09.json").read_text())
 NOW = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
 START = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
 PLAN = DivePlan(
-    site_id=REDANG_ISLAND.id, planned_start=START, planned_duration_minutes=120, max_depth_m=18
+    site_id=TIOMAN_ISLAND.id, planned_start=START, planned_duration_minutes=120, max_depth_m=18
 )
 LIVE = frozenset(
     {
@@ -150,7 +150,7 @@ def run_pipeline(
         assess_dive(
             assessment_id="agent-1",
             plan=PLAN,
-            site=REDANG_ISLAND,
+            site=TIOMAN_ISLAND,
             connectors=used,
             engine=risk_engine or engine(with_warning_rule=with_warning_rule),
             now=NOW,

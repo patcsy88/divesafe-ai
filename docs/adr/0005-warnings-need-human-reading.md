@@ -8,7 +8,7 @@
 MET Malaysia warnings arrive through data.gov.my as free text. One warning can name several
 regions in different paragraphs, there is no structured location field, and some entries (for
 example a tropical-cyclone "No Advisory" notice) have no validity window. Parsing text to decide
-"does this apply to Pulau Redang?" would be an unreviewed heuristic whose failure mode is
+"does this apply to Pulau Tioman?" would be an unreviewed heuristic whose failure mode is
 silently ignoring a real warning.
 
 ## Decision
