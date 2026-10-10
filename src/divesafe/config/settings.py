@@ -67,6 +67,11 @@ class Settings(BaseSettings):
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("dev authentication cannot be used in production")
+        keys = (
+            "".join(self.api_key_hashes.get_secret_value().split()) if self.api_key_hashes else ""
+        )
+        if self.environment == "production" and self.auth_mode == "api_key" and keys in ("", "{}"):
+            raise ValueError("production needs API keys in DIVESAFE_API_KEY_HASHES")
         if self.environment == "production" and self.database_url is not None:
             _require_tls(self.database_url.get_secret_value())
         if (

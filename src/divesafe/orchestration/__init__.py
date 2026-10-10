@@ -8,6 +8,8 @@ Implemented so far: evidence gathering, deterministic risk, reconciliation, and 
 from divesafe.orchestration.human_gate import (
     AlreadyDecidedError,
     DecisionRequiredError,
+    NotAssignedDeciderError,
+    check_assigned,
     decide,
     report_actual_conditions,
 )
@@ -29,6 +31,8 @@ __all__ = [
     "load_ruleset_bytes",
     "read_ruleset_file",
     "AlreadyDecidedError",
+    "NotAssignedDeciderError",
+    "check_assigned",
     "DecisionRequiredError",
     "InvalidPlanError",
     "UnsafeConfigurationError",

@@ -18,6 +18,7 @@ from divesafe.api.state import default_limits
 
 pytestmark = pytest.mark.safety
 
+PLAN_D = {**PLAN, "decider": "decider-user"}
 KEYS = {r: f"key-{r.value}-test-only" for r in Role}
 HEADERS = {r: {"Authorization": f"Bearer {k}"} for r, k in KEYS.items()}
 
@@ -30,7 +31,7 @@ def _client(limits: dict[str, Limit] | None = None) -> tuple[TestClient, Callabl
     state.authenticator = ApiKeyAuthenticator(entries)
     state.limiter = RateLimiter(limits or default_limits())
     return client, lambda: client.post(
-        "/v1/assessments", json=PLAN, headers={"Authorization": "Bearer key-all"}
+        "/v1/assessments", json=PLAN_D, headers={"Authorization": "Bearer key-all"}
     ).json()["record"]["id"]
 
 
@@ -41,7 +42,7 @@ def test_a_viewer_can_read_but_cannot_create_or_decide() -> None:
     assert client.get(f"/v1/assessments/{aid}", headers=h).status_code == 200
     assert client.get(f"/v1/assessments/{aid}/evidence", headers=h).status_code == 200
     assert client.get("/v1/sites/my-pahang-pulau-tioman", headers=h).status_code == 200
-    assert client.post("/v1/assessments", json=PLAN, headers=h).status_code == 403
+    assert client.post("/v1/assessments", json=PLAN_D, headers=h).status_code == 403
     decision = {"decision": "INSUFFICIENT EVIDENCE"}
     assert (
         client.post(f"/v1/assessments/{aid}/decision", json=decision, headers=h).status_code == 403
@@ -70,14 +71,15 @@ def test_an_assessor_can_create_but_not_read_or_decide() -> None:
     client, make = _client()
     aid = make()
     h = HEADERS[Role.ASSESSOR]
-    assert client.post("/v1/assessments", json=PLAN, headers=h).status_code == 201
+    assert client.post("/v1/assessments", json=PLAN_D, headers=h).status_code == 201
     assert client.get(f"/v1/assessments/{aid}", headers=h).status_code == 403
 
 
 def test_a_decider_cannot_create_assessments() -> None:
     client, _ = _client()
     assert (
-        client.post("/v1/assessments", json=PLAN, headers=HEADERS[Role.DECIDER]).status_code == 403
+        client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.DECIDER]).status_code
+        == 403
     )
 
 
@@ -96,7 +98,7 @@ def test_authentication_is_checked_before_the_role_and_a_bad_key_is_401_not_403(
     client, _ = _client()
     assert client.post("/v1/assessments", json=PLAN).status_code == 401
     bad = {"Authorization": "Bearer nope"}
-    assert client.post("/v1/assessments", json=PLAN, headers=bad).status_code == 401
+    assert client.post("/v1/assessments", json=PLAN_D, headers=bad).status_code == 401
 
 
 def test_health_stays_open() -> None:
@@ -110,11 +112,13 @@ def test_health_stays_open() -> None:
 def test_creating_assessments_is_limited_per_actor_with_retry_after() -> None:
     client, _ = _client(default_limits(create_per_minute=2))
     h = HEADERS[Role.ASSESSOR]
-    assert [client.post("/v1/assessments", json=PLAN, headers=h).status_code for _ in range(2)] == [
+    assert [
+        client.post("/v1/assessments", json=PLAN_D, headers=h).status_code for _ in range(2)
+    ] == [
         201,
         201,
     ]
-    limited = client.post("/v1/assessments", json=PLAN, headers=h)
+    limited = client.post("/v1/assessments", json=PLAN_D, headers=h)
     assert limited.status_code == 429
     assert 1 <= int(limited.headers["Retry-After"]) <= 60
     assert limited.json() == {
@@ -126,11 +130,12 @@ def test_creating_assessments_is_limited_per_actor_with_retry_after() -> None:
 def test_one_actors_limit_does_not_throttle_another() -> None:
     client, _ = _client(default_limits(create_per_minute=1))
     assert (
-        client.post("/v1/assessments", json=PLAN, headers=HEADERS[Role.ASSESSOR]).status_code == 201
+        client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
+        == 201
     )
     assert (
         client.post(
-            "/v1/assessments", json=PLAN, headers={"Authorization": "Bearer key-all"}
+            "/v1/assessments", json=PLAN_D, headers={"Authorization": "Bearer key-all"}
         ).status_code
         == 201
     )
@@ -140,11 +145,12 @@ def test_a_forbidden_request_is_not_counted_against_the_limit() -> None:
     client, _ = _client(default_limits(create_per_minute=1))
     for _ in range(5):
         assert (
-            client.post("/v1/assessments", json=PLAN, headers=HEADERS[Role.VIEWER]).status_code
+            client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.VIEWER]).status_code
             == 403
         )
     assert (
-        client.post("/v1/assessments", json=PLAN, headers=HEADERS[Role.ASSESSOR]).status_code == 201
+        client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
+        == 201
     )
 
 
@@ -153,7 +159,8 @@ def test_unauthenticated_requests_cannot_exhaust_an_actors_limit() -> None:
     for _ in range(5):
         assert client.post("/v1/assessments", json=PLAN).status_code == 401
     assert (
-        client.post("/v1/assessments", json=PLAN, headers=HEADERS[Role.ASSESSOR]).status_code == 201
+        client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
+        == 201
     )
 
 

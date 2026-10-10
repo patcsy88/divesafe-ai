@@ -51,6 +51,8 @@ async def assess_dive(
     explanation: str = "",
     model_version: str | None = None,
     provider: LLMProvider | None = None,
+    created_by: str | None = None,
+    assigned_decider: str | None = None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
@@ -115,6 +117,8 @@ async def assess_dive(
         agent_issues=agent_issues,
         ruleset_version=assessment.ruleset_version,
         data_versions=evidence.data_versions,
+        created_by=created_by,
+        assigned_decider=assigned_decider,
     )
     logger.info(
         "assessment created",

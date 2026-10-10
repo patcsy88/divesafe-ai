@@ -103,8 +103,9 @@ def _build(
     return TestClient(create_app(state)), clock, repo
 
 
-def _create(client: TestClient) -> dict[str, Any]:
-    response = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
+def _create(client: TestClient, decider: str | None = None) -> dict[str, Any]:
+    body = PLAN if decider is None else {**PLAN, "decider": decider}
+    response = client.post("/v1/assessments", json=body, headers=AUTH_A)
     assert response.status_code == 201, response.text
     body: dict[str, Any] = response.json()
     return body
@@ -177,7 +178,7 @@ def test_unknown_site_and_past_window_are_rejected() -> None:
 
 def test_actor_comes_from_the_credentials_and_cannot_be_supplied() -> None:
     client, _, _ = _build()
-    rid = _create(client)["record"]["id"]
+    rid = _create(client, decider="bob")["record"]["id"]
     url = f"/v1/assessments/{rid}/decision"
     spoof = {"decision": "INSUFFICIENT EVIDENCE", "decided_by": "carol"}
     assert client.post(url, json=spoof, headers=AUTH_B).status_code == 422
@@ -218,7 +219,7 @@ def test_a_decision_cannot_be_replaced() -> None:
         == 200
     )
     again = client.post(
-        url, json={"decision": "GO", "rationale": "Changed my mind."}, headers=AUTH_B
+        url, json={"decision": "GO", "rationale": "Changed my mind."}, headers=AUTH_A
     )
     assert again.status_code == 409
     stored = client.get(f"/v1/assessments/{rid}", headers=AUTH_A).json()
@@ -250,9 +251,10 @@ def test_actual_conditions_need_a_decision_and_are_one_shot() -> None:
         headers=AUTH_A,
     )
     clock.now += timedelta(hours=3)
-    done = client.post(url, json={"observations": {"vis": "ok"}}, headers=AUTH_B)
+    assert client.post(url, json={"observations": {"vis": "x"}}, headers=AUTH_B).status_code == 403
+    done = client.post(url, json={"observations": {"vis": "ok"}}, headers=AUTH_A)
     assert done.status_code == 200
-    assert done.json()["record"]["actual_conditions"]["reported_by"] == "bob"
+    assert done.json()["record"]["actual_conditions"]["reported_by"] == "alice"
     assert client.post(url, json={"observations": {"vis": "x"}}, headers=AUTH_A).status_code == 409
 
 
@@ -353,7 +355,7 @@ def test_already_decided_is_reported_before_staleness() -> None:
     url = f"/v1/assessments/{rid}/decision"
     client.post(url, json={"decision": "INSUFFICIENT EVIDENCE"}, headers=AUTH_A)
     clock.now += timedelta(hours=2)
-    again = client.post(url, json={"decision": "INSUFFICIENT EVIDENCE"}, headers=AUTH_B)
+    again = client.post(url, json={"decision": "INSUFFICIENT EVIDENCE"}, headers=AUTH_A)
     assert again.status_code == 409 and "already has a decision" in again.json()["detail"]
 
 

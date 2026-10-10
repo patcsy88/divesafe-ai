@@ -17,6 +17,16 @@ class AlreadyDecidedError(RuntimeError):
     """The record already holds a human decision (or actual conditions); it is not replaced."""
 
 
+class NotAssignedDeciderError(PermissionError):
+    """Only the decider assigned to an assessment may record its decision or actual conditions."""
+
+
+def check_assigned(record: AssessmentRecord, actor: str) -> None:
+    assigned = record.assigned_decider
+    if assigned is None or assigned.casefold() != actor.strip().casefold():
+        raise NotAssignedDeciderError("this assessment is assigned to another decider")
+
+
 class DecisionRequiredError(RuntimeError):
     """Actual conditions need a recorded human decision first."""
 
@@ -33,6 +43,7 @@ def decide(
     decided_at: datetime,
     rationale: str | None = None,
 ) -> AssessmentRecord:
+    check_assigned(record, decided_by)
     if record.human_decision is not None:
         raise AlreadyDecidedError("this assessment already has a human decision")
     human = HumanDecision(
@@ -48,6 +59,7 @@ def decide(
 def report_actual_conditions(
     record: AssessmentRecord, *, actual: ActualConditions
 ) -> AssessmentRecord:
+    check_assigned(record, actual.reported_by)
     if record.human_decision is None:
         raise DecisionRequiredError("actual conditions require a recorded human decision")
     if record.actual_conditions is not None:

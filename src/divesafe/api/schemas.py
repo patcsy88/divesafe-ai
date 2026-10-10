@@ -88,6 +88,14 @@ class CreateAssessmentRequest(_Request):
     planned_start: AwareDatetime
     planned_duration_minutes: int = Field(gt=0, le=24 * 60)
     max_depth_m: float = Field(gt=0, le=1000)
+    decider: str | None = Field(
+        default=None,
+        max_length=100,
+        description=(
+            "Actor who will record the human decision. Must be a known key holder with the "
+            "decider role. Defaults to the requester if they hold that role."
+        ),
+    )
 
 
 class DecisionRequest(_Request):

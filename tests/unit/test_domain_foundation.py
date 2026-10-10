@@ -224,7 +224,7 @@ def test_recommendation_rejects_anything_else(bad: str) -> None:
 
 
 def test_human_decision_is_recorded_with_identity_and_rationale() -> None:
-    pending = run_pipeline(None)
+    pending = run_pipeline(None).model_copy(update={"assigned_decider": "leader-1"})
     when = pending.created_at + timedelta(minutes=1)
     decided = decide(
         pending,

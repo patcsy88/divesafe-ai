@@ -35,8 +35,10 @@ from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
     InvalidPlanError,
+    NotAssignedDeciderError,
     UnsafeConfigurationError,
     assess_dive,
+    check_assigned,
     decide,
     report_actual_conditions,
 )
@@ -50,6 +52,10 @@ from divesafe.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NOT_ASSIGNED = (
+    "nothing was recorded; this assessment is assigned to another decider and is still pending"
+)
 
 AssessmentId = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
 
@@ -140,6 +146,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="assessment not found")
         return record
 
+    def _require_assigned(record: AssessmentRecord, principal: Principal) -> None:
+        try:
+            check_assigned(record, principal.actor)
+        except NotAssignedDeciderError as exc:
+            logger.warning(
+                "refused: not the assigned decider",
+                extra={"assessment_id": record.id, "actor": principal.actor},
+            )
+            raise HTTPException(status_code=403, detail=_NOT_ASSIGNED) from exc
+
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
         return {
@@ -160,11 +176,26 @@ def create_app(state: AppState | None = None) -> FastAPI:
         if site is None:
             raise HTTPException(status_code=404, detail="unknown site")
         try:
-            plan = DivePlan(**body.model_dump())
+            plan = DivePlan(**body.model_dump(exclude={"decider"}))
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=_messages(exc)) from exc
+        if body.decider is not None:
+            requested = body.decider
+        else:
+            requested = principal.actor if Role.DECIDER in principal.roles else ""
+        decider = (
+            app_state.authenticator.canonical_decider(requested) if requested.strip() else None
+        )
+        if decider is None:
+            logger.warning("decider assignment refused", extra={"actor": principal.actor})
+            raise HTTPException(
+                status_code=422,
+                detail="name a known key holder with the decider role to record the decision",
+            )
         try:
             record = await assess_dive(
+                created_by=principal.actor,
+                assigned_decider=decider,
                 assessment_id=uuid.uuid4().hex,
                 plan=plan,
                 site=site,
@@ -215,6 +246,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         principal: Annotated[Principal, Depends(DECIDE)],
     ) -> AssessmentView:
         record = _load(assessment_id)
+        _require_assigned(record, principal)
         if record.human_decision is not None:
             raise HTTPException(status_code=409, detail="this assessment already has a decision")
         now = app_state.clock()
@@ -234,6 +266,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 rationale=body.rationale,
             )
             app_state.repository.replace(record, updated)
+        except NotAssignedDeciderError as exc:
+            logger.warning(
+                "decision refused: not the assigned decider",
+                extra={"assessment_id": assessment_id, "actor": principal.actor},
+            )
+            raise HTTPException(status_code=403, detail=_NOT_ASSIGNED) from exc
         except AlreadyDecidedError as exc:
             raise HTTPException(
                 status_code=409, detail="this assessment already has a decision"
@@ -259,6 +297,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         principal: Annotated[Principal, Depends(DECIDE)],
     ) -> AssessmentView:
         record = _load(assessment_id)
+        _require_assigned(record, principal)
         now = app_state.clock()
         if record.human_decision is not None and now < record.plan.planned_start:
             raise HTTPException(
@@ -272,6 +311,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
             )
             updated = report_actual_conditions(record, actual=actual)
             app_state.repository.replace(record, updated)
+        except NotAssignedDeciderError as exc:
+            logger.warning(
+                "actual conditions refused: not the assigned decider",
+                extra={"assessment_id": assessment_id, "actor": principal.actor},
+            )
+            raise HTTPException(status_code=403, detail=_NOT_ASSIGNED) from exc
         except DecisionRequiredError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except AlreadyDecidedError as exc:

@@ -54,6 +54,10 @@ class KeyEntry:
 class Authenticator(Protocol):
     def authenticate(self, request: Request) -> Principal | None: ...
 
+    def canonical_decider(self, actor: str) -> str | None:
+        """The configured name of `actor` if they are a known key holder who may decide."""
+        ...
+
 
 def _actor(value: str) -> str | None:
     cleaned = value.strip()
@@ -76,6 +80,13 @@ class ApiKeyAuthenticator:
                 match = entry
         return Principal(match.actor, match.roles) if match else None
 
+    def canonical_decider(self, actor: str) -> str | None:
+        wanted = actor.strip().casefold()
+        for e in self._hashes.values():
+            if e.actor.casefold() == wanted and Role.DECIDER in e.roles:
+                return e.actor
+        return None
+
 
 class DevAuthenticator:
     """Development only: every role, because nothing here is authenticated."""
@@ -83,6 +94,9 @@ class DevAuthenticator:
     def authenticate(self, request: Request) -> Principal | None:
         actor = _actor(request.headers.get("x-dev-actor", ""))
         return Principal(actor, frozenset(Role)) if actor else None
+
+    def canonical_decider(self, actor: str) -> str | None:
+        return _actor(actor)
 
 
 _FORMAT_ERROR = (

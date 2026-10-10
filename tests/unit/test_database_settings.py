@@ -7,12 +7,15 @@ from pydantic import ValidationError
 
 from divesafe.config import Settings
 
+_KEYS = '{"' + "a" * 64 + '": {"actor": "ops", "roles": ["viewer", "decider"]}}'
+
 
 def _prod(dsn: str) -> Settings:
     return Settings(
         environment="production",
         llm_provider="ollama",
         auth_mode="api_key",
+        api_key_hashes=_KEYS,  # type: ignore[arg-type]
         database_url=dsn,  # type: ignore[arg-type]
     )
 

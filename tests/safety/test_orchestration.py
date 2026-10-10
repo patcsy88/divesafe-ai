@@ -171,7 +171,9 @@ def test_plan_for_a_different_site_is_refused() -> None:
 
 
 def _pending() -> AssessmentRecord:
-    return _run(engine=_engine(with_warning_rule=True))  # INSUFFICIENT EVIDENCE
+    return _run(
+        engine=_engine(with_warning_rule=True), assigned_decider="leader"
+    )  # INSUFFICIENT EVIDENCE
 
 
 def test_accepting_the_recommendation_is_not_an_override() -> None:
@@ -198,15 +200,21 @@ def test_override_without_rationale_is_rejected() -> None:
 
 def test_a_recorded_decision_cannot_be_replaced() -> None:
     decided = decide(
-        _pending(), decided_by="a", decision=R.NO_GO, decided_at=NOW, rationale="Poor visibility."
+        _pending(),
+        decided_by="leader",
+        decision=R.NO_GO,
+        decided_at=NOW,
+        rationale="Poor visibility.",
     )
     with pytest.raises(AlreadyDecidedError):
-        decide(decided, decided_by="b", decision=R.GO, decided_at=NOW, rationale="Changed mind.")
+        decide(
+            decided, decided_by="leader", decision=R.GO, decided_at=NOW, rationale="Changed mind."
+        )
 
 
 def test_original_record_is_not_mutated_by_deciding() -> None:
     pending = _pending()
-    decide(pending, decided_by="a", decision=R.NO_GO, decided_at=NOW, rationale="x")
+    decide(pending, decided_by="leader", decision=R.NO_GO, decided_at=NOW, rationale="x")
     assert pending.human_decision is None
 
 
@@ -216,7 +224,9 @@ def test_actual_conditions_need_a_decision_and_can_be_reported_once() -> None:
     )
     with pytest.raises(DecisionRequiredError, match="require a recorded human decision"):
         report_actual_conditions(_pending(), actual=actual)
-    decided = decide(_pending(), decided_by="a", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW)
+    decided = decide(
+        _pending(), decided_by="leader", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW
+    )
     done = report_actual_conditions(decided, actual=actual)
     assert done.actual_conditions == actual
     with pytest.raises(AlreadyDecidedError):
@@ -280,22 +290,30 @@ def test_decision_cannot_predate_the_assessment() -> None:
     with pytest.raises(ValidationError):
         decide(
             _pending(),
-            decided_by="a",
+            decided_by="leader",
             decision=R.INSUFFICIENT_EVIDENCE,
             decided_at=NOW - timedelta(minutes=1),
         )
 
 
 def test_actual_conditions_cannot_predate_the_decision() -> None:
-    decided = decide(_pending(), decided_by="a", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW)
-    early = ActualConditions(reported_at=NOW - timedelta(hours=1), reported_by="a", observations={})
+    decided = decide(
+        _pending(), decided_by="leader", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW
+    )
+    early = ActualConditions(
+        reported_at=NOW - timedelta(hours=1), reported_by="leader", observations={}
+    )
     with pytest.raises(ValidationError):
         report_actual_conditions(decided, actual=early)
 
 
 def test_gate_round_trip_preserves_types_and_data() -> None:
     decided = decide(
-        _pending(), decided_by="a", decision=R.GO, decided_at=NOW, rationale="Read the warning."
+        _pending(),
+        decided_by="leader",
+        decision=R.GO,
+        decided_at=NOW,
+        rationale="Read the warning.",
     )
     assert isinstance(decided.evidence, tuple) and isinstance(decided.rule_results, tuple)
     assert decided.evidence == _pending().evidence
@@ -304,9 +322,11 @@ def test_gate_round_trip_preserves_types_and_data() -> None:
 
 
 def test_actual_conditions_cannot_predate_the_planned_dive() -> None:
-    decided = decide(_pending(), decided_by="a", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW)
+    decided = decide(
+        _pending(), decided_by="leader", decision=R.INSUFFICIENT_EVIDENCE, decided_at=NOW
+    )
     before_dive = ActualConditions(
-        reported_at=NOW + timedelta(minutes=5), reported_by="a", observations={}
+        reported_at=NOW + timedelta(minutes=5), reported_by="leader", observations={}
     )  # after the decision (17:11) but before the 18:00 planned start
     with pytest.raises(ValidationError):
         report_actual_conditions(decided, actual=before_dive)

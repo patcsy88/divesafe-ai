@@ -376,15 +376,24 @@ def test_the_pin_is_checked_before_the_file_is_parsed(tmp_path: Path) -> None:
         build_engine(pinned, now=NOW)
 
 
+_KEYS = '{"' + "a" * 64 + '": {"actor": "ops", "roles": ["viewer", "decider"]}}'
+
+
 def test_production_requires_a_pinned_ruleset(tmp_path: Path) -> None:
     path = _write(tmp_path, _file())
     with pytest.raises(ValueError, match="pinned"):
-        Settings(environment="production", llm_provider="ollama", ruleset_path=path)
+        Settings(
+            environment="production",
+            llm_provider="ollama",
+            ruleset_path=path,
+            api_key_hashes=_KEYS,  # type: ignore[arg-type]
+        )
     Settings(
         environment="production",
         llm_provider="ollama",
         ruleset_path=path,
         ruleset_sha256="a" * 64,
+        api_key_hashes=_KEYS,  # type: ignore[arg-type]
     )
     Settings(environment="development", ruleset_path=path)  # development may run unpinned
 

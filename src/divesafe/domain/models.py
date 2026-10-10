@@ -289,6 +289,16 @@ class AssessmentRecord(_Frozen):
     )
     ruleset_version: str = Field(min_length=1)
     data_versions: dict[str, str] = Field(default_factory=dict)
+    created_by: str | None = Field(default=None, description="Actor who requested the assessment.")
+    assigned_decider: str | None = Field(
+        default=None,
+        description=(
+            "The only actor who may record the human decision and actual conditions. New "
+            "assessments always have one. None (a record made without one) can be decided by "
+            "nobody."
+        ),
+        max_length=100,
+    )
     human_decision: HumanDecision | None = None
     actual_conditions: ActualConditions | None = None
 

@@ -8,6 +8,8 @@ from divesafe.config import Settings
 from divesafe.models import FakeProvider, ProviderNotAvailableError
 from divesafe.models import llm as llm_module
 
+_KEYS = '{"' + "a" * 64 + '": {"actor": "ops", "roles": ["viewer", "decider"]}}'
+
 
 def _settings(**kwargs: object) -> Settings:
     return Settings(**kwargs)  # type: ignore[arg-type]
@@ -17,7 +19,11 @@ def test_production_refuses_non_durable_storage(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setitem(llm_module._REGISTRY, "ollama", lambda s: FakeProvider())
     monkeypatch.setattr(
         "divesafe.api.app.get_settings",
-        lambda: _settings(environment="production", llm_provider="ollama"),
+        lambda: _settings(
+            environment="production",
+            llm_provider="ollama",
+            api_key_hashes=_KEYS,
+        ),
     )
     monkeypatch.setattr("divesafe.api.state.create_provider", lambda s: FakeProvider())
     with pytest.raises(RuntimeError, match="non-durable"):

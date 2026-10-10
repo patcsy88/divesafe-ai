@@ -105,8 +105,8 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   only, a header) and never from the request body ([ADR 0006](adr/0006-api-auth-and-repository.md)).
   Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013).
   Roles do not say who is *qualified* to decide; that is an operator decision when issuing keys.
-  Any decider can decide any assessment and decisions are write-once, so a wrong or unqualified
-  decider can lock one; ownership/assignment is not built (known gap). `decide()` itself trusts its caller, so it must only be reachable through the API.
+  Each assessment names one assigned decider (ADR 0014); only that actor can decide it or report
+  actual conditions, so another decider cannot lock it. A record with no assignee cannot be decided. `decide()` itself trusts its caller, so it must only be reachable through the API.
 - **Write-once:** `check_successor` plus compare-and-set `replace` enforce it in the repository
   contract (in-memory and PostgreSQL adapters tested, including concurrent writers; the PostgreSQL tests
   need `DIVESAFE_TEST_DATABASE_URL`, see ADR 0012); unvalidated `model_copy` records are untrusted.
@@ -119,7 +119,6 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 - **Durability:** with `DIVESAFE_DATABASE_URL` set, assessments are stored in PostgreSQL
   (ADR 0012). Without it they are in memory only: a restart loses everything, workers do not
   share data, and production refuses to start. The API reports `storage` on `/health`.
-  Actual-conditions reporting has no role restriction.
 - **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
   0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty
   required set; unrequired-but-absent data, contradictory data and window coverage remain open

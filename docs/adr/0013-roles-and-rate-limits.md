@@ -29,13 +29,12 @@
 
 - **One actor may hold assessor and decider** and approve their own assessment; separation of
   duties is not enforced.
-- A decider can decide any assessment and decisions are write-once, so a wrong or unqualified
-  decider can lock one (including an override to GO) before the right leader acts.
+- Superseded by ADR 0014: a decider can now decide only assessments assigned to them.
 - Bodies are parsed before authentication (FastAPI), so malformed JSON gets 422 before 401.
 - Forbidden and unauthenticated requests are not rate limited and each writes a log line.
-- Production with no keys configured starts and rejects everything (a warning, not a refusal).
-- **No per-assessment ownership.** Any `viewer` reads any assessment; any `decider` may decide any
-  assessment. Roles do not tell who is qualified to take a dive decision.
+- Production with no keys configured is now refused at start-up (ADR 0014).
+- Reads are not scoped: any `viewer` reads any assessment. Roles do not tell who is qualified to
+  take a dive decision.
 - **Limits are per process.** With several workers each keeps its own counters, so the effective
   limit is multiplied; a shared store (for example PostgreSQL or Redis) is needed first.
 - **No limit before authentication**, so unauthenticated floods are bounded only by the body-size
