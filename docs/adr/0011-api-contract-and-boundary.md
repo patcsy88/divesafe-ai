@@ -43,5 +43,5 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
 ## Not solved
 
 - Evidence `value` has no size cap of its own (it relies on connector caps); no pagination.
-- Roles/authorization (any authenticated actor can read any assessment), pagination and history
+- Per-assessment ownership (roles exist, ADR 0013, but any viewer reads any assessment), pagination and history
   listing, site search, async jobs.

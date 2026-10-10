@@ -77,8 +77,10 @@ curl -X POST localhost:8000/v1/assessments -H 'X-Dev-Actor: me' -H 'content-type
 
 Without `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` the create endpoint returns 503: there is no default
 evidence age. Outside development use `DIVESAFE_AUTH_MODE=api_key` with
-`DIVESAFE_API_KEY_HASHES` (see `.env.example`). Records are in memory only and are lost on
-restart ([ADR 0006](docs/adr/0006-api-auth-and-repository.md)).
+`DIVESAFE_API_KEY_HASHES` (see `.env.example`). Each key has an actor name and explicit roles
+(viewer, assessor, decider), and requests are rate limited per actor
+([ADR 0013](docs/adr/0013-roles-and-rate-limits.md)). Without `DIVESAFE_DATABASE_URL` records are in
+memory only and are lost on restart ([ADR 0006](docs/adr/0006-api-auth-and-repository.md)).
 
 ## Documentation
 

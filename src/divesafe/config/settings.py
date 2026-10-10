@@ -53,7 +53,13 @@ class Settings(BaseSettings):
 
     auth_mode: Literal["api_key", "dev"] = "api_key"
     # JSON object mapping sha256 hex digest of an API key -> actor name. Never store raw keys.
+    # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"]}}
     api_key_hashes: SecretStr | None = None
+
+    # Per-actor operational limits (abuse and upstream-quota protection, not safety limits).
+    rate_limit_create_per_minute: int = Field(default=10, gt=0, le=10_000)
+    rate_limit_decide_per_minute: int = Field(default=30, gt=0, le=10_000)
+    rate_limit_read_per_minute: int = Field(default=120, gt=0, le=10_000)
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:

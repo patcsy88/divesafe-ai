@@ -103,8 +103,10 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 
 - **Authentication (interim):** the API takes the actor from an API key (or, in development
   only, a header) and never from the request body ([ADR 0006](adr/0006-api-auth-and-repository.md)).
-  No roles: any authenticated actor may decide or override. `decide()` itself trusts its
-  caller, so it must only be reachable through the API.
+  Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013).
+  Roles do not say who is *qualified* to decide; that is an operator decision when issuing keys.
+  Any decider can decide any assessment and decisions are write-once, so a wrong or unqualified
+  decider can lock one; ownership/assignment is not built (known gap). `decide()` itself trusts its caller, so it must only be reachable through the API.
 - **Write-once:** `check_successor` plus compare-and-set `replace` enforce it in the repository
   contract (in-memory and PostgreSQL adapters tested, including concurrent writers; the PostgreSQL tests
   need `DIVESAFE_TEST_DATABASE_URL`, see ADR 0012); unvalidated `model_copy` records are untrusted.

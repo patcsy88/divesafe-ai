@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from divesafe.api.app import create_app
-from divesafe.api.auth import ApiKeyAuthenticator
+from divesafe.api.auth import ApiKeyAuthenticator, KeyEntry, Role
 from divesafe.api.state import (
     INTERIM_REQUIRED_CATEGORIES,
     INTERIM_RULESET_VERSION,
@@ -89,7 +89,12 @@ def _build(
             DataGovMyWarningConnector(_Getter(warnings)),
         ],
         engine=rules if engine else None,
-        authenticator=ApiKeyAuthenticator({_hash(KEY_A): "alice", _hash(KEY_B): "bob"}),
+        authenticator=ApiKeyAuthenticator(
+            {
+                _hash(KEY_A): KeyEntry("alice", frozenset(Role)),
+                _hash(KEY_B): KeyEntry("bob", frozenset(Role)),
+            }
+        ),
         clock=clock,
         sites=SITES,
         decision_max_age=max_age,

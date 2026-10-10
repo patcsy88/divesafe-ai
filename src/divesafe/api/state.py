@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from divesafe.api.auth import Authenticator, build_authenticator
+from divesafe.api.ratelimit import Limit, RateLimiter
 from divesafe.config import Settings
 from divesafe.data import (
     SITES,
@@ -74,6 +75,18 @@ class AppState:
     sites: Mapping[str, DiveSite]
     decision_max_age: timedelta | None
     provider: LLMProvider | None = None
+    limiter: RateLimiter = field(default_factory=lambda: RateLimiter(default_limits()))
+
+
+def default_limits(
+    create_per_minute: int = 10, decide_per_minute: int = 30, read_per_minute: int = 120
+) -> dict[str, Limit]:
+    """Operational limits per actor (abuse and upstream-quota protection), not safety limits."""
+    return {
+        "create": Limit(create_per_minute, 60),
+        "decide": Limit(decide_per_minute, 60),
+        "read": Limit(read_per_minute, 60),
+    }
 
 
 def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEngine | None:
@@ -171,4 +184,11 @@ def build_default_state(settings: Settings) -> AppState:
             else None
         ),
         provider=build_provider(settings),
+        limiter=RateLimiter(
+            default_limits(
+                settings.rate_limit_create_per_minute,
+                settings.rate_limit_decide_per_minute,
+                settings.rate_limit_read_per_minute,
+            )
+        ),
     )

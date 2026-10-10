@@ -52,4 +52,4 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
   a 500 with no content logged).
 - No connection pool, backups, or replication. An ambiguous commit failure (network drop after the
   server committed) is reported as an error although the write may exist; a retry then conflicts.
-- Reads and authorisation are unchanged: any authenticated actor can read any assessment.
+- Roles exist (ADR 0013) but there is no per-assessment ownership: any viewer reads any assessment.

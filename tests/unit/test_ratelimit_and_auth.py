@@ -11,6 +11,8 @@ from fastapi import Request
 from divesafe.api.auth import (
     ApiKeyAuthenticator,
     DevAuthenticator,
+    KeyEntry,
+    Role,
     build_authenticator,
     parse_api_key_hashes,
 )
@@ -80,7 +82,7 @@ HASH = hashlib.sha256(KEY.encode()).hexdigest()
 
 
 def test_api_key_accepts_only_the_right_bearer_key() -> None:
-    auth = ApiKeyAuthenticator({HASH: "alice"})
+    auth = ApiKeyAuthenticator({HASH: KeyEntry("alice", frozenset({Role.VIEWER}))})
     assert auth.authenticate(_request({"Authorization": f"Bearer {KEY}"})).actor == "alice"  # type: ignore[union-attr]
     assert auth.authenticate(_request({"Authorization": "Bearer wrong"})) is None
     assert auth.authenticate(_request({"Authorization": f"Basic {KEY}"})) is None
@@ -98,6 +100,14 @@ def test_dev_mode_reads_actor_header_and_rejects_blank() -> None:
     assert DevAuthenticator().authenticate(_request({"X-Dev-Actor": "  "})) is None
 
 
+def test_dev_mode_grants_every_role_and_api_key_mode_only_the_configured_ones() -> None:
+    dev = DevAuthenticator().authenticate(_request({"X-Dev-Actor": "bob"}))
+    assert dev is not None and dev.roles == frozenset(Role)
+    keyed = ApiKeyAuthenticator({HASH: KeyEntry("alice", frozenset({Role.VIEWER}))})
+    principal = keyed.authenticate(_request({"Authorization": f"Bearer {KEY}"}))
+    assert principal is not None and principal.roles == frozenset({Role.VIEWER})
+
+
 def test_dev_mode_is_refused_in_production() -> None:
     with pytest.raises(ValueError):
         Settings(environment="production", auth_mode="dev", llm_provider="ollama")
@@ -105,7 +115,20 @@ def test_dev_mode_is_refused_in_production() -> None:
 
 @pytest.mark.parametrize(
     "raw",
-    ["not json", "[]", '{"short": "a"}', f'{{"{HASH}": ""}}', f'{{"{HASH}": 5}}'],
+    [
+        "not json",
+        "[]",
+        '{"short": "a"}',
+        f'{{"{HASH}": "alice"}}',
+        f'{{"{HASH}": 5}}',
+        f'{{"{HASH}": {{"actor": "a", "roles": ["decider"]}}}}',
+        f'{{"{HASH}": {{"actor": "", "roles": ["viewer"]}}}}',
+        f'{{"{HASH}": {{"actor": "a", "roles": []}}}}',
+        f'{{"{HASH}": {{"actor": "a", "roles": ["admin"]}}}}',
+        f'{{"{HASH}": {{"actor": "a", "roles": "viewer"}}}}',
+        f'{{"{HASH}": {{"actor": "a"}}}}',
+        f'{{"{HASH}": {{"actor": "a", "roles": ["viewer"], "extra": 1}}}}',
+    ],
 )
 def test_malformed_key_hash_config_fails_at_startup(raw: str) -> None:
     with pytest.raises(ValueError):
@@ -113,7 +136,10 @@ def test_malformed_key_hash_config_fails_at_startup(raw: str) -> None:
 
 
 def test_key_hash_config_round_trips() -> None:
-    assert parse_api_key_hashes(f'{{"{HASH}": "alice"}}') == {HASH: "alice"}
+    raw = f'{{"{HASH}": {{"actor": "alice", "roles": ["viewer", "decider"]}}}}'
+    assert parse_api_key_hashes(raw) == {
+        HASH: KeyEntry("alice", frozenset({Role.VIEWER, Role.DECIDER}))
+    }
 
 
 def test_cached_payload_cannot_be_corrupted_by_a_caller() -> None:
