@@ -24,6 +24,7 @@ from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
 
 from divesafe.domain import AssessmentRecord
+from divesafe.services.migrations import GUARD_TRIGGERS, migrate, schema_problems
 from divesafe.services.repository import (
     ConflictError,
     InvalidSuccessorError,
@@ -40,111 +41,29 @@ STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
 
-GUARD_TRIGGERS = (
-    "assessments_append_only_guard",
-    "assessments_insert_guard",
-    "assessments_no_truncate_guard",
-)
-_ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS public.assessments (
-    id          text PRIMARY KEY CHECK (id ~ '^[0-9A-Za-z._-]{1,64}$'),
-    record      jsonb NOT NULL CHECK (jsonb_typeof(record) = 'object'),
-    created_at  timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE OR REPLACE FUNCTION public.assessments_append_only() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-DECLARE
-    json_null constant jsonb := 'null'::jsonb;
-    old_decision jsonb := COALESCE(OLD.record->'human_decision', json_null);
-    old_actual jsonb := COALESCE(OLD.record->'actual_conditions', json_null);
-    new_decision jsonb := COALESCE(NEW.record->'human_decision', json_null);
-    new_actual jsonb := COALESCE(NEW.record->'actual_conditions', json_null);
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        RAISE EXCEPTION 'assessments are never deleted';
-    END IF;
-    IF NEW.id <> OLD.id
-       OR NEW.created_at IS DISTINCT FROM OLD.created_at
-       OR (NEW.record - 'human_decision' - 'actual_conditions')
-          IS DISTINCT FROM (OLD.record - 'human_decision' - 'actual_conditions')
-       OR (old_decision <> json_null AND new_decision <> old_decision)
-       OR (old_actual <> json_null AND new_actual <> old_actual)
-    THEN
-        RAISE EXCEPTION 'only a first human decision and first actual conditions may be appended';
-    END IF;
-    IF new_actual <> json_null AND new_decision = json_null THEN
-        RAISE EXCEPTION 'actual conditions require a decision';
-    END IF;
-    IF old_decision = json_null AND new_decision <> json_null THEN
-        IF NOT COALESCE(
-            jsonb_typeof(new_decision) = 'object'
-            AND length(btrim(new_decision->>'decided_by')) > 0
-            AND new_decision->>'decision' IN ('GO', 'CAUTION', 'NO-GO', 'INSUFFICIENT EVIDENCE')
-            AND jsonb_typeof(new_decision->'is_override') = 'boolean'
-            AND (
-                (new_decision->'is_override') = 'false'::jsonb
-                OR length(btrim(COALESCE(new_decision->>'override_rationale', ''))) > 0
-            ),
-            false
-        ) THEN
-            RAISE EXCEPTION 'the human decision is malformed';
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.assessments_insert_guard() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-BEGIN
-    IF NEW.record->>'id' IS DISTINCT FROM NEW.id
-       OR COALESCE(NEW.record->'human_decision', 'null'::jsonb) <> 'null'::jsonb
-       OR COALESCE(NEW.record->'actual_conditions', 'null'::jsonb) <> 'null'::jsonb
-    THEN
-        RAISE EXCEPTION 'a new assessment must match its id and carry no decision';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.assessments_no_truncate() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
-BEGIN
-    RAISE EXCEPTION 'assessments are never truncated';
-END;
-$$;
-
-DROP TRIGGER IF EXISTS assessments_append_only_guard ON public.assessments;
-CREATE TRIGGER assessments_append_only_guard
-    BEFORE UPDATE OR DELETE ON public.assessments
-    FOR EACH ROW EXECUTE FUNCTION public.assessments_append_only();
-
-DROP TRIGGER IF EXISTS assessments_insert_guard ON public.assessments;
-CREATE TRIGGER assessments_insert_guard
-    BEFORE INSERT ON public.assessments
-    FOR EACH ROW EXECUTE FUNCTION public.assessments_insert_guard();
-
-DROP TRIGGER IF EXISTS assessments_no_truncate_guard ON public.assessments;
-CREATE TRIGGER assessments_no_truncate_guard
-    BEFORE TRUNCATE ON public.assessments
-    FOR EACH STATEMENT EXECUTE FUNCTION public.assessments_no_truncate();
-"""
+_ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
 def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
     """Create the table and guard as the OWNER role, and optionally grant a least-privilege
     application role. Idempotent. Never run with the application's own credentials."""
-    if app_role is not None and not _ROLE_NAME.match(app_role):
+    if app_role is not None and (
+        not _ROLE_NAME.fullmatch(app_role) or app_role == "public" or app_role.startswith("pg_")
+    ):
         raise ValueError("invalid application role name")
+    migrate(admin_dsn, app_role=app_role)
     try:
         with psycopg.connect(admin_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
-            conn.execute(_SCHEMA)
             conn.execute("REVOKE ALL ON public.assessments FROM PUBLIC")
             if app_role is not None:
                 role = sql.Identifier(app_role)
+                conn.execute(sql.SQL("GRANT SELECT ON public.schema_migrations TO {}").format(role))
+                conn.execute(
+                    sql.SQL(
+                        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES "
+                        "ON public.schema_migrations FROM {}"
+                    ).format(role)
+                )
                 conn.execute(
                     sql.SQL("GRANT SELECT, INSERT, UPDATE ON public.assessments TO {}").format(role)
                 )
@@ -226,6 +145,11 @@ class PostgresAssessmentRepository:
         with _storage_errors(), self._connect() as conn:
             if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
                 return ["the assessments table does not exist (run db_init as the owner role)"]
+            try:
+                with conn.transaction():
+                    problems += schema_problems(conn)
+            except psycopg.errors.InsufficientPrivilege:
+                problems.append("the application role cannot read the migration history")
             enabled = {
                 row[0]
                 for row in conn.execute(
@@ -244,7 +168,9 @@ class PostgresAssessmentRepository:
                     "(SELECT rolsuper FROM pg_roles WHERE rolname = current_user), "
                     "has_table_privilege('public.assessments', 'DELETE'), "
                     "has_table_privilege('public.assessments', 'TRUNCATE'), "
-                    "has_table_privilege('public.assessments', 'TRIGGER') "
+                    "has_table_privilege('public.assessments', 'TRIGGER'), "
+                    "COALESCE(has_table_privilege('public.schema_migrations', 'INSERT, UPDATE, "
+                    "DELETE, TRUNCATE'), false) "
                     "FROM pg_class c WHERE c.oid = 'public.assessments'::regclass"
                 ).fetchone()
                 assert row is not None
@@ -254,6 +180,7 @@ class PostgresAssessmentRepository:
                     "can DELETE",
                     "can TRUNCATE",
                     "can alter triggers",
+                    "can write the migration history",
                 )
                 problems += [
                     f"the application role {n}" for n, flag in zip(names, row, strict=True) if flag

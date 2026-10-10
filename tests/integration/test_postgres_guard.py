@@ -446,6 +446,7 @@ def test_startup_verification_reports_a_missing_disabled_or_overpowered_setup(
         _sql("ALTER TABLE assessments ENABLE TRIGGER assessments_no_truncate_guard")
     _sql("DROP TABLE assessments")
     assert any("does not exist" in p for p in owner.verify(least_privilege=False))
+    _sql("DROP TABLE schema_migrations")  # a fresh database has no history either
     _postgres()  # restore for other tests
 
 
@@ -457,3 +458,179 @@ def test_verification_flags_an_application_role_that_can_delete(app_role_dsn: st
     _sql("REVOKE DELETE ON assessments FROM divesafe_app_test")
     _sql("GRANT TRUNCATE ON assessments TO divesafe_app_test")
     assert any("can TRUNCATE" in p for p in app.verify(least_privilege=True))
+
+
+# --- migrations ------------------------------------------------------------------------------
+
+
+def test_migrating_twice_applies_nothing_the_second_time() -> None:
+    from divesafe.services.migrations import migrate
+
+    _postgres()
+    assert migrate(DSN) == []  # type: ignore[arg-type]
+
+
+def test_a_failing_migration_rolls_back_completely_and_is_not_recorded() -> None:
+    from divesafe.services.migrations import MIGRATIONS, Migration, migrate
+
+    _postgres()
+    bad = Migration(2, "bad", "CREATE TABLE half_done (x int); SELECT 1/0;")
+    with pytest.raises(Exception, match="could not apply"):
+        migrate(DSN, (*MIGRATIONS, bad))  # type: ignore[arg-type]
+    with psycopg.connect(DSN) as conn:  # type: ignore[arg-type]
+        assert conn.execute("SELECT to_regclass('public.half_done')").fetchone() == (None,)
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (1,)
+
+
+def test_a_good_second_migration_is_applied_once_and_recorded() -> None:
+    from divesafe.services.migrations import MIGRATIONS, Migration, migrate
+
+    _postgres()
+    extra = Migration(2, "scratch", "CREATE TABLE migration_scratch (x int)")
+    try:
+        assert migrate(DSN, (*MIGRATIONS, extra)) == [2]  # type: ignore[arg-type]
+        assert migrate(DSN, (*MIGRATIONS, extra)) == []  # type: ignore[arg-type]
+    finally:
+        _sql("DROP TABLE IF EXISTS migration_scratch")
+        _sql("DELETE FROM schema_migrations WHERE version = 2")
+
+
+def test_an_edited_applied_migration_is_refused_by_the_runner() -> None:
+    from divesafe.services.migrations import MIGRATIONS, Migration, MigrationError, migrate
+
+    _postgres()
+    edited = Migration(1, MIGRATIONS[0].name, MIGRATIONS[0].sql + "\n-- edited")
+    with pytest.raises(MigrationError, match="changed after it was applied"):
+        migrate(DSN, (edited,))  # type: ignore[arg-type]
+
+
+def test_startup_refuses_a_database_behind_or_ahead_of_the_code() -> None:
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    try:
+        assert repo.verify(least_privilege=False) == []
+        _sql("DELETE FROM schema_migrations")
+        assert any("schema version 0" in p for p in repo.verify(least_privilege=False))
+        _sql(
+            "INSERT INTO schema_migrations (version, name, checksum) VALUES (1, 'x', %s)",
+            ("0" * 64,),
+        )
+        assert any("changed after" in p for p in repo.verify(least_privilege=False))
+        _sql("DELETE FROM schema_migrations")
+        _postgres()
+        _sql(
+            "INSERT INTO schema_migrations (version, name, checksum) VALUES (2, 'future', %s)",
+            ("1" * 64,),
+        )
+        assert any("ahead of this code" in p for p in repo.verify(least_privilege=False))
+    finally:
+        _sql("DROP TABLE IF EXISTS schema_migrations")
+        _postgres()
+
+
+def test_the_application_role_can_read_but_not_write_the_migration_history(
+    app_role_dsn: str,
+) -> None:
+    with psycopg.connect(app_role_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone() == (1,)
+    for statement in (
+        "DELETE FROM schema_migrations",
+        "UPDATE schema_migrations SET checksum = repeat('0', 64)",
+        "INSERT INTO schema_migrations (version, name, checksum) VALUES (9, 'x', repeat('0', 64))",
+        "DROP TABLE schema_migrations",
+    ):
+        with psycopg.connect(app_role_dsn) as conn, pytest.raises(psycopg.errors.Error):
+            conn.execute(statement)  # type: ignore[call-overload]
+
+
+def test_two_runners_at_once_apply_a_migration_exactly_once() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from divesafe.services.migrations import MIGRATIONS, Migration, migrate
+
+    _postgres()
+    slow = Migration(2, "slow", "SELECT pg_sleep(1); CREATE TABLE migration_scratch (x int)")
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(migrate, DSN, (*MIGRATIONS, slow)) for _ in range(2)]  # type: ignore[arg-type]
+            results = sorted(f.result() for f in futures)
+        assert results == [[], [2]]
+    finally:
+        _sql("DROP TABLE IF EXISTS migration_scratch")
+        _sql("DELETE FROM schema_migrations WHERE version = 2")
+
+
+def test_a_migration_that_leaves_the_guard_disabled_is_rolled_back() -> None:
+    from divesafe.services.migrations import MIGRATIONS, Migration, MigrationError, migrate
+
+    _postgres()
+    sneaky = Migration(
+        2, "sneaky", "ALTER TABLE public.assessments DISABLE TRIGGER assessments_insert_guard"
+    )
+    # `guarded` refuses the wording; bypass it to prove the post-check also holds
+    import divesafe.services.migrations as mod
+
+    original = mod.guarded
+    mod.guarded = lambda known: None  # type: ignore[assignment]
+    try:
+        with pytest.raises(MigrationError, match="not intact"):
+            migrate(DSN, (*MIGRATIONS, sneaky))  # type: ignore[arg-type]
+    finally:
+        mod.guarded = original
+    with psycopg.connect(DSN) as conn:  # type: ignore[arg-type]
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (1,)
+    assert PostgresAssessmentRepository(DSN).verify(least_privilege=False) == []  # type: ignore[arg-type]
+
+
+def test_migrations_refuse_to_run_as_the_application_role(app_role_dsn: str) -> None:
+    from divesafe.services.migrations import MigrationError, migrate
+
+    with pytest.raises(MigrationError, match="owner role"):
+        migrate(app_role_dsn, app_role="divesafe_app_test")
+
+
+@pytest.mark.parametrize("role", ["public", "pg_monitor", "Bad Role", "ok\n"])
+def test_dangerous_application_role_names_are_refused(role: str) -> None:
+    from divesafe.services.postgres import install_schema
+
+    with pytest.raises(ValueError, match="invalid application role"):
+        install_schema(DSN, role)  # type: ignore[arg-type]
+
+
+def test_startup_flags_an_application_role_that_can_write_the_migration_history(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("GRANT UPDATE ON schema_migrations TO divesafe_app_test")
+    assert any("migration history" in p for p in app.verify(least_privilege=True))
+
+
+def test_startup_reports_a_role_that_cannot_read_the_migration_history(app_role_dsn: str) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("REVOKE SELECT ON schema_migrations FROM divesafe_app_test")
+    problems = app.verify(least_privilege=True)
+    assert any("cannot read the migration history" in p for p in problems)
+
+
+def test_migrate_itself_refuses_a_migration_that_touches_the_guard() -> None:
+    from divesafe.services.migrations import MIGRATIONS, Migration, MigrationError, migrate
+
+    _postgres()
+    evil = Migration(2, "evil", "DROP TRIGGER assessments_append_only_guard ON public.assessments")
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        migrate(DSN, (*MIGRATIONS, evil))  # type: ignore[arg-type]
+    assert PostgresAssessmentRepository(DSN).verify(least_privilege=False) == []  # type: ignore[arg-type]
+
+
+def test_installing_again_takes_back_write_access_to_the_migration_history(
+    app_role_dsn: str,
+) -> None:
+    from divesafe.services.postgres import install_schema
+
+    assert DSN is not None
+    _sql("GRANT INSERT, UPDATE, DELETE, TRUNCATE ON schema_migrations TO divesafe_app_test")
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert any("migration history" in p for p in app.verify(least_privilege=True))
+    install_schema(DSN, "divesafe_app_test")
+    assert app.verify(least_privilege=True) == []

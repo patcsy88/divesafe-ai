@@ -1,4 +1,4 @@
-"""Install the assessments schema and its guard as the OWNER role.
+"""Apply schema migrations (ADR 0015) and grant the application role, as the OWNER role.
 
     DIVESAFE_ADMIN_DATABASE_URL=... DIVESAFE_APP_DB_ROLE=divesafe_app \\
         python -m divesafe.services.db_init
@@ -18,7 +18,7 @@ def main() -> None:
     if settings.admin_database_url is None:
         raise SystemExit("DIVESAFE_ADMIN_DATABASE_URL is not set")
     install_schema(settings.admin_database_url.get_secret_value(), settings.app_db_role)
-    print("assessments schema installed")
+    print("schema is up to date")
 
 
 if __name__ == "__main__":

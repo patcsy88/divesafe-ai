@@ -40,7 +40,7 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
 
 ## Not solved
 
-- **No migration system.** `db_init` is one idempotent create; a table change needs a tool (ADR).
+- Migrations: see ADR 0015 (forward-only runner, checksums, start-up version check).
 - **A superuser or the table owner can still disable the guard.** The runtime checks above catch a
   misconfigured application role, not a compromised owner.
 - **The trigger checks the shape of a decision, not its authenticity.** A role with UPDATE can
