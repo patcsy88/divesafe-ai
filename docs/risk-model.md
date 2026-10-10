@@ -132,9 +132,11 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 - `explanation`, `findings` and `scenarios` are LLM-generated and unverified. The API labels
   them. Specialist and scenario `confidence` values are uncalibrated self-estimates and are not
   the record `confidence`, which stays `None`.
-- Known gap: only a scripted fake LLM has been used, so injection resistance and output
-  reliability of real models are unmeasured. An evaluation set (tests/evaluation) is needed
-  before any real provider is trusted for even advisory output.
+- Known gap: no real model has been run. An Ollama adapter and an offline evaluation harness
+  exist (ADR 0016), but the set is seven synthetic scenarios not reviewed by a diving
+  professional, the injection screen is a marker heuristic that misses paraphrase, and no live run
+  has been made. Injection resistance and output reliability of real models are unmeasured, and no
+  real provider should be trusted for even advisory output until a live run has been reviewed.
 
 ### Evidence usability (ADR 0008)
 

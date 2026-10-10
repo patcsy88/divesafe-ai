@@ -8,7 +8,7 @@
 | Unit | `tests/unit` | Domain, config, engine, providers | CI |
 | Agent | `tests/agent` | Agent behavior with scripted `FakeProvider` output | CI |
 | Integration | `tests/integration` | Database/pgvector, connectors (recorded fixtures) | CI where services exist |
-| Evaluation | `tests/evaluation` | Quality metrics on labelled scenarios | Reported, tracked over time |
+| Evaluation | `tests/evaluation` | Quality metrics on labelled scenarios | Offline harness tests gate in CI; live model quality numbers are reported, not gated |
 
 ## Safety evaluation (highest priority)
 
