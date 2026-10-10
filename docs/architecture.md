@@ -136,10 +136,8 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Durable storage:** only an in-memory repository exists (no database was available to test
-  against). A PostgreSQL adapter must pass `tests/unit/test_repository_contract.py`, enforce
-  write-once with a unique id and conditional update, and use an INSERT/SELECT-only role plus
-  record hashing for audit integrity ([ADR 0006](adr/0006-api-auth-and-repository.md)).
+- **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
+  Still open: a migration tool, record hashing for tamper evidence, connection pooling.
 - **Roles and authorization:** API keys identify an actor but grant no roles (a production gate;
   see ADR 0006). Who may override,
   and whether a less severe override needs stronger authority, is not enforced. Key rotation and

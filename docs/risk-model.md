@@ -106,17 +106,17 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   No roles: any authenticated actor may decide or override. `decide()` itself trusts its
   caller, so it must only be reachable through the API.
 - **Write-once:** `check_successor` plus compare-and-set `replace` enforce it in the repository
-  contract (in-memory adapter tested, including concurrent writers). A durable adapter must meet
-  the same contract; unvalidated `model_copy` records are untrusted.
+  contract (in-memory and PostgreSQL adapters tested, including concurrent writers; the PostgreSQL tests
+  need `DIVESAFE_TEST_DATABASE_URL`, see ADR 0012); unvalidated `model_copy` records are untrusted.
 - **Decision-time staleness:** `DIVESAFE_DECISION_MAX_AGE_MINUTES` rejects decisions on old
   assessments, but there is no default (unset means no limit) and evidence is not re-checked.
 - **`now`** is the server clock in the API. `assess_dive` still takes it as a parameter, so
   non-API callers must pass a trusted clock.
 - **Untrusted inputs:** `proposed`, `scenarios` and `explanation` must come only from the agent
   layer, which must delimit untrusted text. They are not sanitised here.
-- **Durability:** the only repository is in-memory, so a restart loses every assessment and
-  decision, and several workers would each hold different data. Run a single worker; the API
-  reports `storage` on `/health`, warns at startup and refuses to start in production.
+- **Durability:** with `DIVESAFE_DATABASE_URL` set, assessments are stored in PostgreSQL
+  (ADR 0012). Without it they are in memory only: a restart loses everything, workers do not
+  share data, and production refuses to start. The API reports `storage` on `/health`.
   Actual-conditions reporting has no role restriction.
 - **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
   0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty

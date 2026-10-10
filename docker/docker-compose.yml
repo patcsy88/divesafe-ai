@@ -25,7 +25,11 @@ services:
     env_file:
       - ../.env
     environment:
+      # Local development only: no TLS and the owner role. Production needs sslmode=require or
+      # stricter and a least-privilege role (docs/adr/0012). Run db_init once before first use:
+      #   docker compose run --rm api python -m divesafe.services.db_init
       DIVESAFE_DATABASE_URL: postgresql://divesafe:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/divesafe
+      DIVESAFE_ADMIN_DATABASE_URL: postgresql://divesafe:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/divesafe
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

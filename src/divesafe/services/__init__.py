@@ -6,6 +6,7 @@ from divesafe.services.evidence import (
     build_evidence_set,
     gather_evidence,
 )
+from divesafe.services.postgres import PostgresAssessmentRepository
 from divesafe.services.repository import (
     AssessmentRepository,
     ConflictError,
@@ -13,6 +14,9 @@ from divesafe.services.repository import (
     InvalidSuccessorError,
     RecordExistsError,
     RecordNotFoundError,
+    RepositoryIntegrityError,
+    RepositoryUnavailableError,
+    UnstorableRecordError,
     check_successor,
 )
 
@@ -23,8 +27,12 @@ __all__ = [
     "EvidenceSet",
     "InMemoryAssessmentRepository",
     "InvalidSuccessorError",
+    "PostgresAssessmentRepository",
     "RecordExistsError",
     "RecordNotFoundError",
+    "RepositoryIntegrityError",
+    "RepositoryUnavailableError",
+    "UnstorableRecordError",
     "build_evidence_set",
     "check_successor",
     "gather_evidence",

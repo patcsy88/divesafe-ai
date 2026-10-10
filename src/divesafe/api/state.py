@@ -35,7 +35,11 @@ from divesafe.risk import (
     WarningNeedsHumanReadingRule,
     placeholder_rules,
 )
-from divesafe.services import AssessmentRepository, InMemoryAssessmentRepository
+from divesafe.services import (
+    AssessmentRepository,
+    InMemoryAssessmentRepository,
+    PostgresAssessmentRepository,
+)
 
 # Interim and unreviewed: no verified tide source exists and no limit is signed off yet, so
 # assessments are always INSUFFICIENT EVIDENCE. This is the honest state; see
@@ -138,10 +142,20 @@ def build_provider(settings: Settings) -> LLMProvider | None:
     return provider
 
 
+def build_repository(settings: Settings) -> AssessmentRepository:
+    if settings.database_url is None:
+        return InMemoryAssessmentRepository()
+    repository = PostgresAssessmentRepository(settings.database_url.get_secret_value())
+    problems = repository.verify(least_privilege=settings.environment == "production")
+    if problems:
+        raise RuntimeError("unsafe database setup: " + "; ".join(problems))
+    return repository
+
+
 def build_default_state(settings: Settings) -> AppState:
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     return AppState(
-        repository=InMemoryAssessmentRepository(),
+        repository=build_repository(settings),
         connectors=[
             OpenMeteoMarineConnector(getter),
             OpenMeteoWindConnector(getter),

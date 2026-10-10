@@ -10,6 +10,19 @@ from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _require_tls(dsn: str) -> None:
+    """Refuse a production database connection that may fall back to plaintext. The message never
+    echoes the connection string."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        mode = conninfo_to_dict(dsn).get("sslmode", "prefer")
+    except Exception:  # noqa: BLE001 - the parser's message can echo the string
+        raise ValueError("DIVESAFE_DATABASE_URL is not a valid connection string") from None
+    if mode not in {"require", "verify-ca", "verify-full"}:
+        raise ValueError("production needs sslmode=require, verify-ca or verify-full in the DSN")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DIVESAFE_", env_file=".env", extra="ignore", env_ignore_empty=True
@@ -19,6 +32,10 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     database_url: SecretStr | None = None
+    # Owner-role connection used ONLY by `python -m divesafe.services.db_init` to install the
+    # schema; the running application never needs it.
+    admin_database_url: SecretStr | None = None
+    app_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
     llm_provider: Literal["openai", "anthropic", "ollama", "fake"] = "fake"
     llm_model: str | None = None
@@ -44,6 +61,8 @@ class Settings(BaseSettings):
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("dev authentication cannot be used in production")
+        if self.environment == "production" and self.database_url is not None:
+            _require_tls(self.database_url.get_secret_value())
         if (
             self.environment == "production"
             and self.ruleset_path is not None

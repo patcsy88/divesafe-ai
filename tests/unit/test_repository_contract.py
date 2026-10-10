@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 from datetime import timedelta
 
+import psycopg
+import psycopg.conninfo
 import pytest
 from tests.conftest import NOW, make_evidence
 
@@ -23,19 +26,53 @@ from divesafe.services import (
     ConflictError,
     InMemoryAssessmentRepository,
     InvalidSuccessorError,
+    PostgresAssessmentRepository,
     RecordExistsError,
     RecordNotFoundError,
 )
+from divesafe.services.postgres import GUARD_TRIGGERS, install_schema
 
 R = Recommendation
+TEST_DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
+
+
+def reset_test_database() -> None:
+    """Install the guard as the owner and empty the table. Refuses any database whose name does
+    not end in `_test`, so a copied production DSN can never be wiped."""
+    assert TEST_DSN is not None
+    name = psycopg.conninfo.conninfo_to_dict(TEST_DSN).get("dbname", "")
+    if not str(name).endswith("_test"):
+        raise RuntimeError("DIVESAFE_TEST_DATABASE_URL must point at a database named *_test")
+    install_schema(TEST_DSN)
+    with psycopg.connect(TEST_DSN) as conn:
+        for trigger in GUARD_TRIGGERS:
+            conn.execute(f"ALTER TABLE assessments DISABLE TRIGGER {trigger}")
+        conn.execute("TRUNCATE assessments")
+        for trigger in GUARD_TRIGGERS:
+            conn.execute(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
+
+
+def _postgres() -> AssessmentRepository:
+    assert TEST_DSN is not None
+    reset_test_database()
+    return PostgresAssessmentRepository(TEST_DSN)
+
+
 ADAPTERS: dict[str, Callable[[], AssessmentRepository]] = {
-    "in-memory": InMemoryAssessmentRepository
+    "in-memory": InMemoryAssessmentRepository,
+    "postgres": pytest.param(
+        _postgres,
+        marks=[
+            pytest.mark.integration,
+            pytest.mark.skipif(TEST_DSN is None, reason="DIVESAFE_TEST_DATABASE_URL not set"),
+        ],
+    ),  # type: ignore[dict-item]
 }
 
 
-@pytest.fixture(params=list(ADAPTERS))
+@pytest.fixture(params=[v for v in ADAPTERS.values()], ids=list(ADAPTERS))
 def repo(request: pytest.FixtureRequest) -> AssessmentRepository:
-    return ADAPTERS[request.param]()
+    return request.param()
 
 
 def _record(record_id: str = "r1") -> AssessmentRecord:

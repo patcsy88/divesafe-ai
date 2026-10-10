@@ -12,6 +12,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -39,7 +40,14 @@ from divesafe.orchestration import (
     decide,
     report_actual_conditions,
 )
-from divesafe.services import ConflictError, InMemoryAssessmentRepository, RecordNotFoundError
+from divesafe.services import (
+    ConflictError,
+    InMemoryAssessmentRepository,
+    RecordNotFoundError,
+    RepositoryIntegrityError,
+    RepositoryUnavailableError,
+    UnstorableRecordError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +106,25 @@ def create_app(state: AppState | None = None) -> FastAPI:
         ]
         return JSONResponse({"detail": errors}, status_code=422)
 
+    @app.exception_handler(RepositoryUnavailableError)
+    async def store_unavailable(request: Request, exc: RepositoryUnavailableError) -> JSONResponse:
+        logger.error("storage unavailable", extra={"path": request.url.path})
+        return JSONResponse(
+            {"detail": "storage is unavailable; nothing was recorded"}, status_code=503
+        )
+
+    @app.exception_handler(RepositoryIntegrityError)
+    async def store_integrity(request: Request, exc: RepositoryIntegrityError) -> JSONResponse:
+        logger.error("storage integrity failure", extra={"path": request.url.path})
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    @app.exception_handler(UnstorableRecordError)
+    async def unstorable(request: Request, exc: UnstorableRecordError) -> JSONResponse:
+        logger.error("record could not be stored", extra={"path": request.url.path})
+        return JSONResponse(
+            {"detail": "the content cannot be stored; nothing was recorded"}, status_code=422
+        )
+
     @app.exception_handler(Exception)
     async def unexpected(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled error", extra={"path": request.url.path})
@@ -147,7 +174,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         except UnsafeConfigurationError as exc:
             logger.error("unsafe configuration", extra={"detail": str(exc)})
             raise HTTPException(status_code=503, detail="server configuration is unsafe") from exc
-        app_state.repository.create(record)
+        await run_in_threadpool(app_state.repository.create, record)
         logger.info(
             "assessment stored", extra={"assessment_id": record.id, "actor": principal.actor}
         )

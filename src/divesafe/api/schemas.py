@@ -94,6 +94,13 @@ class DecisionRequest(_Request):
     decision: Recommendation
     rationale: str | None = Field(default=None, max_length=5000)
 
+    @field_validator("rationale")
+    @classmethod
+    def _no_nul(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("rationale contains a NUL character")
+        return value
+
 
 class ActualConditionsRequest(_Request):
     observations: dict[str, Any]
@@ -104,9 +111,12 @@ class ActualConditionsRequest(_Request):
         if _shape_exceeds(value, max_depth=_MAX_DEPTH, max_nodes=_MAX_NODES):
             raise ValueError("observations are too deeply nested or too large")
         try:
-            size = len(json.dumps(value, default=str))
+            dumped = json.dumps(value, default=str, allow_nan=False)
+            size = len(dumped)
         except (RecursionError, TypeError, ValueError) as exc:
             raise ValueError("observations are not simple JSON") from exc
+        if "\\u0000" in dumped:
+            raise ValueError("observations contain a NUL character")
         if size > 20_000:
             raise ValueError("observations are too large")
         return value

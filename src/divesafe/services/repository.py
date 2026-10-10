@@ -1,9 +1,9 @@
 """Assessment storage contract with write-once, append-only semantics.
 
-Every adapter (in-memory now, PostgreSQL later) must pass tests/unit/test_repository_contract.py.
+Every adapter (in-memory and PostgreSQL) must pass tests/unit/test_repository_contract.py.
 The only permitted change to a stored record is attaching a human decision once and then
-actual conditions once; nothing else may differ. `replace` is compare-and-set, so two concurrent
-writers cannot both succeed.
+actual conditions once; nothing else may differ. A new record cannot already carry a
+decision. `replace` is compare-and-set, so two concurrent writers cannot both succeed.
 """
 
 from __future__ import annotations
@@ -28,6 +28,19 @@ class ConflictError(Exception):
 
 class InvalidSuccessorError(ValueError):
     """The new record changes more than the permitted append-only fields."""
+
+
+class RepositoryUnavailableError(Exception):
+    """The store could not be reached or failed. Carries no connection details."""
+
+
+class RepositoryIntegrityError(Exception):
+    """A stored record could not be read back as a valid record."""
+
+
+class UnstorableRecordError(ValueError):
+    """The record cannot be stored faithfully (for example NUL characters, non-finite numbers,
+    or a value that would not read back identical). Nothing was stored."""
 
 
 class AssessmentRepository(Protocol):
@@ -67,6 +80,8 @@ class InMemoryAssessmentRepository:
         self._lock = threading.Lock()
 
     def create(self, record: AssessmentRecord) -> None:
+        if record.human_decision is not None or record.actual_conditions is not None:
+            raise InvalidSuccessorError("a new record cannot already carry a decision")
         with self._lock:
             if record.id in self._records:
                 raise RecordExistsError(record.id)
