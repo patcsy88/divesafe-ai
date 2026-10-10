@@ -34,6 +34,6 @@
   <circle cx="600" cy="745" r="62" fill="#ffd23f" stroke="#031a2c" stroke-width="10"/>
   <path d="M568 746 L592 772 L638 718" fill="none" stroke="#031a2c" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
   <!-- text -->
-  <text x="600" y="1030" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="120" font-weight="700" fill="#ffffff" letter-spacing="2">Dive<tspan fill="#19d3e6">Safe</tspan><tspan fill="#ffd23f">-AI</tspan></text>
+  <text x="600" y="1030" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="120" font-weight="700" fill="#ffffff" letter-spacing="2">Dive<tspan fill="#19d3e6">Safe</tspan><tspan fill="#ffd23f"> AI</tspan></text>
   <text x="600" y="1096" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" fill="#9fdce6" letter-spacing="8">SMARTER DIVE RISK ASSESSMENT</text>
 </svg>
