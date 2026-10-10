@@ -24,3 +24,6 @@ htmlcov/
 *.db
 *.sqlite*
 /data/
+
+# Forms returned by the dive professional: they name people. Keep local, never commit.
+/docs/domain-validation/returned/
