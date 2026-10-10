@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/divesafe.svg" alt="DiveSafe AI logo" width="200">
+</p>
+
 # DiveSafe AI
 
 Agentic environmental risk assessment and decision support for recreational diving.

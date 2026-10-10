@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" width="1200" height="1200">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b3c5d"/><stop offset="1" stop-color="#031a2c"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#19b5c9"/><stop offset="1" stop-color="#0a5f86"/>
+    </linearGradient>
+    <clipPath id="sc"><path id="sp" d="M600 190 L840 270 V560 C840 720 740 830 600 900 C460 830 360 720 360 560 V270 Z"/></clipPath>
+  </defs>
+  <rect width="1200" height="1200" rx="220" fill="url(#bg)"/>
+  <!-- bubbles -->
+  <g fill="none" stroke="#7fe3ee" stroke-opacity=".5" stroke-width="5">
+    <circle cx="190" cy="300" r="22"/><circle cx="240" cy="210" r="12"/><circle cx="1010" cy="380" r="26"/>
+    <circle cx="960" cy="250" r="14"/><circle cx="150" cy="560" r="10"/><circle cx="1050" cy="600" r="12"/>
+  </g>
+  <!-- shield -->
+  <use href="#sp" fill="url(#shield)" stroke="#bff3f8" stroke-width="14" stroke-linejoin="round"/>
+  <g clip-path="url(#sc)">
+    <!-- waves -->
+    <path d="M330 600 C400 560 460 640 530 600 S660 560 730 600 S800 640 870 600 V950 H330Z" fill="#06456a" opacity=".75"/>
+    <path d="M330 680 C400 640 460 720 530 680 S660 640 730 680 S800 720 870 680 V950 H330Z" fill="#032c47" opacity=".85"/>
+    <!-- AI neural nodes / circuit -->
+    <g stroke="#e9fdff" stroke-width="7" stroke-linecap="round" fill="none" opacity=".95">
+      <path d="M600 330 L520 420 M600 330 L680 420 M520 420 L680 420 M520 420 L470 520 M680 420 L730 520 M520 420 L600 520 M680 420 L600 520 M470 520 L600 520 M730 520 L600 520"/>
+    </g>
+    <g fill="#e9fdff">
+      <circle cx="600" cy="330" r="26"/><circle cx="520" cy="420" r="20"/><circle cx="680" cy="420" r="20"/>
+      <circle cx="470" cy="520" r="17"/><circle cx="600" cy="520" r="17"/><circle cx="730" cy="520" r="17"/>
+    </g>
+    <circle cx="600" cy="330" r="12" fill="#19b5c9"/>
+  </g>
+  <!-- check mark badge -->
+  <circle cx="600" cy="745" r="62" fill="#ffd23f" stroke="#031a2c" stroke-width="10"/>
+  <path d="M568 746 L592 772 L638 718" fill="none" stroke="#031a2c" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- text -->
+  <text x="600" y="1030" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="120" font-weight="700" fill="#ffffff" letter-spacing="2">Dive<tspan fill="#19d3e6">Safe</tspan><tspan fill="#ffd23f">-AI</tspan></text>
+  <text x="600" y="1096" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="38" fill="#9fdce6" letter-spacing="8">SMARTER DIVE RISK ASSESSMENT</text>
+</svg>
