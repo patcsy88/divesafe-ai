@@ -134,6 +134,34 @@ call made.
   **current behaviour is unverified until a token is used**; the marine forecast needs a start
   date of today or later (no history). MET also states its open data may be reused for any
   purpose.
+
+  **Findings 2026-10-10 (nothing connected; no token yet):**
+  - The MET website marine page (`met.gov.my/en/forecast/marine/waters/<code>/`) shows a 7-day
+    forecast by state waters (weather text, wind direction and speed range, wave range with no unit
+    shown). It is HTML only, with no issue time, model or lineage. Its **copyright notice forbids
+    copying, reproducing, publishing or commercially dealing with the site's contents without prior
+    written consent**, so **do not scrape it**. `robots.txt` returns 404. A link to it for human
+    readers is fine; ingesting its values is not.
+  - The MET **Open Data page** says all open datasets on `api.met.gov.my` (introduced 2014) are
+    accessible for integration and reuse by the public, government agencies and private entities. It
+    names no licence; record the exact terms once registered. The Government of Malaysia accepts no
+    liability for loss from the data.
+  - The API home page offers "general weather forecast data" and says to contact MET for anything
+    else. It lists 1,000 requests a day and a burst of 3 a minute; a 2022 community copy says 2,000 a
+    day and 10 a minute. **Plan for the stricter limit.** Token header: `Authorization: METToken
+    <token>`. v1 is stated as deprecated.
+  - The 2022 copy lists marine forecast (`/data` for locations in the WATER category; wind speed as a
+    range with a unit, such as "20-30 km/h", code `FMWS`) and warnings. **Whether marine data is
+    still offered is unconfirmed** and the current docs are behind login. data.gov.my still states
+    marine forecast is unavailable.
+  - **Unknown until a token is used:** datatype codes and units for wave height, whether waves are a
+    range, issue time, the model behind it, the `/locations` id covering Pulau Tioman (the area is a
+    state-wide waters zone, not a dive site), and the current base URL.
+  - **Next:** the user registers with their own name and email and sets `DIVESAFE_MET_API_TOKEN`
+    (environment only). Then read `/datatypes` and `/locations`, record a real fixture, and build a
+    connector (https, host allow-list, typed errors, quota guard, `degraded` quality). A second
+    source cannot count as corroboration until its lineage is known (ADR 0010) and the dive
+    professional gives a per-factor tolerance.
 - **Not verified:** GEBCO, EMODnet, Meteomatics.
 - **Open-Meteo `visibility` is atmospheric**, not underwater: its docs describe viewing distance
   influenced by cloud, humidity and aerosols. It must never stand in for dive visibility.
