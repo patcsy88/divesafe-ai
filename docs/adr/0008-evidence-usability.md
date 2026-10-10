@@ -1,6 +1,6 @@
 # ADR 0008: Evidence usability in the deterministic engine
 
-- Status: Accepted (the `degraded_may_support_go` default needs owner confirmation)
+- Status: Accepted (owner confirmed `degraded_may_support_go=False` on 2026-10-10)
 - Date: 2026-10-09
 
 ## Context
@@ -57,7 +57,14 @@ not exempt), or that is not in the evidence at all, the engine appends
 warning rule) must see stale or unaccepted items, because filtering could hide a real hazard. The
 citation guard is what keeps a GO from resting on them.
 
-## Needs the owner
+## Owner decision (2026-10-10)
+
+The owner chose to keep `degraded_may_support_go=False`. A degraded forecast or model never
+supports GO or CAUTION. While no source can be VALIDATED for a future window, GO and CAUTION stay
+unreachable for future dives, and the system returns NO-GO or INSUFFICIENT EVIDENCE. Reconsider
+only with written limits from a dive professional and a risk-reviewer sign-off, recorded here.
+
+## Was open: needs the owner
 
 Whether a regional model forecast (DEGRADED) may ever support GO or CAUTION is a risk decision.
 The default is "no". Changing it is a one-line policy edit that must be reviewed by `risk-reviewer`
