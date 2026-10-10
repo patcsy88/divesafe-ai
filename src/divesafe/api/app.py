@@ -24,6 +24,8 @@ from divesafe.api.schemas import (
     AssessmentView,
     CreateAssessmentRequest,
     DecisionRequest,
+    EvidenceView,
+    SiteView,
 )
 from divesafe.api.state import AppState, build_default_state
 from divesafe.config import configure_logging, get_settings
@@ -77,6 +79,14 @@ def create_app(state: AppState | None = None) -> FastAPI:
         openapi_url=None if hidden else "/openapi.json",
     )
     app.add_middleware(BodySizeLimitMiddleware)
+
+    @app.middleware("http")
+    async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     app.state.divesafe = app_state
 
     @app.exception_handler(RequestValidationError)
@@ -149,6 +159,23 @@ def create_app(state: AppState | None = None) -> FastAPI:
         principal: Annotated[Principal, Depends(require_principal)],
     ) -> AssessmentView:
         return AssessmentView.of(_load(assessment_id))
+
+    @app.get("/v1/assessments/{assessment_id}/evidence", tags=["assessments"])
+    def get_evidence(
+        assessment_id: AssessmentId,
+        principal: Annotated[Principal, Depends(require_principal)],
+    ) -> EvidenceView:
+        return EvidenceView.of(_load(assessment_id))
+
+    @app.get("/v1/sites/{site_id}", tags=["sites"])
+    def get_site(
+        site_id: Annotated[str, Path(pattern=r"^[A-Za-z0-9._-]{1,100}$")],
+        principal: Annotated[Principal, Depends(require_principal)],
+    ) -> SiteView:
+        site = app_state.sites.get(site_id)
+        if site is None:
+            raise HTTPException(status_code=404, detail="unknown site")
+        return SiteView.of(site)
 
     @app.post("/v1/assessments/{assessment_id}/decision", tags=["human gate"])
     def record_decision(

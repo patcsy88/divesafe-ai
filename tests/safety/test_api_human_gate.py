@@ -25,6 +25,7 @@ from divesafe.data import (
     DataGovMyWarningConnector,
     OpenMeteoMarineConnector,
 )
+from divesafe.domain import DataQuality
 from divesafe.risk import EvidencePolicy, RiskRulesEngine, WarningNeedsHumanReadingRule
 from divesafe.services import InMemoryAssessmentRepository
 
@@ -112,6 +113,8 @@ def _create(client: TestClient) -> dict[str, Any]:
     [
         ("post", "/v1/assessments"),
         ("get", "/v1/assessments/" + "a" * 32),
+        ("get", "/v1/assessments/" + "a" * 32 + "/evidence"),
+        ("get", "/v1/sites/" + SITE_ID),
         ("post", "/v1/assessments/" + "a" * 32 + "/decision"),
         ("post", "/v1/assessments/" + "a" * 32 + "/actual-conditions"),
     ],
@@ -419,3 +422,129 @@ def test_a_failing_llm_still_returns_a_pending_assessment_with_the_issue_count()
     assert body["status"] == "PENDING_HUMAN"
     assert body["record"]["final_recommendation"] == "INSUFFICIENT EVIDENCE"
     assert "failed or were rejected" in body["agent_note"]
+
+
+# --- read-only evidence and site endpoints -----------------------------------------------------
+
+
+def test_evidence_endpoint_shows_provenance_quality_and_age() -> None:
+    client, _, _ = _build()
+    created = _create(client)
+    aid = created["record"]["id"]
+    body = client.get(f"/v1/assessments/{aid}/evidence", headers=AUTH_B).json()
+    assert body["assessment_id"] == aid and "not a safety authority" in body["notice"]
+    assert body["evidence"], "evidence must be inspectable"
+    for entry in body["evidence"]:
+        assert entry["effective_quality"] in {q.value for q in DataQuality}
+        assert entry["item"]["source"] and "upstream_known" in entry["item"]
+        retrieved = datetime.fromisoformat(entry["item"]["retrieved_at"])
+        assert entry["future_dated"] is False
+        assert entry["retrieval_age_minutes_at_assessment"] == int(
+            (T0 - retrieved).total_seconds() // 60
+        )
+    assert "absence is not evidence of safety" in body["evidence_note"]
+    assert "unevaluated_factors" in body
+    marine = [e for e in body["evidence"] if e["item"]["category"] == "waves_swell"]
+    assert marine and all(e["effective_quality"] == "degraded" for e in marine)
+
+
+def test_evidence_issues_are_listed_when_a_source_failed() -> None:
+    client, _, _ = _build(warnings=ConnectorTransportError("HTTP 503"))
+    aid = _create(client)["record"]["id"]
+    body = client.get(f"/v1/assessments/{aid}/evidence", headers=AUTH_A).json()
+    assert any("data-gov-my" in i for i in body["evidence_issues"])
+
+
+def test_evidence_for_an_unknown_or_malformed_id() -> None:
+    client, _, _ = _build()
+    assert (
+        client.get("/v1/assessments/" + "b" * 32 + "/evidence", headers=AUTH_A).status_code == 404
+    )
+    assert client.get("/v1/assessments/not-an-id/evidence", headers=AUTH_A).status_code == 422
+
+
+def test_site_endpoint_never_implies_the_site_is_free_of_hazards() -> None:
+    client, _, _ = _build()
+    body = client.get(f"/v1/sites/{SITE_ID}", headers=AUTH_A).json()
+    assert body["site"]["id"] == SITE_ID and body["site"]["coordinate_source"]
+    assert "does not mean there are none" in body["hazards_note"]
+    assert client.get("/v1/sites/nope", headers=AUTH_A).status_code == 404
+    assert client.get("/v1/sites/bad%20id", headers=AUTH_A).status_code == 422
+
+
+def test_evidence_view_reports_the_engines_quality_not_the_connectors_claim() -> None:
+    from divesafe.api.schemas import EvidenceView
+
+    client, _, repo = _build()
+    record = repo.get(_create(client)["record"]["id"])
+    assert record is not None
+    model_item = next(e for e in record.evidence if e.category.value == "waves_swell")
+    claimed = model_item.model_copy(update={"quality": "validated"})
+    forged = record.model_copy(update={"evidence": (claimed,)})
+    (entry,) = EvidenceView.of(forged).evidence
+    assert entry.item.quality == "validated" and entry.effective_quality == DataQuality.DEGRADED
+
+
+def test_future_dated_evidence_is_flagged_not_hidden() -> None:
+    from divesafe.api.schemas import EvidenceView
+
+    client, _, repo = _build()
+    record = repo.get(_create(client)["record"]["id"])
+    assert record is not None
+    late = record.evidence[0].model_copy(
+        update={"retrieved_at": record.created_at + timedelta(minutes=5)}
+    )
+    (entry,) = EvidenceView.of(record.model_copy(update={"evidence": (late,)})).evidence
+    assert entry.future_dated is True and entry.retrieval_age_minutes_at_assessment is None
+
+
+def test_evidence_with_every_source_failed_still_says_it_is_not_complete() -> None:
+    client, _, _ = _build(warnings=ConnectorTransportError("HTTP 503"))
+    aid = _create(client)["record"]["id"]
+    body = client.get(f"/v1/assessments/{aid}/evidence", headers=AUTH_A).json()
+    assert "absence is not evidence of safety" in body["evidence_note"] and body["evidence_issues"]
+
+
+def test_site_note_changes_when_constraints_are_registered() -> None:
+    from divesafe.api.schemas import SiteView
+    from divesafe.domain import DiveSite, SiteConstraint
+
+    bare = DiveSite(id="s", name="s", latitude=1.0, longitude=1.0, coordinate_source="test")
+    with_c = bare.model_copy(update={"constraints": (SiteConstraint(id="c1", description="d"),)})
+    assert "No hazards" in SiteView.of(bare).hazards_note
+    note = SiteView.of(with_c).hazards_note
+    assert "c1" in note and "not a limit" in note and "No hazards, local rules" not in note
+    assert "does not mean there are none" in note
+
+
+def test_views_never_grow_a_risk_level_or_confidence_label() -> None:
+    from divesafe.api.schemas import EvidenceEntry, EvidenceView, SiteView
+
+    banned = {"risk_level", "safety_score", "confidence_label", "safe"}
+    for model in (EvidenceView, EvidenceEntry, SiteView):
+        assert not banned & set(model.model_fields)
+
+
+def test_malformed_ids_without_credentials_get_401_not_422() -> None:
+    client, _, _ = _build()
+    for path in ("/v1/assessments/not-an-id/evidence", "/v1/sites/bad%20id", "/v1/sites/x%0a"):
+        assert client.get(path).status_code == 401
+
+
+def test_hostile_site_id_is_not_echoed_and_trailing_newline_is_refused() -> None:
+    client, _, _ = _build()
+    hostile = "<script>alert(1)</script>"
+    response = client.get(f"/v1/sites/{hostile}", headers=AUTH_A)
+    assert response.status_code in {404, 422} and "script" not in response.text
+    assert client.get(f"/v1/sites/{SITE_ID}%0a", headers=AUTH_A).status_code == 422
+
+
+def test_read_endpoints_are_not_cacheable() -> None:
+    client, _, _ = _build()
+    aid = _create(client)["record"]["id"]
+    for path in (
+        f"/v1/assessments/{aid}",
+        f"/v1/assessments/{aid}/evidence",
+        f"/v1/sites/{SITE_ID}",
+    ):
+        assert client.get(path, headers=AUTH_A).headers["cache-control"] == "no-store"

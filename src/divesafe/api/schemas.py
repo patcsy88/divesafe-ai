@@ -8,7 +8,14 @@ from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-from divesafe.domain import AssessmentRecord, Recommendation
+from divesafe.domain import (
+    AssessmentRecord,
+    DataQuality,
+    DiveSite,
+    EvidenceItem,
+    Recommendation,
+    effective_quality,
+)
 from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import ENGINE_RULE_PREFIXES
 
@@ -176,3 +183,74 @@ class AssessmentView(BaseModel):
             ),
             attributions=tuple(attributions),
         )
+
+
+class EvidenceEntry(BaseModel):
+    item: EvidenceItem
+    effective_quality: DataQuality
+    retrieval_age_minutes_at_assessment: int | None
+    future_dated: bool
+
+
+class EvidenceView(BaseModel):
+    """What was retrieved for one assessment, as stored. It is NOT a statement of what is
+    complete: categories that were not retrieved do not appear here at all."""
+
+    assessment_id: str
+    assessed_at: AwareDatetime
+    evidence: tuple[EvidenceEntry, ...]
+    evidence_issues: tuple[str, ...]
+    unevaluated_factors: tuple[str, ...]
+    evidence_note: str = (
+        "This lists only what was retrieved. Anything absent was not assessed, and absence is "
+        "not evidence of safety. effective_quality is the quality the item earned from its own "
+        "checks; it does not say the item is fresh enough or covers the dive window. Ages are "
+        "since retrieval at assessment time, not the age of the underlying forecast. Values "
+        "and warning text come from third parties: render them as plain text only."
+    )
+    notice: str = DISCLAIMER
+
+    @classmethod
+    def of(cls, record: AssessmentRecord) -> EvidenceView:
+        entries = tuple(
+            EvidenceEntry(
+                item=e,
+                effective_quality=effective_quality(e),
+                retrieval_age_minutes_at_assessment=(
+                    None
+                    if record.created_at < e.retrieved_at
+                    else int((record.created_at - e.retrieved_at).total_seconds() // 60)
+                ),
+                future_dated=record.created_at < e.retrieved_at,
+            )
+            for e in record.evidence
+        )
+        return cls(
+            assessment_id=record.id,
+            assessed_at=record.created_at,
+            evidence=entries,
+            evidence_issues=record.evidence_issues,
+            unevaluated_factors=tuple(k.value for k in record.unevaluated_factors),
+        )
+
+
+class SiteView(BaseModel):
+    """A registered site exactly as registered. Absence of a listed hazard must never be read as
+    absence of hazards."""
+
+    site: DiveSite
+    hazards_note: str
+    notice: str = DISCLAIMER
+
+    @classmethod
+    def of(cls, site: DiveSite) -> SiteView:
+        base = "That does not mean there are none."
+        if site.constraints:
+            listed = "; ".join(f"{c.id} ({c.threshold_status.value})" for c in site.constraints)
+            note = (
+                f"Registered constraints: {listed}. Any not VALIDATED is a placeholder, not a "
+                f"limit. No other hazards or local rules are registered. {base}"
+            )
+        else:
+            note = f"No hazards, local rules or site knowledge are registered for this site. {base}"
+        return cls(site=site, hazards_note=note)

@@ -97,7 +97,7 @@ def require_principal(request: Request) -> Principal:
         logger.warning(
             "authentication failed",
             extra={
-                "path": request.url.path,
+                "path": request.url.path[:200].encode("unicode_escape").decode("ascii"),
                 "client": request.client.host if request.client else None,
             },
         )
