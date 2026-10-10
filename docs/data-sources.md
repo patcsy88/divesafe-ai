@@ -187,6 +187,11 @@ evidence category and timing questions only.
 results across users, then register a key (kept in the environment, never in the repository);
 (c) decide whether tide height alone, without tidal streams, is worth connecting.
 
+**Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
+credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
+requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
+matters for Tioman, or if JUPEM data becomes available.
+
 ### Known limits that affect safety use
 
 - **data.gov.my states that marine forecast data is currently unavailable.** Warnings exist
@@ -210,7 +215,7 @@ results across users, then register a key (kept in the environment, never in the
    DWD and Open-Meteo must be shown wherever its data is displayed.
 2. ~~First area~~ **Decided: Pulau Tioman** (was Pulau Redang until 2026-10-10). Specific dive-site
    coordinates still need a source.
-3. Is there access to official JUPEM tide data (licence or file export)? Still open.
+3. ~~Official JUPEM tide data?~~ **Decided: skip tide height for now** (2026-10-10); not pursued.
 4. ~~Wind~~ **Connected** (Open-Meteo forecast model; see "Wind connector behaviour"). Whether it is
    good enough to support a limit, and which model should be pinned, are professional decisions.
 
