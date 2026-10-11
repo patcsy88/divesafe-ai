@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,8 +84,9 @@ def test_the_request_pins_the_unit_uses_https_and_a_known_host() -> None:
         "wind_gusts_10m",
         "wind_direction_10m",
     }
-    assert "api.open-meteo.com" in ALLOWED_HOSTS
-    assert "api.open-meteo.com" in DEFAULT_MIN_INTERVAL_SECONDS
+    host = "api.open-meteo.com"
+    assert host in set(ALLOWED_HOSTS)
+    assert host in set(DEFAULT_MIN_INTERVAL_SECONDS.keys())
 
 
 def test_provenance_is_complete_and_states_every_known_limitation() -> None:
@@ -232,5 +234,5 @@ def test_every_open_meteo_item_carries_the_required_attribution_wording_and_link
     ).items
     for item in (*wind_result.items, *marine_items):
         text = item.value["attribution"]
-        assert "Open-Meteo.com" in text and "https://open-meteo.com/" in text
-        assert "CC BY 4.0" in text
+        assert "Open-Meteo.com" in text and "CC BY 4.0" in text
+        assert re.search(r"https://open-meteo\.com/(?!\w)", text)
