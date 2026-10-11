@@ -44,3 +44,25 @@ jobs:
         run: pytest -rs | tee pytest.log
       - name: Fail if the PostgreSQL tests were skipped
         run: "! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log"
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install exactly what the lockfile pins
+        run: npm ci
+      - name: Known vulnerabilities in runtime dependencies
+        run: npm audit --omit=dev
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build (no secret is needed to build)
+        run: npm run build

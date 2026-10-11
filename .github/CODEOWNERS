@@ -15,4 +15,11 @@
 /tests/safety/                          @patcsy88
 /docs/adr/                              @patcsy88
 /.github/                               @patcsy88
+/web/lib/session.ts                    @patcsy88
+/web/lib/config.ts                     @patcsy88
+/web/lib/auth.ts                       @patcsy88
+/web/lib/api.ts                        @patcsy88
+/web/app/actions.ts                    @patcsy88
+/web/next.config.ts                    @patcsy88
+/web/tests/boundary.test.ts            @patcsy88
 /opencode.jsonc                         @patcsy88
