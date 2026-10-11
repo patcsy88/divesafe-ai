@@ -17,6 +17,8 @@ from divesafe.data import (
     Connector,
     DataGovMyWarningConnector,
     DiveSite,
+    OpenMeteoMarineConnector,
+    OpenMeteoWindConnector,
     UrllibJsonGetter,
 )
 from divesafe.domain import DataCategory, RiskFactorKind
@@ -178,6 +180,8 @@ def build_default_state(settings: Settings) -> AppState:
     return AppState(
         repository=build_repository(settings),
         connectors=[
+            OpenMeteoMarineConnector(getter),
+            OpenMeteoWindConnector(getter),
             DataGovMyWarningConnector(getter),
         ],
         engine=build_engine(settings),
