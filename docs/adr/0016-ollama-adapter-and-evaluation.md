@@ -13,11 +13,11 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   the standard library (no new dependency, no vendor SDK). OpenAI and Anthropic are not built;
   each needs its own ADR for the dependency and a note on what the vendor sees.
 - **Egress:** `external` is true unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`).
-  A remote server must use https and is then refused unless `DIVESAFE_ALLOW_EXTERNAL_LLM=true`.
+  A remote server must use https (see the amendments for the one exception) and is then refused unless `DIVESAFE_ALLOW_EXTERNAL_LLM=true`.
   Base URLs with credentials, a query, a fragment or an invalid port are refused. A look-alike
   such as `localhost.evil.example` is not loopback.
 - **Safety of the call:**
-  - Non-streaming, no redirects, and environment proxies are ignored (a proxy would carry the
+  - Streamed (see the amendments), no redirects, and environment proxies are ignored (a proxy would carry the
     prompt somewhere the egress flag never approved).
   - Response capped at 1 MiB, read in chunks with `read1`, under a 50 s total deadline (the
     agent runner waits 60 s) and a 15 s per-read timeout. `read(n)` was rejected because a
@@ -49,17 +49,19 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 ## Amendments (2026-10-11)
 
 - **Streaming.** The adapter sends `stream: true` and joins the lines. A reply counts only if
-  exactly the last line has `done: true` and every line has a string `message.content`; a cut-off
+  exactly the last line has `done: true` with `done_reason` "stop" (a reply stopped by the token limit is refused) and every line has a string `message.content`; a cut-off
   stream or an error line is refused, never used partly. Reason: a proxy in front of the test
   server answered 504 after 30 s of silence on a non-streamed call.
 - **`think`.** Defaults to `false` and is sent to the server (`None` leaves it to the server). A
   thinking model can otherwise spend its whole output budget on thinking and return nothing.
 - **Plain http to a named remote host.** `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS` is a comma-separated
-  list of exact hostnames (empty by default; no wildcards, suffixes, addresses or ranges). Only
+  list of exact hostnames (empty by default; no wildcards, suffixes, IP addresses or ranges; any port on a listed host is allowed). Only
   those hosts may use `http://`. The server still counts as external, so
   `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is still needed, and production refuses a non-empty list. The
   prompt then crosses the network unencrypted and the server can be impersonated; use it only on a
-  network you control. Added at the owner's request for a LAN test server.
+  network you control. On a shared network a spoofed DNS or `.local` (mDNS) answer can also rewrite
+  the reply, so forged explanation text could reach the human decider (the recommendation can still
+  only be tightened). Do not use `.local` names. Added at the owner's request for a LAN test server.
 
 ## Not solved
 
@@ -77,6 +79,8 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 - Model output is nondeterministic even at temperature 0 on some backends; compare runs.
 - The stored `model_version` is the name only, not a digest; pulling and pinning a model is the
   operator's job.
+- The total deadline is checked between reads only: waiting for a slot, connecting, DNS and one
+  read can run past it, so a worker thread can outlive the 60 s stage timeout.
 - The first-byte timeout (15 s), total deadline (50 s) and concurrency (4) are constants. A slow
   single-GPU server with four parallel calls exceeds them, so a live run can measure nothing.
 - Ollama has no authentication here; a remote server must be protected by the network or a proxy.

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from tests.evaluation.harness import evaluate
 
+from divesafe.config import Settings
 from divesafe.models.ollama import OllamaProvider
 
 MODEL = os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
@@ -42,11 +43,12 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
 ) -> None:
     assert MODEL is not None
     base = os.environ.get("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
-    plain = frozenset(
-        h.strip().lower()
-        for h in os.environ.get("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS", "").split(",")
-        if h.strip()
-    )
+    plain = Settings(
+        ollama_plain_http_hosts=os.environ.get("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS")
+    ).plain_http_host_set()
+    probe = OllamaProvider(MODEL, base, plain_http_hosts=plain)
+    if probe.external and os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") != "true":
+        pytest.skip("a remote Ollama server needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
     report = evaluate(lambda: OllamaProvider(MODEL, base, plain_http_hosts=plain))
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / "evaluation_ollama.json"
     out.write_text(

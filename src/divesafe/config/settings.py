@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     def plain_http_host_set(self) -> frozenset[str]:
         parts = [p.strip().lower() for p in (self.ollama_plain_http_hosts or "").split(",")]
         parts = [p for p in parts if p]
-        if any(not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) for p in parts):
+        if any(
+            not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) or p.rsplit(".", 1)[-1].isdigit()
+            for p in parts
+        ):
             raise ValueError(
                 "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS must be comma-separated exact hostnames"
             )

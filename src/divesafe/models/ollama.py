@@ -83,6 +83,9 @@ def _post(url: str, body: bytes, timeout: float) -> bytes:
                     raise OllamaError("the Ollama response was too large")
     except OllamaError:
         raise
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise OllamaError("the Ollama server could not be reached or refused the request") from None
     except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
         raise OllamaError("the Ollama server could not be reached or refused the request") from None
     finally:
@@ -90,24 +93,35 @@ def _post(url: str, body: bytes, timeout: float) -> bytes:
     return b"".join(chunks)
 
 
+MAX_STREAM_LINES = 20_000
+
+
 def _join_stream(raw: bytes) -> str:
     """Join the streamed lines (one JSON object each). The reply counts only if the final line
-    says `done`; a cut-off stream, an error line or any odd shape is refused, never repaired."""
+    says `done` with `done_reason` "stop"; a cut-off stream, a reply stopped by the token limit,
+    an error line or any odd shape is refused, never repaired. `thinking` text is never used."""
     bad = OllamaError("the Ollama response was not in the expected shape")
-    try:
-        lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
-    except (ValueError, RecursionError):
-        raise bad from None
-    if not lines or not all(isinstance(x, dict) for x in lines):
+    raw_lines = raw.splitlines()
+    if not raw_lines or len(raw_lines) > MAX_STREAM_LINES:
         raise bad
     parts: list[str] = []
-    for x in lines:
-        message = x.get("message")
+    last: dict[str, Any] | None = None
+    for line in raw_lines:
+        if not line.strip():
+            continue
+        if last is not None and last.get("done") is not False:
+            raise bad  # something follows a final line
+        try:
+            x = json.loads(line)
+        except (ValueError, RecursionError):
+            raise bad from None
+        message = x.get("message") if isinstance(x, dict) else None
         content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, str):
             raise bad
         parts.append(content)
-    if lines[-1].get("done") is not True or any(x.get("done") is True for x in lines[:-1]):
+        last = x
+    if last is None or last.get("done") is not True or last.get("done_reason", "stop") != "stop":
         raise bad
     return "".join(parts)
 
@@ -125,11 +139,14 @@ class OllamaProvider:
     ) -> None:
         if not model.strip():
             raise ValueError("an Ollama model name is required (DIVESAFE_LLM_MODEL)")
-        parsed = urllib.parse.urlsplit(base_url)
+        try:
+            parsed = urllib.parse.urlsplit(base_url)
+        except ValueError:
+            raise ValueError("the Ollama base URL is not a valid URL") from None
         host = parsed.hostname or ""
         if parsed.scheme not in ("http", "https") or not host:
             raise ValueError("the Ollama base URL must be an http(s) URL with a host")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if "@" in parsed.netloc or parsed.query or parsed.fragment:
             raise ValueError(
                 "the Ollama base URL must not carry credentials, a query or a fragment"
             )

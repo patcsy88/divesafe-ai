@@ -233,3 +233,56 @@ def test_production_refuses_plain_http_hosts() -> None:
             api_key_hashes='{"a": {"actor": "x", "roles": ["viewer"]}}',  # type: ignore[arg-type]
             ollama_plain_http_hosts="ollama.example.org",
         )
+
+
+def _stream(*lines: dict[str, object]) -> bytes:
+    return ("\n".join(json.dumps(x) for x in lines) + "\n").encode()
+
+
+def test_a_reply_stopped_by_the_token_limit_is_refused() -> None:
+    cut = _stream({"message": {"content": '{"a"'}, "done": True, "done_reason": "length"})
+    with pytest.raises(OllamaError):
+        _run(OllamaProvider("m1", transport=_Recorder(cut)))
+    ok = _stream({"message": {"content": "x"}, "done": True, "done_reason": "stop"})
+    assert _run(OllamaProvider("m1", transport=_Recorder(ok))) == "x"
+
+
+def test_thinking_text_is_never_part_of_the_answer() -> None:
+    reply = _stream(
+        {"message": {"content": "", "thinking": "SECRET-REASONING"}, "done": False},
+        {"message": {"content": "answer", "thinking": "more"}, "done": True},
+    )
+    assert _run(OllamaProvider("m1", transport=_Recorder(reply), think=True)) == "answer"
+
+
+def test_a_line_after_the_final_one_and_an_endless_stream_are_refused() -> None:
+    after = _stream(
+        {"message": {"content": "a"}, "done": True}, {"message": {"content": "b"}, "done": False}
+    )
+    with pytest.raises(OllamaError):
+        _run(OllamaProvider("m1", transport=_Recorder(after)))
+    many = b'{"message": {"content": ""}, "done": false}\n' * 30_000 + (
+        b'{"message": {"content": "x"}, "done": true}\n'
+    )
+    with pytest.raises(OllamaError):
+        _run(OllamaProvider("m1", transport=_Recorder(many)))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://@ollama.example.org",
+        "http://ollama.example.org.",
+        "http://[bad",
+    ],
+)
+def test_odd_urls_are_refused_even_for_a_listed_host(url: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        OllamaProvider("m", url, plain_http_hosts=frozenset({"ollama.example.org"}))
+    assert "bad" not in str(caught.value).replace("not a valid", "")
+
+
+@pytest.mark.parametrize("bad", ["10.0.0.5", "167772165", "host.123"])
+def test_ip_addresses_and_all_digit_names_cannot_be_listed(bad: str) -> None:
+    with pytest.raises(ValueError, match="exact hostnames"):
+        Settings(ollama_plain_http_hosts=bad)
