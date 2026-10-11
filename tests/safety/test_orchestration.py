@@ -330,3 +330,54 @@ def test_actual_conditions_cannot_predate_the_planned_dive() -> None:
     )  # after the decision (17:11) but before the 18:00 planned start
     with pytest.raises(ValidationError):
         report_actual_conditions(decided, actual=before_dive)
+
+
+# A slow agent stage must not leave a stale result: the evidence is judged again at the later time
+# and the result can only get worse (INSUFFICIENT_EVIDENCE is worse than GO).
+def test_a_result_is_judged_again_after_a_slow_stage_and_can_only_get_worse() -> None:
+    clock_times = iter([NOW + timedelta(hours=2)])
+
+    on_time = _run()
+    assert on_time.deterministic_recommendation is R.GO  # the baseline this test builds on
+    later = _run(clock=lambda: next(clock_times))
+    assert later.deterministic_recommendation is R.INSUFFICIENT_EVIDENCE
+    assert later.final_recommendation is R.INSUFFICIENT_EVIDENCE
+    assert later.created_at == NOW + timedelta(hours=2)
+    assert any(r.rule_id == "assessment.window_started" for r in later.rule_results)
+
+
+def test_a_clock_that_runs_backwards_or_stands_still_changes_nothing() -> None:
+    base = _run()
+    for moment in (NOW, NOW - timedelta(hours=1)):
+        again = _run(clock=lambda moment=moment: moment)
+        assert again.final_recommendation is base.final_recommendation
+        assert again.created_at == NOW
+
+
+def test_a_later_clock_cannot_make_the_result_better() -> None:
+    worse = _run(marine=ConnectorTransportError("down"), clock=lambda: NOW + timedelta(minutes=1))
+    assert worse.final_recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_better_result_at_the_later_time_is_never_taken() -> None:
+    class _ImprovingRule:
+        rule_id = "synthetic.improving"
+        citation = "test fixture (synthetic, not a real safety source)"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
+            self.calls += 1
+            outcome = R.NO_GO if self.calls == 1 else R.GO
+            return RuleResult(rule_id=self.rule_id, outcome=outcome, rationale="synthetic")
+
+    engine = RiskRulesEngine(
+        [_ImprovingRule()],
+        EvidencePolicy(LIVE, timedelta(hours=1), degraded_may_support_go=True),  # synthetic
+        "synthetic",
+        required_factors=frozenset(),
+    )
+    record = _run(engine=engine, clock=lambda: NOW + timedelta(minutes=1))
+    assert record.deterministic_recommendation is R.NO_GO
+    assert record.final_recommendation is R.NO_GO

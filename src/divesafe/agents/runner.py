@@ -25,20 +25,34 @@ MAX_PROMPT_CHARS = 200_000
 STAGE_TIMEOUT_SECONDS = 150.0
 
 
-def _declared(provider: object, attribute: str, default: float) -> float:
+CALL_TIMEOUT_CEILING_SECONDS = 600.0
+STAGE_TIMEOUT_CEILING_SECONDS = 1800.0
+
+
+def _declared(provider: object, attribute: str, default: float, ceiling: float) -> float:
+    """A provider's declared budget, or the default when it is missing, not a plain positive
+    finite number, or absurd. A budget above the ceiling is capped, never trusted."""
     value = getattr(provider, attribute, None)
     if isinstance(value, bool) or not isinstance(value, int | float):
         return default
-    return float(value) if 0 < value < float("inf") else default
+    try:
+        number = float(value)
+    except OverflowError:
+        return default
+    return min(number, ceiling) if 0 < number < float("inf") else default
 
 
 def call_timeout(provider: object) -> float:
     """A provider may declare a longer budget for one call (a slow self-hosted model)."""
-    return _declared(provider, "call_timeout_seconds", CALL_TIMEOUT_SECONDS)
+    return _declared(
+        provider, "call_timeout_seconds", CALL_TIMEOUT_SECONDS, CALL_TIMEOUT_CEILING_SECONDS
+    )
 
 
 def stage_timeout(provider: object) -> float:
-    return _declared(provider, "stage_timeout_seconds", STAGE_TIMEOUT_SECONDS)
+    return _declared(
+        provider, "stage_timeout_seconds", STAGE_TIMEOUT_SECONDS, STAGE_TIMEOUT_CEILING_SECONDS
+    )
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)

@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from divesafe.config.settings import Settings
@@ -76,6 +77,8 @@ def _post(
     if not slots.acquire(timeout=timeout):
         raise OllamaError("too many Ollama calls are already in flight")
     try:
+        if time.monotonic() >= deadline:
+            raise OllamaError("the Ollama call exceeded its total deadline")
         chunks: list[bytes] = []
         size = 0
         with opener.open(
@@ -137,6 +140,34 @@ def _join_stream(raw: bytes) -> str:
     return "".join(parts)
 
 
+MAX_CALL_TIMEOUT_SECONDS = 600.0
+MAX_STAGE_TIMEOUT_SECONDS = 1800.0
+MAX_FIRST_BYTE_TIMEOUT_SECONDS = 300.0
+MAX_CONCURRENT_CEILING = 8
+
+
+def _check_budgets(call: float, stage: float, first_byte: float, concurrent: int) -> None:
+    numbers = (call, stage, first_byte)
+    if any(isinstance(n, bool) or not isinstance(n, int | float) for n in numbers):
+        raise ValueError("the Ollama time budgets must be numbers")
+    if isinstance(concurrent, bool) or not isinstance(concurrent, int):
+        raise ValueError("the Ollama concurrency must be a whole number")
+    if not all(0 < n < float("inf") for n in numbers):
+        raise ValueError("the Ollama time budgets must be positive and finite")
+    if (
+        call > MAX_CALL_TIMEOUT_SECONDS
+        or stage > MAX_STAGE_TIMEOUT_SECONDS
+        or first_byte > MAX_FIRST_BYTE_TIMEOUT_SECONDS
+        or not 1 <= concurrent <= MAX_CONCURRENT_CEILING
+    ):
+        raise ValueError("an Ollama time budget or the concurrency is above its ceiling")
+    if stage < call or call < 2 * first_byte + 1:
+        raise ValueError(
+            "the stage budget must cover one call, and a call must be at least twice the "
+            "first-byte timeout plus 1 s"
+        )
+
+
 class OllamaProvider:
     name = "ollama"
 
@@ -176,10 +207,20 @@ class OllamaProvider:
         self._think = think
         self.external = not loopback
         self._url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/api/chat"
+        _check_budgets(
+            call_timeout_seconds,
+            stage_timeout_seconds,
+            first_byte_timeout_seconds,
+            max_concurrent_calls,
+        )
         self.call_timeout_seconds = call_timeout_seconds
         self.stage_timeout_seconds = stage_timeout_seconds
-        # The worker thread must end before the agent's own timeout does.
-        self._deadline = max(call_timeout_seconds - 10.0, call_timeout_seconds / 2)
+        # The deadline is checked between reads, and one read or the connect can take a further
+        # `first_byte` seconds, so the worker thread ends before the agent's own timeout does.
+        self._deadline = call_timeout_seconds - first_byte_timeout_seconds - 1.0
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_concurrent_calls, thread_name_prefix="ollama"
+        )
         self._transport: Transport = transport or functools.partial(
             _post,
             slots=threading.BoundedSemaphore(max_concurrent_calls),
@@ -204,7 +245,11 @@ class OllamaProvider:
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         body = self._body(request)
-        raw = await asyncio.to_thread(self._transport, self._url, body, self._deadline)
+        # The calls run on this provider's own small pool and queue there, so a line of slow model
+        # calls can never use up the default threads the data connectors need.
+        raw = await asyncio.get_running_loop().run_in_executor(
+            self._executor, self._transport, self._url, body, self._deadline
+        )
         return LLMResponse(text=_join_stream(raw), provider=self.name, model=self.model)
 
 

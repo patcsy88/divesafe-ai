@@ -271,6 +271,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 engine=app_state.engine,
                 now=app_state.clock(),
                 provider=app_state.provider,
+                clock=app_state.clock,
             )
         except InvalidPlanError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

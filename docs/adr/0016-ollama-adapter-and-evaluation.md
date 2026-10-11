@@ -63,17 +63,25 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   the reply, so forged explanation text could reach the human decider (the recommendation can still
   only be tightened). Do not use `.local` names. Added at the owner's request for a LAN test server.
 
-- **Time budgets are settings** (defaults are the original values). `DIVESAFE_LLM_CALL_TIMEOUT_SECONDS`
-  (60), `DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS` (150), `DIVESAFE_LLM_FIRST_BYTE_TIMEOUT_SECONDS` (15)
-  and `DIVESAFE_LLM_MAX_CONCURRENT_CALLS` (4, per provider instance, not process-wide). Settings
-  refuse a stage budget below one call's, or a first-byte wait above one call's. The adapter exposes
-  `call_timeout_seconds` and `stage_timeout_seconds`; the agent runner reads them (a missing,
-  non-numeric, boolean, non-finite or non-positive value falls back to the default) so no agent
-  signature changed. The adapter's worker deadline is the call budget minus 10 s (or half, if
-  smaller), so the thread ends before the agent's timeout. A slow single-GPU server measured
-  with these budgets is the intended use: for example 1 call at a time, 120 s first byte, 200 s per
-  call, 900 s per stage. Only the budgets changed; the rules, `reconcile` and the downgrade-only
-  rule are untouched, and a timeout is still an issue that leaves the deterministic result.
+- **Time budgets are settings** (defaults are the original values).
+  `DIVESAFE_LLM_CALL_TIMEOUT_SECONDS` (60, at most 600), `DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS` (150,
+  at most 1800), `DIVESAFE_LLM_FIRST_BYTE_TIMEOUT_SECONDS` (15, at most 300) and
+  `DIVESAFE_LLM_MAX_CONCURRENT_CALLS` (4, 1 to 8, per provider instance, so per process). Settings
+  and the adapter's constructor both refuse a stage budget below one call's, and a call below twice
+  the first-byte timeout plus 1 s. The adapter exposes `call_timeout_seconds` and
+  `stage_timeout_seconds`; the agent runner reads them and caps them at its own ceilings (a missing,
+  non-numeric, boolean, non-finite or non-positive value falls back to the default).
+- **Threads.** Model calls run on a pool owned by the provider (one worker per allowed concurrent
+  call) and queue there, so a line of slow calls cannot use up the default threads the data
+  connectors need. The worker deadline is the call budget minus the first-byte timeout minus 1 s,
+  because the deadline is checked between reads and one read or the connect can take a further
+  first-byte timeout; the thread therefore ends before the agent's own timeout does.
+- **A slow stage cannot leave a stale result.** After the stage the pipeline reads the clock again
+  and judges the same evidence at that later time. It adds an `assessment.window_started` rule if
+  the planned start has passed, keeps the connector-issue rule, and takes the new result only if it
+  is more severe. The record's `created_at` is the later time. The result can only get worse.
+- **Intended use:** a slow single-GPU server, for example 1 call at a time, 90 s to the first byte,
+  200 s per call and 900 s per stage.
 
 ## Not solved
 
@@ -84,6 +92,11 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   human-rated sample.
 - Injection detection is a screening heuristic over marker phrases and does not catch a
   paraphrase. It is not a gate.
+- - A request now lasts as long as the whole stage (plus up to 30 s of evidence gathering). The web
+  client waits 120 s, so a stage longer than about 90 s shows "outcome unknown" in the UI while the
+  API still stores a pending record, and a retry after more than 10 minutes cannot be replayed.
+  Creating assessments asynchronously (202 and poll) would fix it and needs its own ADR.
+- There is no server-wide cap on assessments in flight; the per-actor create limit is per minute.
 - A stage timeout counts as one issue for many lost calls, so the schema-failure rate
   understates in that case.
 - The harness reuses `tests/agent/scripted_llm.py` fixtures, so changes there change the

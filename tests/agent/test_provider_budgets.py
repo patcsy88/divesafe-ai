@@ -44,3 +44,11 @@ def test_a_call_waits_for_the_declared_budget_and_times_out_at_it() -> None:
     with pytest.raises(AgentError) as caught:  # waits past the 0.05 s above, so it did not time out
         asyncio.run(call_structured(_Slow(0.1, call_timeout_seconds=5), **kwargs))  # type: ignore[arg-type]
     assert "timed out" not in str(caught.value)
+
+
+def test_an_absurd_declared_budget_is_capped_not_trusted() -> None:
+    assert call_timeout(_Slow(0, call_timeout_seconds=1e9)) == runner.CALL_TIMEOUT_CEILING_SECONDS
+    assert (
+        stage_timeout(_Slow(0, stage_timeout_seconds=1e9)) == runner.STAGE_TIMEOUT_CEILING_SECONDS
+    )
+    assert call_timeout(_Slow(0, call_timeout_seconds=10**400)) == runner.CALL_TIMEOUT_SECONDS

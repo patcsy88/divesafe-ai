@@ -9,7 +9,7 @@ INSUFFICIENT EVIDENCE, so the user sees why instead of getting nothing.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 
 from divesafe.agents import run_agent_stage
@@ -53,6 +53,7 @@ async def assess_dive(
     provider: LLMProvider | None = None,
     created_by: str | None = None,
     assigned_decider: str | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
@@ -68,14 +69,16 @@ async def assess_dive(
 
     assessment = engine.assess(plan, evidence.items, now)
     rule_results = list(assessment.rule_results)
+    issue_rules: list[RuleResult] = []
     if evidence.issues:
-        rule_results.append(
+        issue_rules.append(
             RuleResult(
                 rule_id="evidence.connector_issues",
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale="; ".join(evidence.issues),
             )
         )
+    rule_results.extend(issue_rules)
     deterministic = most_severe(tuple(r.outcome for r in rule_results))
 
     findings: tuple[Finding, ...] = ()
@@ -88,6 +91,29 @@ async def assess_dive(
         findings, agent_issues = stage.findings, stage.issues
         proposal_ids = stage.proposal_evidence_ids
 
+    # A slow agent stage can take minutes. Judge the evidence again at the later time, and only
+    # tighten: stale evidence or a dive window that has since started can make the result worse,
+    # never better.
+    completed = now
+    if clock is not None:
+        completed = max(now, clock())
+        if completed > now:
+            later = engine.assess(plan, evidence.items, completed)
+            tightened = list(later.rule_results)
+            if plan.planned_start < completed:
+                tightened.append(
+                    RuleResult(
+                        rule_id="assessment.window_started",
+                        outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                        rationale="the dive start time passed while the assessment was running",
+                    )
+                )
+            tightened.extend(issue_rules)
+            again = most_severe(tuple(r.outcome for r in tightened))
+            if again is not deterministic and most_severe((again, deterministic)) is again:
+                rule_results, deterministic = tightened, again
+                assessment = later
+
     reconciled = reconcile(deterministic, proposed)
     if reconciled.llm_attempted_downgrade and proposed is not None:
         # Do not keep persuasive prose that argues against the recorded result.
@@ -98,7 +124,7 @@ async def assess_dive(
 
     record = AssessmentRecord(
         id=assessment_id,
-        created_at=now,
+        created_at=completed,
         plan=plan,
         evidence=evidence.items,
         rule_results=tuple(rule_results),

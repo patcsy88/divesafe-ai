@@ -297,12 +297,12 @@ def test_the_time_budgets_come_from_settings_and_default_to_the_original_values(
             llm_model="m",
             llm_call_timeout_seconds=200,
             llm_stage_timeout_seconds=900,
-            llm_first_byte_timeout_seconds=120,
+            llm_first_byte_timeout_seconds=90,
             llm_max_concurrent_calls=1,
         )
     )
     assert (slow.call_timeout_seconds, slow.stage_timeout_seconds) == (200.0, 900.0)  # type: ignore[attr-defined]
-    assert slow._deadline == 190.0  # type: ignore[attr-defined]
+    assert slow._deadline == 109.0  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -315,8 +315,61 @@ def test_the_time_budgets_come_from_settings_and_default_to_the_original_values(
         {"llm_max_concurrent_calls": 99},
         {"llm_stage_timeout_seconds": 10, "llm_call_timeout_seconds": 60},
         {"llm_first_byte_timeout_seconds": 100, "llm_call_timeout_seconds": 60},
+        {"llm_first_byte_timeout_seconds": 30, "llm_call_timeout_seconds": 60},
+        {"llm_call_timeout_seconds": float("nan")},
+        {"llm_stage_timeout_seconds": float("inf")},
+        {"llm_call_timeout_seconds": 601},
+        {"llm_stage_timeout_seconds": 1801},
     ],
 )
 def test_nonsense_time_budgets_are_refused(bad: dict[str, float]) -> None:
     with pytest.raises(ValueError):
         Settings(**bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"call_timeout_seconds": float("nan")},
+        {"call_timeout_seconds": float("inf")},
+        {"call_timeout_seconds": True},
+        {"call_timeout_seconds": 0},
+        {"call_timeout_seconds": 601, "stage_timeout_seconds": 900},
+        {"stage_timeout_seconds": 10, "call_timeout_seconds": 60},
+        {"first_byte_timeout_seconds": 40, "call_timeout_seconds": 60},
+        {"max_concurrent_calls": 0},
+        {"max_concurrent_calls": 9},
+        {"max_concurrent_calls": True},
+    ],
+)
+def test_a_directly_built_provider_cannot_dodge_the_budget_limits(bad: dict[str, float]) -> None:
+    with pytest.raises(ValueError):
+        OllamaProvider("m", **bad)  # type: ignore[arg-type]
+
+
+def test_queued_calls_do_not_use_the_default_pool_and_run_on_the_providers_own_pool() -> None:
+    import threading
+
+    names: list[str] = []
+    release = threading.Event()
+
+    def transport(url: str, body: bytes, timeout: float) -> bytes:
+        names.append(threading.current_thread().name)
+        release.wait(5)
+        return _ok()
+
+    provider = OllamaProvider("m1", transport=transport, max_concurrent_calls=1)
+
+    async def go() -> int:
+        tasks = [asyncio.create_task(provider.complete(REQUEST)) for _ in range(5)]
+        await asyncio.sleep(0.3)
+        # Only one call has reached a thread; the other four are queued in the provider's pool.
+        started = len(names)
+        # The default executor is still free for other work (the data connectors use it).
+        await asyncio.wait_for(asyncio.to_thread(lambda: 1), 1)
+        release.set()
+        await asyncio.gather(*tasks)
+        return started
+
+    assert asyncio.run(go()) == 1
+    assert all(n.startswith("ollama") for n in names)

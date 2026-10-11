@@ -108,7 +108,15 @@ def test_a_slow_drip_hits_the_total_deadline(server: str, monkeypatch: pytest.Mo
     _Handler.mode = "drip"
     started = time.monotonic()
     with pytest.raises(OllamaError, match="total deadline"):
-        asyncio.run(OllamaProvider("m", server, call_timeout_seconds=0.6).complete(REQUEST))
+        asyncio.run(
+            OllamaProvider(
+                "m",
+                server,
+                call_timeout_seconds=1.6,
+                stage_timeout_seconds=2.0,
+                first_byte_timeout_seconds=0.3,
+            ).complete(REQUEST)
+        )
     assert time.monotonic() - started < 2
 
 
@@ -198,9 +206,16 @@ def test_a_deeply_nested_response_is_a_fixed_error() -> None:
 
 
 def test_the_worker_deadline_is_always_below_the_agent_call_timeout() -> None:
-    for call in (0.2, 1.0, 12.0, 60.0, 300.0):
-        provider = OllamaProvider("m", "http://localhost:1", call_timeout_seconds=call)
-        assert 0 < provider._deadline < call
+    for call, first_byte in ((3.0, 1.0), (12.0, 5.0), (60.0, 15.0), (300.0, 120.0)):
+        provider = OllamaProvider(
+            "m",
+            "http://localhost:1",
+            call_timeout_seconds=call,
+            stage_timeout_seconds=call,
+            first_byte_timeout_seconds=first_byte,
+        )
+        assert provider._deadline > 0
+        assert provider._deadline + first_byte < call  # deadline plus one blocked read fits
 
 
 def test_each_provider_has_its_own_concurrency_limit(server: str) -> None:
@@ -220,7 +235,11 @@ def test_the_first_byte_timeout_comes_from_the_provider(server: str) -> None:
     with pytest.raises(OllamaError, match="could not be reached"):
         asyncio.run(
             OllamaProvider(
-                "m", server, first_byte_timeout_seconds=0.3, call_timeout_seconds=30
+                "m",
+                server,
+                first_byte_timeout_seconds=0.3,
+                call_timeout_seconds=30,
+                stage_timeout_seconds=60,
             ).complete(REQUEST)
         )
     assert time.monotonic() - started < 3
