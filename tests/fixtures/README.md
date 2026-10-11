@@ -9,6 +9,7 @@ run offline; they must not be treated as current conditions.
 | `open_meteo_wind_tioman_recorded_2026-10-08.json` | Open-Meteo Forecast API (wind, 10 m), Pulau Tioman reference point, `cell_selection=sea` | 2026-10-10 | Trimmed to the same 7 hourly values as the marine fixture. CC BY 4.0, non-commercial. |
 | `data_gov_my_warning_recorded_2026-10-09.json` | data.gov.my Weather API (MET Malaysia), `limit=3` | 2026-10-09 | Unmodified. |
 | `data_gov_my_warning_incl_no_advisory_recorded_2026-10-09.json` | data.gov.my Weather API, issued since 2026-10-02, `limit=100` | 2026-10-09 | Unmodified. Includes an undated "No Advisory" tropical-cyclone notice. |
+| `data_gov_my_forecast_tioman_recorded_2026-10-11.json` | data.gov.my Weather API (MET Malaysia) 7-day forecast, `Rc024` Pulau Tioman, `limit=100` | 2026-10-11 | Unmodified; 7 daily rows (2026-10-11 to 2026-10-17). |
 
 Edge cases (nulls, wrong units, missing hours, truncation) are built in tests by mutating these
 files in code and are labelled synthetic there.

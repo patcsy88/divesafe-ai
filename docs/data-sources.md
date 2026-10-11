@@ -1,5 +1,17 @@
 # Data sources
 
+**Forecast connector (2026-10-11).** `divesafe.data.data_gov_my_forecast` reads MET Malaysia's
+7-day general forecast from `api.data.gov.my/weather/forecast/` for Pulau Tioman (`Rc024`, a
+recreation-centre location). The API docs say marine forecast data is unavailable, so this is a
+land-style rain, thunderstorm and haze forecast plus daily minimum and maximum temperature. It has
+no wind, wave, swell, current or tide. Evidence: category `weather`, `forecast`, `degraded`,
+upstream unknown, one item per Malaysia-time day in the window; a window the forecast does not
+fully cover is rejected. Bahasa Melayu phrases are matched to a reviewed table and unmatched ones
+are kept as received. `weather` is not a required category, so this item changes no outcome. The
+Weather API allows 4 requests per minute across all its endpoints; the getter now enforces that as
+a shared budget (it replaces the 15-second spacing) and fails closed when it is used up. Fixture:
+`data_gov_my_forecast_tioman_recorded_2026-10-11.json`.
+
 **Status (2026-10-09):** connectors are implemented for Malaysia (Pulau Tioman): Open-Meteo
 marine and data.gov.my warnings. Product-owner decisions: **non-commercial use only**; first
 area **Pulau Tioman, Pahang** (changed from Pulau Redang, Terengganu, on 2026-10-10). Do not add endpoints, API names or sample values until a
