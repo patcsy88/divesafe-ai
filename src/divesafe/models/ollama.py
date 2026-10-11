@@ -42,7 +42,7 @@ class OllamaError(RuntimeError):
     """The server was unreachable or returned something unusable. Messages are fixed strings."""
 
 
-def _is_loopback(host: str) -> bool:
+def is_loopback(host: str) -> bool:
     if host in _LOOPBACK_NAMES:
         return True
     try:
@@ -146,21 +146,21 @@ MAX_FIRST_BYTE_TIMEOUT_SECONDS = 300.0
 MAX_CONCURRENT_CEILING = 8
 
 
-def _check_budgets(call: float, stage: float, first_byte: float, concurrent: int) -> None:
+def check_budgets(call: float, stage: float, first_byte: float, concurrent: int) -> None:
     numbers = (call, stage, first_byte)
     if any(isinstance(n, bool) or not isinstance(n, int | float) for n in numbers):
-        raise ValueError("the Ollama time budgets must be numbers")
+        raise ValueError("the LLM time budgets must be numbers")
     if isinstance(concurrent, bool) or not isinstance(concurrent, int):
-        raise ValueError("the Ollama concurrency must be a whole number")
+        raise ValueError("the LLM concurrency must be a whole number")
     if not all(0 < n < float("inf") for n in numbers):
-        raise ValueError("the Ollama time budgets must be positive and finite")
+        raise ValueError("the LLM time budgets must be positive and finite")
     if (
         call > MAX_CALL_TIMEOUT_SECONDS
         or stage > MAX_STAGE_TIMEOUT_SECONDS
         or first_byte > MAX_FIRST_BYTE_TIMEOUT_SECONDS
         or not 1 <= concurrent <= MAX_CONCURRENT_CEILING
     ):
-        raise ValueError("an Ollama time budget or the concurrency is above its ceiling")
+        raise ValueError("an LLM time budget or the concurrency is above its ceiling")
     if stage < call or call < 2 * first_byte + 1:
         raise ValueError(
             "the stage budget must cover one call, and a call must be at least twice the "
@@ -200,14 +200,14 @@ class OllamaProvider:
             parsed.port  # noqa: B018 (validates the port)
         except ValueError:
             raise ValueError("the Ollama base URL has an invalid port") from None
-        loopback = _is_loopback(host)
+        loopback = is_loopback(host)
         if parsed.scheme == "http" and not loopback and host not in plain_http_hosts:
             raise ValueError("a remote Ollama server must use https")
         self.model = model.strip()
         self._think = think
         self.external = not loopback
         self._url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/api/chat"
-        _check_budgets(
+        check_budgets(
             call_timeout_seconds,
             stage_timeout_seconds,
             first_byte_timeout_seconds,

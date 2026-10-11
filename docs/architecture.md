@@ -146,8 +146,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   No request-size or per-client rate limits beyond the provider-limit guard.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
   egress flag exist (ADR 0007). An Ollama adapter and an offline-tested evaluation harness exist
-  (ADR 0016); no live run has been made, OpenAI and Anthropic adapters are not built, and
-  real-model behaviour is unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
+  (ADR 0016) and an OpenAI-compatible one (ADR 0018, offline-tested only). One small live run on
+  a synthetic set has been made (Ollama, `qwen3.5:9b`); vendor-specific OpenAI and Anthropic
+  adapters are not built, and real-model behaviour is largely unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
 - **Contradiction detection and validity-window coverage** (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
 - **Per-category evidence quality policy and engine-level validity-window coverage**

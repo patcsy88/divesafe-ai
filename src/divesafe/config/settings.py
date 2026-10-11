@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     admin_database_url: SecretStr | None = None
     app_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
-    llm_provider: Literal["openai", "anthropic", "ollama", "fake"] = "fake"
+    llm_provider: Literal["openai", "anthropic", "ollama", "openai_compatible", "fake"] = "fake"
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
     llm_base_url: AnyHttpUrl | None = None
@@ -54,17 +54,15 @@ class Settings(BaseSettings):
     llm_first_byte_timeout_seconds: float = Field(default=15.0, gt=0, le=300, allow_inf_nan=False)
     llm_max_concurrent_calls: int = Field(default=4, ge=1, le=8)
 
+    # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
+    # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.
+    llm_allowed_hosts: str | None = None
+
     def plain_http_host_set(self) -> frozenset[str]:
-        parts = [p.strip().lower() for p in (self.ollama_plain_http_hosts or "").split(",")]
-        parts = [p for p in parts if p]
-        if any(
-            not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) or p.rsplit(".", 1)[-1].isdigit()
-            for p in parts
-        ):
-            raise ValueError(
-                "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS must be comma-separated exact hostnames"
-            )
-        return frozenset(parts)
+        return _host_set(self.ollama_plain_http_hosts, "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS")
+
+    def llm_allowed_host_set(self) -> frozenset[str]:
+        return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.
@@ -106,6 +104,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "one LLM call's timeout must be at least twice the first-byte timeout plus 1 s"
             )
+        self.llm_allowed_host_set()
         plain_hosts = self.plain_http_host_set()
         if self.environment == "production" and plain_hosts:
             raise ValueError("plain-http Ollama hosts cannot be used in production")
@@ -127,6 +126,17 @@ class Settings(BaseSettings):
         ):
             raise ValueError("a production ruleset must be pinned with DIVESAFE_RULESET_SHA256")
         return self
+
+
+def _host_set(value: str | None, name: str) -> frozenset[str]:
+    parts = [p.strip().lower() for p in (value or "").split(",")]
+    parts = [p for p in parts if p]
+    if any(
+        not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) or p.rsplit(".", 1)[-1].isdigit()
+        for p in parts
+    ):
+        raise ValueError(f"{name} must be comma-separated exact hostnames")
+    return frozenset(parts)
 
 
 @lru_cache
