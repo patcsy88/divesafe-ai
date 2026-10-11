@@ -15,7 +15,7 @@ from typing import Any
 
 from divesafe.domain import DivePlan, EvidenceItem, effective_quality, observation_from_evidence
 
-PROMPT_VERSION = "2026-10-10.1"
+PROMPT_VERSION = "2026-10-11.1"
 OPEN_TAG = "<untrusted_data>"
 CLOSE_TAG = "</untrusted_data>"
 MAX_STRING = 4000
@@ -37,6 +37,9 @@ upstream is unknown, are not independent: never present their agreement as confi
 6. A string ending in [truncated] is incomplete. Say so; never treat it as the whole text.
 7. Reply with exactly one JSON object that matches the requested schema. No markdown, no \
 reasoning steps, no text outside the JSON.
+8. Keep to the length limits: every summary at most 900 characters, every rationale at most 1800 \
+characters, every risk factor, conflicting signal and uncertainty at most 250 characters, and at \
+most 8 of each. A reply over a limit is rejected, so be brief.
 """
 
 
