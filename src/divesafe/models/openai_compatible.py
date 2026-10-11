@@ -18,6 +18,8 @@ import functools
 import http.client
 import json
 import re
+import socket
+import ssl
 import threading
 import time
 import urllib.error
@@ -50,6 +52,24 @@ class OpenAICompatibleError(RuntimeError):
     """The server was unreachable or returned something unusable. Messages are fixed strings."""
 
 
+class _LoopbackConnection(http.client.HTTPConnection):
+    """Plain http is allowed only to a loopback server. `localhost` is resolved by the system, so
+    the address actually connected to is checked before anything (prompt, key) is sent."""
+
+    def connect(self) -> None:
+        super().connect()
+        sock = self.sock
+        peer = sock.getpeername()[0] if isinstance(sock, socket.socket) else ""
+        if not is_loopback(str(peer).split("%", 1)[0]):
+            self.close()
+            raise OpenAICompatibleError("the model server is not on this machine")
+
+
+class _LoopbackHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(_LoopbackConnection, req)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(  # type: ignore[no-untyped-def]
         self, req, fp, code, msg, headers, newurl
@@ -62,13 +82,23 @@ def _post(
     body: bytes,
     timeout: float,
     *,
-    headers: dict[str, str],
+    api_key: SecretStr | None,
+    loopback: bool,
     slots: threading.BoundedSemaphore,
     socket_timeout: float,
 ) -> bytes:
     """POST with no proxy, no redirects, a size cap and a total deadline (`timeout` seconds)."""
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    tls = ssl.create_default_context()  # verifies the certificate and the host name
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect,
+        urllib.request.HTTPSHandler(context=tls),
+        *([_LoopbackHTTPHandler()] if loopback else []),
+    )
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key.get_secret_value()}"
     request = urllib.request.Request(  # noqa: S310 (scheme and host checked at construction)
         url, data=body, headers=headers, method="POST"
     )
@@ -110,7 +140,7 @@ def join_sse(raw: bytes) -> str:
     """Join the streamed `data:` events into the reply text, or refuse the whole reply."""
     bad = OpenAICompatibleError("the model response was not in the expected shape")
     try:
-        lines = raw.decode("utf-8").splitlines()
+        lines = re.split(r"\r\n|\r|\n", raw.decode("utf-8"))
     except UnicodeDecodeError:
         raise bad from None
     if not lines or len(lines) > MAX_STREAM_LINES:
@@ -144,6 +174,8 @@ def join_sse(raw: bytes) -> str:
         delta = choice.get("delta")
         if not isinstance(delta, dict):
             raise bad
+        if any(delta.get(k) for k in ("tool_calls", "function_call", "refusal")):
+            raise bad  # a reply that asks for a tool or refuses is not a plain answer
         content = delta.get("content")
         if content is not None:
             if not isinstance(content, str):
@@ -216,12 +248,10 @@ class OpenAICompatibleProvider:
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent_calls, thread_name_prefix="openai-compat"
         )
-        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-        if secret:
-            headers["Authorization"] = f"Bearer {secret}"
         self._transport: Transport = transport or functools.partial(
             _post,
-            headers=headers,
+            api_key=api_key,
+            loopback=loopback,
             slots=threading.BoundedSemaphore(max_concurrent_calls),
             socket_timeout=first_byte_timeout_seconds,
         )

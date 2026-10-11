@@ -161,6 +161,39 @@ def test_the_first_byte_timeout_comes_from_the_provider(server: str) -> None:
     assert time.monotonic() - started < 3
 
 
+def test_the_tls_context_verifies_certificates_and_host_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ssl
+
+    from divesafe.models import openai_compatible as oc
+
+    seen: list[ssl.SSLContext] = []
+    real = oc.urllib.request.HTTPSHandler
+
+    class _Spy(real):  # type: ignore[valid-type, misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            seen.append(kwargs["context"])
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(oc.urllib.request, "HTTPSHandler", _Spy)
+    with pytest.raises(OpenAICompatibleError):
+        asyncio.run(OpenAICompatibleProvider("m", "http://127.0.0.1:1/v1").complete(REQUEST))
+    assert seen and seen[0].verify_mode == ssl.CERT_REQUIRED and seen[0].check_hostname
+
+
+def test_plain_http_is_refused_if_the_connection_does_not_land_on_loopback(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from divesafe.models import openai_compatible as oc
+
+    provider = OpenAICompatibleProvider("m", server, api_key=SecretStr(KEY))  # built as loopback
+    monkeypatch.setattr(oc, "is_loopback", lambda host: False)  # but the peer check disagrees
+    with pytest.raises(OpenAICompatibleError, match="not on this machine"):
+        asyncio.run(provider.complete(REQUEST))
+    assert _Handler.seen == []  # nothing, including the key, was sent
+
+
 def test_environment_proxies_are_ignored(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
         monkeypatch.setenv(name, "http://127.0.0.1:1")

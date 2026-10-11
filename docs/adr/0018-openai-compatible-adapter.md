@@ -22,7 +22,11 @@ and no new dependency is needed (standard library only, as in ADR 0016).
     `DIVESAFE_ALLOW_EXTERNAL_LLM=true`.
   - Base URLs with credentials, a query, a fragment or an invalid port are refused. A look-alike
     such as `localhost.evil.example` or a subdomain of a listed host is not accepted.
-  - TLS verification is never disabled.
+  - TLS verification is never disabled; the adapter passes its own default SSL context (certificate
+    and host name required) instead of relying on the process default.
+  - `localhost` is resolved by the system, so over plain http the connection itself is checked:
+    after connecting, the peer address must be loopback, or the call stops before anything (prompt,
+    key) is sent.
 - **The API key** (`DIVESAFE_LLM_API_KEY`, a `SecretStr`) is optional (local servers usually need
   none). It must be printable ASCII with no whitespace (no header injection) and is sent only as
   `Authorization: Bearer`, never in the body, a URL, an error or the provider's `repr`. Redirects
@@ -33,9 +37,11 @@ and no new dependency is needed (standard library only, as in ADR 0016).
   runner reads `call_timeout_seconds` and `stage_timeout_seconds` from the provider.
 - **Streaming and strict acceptance.** The reply is streamed (server-sent events). It is accepted
   only if all hold: every event is a `data:` line (blank lines and `:` comments are allowed); no
-  event carries an `error`; there is one choice, index 0; content is a string; the choice ends with
+  event carries an `error`; no delta carries `tool_calls`, `function_call` or a `refusal`; there is one choice, index 0; content is a string; the choice ends with
   `finish_reason` "stop" (so "length", "content_filter" and "tool_calls" are refused); nothing
   follows that choice; the stream ends with `[DONE]` and nothing follows it; at most 20,000 lines.
+  Lines split only on `\\r\\n`, `\\r` and `\\n`, as the SSE format says, so a Unicode line separator
+  inside content is not a break.
   A usage-only event (empty `choices`) is allowed. Anything else is refused, never repaired.
   Reasoning fields are ignored and never used.
 - **Structured output** is requested with `response_format` of type `json_schema`. Servers differ
@@ -63,6 +69,16 @@ host and setting the opt-in is the operator's explicit acceptance.
 
 - Not run against any real server yet. The stream format was written from the public protocol and
   tested against a local fake server, so real servers may differ in ways only a live run shows.
+- Settings errors no longer carry the submitted values (`hide_input_in_errors`), but
+  `ValidationError.errors()` still holds the input unless the caller drops it. Nothing in `src`
+  logs a Settings error's details.
+- The deadline is checked between body reads. Connecting, the TLS handshake and the header lines each
+  get a fresh first-byte timeout, so a server that drips headers can hold a worker for longer than
+  the call budget (a watchdog that closes the connection would fix it). The agent stage still ends
+  on time and the result stays deterministic.
+- The allow-list ignores the port: any port on a listed host is allowed. `DIVESAFE_LLM_ALLOWED_HOSTS`
+  does not apply to the Ollama adapter, which needs only the external opt-in over https.
+- The response `Content-Type` is not checked.
 - The allow-list is checked at construction. DNS can still point a listed name anywhere; this is
   the same trust as for any hostname allow-list.
 - A key is not rotated or scoped by the app. No per-host key: one key is sent to the one base URL.

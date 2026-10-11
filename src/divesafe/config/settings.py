@@ -26,7 +26,11 @@ def _require_tls(dsn: str) -> None:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="DIVESAFE_", env_file=".env", extra="ignore", env_ignore_empty=True
+        env_prefix="DIVESAFE_",
+        env_file=".env",
+        extra="ignore",
+        env_ignore_empty=True,
+        hide_input_in_errors=True,
     )
 
     environment: Literal["development", "test", "production"] = "development"
@@ -132,7 +136,9 @@ def _host_set(value: str | None, name: str) -> frozenset[str]:
     parts = [p.strip().lower() for p in (value or "").split(",")]
     parts = [p for p in parts if p]
     if any(
-        not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) or p.rsplit(".", 1)[-1].isdigit()
+        not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*", p)
+        or p.rsplit(".", 1)[-1].isdigit()
+        or any(label.startswith("0x") for label in p.split("."))
         for p in parts
     ):
         raise ValueError(f"{name} must be comma-separated exact hostnames")

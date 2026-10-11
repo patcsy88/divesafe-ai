@@ -277,7 +277,20 @@ def test_a_loopback_server_needs_no_opt_in() -> None:
 
 
 @pytest.mark.parametrize(
-    "bad", ["*.example.org", "10.0.0.1", "a b", "https://x.example", "x/y", "1234"]
+    "bad",
+    [
+        "*.example.org",
+        "10.0.0.1",
+        "a b",
+        "https://x.example",
+        "x/y",
+        "1234",
+        "a..b",
+        "0x7f000001",
+        "x.0xa000001",
+        "host.example.",
+        "-a.example",
+    ],
 )
 def test_the_allow_list_takes_only_exact_hostnames(bad: str) -> None:
     with pytest.raises(ValueError, match="exact hostnames"):
@@ -319,3 +332,65 @@ def test_the_budgets_apply_to_this_adapter_too() -> None:
 def test_a_directly_built_provider_cannot_dodge_the_budget_limits(bad: dict[str, float]) -> None:
     with pytest.raises(ValueError):
         OpenAICompatibleProvider("m", "http://localhost:8000/v1", **bad)  # type: ignore[arg-type]
+
+
+def test_a_settings_error_never_echoes_a_secret() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as caught:
+        Settings(
+            llm_api_key="SENTINEL-LLM-KEY",  # type: ignore[arg-type]
+            database_url="postgresql://u:SENTINEL-DB-PASSWORD@h/db",  # type: ignore[arg-type]
+            api_key_hashes="SENTINEL-HASHES",  # type: ignore[arg-type]
+            llm_allowed_hosts="not a host",
+        )
+    # What a startup traceback prints. (`.errors()` still carries the input unless a caller passes
+    # include_input=False; nothing in src logs it for Settings.)
+    shown = str(caught.value) + repr(caught.value)
+    assert "SENTINEL" not in shown
+    assert "SENTINEL" not in caught.value.json(include_input=False)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost.:8000/v1",
+        "http://0.0.0.0:8000/v1",
+        "http://[::]:8000/v1",
+        "http://localhost.evil.example:8000/v1",
+        "http://127.0.0.1.evil.example:8000/v1",
+        "http://\uff4c\uff4f\uff43\uff41\uff4c\uff48\uff4f\uff53\uff54/v1",
+    ],
+)
+def test_loopback_look_alikes_may_not_use_plain_http(url: str) -> None:
+    with pytest.raises(ValueError):
+        OpenAICompatibleProvider("m", url)
+
+
+def test_the_key_is_not_in_the_transport_repr() -> None:
+    provider = OpenAICompatibleProvider(
+        "m", "http://localhost:8000/v1", api_key=SecretStr("sk-SECRET-KEY-123")
+    )
+    assert "SECRET-KEY" not in repr(provider._transport)
+
+
+@pytest.mark.parametrize("field", ["tool_calls", "function_call", "refusal"])
+def test_a_tool_call_or_a_refusal_is_refused(field: str) -> None:
+    value: object = {"tool_calls": [{"id": "x"}], "function_call": {"name": "x"}}.get(field, "no")
+    chunk = {"choices": [{"index": 0, "delta": {"content": "a", field: value}}]}
+    raw = f"data: {json.dumps(chunk)}\n\n".encode() + _ok()
+    with pytest.raises(OpenAICompatibleError, match="expected shape"):
+        join_sse(raw)
+
+
+def test_a_unicode_line_separator_inside_content_is_not_a_line_break() -> None:
+    chunk = {"choices": [{"index": 0, "delta": {"content": "a\u2028b\x85c"}}]}
+    raw = ("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n").encode() + _ok("")
+    assert b"\xe2\x80\xa8" in raw  # the raw separator is in the stream, not an escape
+    assert join_sse(raw) == "a\u2028b\x85c"
+
+
+def test_more_than_the_line_cap_of_harmless_lines_is_refused() -> None:
+    body = _ok("x")[: -len(b"data: [DONE]\n\n")] + b": keep-alive\n" * 20_001 + b"data: [DONE]\n"
+    with pytest.raises(OpenAICompatibleError, match="expected shape"):
+        join_sse(body)
