@@ -1,0 +1,18 @@
+# Paths that AGENTS.md section 13 requires a risk or security review for.
+# CODEOWNERS only requests a human reviewer, and only blocks a merge when branch protection has
+# "Require review from Code Owners" on. The risk-reviewer and security-reviewer agents are
+# OpenCode agents, not GitHub accounts, so they cannot be listed here.
+/src/divesafe/risk/                     @patcsy88
+/src/divesafe/domain/                   @patcsy88
+/src/divesafe/agents/                   @patcsy88
+/src/divesafe/models/                   @patcsy88
+/src/divesafe/services/migrations.py    @patcsy88
+/src/divesafe/services/postgres.py      @patcsy88
+/src/divesafe/services/db_init.py       @patcsy88
+/src/divesafe/api/auth.py               @patcsy88
+/src/divesafe/config/                   @patcsy88
+/src/divesafe/data/                     @patcsy88
+/tests/safety/                          @patcsy88
+/docs/adr/                              @patcsy88
+/.github/                               @patcsy88
+/opencode.jsonc                         @patcsy88

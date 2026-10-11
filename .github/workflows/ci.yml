@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: divesafe_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DIVESAFE_TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:5432/divesafe_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: pytest -m safety
+      - name: Full suite (the PostgreSQL tests must run, not skip)
+        shell: bash # explicit bash enables pipefail, so a failing pytest is not hidden by tee
+        run: pytest -rs | tee pytest.log
+      - name: Fail if the PostgreSQL tests were skipped
+        run: "! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log"
