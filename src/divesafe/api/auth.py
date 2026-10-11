@@ -23,6 +23,7 @@ from fastapi import HTTPException, Request
 
 from divesafe.api.ratelimit import LIMIT_KEYS
 from divesafe.config import Settings
+from divesafe.config.netaddr import bucket, canonical_ip
 
 logger = logging.getLogger(__name__)
 
@@ -153,15 +154,51 @@ def build_authenticator(settings: Settings) -> Authenticator:
     return ApiKeyAuthenticator(parse_api_key_hashes(settings.api_key_hashes.get_secret_value()))
 
 
+def client_source(request: Request, trusted_proxies: frozenset[str]) -> str:
+    """Who is calling, for failed-authentication limits.
+
+    The TCP peer, unless that peer is a configured trusted proxy: then the last X-Forwarded-For
+    entry, which is the address the proxy itself saw. Anything unparseable falls back to the
+    peer, never to the header, so a client cannot choose its own bucket. Addresses are
+    normalised (IPv4-mapped unwrapped, zone ids dropped, IPv6 grouped by /64).
+    """
+    raw = request.client.host if request.client else ""
+    peer = canonical_ip(raw)
+    if peer is None:
+        return raw[:64].encode("unicode_escape").decode("ascii") or "unknown"
+    if str(peer) not in trusted_proxies:
+        return bucket(peer)
+    forwarded = canonical_ip(request.headers.get("x-forwarded-for", "").rsplit(",", 1)[-1])
+    return bucket(forwarded if forwarded is not None else peer)
+
+
 def require_principal(request: Request) -> Principal:
-    authenticator: Authenticator = request.app.state.divesafe.authenticator
-    principal = authenticator.authenticate(request)
-    if principal is None:
+    state = request.app.state.divesafe
+    authenticator: Authenticator = state.authenticator
+    source = client_source(request, state.trusted_proxies)
+    # Count this attempt as a failure before the key is looked at; a correct key takes it back.
+    # A source at its limit is refused without the key being checked, so it learns nothing.
+    wait = state.limiter.reserve("auth_failure", source)
+    if wait is not None:
+        logger.debug("authentication blocked after repeated failures", extra={"client": source})
+        raise HTTPException(
+            status_code=429,
+            detail=_REFUSED + "too many failed attempts; wait and try again",
+            headers={"Retry-After": str(wait)},
+        )
+    try:
+        principal = authenticator.authenticate(request)
+    except Exception:
+        state.limiter.release("auth_failure", source)  # an error of ours is not a wrong key
+        raise
+    if principal is not None:
+        state.limiter.release("auth_failure", source)
+    else:
         logger.warning(
             "authentication failed",
             extra={
                 "path": request.url.path[:200].encode("unicode_escape").decode("ascii"),
-                "client": request.client.host if request.client else None,
+                "client": source,
             },
         )
         raise HTTPException(

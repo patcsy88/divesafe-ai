@@ -37,3 +37,19 @@ test("an unknown key and an unreachable API do not sign in", async () => {
   }) as typeof fetch;
   await assert.rejects(() => checkKey("wrong-key-xxxx"), /did not answer/);
 });
+
+test("the person's address is passed on only when there is one", async () => {
+  const seen: Array<string | null> = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get("x-forwarded-for"));
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  await checkKey("a-valid-key-123", "203.0.113.9");
+  await checkKey("a-valid-key-123");
+  assert.deepEqual(seen, ["203.0.113.9", null]);
+});
+
+test("a rate-limit answer from the API is not shown as a wrong key", async () => {
+  reply(429, { detail: "nothing was recorded; too many failed attempts; wait and try again" });
+  await assert.rejects(() => checkKey("any-key-12345678"), (e: unknown) => (e as { status?: number }).status === 429);
+});

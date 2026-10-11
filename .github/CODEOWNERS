@@ -16,6 +16,8 @@
 /docs/adr/                              @patcsy88
 /.github/                               @patcsy88
 /web/lib/session.ts                    @patcsy88
+/web/lib/throttle.ts                    @patcsy88
+/src/divesafe/api/ratelimit.py          @patcsy88
 /web/lib/config.ts                     @patcsy88
 /web/lib/auth.ts                       @patcsy88
 /web/lib/api.ts                        @patcsy88

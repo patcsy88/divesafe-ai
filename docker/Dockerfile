@@ -13,4 +13,4 @@ RUN useradd --create-home --uid 10001 divesafe
 USER divesafe
 
 EXPOSE 8000
-CMD ["uvicorn", "divesafe.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "divesafe.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

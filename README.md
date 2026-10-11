@@ -66,7 +66,7 @@ docker compose -f docker/docker-compose.yml --env-file .env up --build
 
 ```bash
 export DIVESAFE_AUTH_MODE=dev DIVESAFE_EVIDENCE_MAX_AGE_MINUTES=60 DIVESAFE_DECISION_MAX_AGE_MINUTES=120
-uvicorn divesafe.api.app:create_app --factory --port 8000
+uvicorn divesafe.api.app:create_app --factory --port 8000 --no-proxy-headers
 curl -X POST localhost:8000/v1/assessments -H 'X-Dev-Actor: me' -H 'content-type: application/json' \
   -d '{"site_id":"my-pahang-pulau-tioman","planned_start":"<future UTC time>","planned_duration_minutes":90,"max_depth_m":18}'
 ```

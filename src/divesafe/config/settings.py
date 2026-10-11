@@ -60,9 +60,24 @@ class Settings(BaseSettings):
     rate_limit_create_per_minute: int = Field(default=10, gt=0, le=10_000)
     rate_limit_decide_per_minute: int = Field(default=30, gt=0, le=10_000)
     rate_limit_read_per_minute: int = Field(default=120, gt=0, le=10_000)
+    # Failed authentications allowed per source per minute before it is refused (429).
+    rate_limit_auth_failures_per_minute: int = Field(default=10, gt=0, le=10_000)
+    # Comma-separated IP addresses of reverse proxies whose X-Forwarded-For may be believed (for
+    # example the web server). Empty means the TCP peer is always the source.
+    trusted_proxies: str | None = None
+
+    def trusted_proxy_set(self) -> frozenset[str]:
+        from divesafe.config.netaddr import canonical_ip
+
+        parts = [p.strip() for p in (self.trusted_proxies or "").split(",") if p.strip()]
+        found = [canonical_ip(p) for p in parts]
+        if any(a is None for a in found):
+            raise ValueError("DIVESAFE_TRUSTED_PROXIES must be comma-separated IP addresses")
+        return frozenset(str(a) for a in found)
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
+        self.trusted_proxy_set()
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":

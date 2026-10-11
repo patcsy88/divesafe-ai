@@ -351,3 +351,230 @@ def test_unsafe_key_configuration_is_refused(raw: str) -> None:
     with pytest.raises(ValueError) as caught:
         parse_api_key_hashes(raw)
     assert H1 not in str(caught.value)
+
+
+# --- failed-authentication limit ----------------------------------------------------------------
+
+BAD = {"Authorization": "Bearer not-a-real-key"}
+
+
+def _failing(limit: int = 3, proxies: frozenset[str] = frozenset()) -> TestClient:
+    client, _ = _client(default_limits(auth_failures_per_minute=limit))
+    client.app.state.divesafe.trusted_proxies = proxies  # type: ignore[attr-defined]
+    return client
+
+
+def test_repeated_wrong_keys_are_refused_with_retry_after() -> None:
+    client = _failing(3)
+    assert [client.get("/v1/sites", headers=BAD).status_code for _ in range(3)] == [401] * 3
+    blocked = client.get("/v1/sites", headers=BAD)
+    assert blocked.status_code == 429 and int(blocked.headers["retry-after"]) >= 1
+    assert "nothing was recorded" in blocked.json()["detail"]
+
+
+def test_a_blocked_source_is_refused_even_with_a_correct_key() -> None:
+    client = _failing(2)
+    for _ in range(2):
+        client.get("/v1/sites", headers=BAD)
+    good = client.get("/v1/sites", headers=HEADERS[Role.VIEWER])
+    assert good.status_code == 429, "a correct guess must not be confirmed to a blocked source"
+
+
+def test_successful_requests_do_not_count_as_failures() -> None:
+    client = _failing(2)
+    for _ in range(20):
+        assert client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).status_code == 200
+
+
+def test_a_wrong_role_is_a_403_and_is_not_a_failed_authentication() -> None:
+    client = _failing(2)
+    for _ in range(5):
+        assert client.get("/v1/sites", headers=HEADERS[Role.DECIDER]).status_code == 403
+    assert client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).status_code == 200
+
+
+def test_a_missing_header_counts_and_health_stays_open() -> None:
+    client = _failing(2)
+    for _ in range(2):
+        assert client.get("/v1/sites").status_code == 401
+    assert client.get("/v1/sites").status_code == 429
+    assert client.get("/health").status_code == 200
+
+
+def test_the_failure_window_expires() -> None:
+    now = [0.0]
+    limiter = RateLimiter(default_limits(auth_failures_per_minute=2), clock=lambda: now[0])
+    assert limiter.reserve("auth_failure", "1.2.3.4") is None
+    assert limiter.reserve("auth_failure", "1.2.3.4") is None
+    assert limiter.reserve("auth_failure", "1.2.3.4") is not None
+    now[0] = 61.0
+    assert limiter.reserve("auth_failure", "1.2.3.4") is None
+
+
+def test_one_sources_failures_do_not_block_another() -> None:
+    limiter = RateLimiter(default_limits(auth_failures_per_minute=1))
+    assert limiter.reserve("auth_failure", "1.1.1.1") is None
+    assert limiter.reserve("auth_failure", "1.1.1.1") is not None
+    assert limiter.reserve("auth_failure", "2.2.2.2") is None
+
+
+def test_a_client_cannot_choose_its_bucket_with_x_forwarded_for_unless_the_peer_is_trusted() -> (
+    None
+):
+    client = _failing(2)  # TestClient's peer is "testclient", which is not trusted
+    for i in range(2):
+        client.get("/v1/sites", headers={**BAD, "X-Forwarded-For": f"9.9.9.{i}"})
+    spoofed = client.get("/v1/sites", headers={**BAD, "X-Forwarded-For": "8.8.8.8"})
+    assert spoofed.status_code == 429
+
+
+def test_a_trusted_proxy_separates_clients_and_ignores_garbage() -> None:
+    from types import SimpleNamespace
+
+    from divesafe.api.auth import client_source
+
+    def req(peer: str | None, xff: str | None) -> SimpleNamespace:
+        headers = {} if xff is None else {"x-forwarded-for": xff}
+        return SimpleNamespace(client=SimpleNamespace(host=peer) if peer else None, headers=headers)
+
+    proxy = frozenset({"10.0.0.5"})
+    assert client_source(req("10.0.0.5", "1.1.1.1"), proxy) == "1.1.1.1"  # type: ignore[arg-type]
+    assert client_source(req("10.0.0.5", "6.6.6.6, 1.1.1.1"), proxy) == "1.1.1.1"  # type: ignore[arg-type]
+    assert client_source(req("10.0.0.5", "not-an-ip"), proxy) == "10.0.0.5"  # type: ignore[arg-type]
+    assert client_source(req("10.0.0.5", None), proxy) == "10.0.0.5"  # type: ignore[arg-type]
+    assert client_source(req("10.0.0.5", "1.1.1.1"), frozenset()) == "10.0.0.5"  # type: ignore[arg-type]
+    assert client_source(req(None, None), proxy) == "unknown"  # type: ignore[arg-type]
+
+
+def test_trusted_proxies_setting_rejects_non_addresses() -> None:
+    from divesafe.config import Settings
+
+    assert Settings(trusted_proxies="10.0.0.5, ::1").trusted_proxy_set() == {"10.0.0.5", "::1"}
+    for bad in ("web.internal", "10.0.0.0/8", "10.0.0.5;1"):
+        with pytest.raises(ValueError):
+            Settings(trusted_proxies=bad)
+    assert Settings().trusted_proxy_set() == frozenset()
+
+
+def test_the_failure_limit_is_not_a_key_a_route_can_claim() -> None:
+    from divesafe.api.auth import require_role
+    from divesafe.api.ratelimit import LIMIT_KEYS
+
+    assert "auth_failure" not in LIMIT_KEYS and "auth_failure" in default_limits()
+    with pytest.raises(ValueError):
+        require_role(Role.VIEWER, limit_key="auth_failure")
+
+
+def test_parallel_wrong_keys_cannot_all_pass_the_check_before_any_is_counted() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    limiter = RateLimiter(default_limits(auth_failures_per_minute=5))
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(lambda _: limiter.reserve("auth_failure", "1.1.1.1"), range(200)))
+    assert sum(1 for r in results if r is None) == 5
+
+
+def test_a_correct_key_takes_its_reservation_back() -> None:
+    client = _failing(2)
+    for _ in range(20):
+        assert client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).status_code == 200
+    assert client.get("/v1/sites", headers=BAD).status_code == 401
+
+
+def test_a_blocked_request_does_not_extend_its_own_block() -> None:
+    now = [0.0]
+    limiter = RateLimiter(default_limits(auth_failures_per_minute=1), clock=lambda: now[0])
+    assert limiter.reserve("auth_failure", "x") is None
+    for i in range(1, 50):
+        now[0] = float(i)
+        assert limiter.reserve("auth_failure", "x") is not None
+    now[0] = 61.0
+    assert limiter.reserve("auth_failure", "x") is None
+
+
+def test_an_invalid_body_with_no_credentials_problem_is_not_a_counted_failure() -> None:
+    client = _failing(2)
+    for _ in range(5):
+        bad = client.post("/v1/assessments", content=b"{", headers=HEADERS[Role.ASSESSOR])
+        assert bad.status_code in {400, 422}
+    assert client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).status_code == 200
+
+
+def test_through_a_trusted_proxy_people_have_separate_buckets_end_to_end() -> None:
+    from fastapi.testclient import TestClient
+
+    client, _ = _client(default_limits(auth_failures_per_minute=2))
+    client.app.state.divesafe.trusted_proxies = frozenset({"10.0.0.5"})  # type: ignore[attr-defined]
+    proxied = TestClient(client.app, client=("10.0.0.5", 5000))
+    for _ in range(2):
+        assert (
+            proxied.get("/v1/sites", headers={**BAD, "X-Forwarded-For": "1.1.1.1"}).status_code
+            == 401
+        )
+    assert (
+        proxied.get("/v1/sites", headers={**BAD, "X-Forwarded-For": "1.1.1.1"}).status_code == 429
+    )
+    other = proxied.get("/v1/sites", headers={**HEADERS[Role.VIEWER], "X-Forwarded-For": "2.2.2.2"})
+    assert other.status_code == 200
+
+
+def test_addresses_are_normalised_one_machine_one_bucket() -> None:
+    from divesafe.config.netaddr import bucket, canonical_ip
+
+    def b(text: str) -> str | None:
+        a = canonical_ip(text)
+        return None if a is None else bucket(a)
+
+    assert b("::ffff:1.2.3.4") == b("1.2.3.4")
+    assert b("fe80::1%eth0") == b("fe80::2")
+    assert b("2001:db8:1:2::1") == b("2001:db8:1:2:ffff::9")
+    assert b("2001:db8:1:2::1") != b("2001:db8:1:3::1")
+    assert b("x" * 100) is None and b("") is None and b("1.2.3.4:80") is None
+
+
+def test_the_trusted_proxy_comparison_is_normalised() -> None:
+    from divesafe.config import Settings
+
+    assert Settings(trusted_proxies="::ffff:10.0.0.5").trusted_proxy_set() == {"10.0.0.5"}
+
+
+def test_trusted_proxies_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from divesafe.config import Settings
+
+    monkeypatch.setenv("DIVESAFE_TRUSTED_PROXIES", "10.0.0.5,10.0.0.6")
+    assert Settings().trusted_proxy_set() == {"10.0.0.5", "10.0.0.6"}
+    monkeypatch.setenv("DIVESAFE_TRUSTED_PROXIES", "gateway.internal")
+    with pytest.raises(ValueError):
+        Settings()
+
+
+def test_the_table_sheds_unblocked_sources_before_blocked_ones() -> None:
+    limiter = RateLimiter({"k": Limit(2, 60)}, max_tracked=50)
+    for _ in range(2):
+        limiter.reserve("k", "victim")
+    for i in range(500):
+        limiter.reserve("k", f"flood-{i}")
+    assert len(limiter._hits) <= 51  # noqa: SLF001
+    assert limiter.reserve("k", "victim") is not None
+
+
+def test_a_zone_id_does_not_make_a_different_address() -> None:
+    from divesafe.config import Settings
+    from divesafe.config.netaddr import canonical_ip
+
+    assert canonical_ip("fe80::1%eth0") == canonical_ip("fe80::1")
+    assert Settings(trusted_proxies="fe80::1%eth0").trusted_proxy_set() == {"fe80::1"}
+
+
+def test_an_error_while_authenticating_is_not_counted_as_a_wrong_key() -> None:
+    client, _ = _client(default_limits(auth_failures_per_minute=2))
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+
+    class Boom:
+        def authenticate(self, request: object) -> None:
+            raise RuntimeError("store down")
+
+    state.authenticator = Boom()
+    quiet = TestClient(client.app, raise_server_exceptions=False)
+    for _ in range(5):
+        assert quiet.get("/v1/sites", headers=BAD).status_code == 500

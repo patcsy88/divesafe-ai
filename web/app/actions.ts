@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   ApiError,
@@ -10,9 +11,11 @@ import {
   recordDecision,
 } from "../lib/api.ts";
 import { endSession, requireKey, startSession } from "../lib/auth.ts";
+import { trustProxy } from "../lib/config.ts";
 import { parseObservations } from "../lib/observations.ts";
 import { RECOMMENDATIONS } from "../lib/present.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
+import { forwardedAddress, LoginThrottle, sourceOf } from "../lib/throttle.ts";
 
 export interface FormState {
   error: string | null;
@@ -23,14 +26,28 @@ const text = (data: FormData, name: string): string => {
   return typeof value === "string" ? value.trim() : "";
 };
 
+const throttle = ((globalThis as { __divesafeThrottle?: LoginThrottle }).__divesafeThrottle ??=
+  new LoginThrottle());
+
 export async function login(_prev: FormState, data: FormData): Promise<FormState> {
+  const forwarded = (await headers()).get("x-forwarded-for");
+  const source = sourceOf(forwarded, trustProxy());
   const key = text(data, "api_key");
   if (!/^[\x21-\x7e]{8,512}$/.test(key)) return { error: "Enter your personal API key." };
+  // Counted as a failure before the network call and taken back unless the key is rejected, so a
+  // burst of parallel guesses cannot all pass the check first.
+  const wait = throttle.reserve(source, Date.now());
+  if (wait !== null) {
+    return { error: `Too many failed sign-ins. Wait ${wait} seconds and try again.` };
+  }
   try {
-    await checkKey(key);
+    await checkKey(key, forwardedAddress(forwarded, trustProxy()) ?? undefined);
   } catch (error) {
+    // Only a rejected key stays counted. An unreachable service or a 429 is not the person's mistake.
+    if (!(error instanceof ApiError && error.status === 401)) throttle.release(source);
     return { error: error instanceof ApiError ? error.message : "Sign-in failed." };
   }
+  throttle.release(source);
   await startSession(key);
   redirect("/");
 }

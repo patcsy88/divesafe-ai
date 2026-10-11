@@ -53,9 +53,19 @@ third-party text; the id pattern matches the API's; extra headers, `object-src '
 
 ## Known gaps
 
-- **Login is unthrottled.** The API limits only authenticated actors, so failed keys are not rate
-  limited, and every failure is logged with the web server's address. Add a failed-auth limiter at
-  the API (trusted `X-Forwarded-For`) and one on the login action before exposure.
+- **Login throttle is per instance.** The login action allows 5 rejected keys a minute per source
+  (in memory, one instance; replicas multiply it, restarts reset it), below the API's 10, and the
+  API counts failures too (ADR 0013). Each attempt is reserved before the network call. Behind this
+  server the API sees one address unless the web server is listed in `DIVESAFE_TRUSTED_PROXIES`
+  and `DIVESAFE_WEB_TRUST_PROXY=1` is set; without both, all sign-ins share one bucket and one
+  person can block everyone for a minute (nothing is recorded; assessments stay pending). With
+  `TRUST_PROXY=1` the web app must be reachable only through a proxy that overwrites or appends
+  `X-Forwarded-For`. Only sign-in forwards the address, so a 401 elsewhere (a stale session) counts
+  against the web server's own bucket when it is not trusted. Reservations of in-flight successful
+  sign-ins count briefly, so five simultaneous sign-ins from one bucket can see a 429 (nothing is
+  recorded). A late release can remove another attempt's hit when the API timeout (120 s) exceeds
+  the 60 s window. `login` is a `"use server"` action with no direct test; the library is tested.
+  API keys must be generated (at least 128 bits), as the hashes are unsalted.
 - No idempotency key: a timed-out create may have been stored, and a retry makes a second record.
 - No "who am I" endpoint, so the UI cannot hide actions a role cannot perform. Sign-in calls `GET /v1/sites`
   and accepts a 403 only when the API's own refusal text is present.

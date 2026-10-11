@@ -76,16 +76,21 @@ class AppState:
     decision_max_age: timedelta | None
     provider: LLMProvider | None = None
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(default_limits()))
+    trusted_proxies: frozenset[str] = frozenset()
 
 
 def default_limits(
-    create_per_minute: int = 10, decide_per_minute: int = 30, read_per_minute: int = 120
+    create_per_minute: int = 10,
+    decide_per_minute: int = 30,
+    read_per_minute: int = 120,
+    auth_failures_per_minute: int = 10,
 ) -> dict[str, Limit]:
     """Operational limits per actor (abuse and upstream-quota protection), not safety limits."""
     return {
         "create": Limit(create_per_minute, 60),
         "decide": Limit(decide_per_minute, 60),
         "read": Limit(read_per_minute, 60),
+        "auth_failure": Limit(auth_failures_per_minute, 60),
     }
 
 
@@ -167,6 +172,11 @@ def build_repository(settings: Settings) -> AssessmentRepository:
 
 def build_default_state(settings: Settings) -> AppState:
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
+    if settings.environment == "production" and not settings.trusted_proxy_set():
+        logger.warning(
+            "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "
+            "Behind a proxy or the web server, every person shares one bucket until it is set"
+        )
     return AppState(
         repository=build_repository(settings),
         connectors=[
@@ -189,6 +199,8 @@ def build_default_state(settings: Settings) -> AppState:
                 settings.rate_limit_create_per_minute,
                 settings.rate_limit_decide_per_minute,
                 settings.rate_limit_read_per_minute,
+                settings.rate_limit_auth_failures_per_minute,
             )
         ),
+        trusted_proxies=settings.trusted_proxy_set(),
     )

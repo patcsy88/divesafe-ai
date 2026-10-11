@@ -42,7 +42,12 @@ export function describeFailure(status: number, detail: unknown, retryAfter: str
   return "Something went wrong. The outcome is unknown: check whether it was recorded before trying again.";
 }
 
-async function call(path: string, key: string, init: RequestInit = {}): Promise<unknown> {
+async function call(
+  path: string,
+  key: string,
+  init: RequestInit = {},
+  source?: string,
+): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl()}${path}`, {
@@ -54,6 +59,7 @@ async function call(path: string, key: string, init: RequestInit = {}): Promise<
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         Authorization: `Bearer ${key}`,
+        ...(source ? { "X-Forwarded-For": source } : {}),
       },
     });
   } catch {
@@ -76,11 +82,13 @@ async function call(path: string, key: string, init: RequestInit = {}): Promise<
   return body;
 }
 
-export async function checkKey(key: string): Promise<void> {
+// `source` is the person's address, passed on so the API counts failures against them and not
+// against this server. The API believes it only if it is configured to trust this server.
+export async function checkKey(key: string, source?: string): Promise<void> {
   // 401 means the key is unknown. 403 means it is valid but lacks the viewer role, which is
   // acceptable here: roles are independent and an assessor may not be able to read.
   try {
-    await call("/v1/sites", key);
+    await call("/v1/sites", key, {}, source);
   } catch (error) {
     if (error instanceof ApiError && error.status === 403 && error.refused) return;
     throw error;

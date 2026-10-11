@@ -26,5 +26,10 @@ export function sessionSecret(env: Record<string, string | undefined> = process.
   return secret;
 }
 
+// True only when a reverse proxy you control sets X-Forwarded-For. Otherwise the header is ignored.
+export function trustProxy(env: Record<string, string | undefined> = process.env): boolean {
+  return env.DIVESAFE_WEB_TRUST_PROXY === "1";
+}
+
 export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 export const API_TIMEOUT_MS = 120_000;
