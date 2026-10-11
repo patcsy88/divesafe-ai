@@ -4,6 +4,7 @@ Design and the verified source register: docs/data-sources.md.
 """
 
 from divesafe.data.base import Connector, FetchResult
+from divesafe.data.data_gov_my_forecast import DataGovMyForecastConnector
 from divesafe.data.data_gov_my_warnings import DataGovMyWarningConnector
 from divesafe.data.errors import ConnectorError, ConnectorResponseError, ConnectorTransportError
 from divesafe.data.http import JsonGetter, UrllibJsonGetter
@@ -27,6 +28,7 @@ __all__ = [
     "ConnectorError",
     "ConnectorResponseError",
     "ConnectorTransportError",
+    "DataGovMyForecastConnector",
     "DataGovMyWarningConnector",
     "FetchResult",
     "JsonGetter",

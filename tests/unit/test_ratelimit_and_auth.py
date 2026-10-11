@@ -243,3 +243,22 @@ def test_a_blocked_call_never_reaches_the_provider() -> None:
     with pytest.raises(ConnectorTransportError):
         _call(g, MARINE, 2)
     assert inner.calls == 1
+
+
+def test_data_gov_my_allows_four_calls_a_minute_across_endpoints_and_then_refuses() -> None:
+    from divesafe.data.ratelimit import DEFAULT_MIN_INTERVAL_SECONDS
+
+    inner, clock = _Inner(), _Clock()
+    g = CachingRateLimitedGetter(
+        inner, clock=clock, min_interval_seconds=DEFAULT_MIN_INTERVAL_SECONDS
+    )
+    urls = ["https://api.data.gov.my/weather/forecast/", "https://api.data.gov.my/weather/warning/"]
+    for i in range(4):
+        _get(g, urls[i % 2], n=str(i))
+    assert inner.calls == 4
+    with pytest.raises(ConnectorTransportError, match="budget"):
+        _get(g, urls[0], n="99")
+    assert inner.calls == 4
+    clock.t += 61
+    _get(g, urls[0], n="100")
+    assert inner.calls == 5

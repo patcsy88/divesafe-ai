@@ -15,6 +15,7 @@ from divesafe.data import (
     SITES,
     CachingRateLimitedGetter,
     Connector,
+    DataGovMyForecastConnector,
     DataGovMyWarningConnector,
     DiveSite,
     OpenMeteoMarineConnector,
@@ -182,6 +183,7 @@ def build_default_state(settings: Settings) -> AppState:
         connectors=[
             OpenMeteoMarineConnector(getter),
             OpenMeteoWindConnector(getter),
+            DataGovMyForecastConnector(getter),
             DataGovMyWarningConnector(getter),
         ],
         engine=build_engine(settings),

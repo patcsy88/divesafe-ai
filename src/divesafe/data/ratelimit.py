@@ -24,7 +24,7 @@ from divesafe.data.errors import ConnectorTransportError
 from divesafe.data.http import JsonGetter
 
 DEFAULT_MIN_INTERVAL_SECONDS: Mapping[str, float] = {
-    "api.data.gov.my": 15.0,
+    "api.data.gov.my": 0.0,
     "marine-api.open-meteo.com": 0.5,
     "api.open-meteo.com": 0.5,
 }
@@ -45,7 +45,14 @@ OPEN_METEO_QUOTA = QuotaGroup(
     hosts=frozenset({"marine-api.open-meteo.com", "api.open-meteo.com"}),
     limits=((60.0, 600), (3600.0, 5000), (86400.0, 10000)),
 )
-DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (OPEN_METEO_QUOTA,)
+# developer.data.gov.my/rate-limit (checked 2026-10-11): the Weather API allows 4 requests per
+# minute, and the forecast and warning endpoints share it, so it is a budget, not a spacing.
+DATA_GOV_MY_QUOTA = QuotaGroup(
+    name="data-gov-my",
+    hosts=frozenset({"api.data.gov.my"}),
+    limits=((60.0, 4),),
+)
+DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (OPEN_METEO_QUOTA, DATA_GOV_MY_QUOTA)
 
 
 class CachingRateLimitedGetter:
