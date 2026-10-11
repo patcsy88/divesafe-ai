@@ -17,18 +17,17 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 
 Foundation, data connectors, assessment pipeline, human gate and API. The repository contains the architecture, engineering rules,
 the safety-critical core (domain types, fail-closed rules engine with reconciliation, LLM provider
-abstraction, config, API skeleton), and connectors for Pulau Tioman, Malaysia (Open-Meteo
-marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
+abstraction, config, API skeleton), and connectors for Pulau Tioman, Malaysia (MET Malaysia
+warnings via data.gov.my; the Open-Meteo marine and wind connectors are kept in the code but are
+not wired into the running system) with an evidence/provenance
 service, an assessment pipeline, the human decision gate, a FastAPI interface, and an agent
 stage (five specialists, three bounded Tree-of-Thought scenarios and a risk proposal) that has
 only been exercised with a scripted fake LLM. Tides,
 reviewed rules, real LLM adapters, RAG, durable storage (PostgreSQL) and a web UI are not
 implemented yet. With `DIVESAFE_LLM_PROVIDER=fake` (the default) the agent stage is off.
-Wind is connected (model forecast); no verified tide source exists, so every assessment is
+Open-Meteo was removed as a live source on 2026-10-11, so no wave, swell, current, sea
+temperature or wind data is fetched. With no verified tide source either, every assessment is
 `INSUFFICIENT EVIDENCE` by design.
-
-Marine data is Open-Meteo.com (CC BY 4.0, non-commercial use only), with wave models from DWD
-and others.
 
 ## Safety hierarchy
 

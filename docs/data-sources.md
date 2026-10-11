@@ -1,7 +1,11 @@
 # Data sources
 
-**Status (2026-10-09):** connectors are implemented for Malaysia (Pulau Tioman): Open-Meteo
-marine and data.gov.my warnings. Product-owner decisions: **non-commercial use only**; first
+**Status (2026-10-11):** **Open-Meteo was removed as a live source on the owner's instruction**:
+its marine and wind connectors, fixtures and tests remain in the repository but are not
+registered in `build_default_state`, so nothing calls `*.open-meteo.com`. The only live
+connector is data.gov.my warnings. Sections below that describe Open-Meteo describe the unwired
+code. Connectors are implemented for Malaysia (Pulau Tioman): Open-Meteo (unwired)
+and data.gov.my warnings. Product-owner decisions: **non-commercial use only**; first
 area **Pulau Tioman, Pahang** (changed from Pulau Redang, Terengganu, on 2026-10-10). Do not add endpoints, API names or sample values until a
 source is verified and recorded here.
 
