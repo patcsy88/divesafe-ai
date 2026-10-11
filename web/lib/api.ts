@@ -47,6 +47,7 @@ async function call(
   key: string,
   init: RequestInit = {},
   source?: string,
+  idempotencyKey?: string,
 ): Promise<unknown> {
   let response: Response;
   try {
@@ -60,6 +61,7 @@ async function call(
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         Authorization: `Bearer ${key}`,
         ...(source ? { "X-Forwarded-For": source } : {}),
+        ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       },
     });
   } catch {
@@ -103,11 +105,22 @@ export interface CreateBody {
   decider?: string;
 }
 
-export async function createAssessment(key: string, body: CreateBody): Promise<AssessmentView> {
-  return (await call("/v1/assessments", key, {
-    method: "POST",
-    body: JSON.stringify(body),
-  })) as AssessmentView;
+// A retry key is sent so that repeating a request whose outcome was unknown returns the original
+// result instead of making a second record. Only a well-formed key is sent.
+export const RETRY_KEY = /^[A-Za-z0-9._-]{16,128}$/;
+
+export async function createAssessment(
+  key: string,
+  body: CreateBody,
+  retryKey?: string,
+): Promise<AssessmentView> {
+  return (await call(
+    "/v1/assessments",
+    key,
+    { method: "POST", body: JSON.stringify(body) },
+    undefined,
+    retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
+  )) as AssessmentView;
 }
 
 export async function getAssessment(key: string, id: string): Promise<AssessmentView> {
@@ -128,12 +141,16 @@ export async function recordDecision(
   key: string,
   id: string,
   body: { decision: string; rationale?: string },
+  retryKey?: string,
 ): Promise<AssessmentView> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
-  return (await call(`/v1/assessments/${encodeURIComponent(id)}/decision`, key, {
-    method: "POST",
-    body: JSON.stringify(body),
-  })) as AssessmentView;
+  return (await call(
+    `/v1/assessments/${encodeURIComponent(id)}/decision`,
+    key,
+    { method: "POST", body: JSON.stringify(body) },
+    undefined,
+    retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
+  )) as AssessmentView;
 }
 
 export async function recordActualConditions(

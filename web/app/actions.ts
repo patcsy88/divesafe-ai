@@ -19,6 +19,8 @@ import { forwardedAddress, LoginThrottle, sourceOf } from "../lib/throttle.ts";
 
 export interface FormState {
   error: string | null;
+  // Set when the earlier attempt is finished with, so the form should start a new one.
+  renewKey?: boolean;
 }
 
 const text = (data: FormData, name: string): string => {
@@ -73,20 +75,27 @@ export async function runAssessment(_prev: FormState, data: FormData): Promise<F
 
   let id: string;
   try {
-    const view = await createAssessment(key, {
-      site_id: site,
-      planned_start: start,
-      planned_duration_minutes: minutes,
-      max_depth_m: depth,
-      ...(decider ? { decider } : {}),
-    });
+    const view = await createAssessment(
+      key,
+      {
+        site_id: site,
+        planned_start: start,
+        planned_duration_minutes: minutes,
+        max_depth_m: depth,
+        ...(decider ? { decider } : {}),
+      },
+      text(data, "retry_key"),
+    );
     id = view.record.id;
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       await endSession();
       redirect("/login");
     }
-    return { error: error instanceof ApiError ? error.message : "Could not run the assessment." };
+    return {
+      error: error instanceof ApiError ? error.message : "Could not run the assessment.",
+      renewKey: error instanceof ApiError && error.status === 409,
+    };
   }
   redirect(`/assessments/${encodeURIComponent(id)}`);
 }
@@ -99,15 +108,23 @@ async function failed(
   key: string,
   id: string,
   recorded: (view: Awaited<ReturnType<typeof getAssessment>>) => boolean,
+  differs?: string,
 ): Promise<FormState> {
   if (error instanceof ApiError && error.status === 401) {
     await endSession();
     redirect("/login");
   }
   if (error instanceof ApiError && error.status === 409) {
-    // A second tab or a retry: only go to the record if a fresh read shows it was recorded.
+    // A second tab or a retry: only go to the record if a fresh read shows what was submitted.
     try {
-      if (recorded(await getAssessment(key, id))) redirect(`/assessments/${id}`);
+      const view = await getAssessment(key, id);
+      if (recorded(view)) redirect(`/assessments/${id}`);
+      if (differs && view.record.human_decision) {
+        return {
+          error: `${differs} The decision already recorded is ${view.record.human_decision.decision}; yours was not recorded.`,
+          renewKey: true,
+        };
+      }
     } catch (inner) {
       if (inner instanceof ApiError) return { error: error.message };
       throw inner;
@@ -128,9 +145,23 @@ export async function submitDecision(_prev: FormState, data: FormData): Promise<
   if (rationale.length > 5000) return { error: "The rationale is too long (5000 characters at most)." };
   try {
     // The API compares this with the system's recommendation and demands a rationale for an override.
-    await recordDecision(key, id, { decision, ...(rationale ? { rationale } : {}) });
+    await recordDecision(
+      key,
+      id,
+      { decision, ...(rationale ? { rationale } : {}) },
+      text(data, "retry_key"),
+    );
   } catch (error) {
-    return failed(error, "Could not record the decision.", key, id, (v) => v.record.human_decision !== null);
+    return failed(
+      error,
+      "Could not record the decision.",
+      key,
+      id,
+      (v) =>
+        v.record.human_decision?.decision === decision &&
+        (v.record.human_decision.override_rationale ?? "") === rationale,
+      "A different decision is already on record.",
+    );
   }
   redirect(`/assessments/${id}`);
 }

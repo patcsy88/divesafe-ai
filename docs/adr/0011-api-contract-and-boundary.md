@@ -35,6 +35,28 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
 - Third-party text (`value`, warning text) must be rendered by clients as plain text only.
 - `/v1/*` responses carry `Cache-Control: no-store`.
 
+### Retry keys (`Idempotency-Key`)
+
+- Optional on `POST /v1/assessments` and `POST /v1/assessments/{id}/decision`; 16 to 128 characters
+  of letters, digits, `.`, `_`, `-`, otherwise 422 and nothing is stored.
+- **Create:** the assessment id is derived from the caller and the key (SHA-256, 32 hex), so the
+  repository's unique id is what prevents a second record. A repeat with the same plan and decider
+  returns the stored record with 200 and `Idempotent-Replay: true`; a repeat with a different plan
+  or decider is 422. Keys are per actor. No new storage, no migration. The stored record is
+  returned as it was, not re-assessed, so its evidence is the original evidence; for that reason a
+  repeat is only honoured within 10 minutes of creation (`REPLAY_WINDOW`), after which it is 409
+  and a new assessment (new key) is needed. A caller without the viewer role gets the record as
+  it was at creation, with any later decision or actual conditions removed, so a repeat is not a
+  way to read them. Two concurrent first requests may both assess before one is stored; the other
+  then gets the stored record (duplicate connector work, one record). Do not reuse actor names:
+  the id is derived from the actor and the key, and keys are not secret from a viewer.
+- **Decision:** a repeat is reported (200, `Idempotent-Replay: true`) only if a well-formed key is
+  sent and the record already holds a decision by the same actor with the same outcome and the same
+  reason. The key is a flag, not bound to the first request (binding it would need a schema change
+  to a write-once record), so the same decision with any key is reported. Anything else, and any
+  repeat without a key, is still 409. A decision is never changed or re-recorded.
+- The id is not secret; the actor is part of it, so another person's key reaches nothing of yours.
+
 ## Consequences
 
 - A frontend can be built against the OpenAPI schema (served outside production).

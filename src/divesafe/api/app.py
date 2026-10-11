@@ -7,11 +7,14 @@ reported as client errors and internals are never echoed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 import uuid
+from datetime import timedelta
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -46,6 +49,7 @@ from divesafe.orchestration import (
 from divesafe.services import (
     ConflictError,
     InMemoryAssessmentRepository,
+    RecordExistsError,
     RecordNotFoundError,
     RepositoryIntegrityError,
     RepositoryUnavailableError,
@@ -59,6 +63,18 @@ _NOT_ASSIGNED = (
 )
 
 AssessmentId = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
+
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._-]{16,128}$")
+# How long after creation a create may be repeated under the same key. Operational, not a safety
+# limit: past it the stored result is old evidence, so the caller must start a new assessment.
+REPLAY_WINDOW = timedelta(minutes=10)
+
+
+def _idempotent_id(actor: str, key: str) -> str:
+    """The assessment id for this caller's retry key. The same actor and key always give the same
+    id, so the repository's unique id is what stops a second record; no extra storage."""
+    return hashlib.sha256(f"divesafe-idempotency-v1\0{actor}\0{key}".encode()).hexdigest()[:32]
+
 
 READ = require_role(Role.VIEWER, limit_key="read")
 CREATE = require_role(Role.ASSESSOR, limit_key="create")
@@ -167,8 +183,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @app.post("/v1/assessments", status_code=201, tags=["assessments"])
     async def create_assessment(
-        body: CreateAssessmentRequest, principal: Annotated[Principal, Depends(CREATE)]
+        body: CreateAssessmentRequest,
+        principal: Annotated[Principal, Depends(CREATE)],
+        response: Response,
+        idempotency_key: Annotated[str | None, Header()] = None,
     ) -> AssessmentView:
+        if idempotency_key is not None and not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            raise HTTPException(
+                status_code=422,
+                detail="Idempotency-Key must be 16 to 128 letters, digits, '.', '_' or '-'",
+            )
         if app_state.engine is None:
             raise HTTPException(
                 status_code=503, detail="the evidence policy is not configured on this server"
@@ -193,11 +217,54 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 status_code=422,
                 detail="name a known key holder with the decider role to record the decision",
             )
+        assessment_id = (
+            _idempotent_id(principal.actor, idempotency_key)
+            if idempotency_key is not None
+            else uuid.uuid4().hex
+        )
+
+        def replay(existing: AssessmentRecord) -> AssessmentView:
+            # The same key must mean the same request; anything else is refused, not reinterpreted.
+            if (
+                existing.plan != plan
+                or existing.assigned_decider != decider
+                or existing.created_by != principal.actor
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="this Idempotency-Key was already used for a different request",
+                )
+            if app_state.clock() - existing.created_at > REPLAY_WINDOW:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "nothing was recorded; the earlier result for this Idempotency-Key is too "
+                        "old to repeat. Run a new assessment"
+                    ),
+                )
+            response.status_code = 200
+            response.headers["Idempotent-Replay"] = "true"
+            logger.info(
+                "assessment create replayed",
+                extra={"assessment_id": existing.id, "actor": principal.actor},
+            )
+            if Role.VIEWER in principal.roles:
+                return AssessmentView.of(existing)
+            # A create-only key must not use a repeat to read what happened since: it gets the
+            # record as it was when it created it.
+            return AssessmentView.of(
+                existing.model_copy(update={"human_decision": None, "actual_conditions": None})
+            )
+
+        if idempotency_key is not None:
+            earlier = await run_in_threadpool(app_state.repository.get, assessment_id)
+            if earlier is not None:
+                return replay(earlier)
         try:
             record = await assess_dive(
                 created_by=principal.actor,
                 assigned_decider=decider,
-                assessment_id=uuid.uuid4().hex,
+                assessment_id=assessment_id,
                 plan=plan,
                 site=site,
                 connectors=app_state.connectors,
@@ -210,7 +277,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
         except UnsafeConfigurationError as exc:
             logger.error("unsafe configuration", extra={"detail": str(exc)})
             raise HTTPException(status_code=503, detail="server configuration is unsafe") from exc
-        await run_in_threadpool(app_state.repository.create, record)
+        try:
+            await run_in_threadpool(app_state.repository.create, record)
+        except RecordExistsError:
+            # Two requests with one key raced; the other stored first. Not a failure for this one.
+            if idempotency_key is None:
+                raise
+            stored = await run_in_threadpool(app_state.repository.get, assessment_id)
+            if stored is None:
+                raise
+            return replay(stored)
         logger.info(
             "assessment stored", extra={"assessment_id": record.id, "actor": principal.actor}
         )
@@ -249,10 +325,40 @@ def create_app(state: AppState | None = None) -> FastAPI:
         assessment_id: AssessmentId,
         body: DecisionRequest,
         principal: Annotated[Principal, Depends(DECIDE)],
+        response: Response,
+        idempotency_key: Annotated[str | None, Header()] = None,
     ) -> AssessmentView:
+        if idempotency_key is not None and not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            raise HTTPException(
+                status_code=422,
+                detail="Idempotency-Key must be 16 to 128 letters, digits, '.', '_' or '-'",
+            )
+
+        def same_decision(existing: AssessmentRecord) -> bool:
+            made = existing.human_decision
+            return (
+                idempotency_key is not None
+                and made is not None
+                and made.decided_by == principal.actor
+                and made.decision == body.decision
+                and (made.override_rationale or "") == (body.rationale or "")
+            )
+
+        def replay(existing: AssessmentRecord) -> AssessmentView:
+            response.headers["Idempotent-Replay"] = "true"
+            logger.info(
+                "decision replayed",
+                extra={"assessment_id": assessment_id, "actor": principal.actor},
+            )
+            return AssessmentView.of(existing)
+
         record = _load(assessment_id)
         _require_assigned(record, principal)
         if record.human_decision is not None:
+            # A retry of the very same decision (same person, outcome and reason) after an
+            # unknown outcome is reported back, unchanged. Anything else stays a 409.
+            if same_decision(record):
+                return replay(record)
             raise HTTPException(status_code=409, detail="this assessment already has a decision")
         now = app_state.clock()
         max_age = app_state.decision_max_age
@@ -277,12 +383,24 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 extra={"assessment_id": assessment_id, "actor": principal.actor},
             )
             raise HTTPException(status_code=403, detail=_NOT_ASSIGNED) from exc
-        except AlreadyDecidedError as exc:
+        except (AlreadyDecidedError, ConflictError) as exc:
+            # Two identical submissions can race; the loser is a replay if the winner matches it.
+            try:
+                latest = app_state.repository.get(assessment_id)
+            except RepositoryUnavailableError as unavailable:
+                raise HTTPException(
+                    status_code=503,
+                    detail="the outcome is unknown; reload to see whether it was recorded",
+                ) from unavailable
+            if latest is not None and same_decision(latest):
+                return replay(latest)
+            if isinstance(exc, ConflictError):
+                raise HTTPException(
+                    status_code=409, detail="assessment changed; reload it"
+                ) from exc
             raise HTTPException(
                 status_code=409, detail="this assessment already has a decision"
             ) from exc
-        except ConflictError as exc:
-            raise HTTPException(status_code=409, detail="assessment changed; reload it") from exc
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail="assessment not found") from exc
         logger.info(

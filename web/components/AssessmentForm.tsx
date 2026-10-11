@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { runAssessment, type FormState } from "../app/actions.ts";
+import { useRetryKey } from "./useRetryKey.ts";
 
 const initial: FormState = { error: null };
 
@@ -11,8 +12,13 @@ export default function AssessmentForm({
   sites: ReadonlyArray<{ id: string; label: string }>;
 }) {
   const [state, action, pending] = useActionState(runAssessment, initial);
+  const [retryKey, renewKey] = useRetryKey();
+  useEffect(() => {
+    if (state.renewKey) renewKey();
+  }, [state, renewKey]);
   return (
-    <form action={action} className="card">
+    <form action={action} onChange={renewKey} className="card">
+      <input type="hidden" name="retry_key" value={retryKey} />
       <label htmlFor="site_id">Dive site</label>
       <select id="site_id" name="site_id" required>
         {sites.map((s) => (

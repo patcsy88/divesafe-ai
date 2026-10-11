@@ -51,6 +51,15 @@ outcome no longer say "nothing was recorded"; control and bidi characters are st
 third-party text; the id pattern matches the API's; extra headers, `object-src 'none'` and
 `images.unoptimized`.
 
+## Retry keys and confirmation
+
+- The forms send an `Idempotency-Key` (a random 32-hex value made in the browser after first
+  render, new whenever any field changes or the API answers 409). Without `crypto` no key is sent.
+  A decision that differs from the one on record is not treated as recorded: the person is told
+  theirs was not recorded. See ADR 0011 for the API behaviour.
+- The decision form shows the outcome, the system's recommendation and the reason, and records
+  only on a second, explicit "Confirm and record" press. Editing anything returns to the review.
+
 ## Known gaps
 
 - **Login throttle is per instance.** The login action allows 5 rejected keys a minute per source
@@ -66,7 +75,7 @@ third-party text; the id pattern matches the API's; extra headers, `object-src '
   recorded). A late release can remove another attempt's hit when the API timeout (120 s) exceeds
   the 60 s window. `login` is a `"use server"` action with no direct test; the library is tested.
   API keys must be generated (at least 128 bits), as the hashes are unsalted.
-- No idempotency key: a timed-out create may have been stored, and a retry makes a second record.
+- A retry key covers an unknown-outcome retry only while the form is unchanged and the page stays open; reloading starts a new attempt, so a timed-out create can still be duplicated after a reload. Check the record list before retrying.
 - No "who am I" endpoint, so the UI cannot hide actions a role cannot perform. Sign-in calls `GET /v1/sites`
   and accepts a 403 only when the API's own refusal text is present.
 - The cookie is the equivalent of the key for 8 hours. It cannot be revoked server-side; revoke the
@@ -91,8 +100,9 @@ bare 403 (e.g. from a proxy); timeout wording no longer tells a decider to "chec
 assessment"; the repository scan exclusion is anchored to `web/node_modules` and `web/.next`.
 
 Gaps added:
-- No confirm step before an irreversible decision, and no idempotency key. Safety rests on the API's
-  write-once compare-and-swap. A form loses its typed text after an error.
+- A form loses its typed text after an error. The decision form now has a review-and-confirm step
+  (display only; the API still derives the override and demands the reason). Safety rests on the
+  API's write-once compare-and-swap, not on the confirm step.
 - Responses are cast, not validated, and not size-capped; evidence values are truncated to 20,000
   characters on screen only. One malformed item could still crash a page.
 - The backend `observations` object is open-keyed and unbounded in value; bidi and C1 characters are
