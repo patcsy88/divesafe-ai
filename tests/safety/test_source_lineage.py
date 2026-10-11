@@ -4,6 +4,7 @@ canonical form. (ADR 0010.)"""
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -206,7 +207,7 @@ def test_the_prompt_carries_lineage_and_the_corroboration_rule() -> None:
         "never present their agreement as confirmation",
     ):
         assert fragment in SYSTEM_PROMPT, fragment
-    assert PROMPT_VERSION >= "2026-10-10.1"
+    assert tuple(int(x) for x in re.split(r"[-.]", PROMPT_VERSION)) >= (2026, 10, 10, 1)
 
 
 def test_agents_see_the_engines_quality_not_the_connectors_claim() -> None:

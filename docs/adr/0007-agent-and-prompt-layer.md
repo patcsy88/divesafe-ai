@@ -42,7 +42,10 @@ Evidence, specialist findings (LLM-derived) and rule rationales go inside one
 `<untrusted_data>` block as ASCII-only JSON with `<`, `>` and `&` escaped, long strings
 truncated at 4,000 characters. The plan and the allowed evidence ids sit outside it. The system
 prompt states the data-not-instructions rule, the citation rule, and that rules are authoritative.
-The prompt version is stored in `model_version`.
+The prompt version is stored in `model_version`. Rule 8 states the output length limits (a live
+run showed 44% of calls rejected for length, ADR 0016) and says brevity never outranks the caveat
+rules. Not solved: nothing checks that a reply keeps its caveats, and a lower rejection rate is not
+evidence that it does.
 
 **Plain text only.** `explanation`, findings, scenarios and rationales are untrusted LLM prose.
 Clients must render them as plain text (no HTML or markdown), and they must never be ingested into

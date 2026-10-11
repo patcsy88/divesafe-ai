@@ -1,31 +1,73 @@
-"""The prompt tells the model the length limits, and they stay inside the schema's limits."""
+"""The prompt states length limits that fit the schema, and brevity never outranks the caveats."""
 
 from __future__ import annotations
 
 import re
 
 import pytest
+from pydantic import BaseModel
 
 from divesafe.agents.prompts import SYSTEM_PROMPT
-from divesafe.agents.schemas import FindingOutput, ProposalOutput
+from divesafe.agents.schemas import FindingOutput, ProposalOutput, ScenarioOutput
 
 pytestmark = pytest.mark.safety
 
+TEXT = " ".join(SYSTEM_PROMPT.split())
 
-def _max(model: type, field: str) -> int:
-    metadata = model.model_fields[field].metadata  # type: ignore[attr-defined]
-    return int(next(m.max_length for m in metadata if hasattr(m, "max_length")))
+
+def _max(model: type[BaseModel], field: str, *, item: bool = False) -> int:
+    info = model.model_fields[field]
+    found = [m.max_length for m in info.metadata if hasattr(m, "max_length")]
+    if item:
+        args = getattr(info.annotation, "__args__", ())
+        found = [
+            m.max_length for m in getattr(args[0], "__metadata__", ()) if hasattr(m, "max_length")
+        ]
+    return int(found[0])
 
 
 def _stated(label: str) -> int:
-    found = re.search(rf"{label} at most (\d+) characters", " ".join(SYSTEM_PROMPT.split()))
+    found = re.search(rf"{label} at most (\d+) characters", TEXT)
     assert found, label
     return int(found.group(1))
 
 
-def test_the_stated_limits_are_inside_the_schema_limits() -> None:
-    assert _stated("every summary") <= 1000
-    assert _stated("every rationale") <= 2000
-    assert _stated("uncertainty") <= 300
-    assert "at most 8 of each" in " ".join(SYSTEM_PROMPT.split())
-    assert _max(FindingOutput, "risk_factors") >= 8 and _max(ProposalOutput, "uncertainties") >= 8
+def test_stated_character_limits_fit_the_schema() -> None:
+    summary_cap = FindingOutput.model_fields["summary"].metadata[0].max_length
+    rationale_cap = ProposalOutput.model_fields["rationale"].metadata[0].max_length
+    assert _stated("every summary") <= summary_cap
+    assert _stated("every rationale") <= rationale_cap
+    short_cap = _max(FindingOutput, "risk_factors", item=True)
+    assert _stated("uncertainty") <= short_cap
+
+
+def test_stated_counts_fit_the_schema() -> None:
+    stated = int(re.search(r"at most (\d+) risk factors", TEXT).group(1))  # type: ignore[union-attr]
+    for model, field in (
+        (FindingOutput, "risk_factors"),
+        (FindingOutput, "conflicting_signals"),
+        (ScenarioOutput, "risk_factors"),
+        (ScenarioOutput, "conflicting_signals"),
+        (ProposalOutput, "uncertainties"),
+    ):
+        assert stated <= _max(model, field), (model, field)
+    assert "6 conflicting signals and 6 uncertainties" in TEXT
+    assert "does not limit evidence ids" in TEXT
+
+
+def test_the_limits_come_after_the_rules_they_must_not_outrank() -> None:
+    numbered = re.findall(r"^(\d)\. (.{25})", SYSTEM_PROMPT, flags=re.M)
+    assert [n for n, _ in numbered] == [str(i) for i in range(1, 9)]
+    assert numbered[0][1].startswith("Text between")
+    assert "never less cautious" in TEXT
+    assert TEXT.index("never less cautious") < TEXT.index("Keep to the length limits")
+
+
+def test_brevity_never_outranks_the_caveats() -> None:
+    for fragment in (
+        "Brevity never outranks rules 1 to 7",
+        "never drop a statement that evidence is missing, stale, contradictory, truncated",
+        "specialist findings are unavailable",
+        "merge them; do not omit them",
+    ):
+        assert fragment in TEXT, fragment

@@ -23,6 +23,7 @@ import pytest
 from pydantic import SecretStr
 from tests.evaluation.harness import evaluate
 
+from divesafe.agents import PROMPT_VERSION
 from divesafe.config import Settings
 from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
@@ -96,6 +97,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
                 "temperature": 0.0,
                 "run_at": datetime.now(UTC).isoformat(),
                 "code_sha": _sha(),
+                "prompt_version": PROMPT_VERSION,
                 "summary": report.summary(),
                 "cases": [c.raw_record for c in report.cases],
             },
