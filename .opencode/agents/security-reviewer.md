@@ -1,6 +1,7 @@
 ---
 description: Read-only reviewer for secrets, authentication, authorization, prompt injection, tool permissions, data validation, dependencies and external API handling.
 mode: subagent
+model: cliproxyapi/claude-opus-5-5#high
 permissions:
   - action: "*"
     resource: "*"
