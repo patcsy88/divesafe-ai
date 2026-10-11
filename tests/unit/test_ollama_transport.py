@@ -18,7 +18,7 @@ from divesafe.models import ollama as mod
 from divesafe.models.ollama import OllamaError, OllamaProvider
 
 REQUEST = LLMRequest(messages=(ChatMessage(role="user", content="SECRET-PROMPT"),))
-GOOD = json.dumps({"message": {"content": "ok"}}).encode()
+GOOD = json.dumps({"message": {"content": "ok"}, "done": True}).encode()
 
 
 class _Handler(BaseHTTPRequestHandler):

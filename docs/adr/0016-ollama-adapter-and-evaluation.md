@@ -46,6 +46,21 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
     records with run time, code SHA and temperature, and fails if no proposal was obtained, so a
     dead model cannot pass.
 
+## Amendments (2026-10-11)
+
+- **Streaming.** The adapter sends `stream: true` and joins the lines. A reply counts only if
+  exactly the last line has `done: true` and every line has a string `message.content`; a cut-off
+  stream or an error line is refused, never used partly. Reason: a proxy in front of the test
+  server answered 504 after 30 s of silence on a non-streamed call.
+- **`think`.** Defaults to `false` and is sent to the server (`None` leaves it to the server). A
+  thinking model can otherwise spend its whole output budget on thinking and return nothing.
+- **Plain http to a named remote host.** `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS` is a comma-separated
+  list of exact hostnames (empty by default; no wildcards, suffixes, addresses or ranges). Only
+  those hosts may use `http://`. The server still counts as external, so
+  `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is still needed, and production refuses a non-empty list. The
+  prompt then crosses the network unencrypted and the server can be impersonated; use it only on a
+  network you control. Added at the owner's request for a LAN test server.
+
 ## Not solved
 
 - No live run has been made: real-model behaviour is still unmeasured. No model is recommended.
@@ -62,6 +77,8 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 - Model output is nondeterministic even at temperature 0 on some backends; compare runs.
 - The stored `model_version` is the name only, not a digest; pulling and pinning a model is the
   operator's job.
+- The first-byte timeout (15 s), total deadline (50 s) and concurrency (4) are constants. A slow
+  single-GPU server with four parallel calls exceeds them, so a live run can measure nothing.
 - Ollama has no authentication here; a remote server must be protected by the network or a proxy.
 - Worker threads cannot be cancelled: a call that outlives the agent timeout ends at its own 50 s
   deadline.

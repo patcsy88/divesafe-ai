@@ -1,8 +1,11 @@
 """Ollama adapter (ADR 0016): a local or self-hosted model over its native chat API.
 
+The reply is streamed, so a proxy with an idle timeout does not cut off a slow answer.
+
 Never logs a request (it holds the whole prompt). Errors carry no prompt, response or URL
 content. Redirects are refused. A non-loopback server is treated as external, because the prompt
-leaves this machine.
+leaves this machine. Plain http to a remote host is refused unless that exact hostname is in
+`DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`; the prompt is then unencrypted on the network.
 """
 
 from __future__ import annotations
@@ -87,11 +90,38 @@ def _post(url: str, body: bytes, timeout: float) -> bytes:
     return b"".join(chunks)
 
 
+def _join_stream(raw: bytes) -> str:
+    """Join the streamed lines (one JSON object each). The reply counts only if the final line
+    says `done`; a cut-off stream, an error line or any odd shape is refused, never repaired."""
+    bad = OllamaError("the Ollama response was not in the expected shape")
+    try:
+        lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    except (ValueError, RecursionError):
+        raise bad from None
+    if not lines or not all(isinstance(x, dict) for x in lines):
+        raise bad
+    parts: list[str] = []
+    for x in lines:
+        message = x.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str):
+            raise bad
+        parts.append(content)
+    if lines[-1].get("done") is not True or any(x.get("done") is True for x in lines[:-1]):
+        raise bad
+    return "".join(parts)
+
+
 class OllamaProvider:
     name = "ollama"
 
     def __init__(
-        self, model: str, base_url: str = DEFAULT_BASE_URL, transport: Transport | None = None
+        self,
+        model: str,
+        base_url: str = DEFAULT_BASE_URL,
+        transport: Transport | None = None,
+        think: bool | None = False,
+        plain_http_hosts: frozenset[str] = frozenset(),
     ) -> None:
         if not model.strip():
             raise ValueError("an Ollama model name is required (DIVESAFE_LLM_MODEL)")
@@ -108,9 +138,10 @@ class OllamaProvider:
         except ValueError:
             raise ValueError("the Ollama base URL has an invalid port") from None
         loopback = _is_loopback(host)
-        if parsed.scheme == "http" and not loopback:
+        if parsed.scheme == "http" and not loopback and host not in plain_http_hosts:
             raise ValueError("a remote Ollama server must use https")
         self.model = model.strip()
+        self._think = think
         self.external = not loopback
         self._url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/api/chat"
         self._transport = transport or _post
@@ -122,9 +153,11 @@ class OllamaProvider:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in request.messages],
-            "stream": False,
+            "stream": True,
             "options": options,
         }
+        if self._think is not None:
+            payload["think"] = self._think
         if request.json_schema is not None:
             payload["format"] = request.json_schema
         return json.dumps(payload).encode()
@@ -132,19 +165,14 @@ class OllamaProvider:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         body = self._body(request)
         raw = await asyncio.to_thread(self._transport, self._url, body, TOTAL_DEADLINE_SECONDS)
-        try:
-            data = json.loads(raw)
-            text = data["message"]["content"]
-        except (ValueError, KeyError, TypeError, RecursionError):
-            raise OllamaError("the Ollama response was not in the expected shape") from None
-        if not isinstance(text, str):
-            raise OllamaError("the Ollama response was not in the expected shape")
-        return LLMResponse(text=text, provider=self.name, model=self.model)
+        return LLMResponse(text=_join_stream(raw), provider=self.name, model=self.model)
 
 
 def _factory(settings: Settings) -> OllamaProvider:
     base = str(settings.llm_base_url) if settings.llm_base_url else DEFAULT_BASE_URL
-    return OllamaProvider(settings.llm_model or "", base)
+    return OllamaProvider(
+        settings.llm_model or "", base, plain_http_hosts=settings.plain_http_host_set()
+    )
 
 
 register_provider("ollama", _factory)

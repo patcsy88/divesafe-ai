@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -43,6 +44,18 @@ class Settings(BaseSettings):
     llm_base_url: AnyHttpUrl | None = None
     # Hosted providers receive evidence and plan data. Off unless explicitly allowed.
     allow_external_llm: bool = False
+    # Comma-separated exact hostnames of non-loopback Ollama servers that may be used over plain
+    # http (ADR 0016). The prompt then crosses the network unencrypted. Empty: https is required.
+    ollama_plain_http_hosts: str | None = None
+
+    def plain_http_host_set(self) -> frozenset[str]:
+        parts = [p.strip().lower() for p in (self.ollama_plain_http_hosts or "").split(",")]
+        parts = [p for p in parts if p]
+        if any(not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", p) for p in parts):
+            raise ValueError(
+                "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS must be comma-separated exact hostnames"
+            )
+        return frozenset(parts)
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.
@@ -78,6 +91,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         self.trusted_proxy_set()
+        plain_hosts = self.plain_http_host_set()
+        if self.environment == "production" and plain_hosts:
+            raise ValueError("plain-http Ollama hosts cannot be used in production")
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
