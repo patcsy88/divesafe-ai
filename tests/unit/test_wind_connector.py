@@ -234,5 +234,5 @@ def test_every_open_meteo_item_carries_the_required_attribution_wording_and_link
     ).items
     for item in (*wind_result.items, *marine_items):
         text = item.value["attribution"]
-        assert "Open-Meteo.com" in text and "CC BY 4.0" in text
-        assert re.search(r"https://open-meteo\.com/(?!\w)", text)
+        words = set(re.split(r"[\s(),]+", text))
+        assert {"Open-Meteo.com", "CC", "BY", "4.0", "https://open-meteo.com/"} <= words
