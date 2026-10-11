@@ -11,6 +11,7 @@ leaves this machine. Plain http to a remote host is refused unless that exact ho
 from __future__ import annotations
 
 import asyncio
+import functools
 import http.client
 import ipaddress
 import json
@@ -28,7 +29,6 @@ from divesafe.models.llm import LLMRequest, LLMResponse, register_provider
 DEFAULT_BASE_URL = "http://localhost:11434"
 MAX_RESPONSE_BYTES = 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 15.0
-TOTAL_DEADLINE_SECONDS = 50.0  # below the agent runner's 60 s, so the worker thread ends first
 MAX_CONCURRENT_CALLS = 4
 _CHUNK = 64 * 1024
 _SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_CALLS)
@@ -57,7 +57,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _post(url: str, body: bytes, timeout: float) -> bytes:
+def _post(
+    url: str,
+    body: bytes,
+    timeout: float,
+    *,
+    slots: threading.BoundedSemaphore | None = None,
+    socket_timeout: float | None = None,
+) -> bytes:
     """POST with no proxy (environment proxies would carry the prompt elsewhere), no redirects, a
     size cap and a total deadline. `timeout` is the whole-call budget in seconds."""
     deadline = time.monotonic() + timeout
@@ -65,12 +72,16 @@ def _post(url: str, body: bytes, timeout: float) -> bytes:
     request = urllib.request.Request(  # noqa: S310 (scheme and host checked at construction)
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    if not _SLOTS.acquire(timeout=timeout):
+    slots = slots if slots is not None else _SLOTS
+    if not slots.acquire(timeout=timeout):
         raise OllamaError("too many Ollama calls are already in flight")
     try:
         chunks: list[bytes] = []
         size = 0
-        with opener.open(request, timeout=SOCKET_TIMEOUT_SECONDS) as response:
+        with opener.open(
+            request,
+            timeout=socket_timeout if socket_timeout is not None else SOCKET_TIMEOUT_SECONDS,
+        ) as response:
             while True:
                 if time.monotonic() > deadline:
                     raise OllamaError("the Ollama call exceeded its total deadline")
@@ -89,7 +100,7 @@ def _post(url: str, body: bytes, timeout: float) -> bytes:
     except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
         raise OllamaError("the Ollama server could not be reached or refused the request") from None
     finally:
-        _SLOTS.release()
+        slots.release()
     return b"".join(chunks)
 
 
@@ -136,6 +147,10 @@ class OllamaProvider:
         transport: Transport | None = None,
         think: bool | None = False,
         plain_http_hosts: frozenset[str] = frozenset(),
+        call_timeout_seconds: float = 60.0,
+        stage_timeout_seconds: float = 150.0,
+        first_byte_timeout_seconds: float = SOCKET_TIMEOUT_SECONDS,
+        max_concurrent_calls: int = MAX_CONCURRENT_CALLS,
     ) -> None:
         if not model.strip():
             raise ValueError("an Ollama model name is required (DIVESAFE_LLM_MODEL)")
@@ -161,7 +176,15 @@ class OllamaProvider:
         self._think = think
         self.external = not loopback
         self._url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/api/chat"
-        self._transport = transport or _post
+        self.call_timeout_seconds = call_timeout_seconds
+        self.stage_timeout_seconds = stage_timeout_seconds
+        # The worker thread must end before the agent's own timeout does.
+        self._deadline = max(call_timeout_seconds - 10.0, call_timeout_seconds / 2)
+        self._transport: Transport = transport or functools.partial(
+            _post,
+            slots=threading.BoundedSemaphore(max_concurrent_calls),
+            socket_timeout=first_byte_timeout_seconds,
+        )
 
     def _body(self, request: LLMRequest) -> bytes:
         options: dict[str, Any] = {"temperature": request.temperature}
@@ -181,14 +204,20 @@ class OllamaProvider:
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         body = self._body(request)
-        raw = await asyncio.to_thread(self._transport, self._url, body, TOTAL_DEADLINE_SECONDS)
+        raw = await asyncio.to_thread(self._transport, self._url, body, self._deadline)
         return LLMResponse(text=_join_stream(raw), provider=self.name, model=self.model)
 
 
 def _factory(settings: Settings) -> OllamaProvider:
     base = str(settings.llm_base_url) if settings.llm_base_url else DEFAULT_BASE_URL
     return OllamaProvider(
-        settings.llm_model or "", base, plain_http_hosts=settings.plain_http_host_set()
+        settings.llm_model or "",
+        base,
+        plain_http_hosts=settings.plain_http_host_set(),
+        call_timeout_seconds=settings.llm_call_timeout_seconds,
+        stage_timeout_seconds=settings.llm_stage_timeout_seconds,
+        first_byte_timeout_seconds=settings.llm_first_byte_timeout_seconds,
+        max_concurrent_calls=settings.llm_max_concurrent_calls,
     )
 
 

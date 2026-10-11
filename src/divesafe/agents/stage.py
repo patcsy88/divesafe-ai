@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from divesafe.agents.prompts import PROMPT_VERSION
 from divesafe.agents.risk_agent import propose
-from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, STAGE_TIMEOUT_SECONDS, AgentError
+from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, stage_timeout
 from divesafe.agents.specialists import SPECIALISTS, run_specialist
 from divesafe.agents.tot import evaluate_scenarios
 from divesafe.domain import (
@@ -110,7 +110,7 @@ async def run_agent_stage(
     cited: tuple[str, ...] = ()
     explanation = ""
     try:
-        async with asyncio.timeout(STAGE_TIMEOUT_SECONDS):
+        async with asyncio.timeout(stage_timeout(provider)):
             proposed, cited, explanation = await _stage(
                 provider, plan, evidence, rule_results, deterministic, issues, findings, scenarios
             )

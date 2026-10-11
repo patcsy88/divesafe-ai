@@ -286,3 +286,37 @@ def test_odd_urls_are_refused_even_for_a_listed_host(url: str) -> None:
 def test_ip_addresses_and_all_digit_names_cannot_be_listed(bad: str) -> None:
     with pytest.raises(ValueError, match="exact hostnames"):
         Settings(ollama_plain_http_hosts=bad)
+
+
+def test_the_time_budgets_come_from_settings_and_default_to_the_original_values() -> None:
+    default = create_provider(Settings(llm_provider="ollama", llm_model="m"))
+    assert (default.call_timeout_seconds, default.stage_timeout_seconds) == (60.0, 150.0)  # type: ignore[attr-defined]
+    slow = create_provider(
+        Settings(
+            llm_provider="ollama",
+            llm_model="m",
+            llm_call_timeout_seconds=200,
+            llm_stage_timeout_seconds=900,
+            llm_first_byte_timeout_seconds=120,
+            llm_max_concurrent_calls=1,
+        )
+    )
+    assert (slow.call_timeout_seconds, slow.stage_timeout_seconds) == (200.0, 900.0)  # type: ignore[attr-defined]
+    assert slow._deadline == 190.0  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"llm_call_timeout_seconds": 0},
+        {"llm_call_timeout_seconds": -1},
+        {"llm_call_timeout_seconds": 100000},
+        {"llm_max_concurrent_calls": 0},
+        {"llm_max_concurrent_calls": 99},
+        {"llm_stage_timeout_seconds": 10, "llm_call_timeout_seconds": 60},
+        {"llm_first_byte_timeout_seconds": 100, "llm_call_timeout_seconds": 60},
+    ],
+)
+def test_nonsense_time_budgets_are_refused(bad: dict[str, float]) -> None:
+    with pytest.raises(ValueError):
+        Settings(**bad)  # type: ignore[arg-type]

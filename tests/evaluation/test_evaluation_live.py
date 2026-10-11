@@ -46,10 +46,23 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
     plain = Settings(
         ollama_plain_http_hosts=os.environ.get("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS")
     ).plain_http_host_set()
-    probe = OllamaProvider(MODEL, base, plain_http_hosts=plain)
+    budgets = Settings(
+        llm_call_timeout_seconds=float(os.environ.get("DIVESAFE_EVAL_CALL_TIMEOUT", "60")),
+        llm_stage_timeout_seconds=float(os.environ.get("DIVESAFE_EVAL_STAGE_TIMEOUT", "150")),
+        llm_first_byte_timeout_seconds=float(os.environ.get("DIVESAFE_EVAL_FIRST_BYTE", "15")),
+        llm_max_concurrent_calls=int(os.environ.get("DIVESAFE_EVAL_CONCURRENCY", "4")),
+    )
+    options = {
+        "plain_http_hosts": plain,
+        "call_timeout_seconds": budgets.llm_call_timeout_seconds,
+        "stage_timeout_seconds": budgets.llm_stage_timeout_seconds,
+        "first_byte_timeout_seconds": budgets.llm_first_byte_timeout_seconds,
+        "max_concurrent_calls": budgets.llm_max_concurrent_calls,
+    }
+    probe = OllamaProvider(MODEL, base, **options)  # type: ignore[arg-type]
     if probe.external and os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") != "true":
         pytest.skip("a remote Ollama server needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
-    report = evaluate(lambda: OllamaProvider(MODEL, base, plain_http_hosts=plain))
+    report = evaluate(lambda: OllamaProvider(MODEL, base, **options))  # type: ignore[arg-type]
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / "evaluation_ollama.json"
     out.write_text(
         json.dumps(

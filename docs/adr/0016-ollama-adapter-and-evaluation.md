@@ -63,6 +63,18 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   the reply, so forged explanation text could reach the human decider (the recommendation can still
   only be tightened). Do not use `.local` names. Added at the owner's request for a LAN test server.
 
+- **Time budgets are settings** (defaults are the original values). `DIVESAFE_LLM_CALL_TIMEOUT_SECONDS`
+  (60), `DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS` (150), `DIVESAFE_LLM_FIRST_BYTE_TIMEOUT_SECONDS` (15)
+  and `DIVESAFE_LLM_MAX_CONCURRENT_CALLS` (4, per provider instance, not process-wide). Settings
+  refuse a stage budget below one call's, or a first-byte wait above one call's. The adapter exposes
+  `call_timeout_seconds` and `stage_timeout_seconds`; the agent runner reads them (a missing,
+  non-numeric, boolean, non-finite or non-positive value falls back to the default) so no agent
+  signature changed. The adapter's worker deadline is the call budget minus 10 s (or half, if
+  smaller), so the thread ends before the agent's timeout. A slow single-GPU server measured
+  with these budgets is the intended use: for example 1 call at a time, 120 s first byte, 200 s per
+  call, 900 s per stage. Only the budgets changed; the rules, `reconcile` and the downgrade-only
+  rule are untouched, and a timeout is still an issue that leaves the deterministic result.
+
 ## Not solved
 
 - No live run has been made: real-model behaviour is still unmeasured. No model is recommended.
@@ -81,8 +93,6 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   operator's job.
 - The total deadline is checked between reads only: waiting for a slot, connecting, DNS and one
   read can run past it, so a worker thread can outlive the 60 s stage timeout.
-- The first-byte timeout (15 s), total deadline (50 s) and concurrency (4) are constants. A slow
-  single-GPU server with four parallel calls exceeds them, so a live run can measure nothing.
 - Ollama has no authentication here; a remote server must be protected by the network or a proxy.
 - Worker threads cannot be cancelled: a call that outlives the agent timeout ends at its own 50 s
   deadline.

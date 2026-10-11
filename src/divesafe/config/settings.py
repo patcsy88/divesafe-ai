@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # Comma-separated exact hostnames of non-loopback Ollama servers that may be used over plain
     # http (ADR 0016). The prompt then crosses the network unencrypted. Empty: https is required.
     ollama_plain_http_hosts: str | None = None
+    # Time budgets for a slow self-hosted model (ADR 0016). The defaults are the original values.
+    # One call, the whole agent stage, the wait for a server's first byte, and parallel calls.
+    llm_call_timeout_seconds: float = Field(default=60.0, gt=0, le=900)
+    llm_stage_timeout_seconds: float = Field(default=150.0, gt=0, le=3600)
+    llm_first_byte_timeout_seconds: float = Field(default=15.0, gt=0, le=300)
+    llm_max_concurrent_calls: int = Field(default=4, ge=1, le=8)
 
     def plain_http_host_set(self) -> frozenset[str]:
         parts = [p.strip().lower() for p in (self.ollama_plain_http_hosts or "").split(",")]
@@ -94,6 +100,10 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         self.trusted_proxy_set()
+        if self.llm_stage_timeout_seconds < self.llm_call_timeout_seconds:
+            raise ValueError("the LLM stage timeout cannot be shorter than one call's timeout")
+        if self.llm_first_byte_timeout_seconds > self.llm_call_timeout_seconds:
+            raise ValueError("the LLM first-byte timeout cannot exceed one call's timeout")
         plain_hosts = self.plain_http_host_set()
         if self.environment == "production" and plain_hosts:
             raise ValueError("plain-http Ollama hosts cannot be used in production")

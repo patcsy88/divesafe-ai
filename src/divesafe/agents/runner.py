@@ -24,6 +24,23 @@ MAX_EVIDENCE_ITEMS = 120
 MAX_PROMPT_CHARS = 200_000
 STAGE_TIMEOUT_SECONDS = 150.0
 
+
+def _declared(provider: object, attribute: str, default: float) -> float:
+    value = getattr(provider, attribute, None)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return default
+    return float(value) if 0 < value < float("inf") else default
+
+
+def call_timeout(provider: object) -> float:
+    """A provider may declare a longer budget for one call (a slow self-hosted model)."""
+    return _declared(provider, "call_timeout_seconds", CALL_TIMEOUT_SECONDS)
+
+
+def stage_timeout(provider: object) -> float:
+    return _declared(provider, "stage_timeout_seconds", STAGE_TIMEOUT_SECONDS)
+
+
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
 T = TypeVar("T", bound=BaseModel)
@@ -46,7 +63,7 @@ async def call_structured(
     user_message: str,
     output: type[T],
     allowed_ids: frozenset[str],
-    timeout: float = CALL_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> T:
     if len(user_message) > MAX_PROMPT_CHARS:
         raise AgentError(f"{task}: prompt too large")
@@ -60,7 +77,10 @@ async def call_structured(
         json_schema=output.model_json_schema(),
     )
     try:
-        response = await asyncio.wait_for(provider.complete(request), timeout=timeout)
+        response = await asyncio.wait_for(
+            provider.complete(request),
+            timeout=timeout if timeout is not None else call_timeout(provider),
+        )
     except TimeoutError:
         raise AgentError(f"{task}: provider timed out") from None
     except Exception as exc:  # provider adapters may raise anything; never chain their text

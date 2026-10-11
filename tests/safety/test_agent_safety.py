@@ -333,7 +333,7 @@ def test_the_stage_deadline_produces_no_proposal(monkeypatch: pytest.MonkeyPatch
             await asyncio.sleep(2)
             raise AssertionError("unreachable")
 
-    monkeypatch.setattr("divesafe.agents.stage.STAGE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("divesafe.agents.runner.STAGE_TIMEOUT_SECONDS", 0.05)
     record = run_pipeline(_Slow())
     assert record.proposed_recommendation is None
     assert any("timed out" in i for i in record.agent_issues)

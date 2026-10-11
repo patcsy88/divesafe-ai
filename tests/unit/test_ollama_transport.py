@@ -46,6 +46,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(mod.MAX_RESPONSE_BYTES + 10))
             self.end_headers()
             self.wfile.write(b"x" * (mod.MAX_RESPONSE_BYTES + 10))
+        elif mode == "silent":
+            time.sleep(2)
         elif mode == "drip":
             self.send_response(200)
             self.end_headers()
@@ -104,10 +106,9 @@ def test_an_oversized_response_is_refused(server: str) -> None:
 
 def test_a_slow_drip_hits_the_total_deadline(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     _Handler.mode = "drip"
-    monkeypatch.setattr(mod, "TOTAL_DEADLINE_SECONDS", 0.3)
     started = time.monotonic()
     with pytest.raises(OllamaError, match="total deadline"):
-        _complete(server)
+        asyncio.run(OllamaProvider("m", server, call_timeout_seconds=0.6).complete(REQUEST))
     assert time.monotonic() - started < 2
 
 
@@ -194,3 +195,32 @@ def test_a_deeply_nested_response_is_a_fixed_error() -> None:
     provider = OllamaProvider("m", transport=lambda u, b, t: nested)
     with pytest.raises(OllamaError, match="expected shape"):
         asyncio.run(provider.complete(REQUEST))
+
+
+def test_the_worker_deadline_is_always_below_the_agent_call_timeout() -> None:
+    for call in (0.2, 1.0, 12.0, 60.0, 300.0):
+        provider = OllamaProvider("m", "http://localhost:1", call_timeout_seconds=call)
+        assert 0 < provider._deadline < call
+
+
+def test_each_provider_has_its_own_concurrency_limit(server: str) -> None:
+    one = OllamaProvider("m", server, max_concurrent_calls=1)
+    transport = one._transport
+    slots = transport.keywords["slots"]  # type: ignore[attr-defined]
+    slots.acquire()
+    with pytest.raises(OllamaError, match="in flight"):
+        transport(f"{server}/api/chat", b"{}", 0.1)
+    slots.release()
+    assert OllamaProvider("m", server)._transport.keywords["slots"] is not slots  # type: ignore[attr-defined]
+
+
+def test_the_first_byte_timeout_comes_from_the_provider(server: str) -> None:
+    _Handler.mode = "silent"
+    started = time.monotonic()
+    with pytest.raises(OllamaError, match="could not be reached"):
+        asyncio.run(
+            OllamaProvider(
+                "m", server, first_byte_timeout_seconds=0.3, call_timeout_seconds=30
+            ).complete(REQUEST)
+        )
+    assert time.monotonic() - started < 3
