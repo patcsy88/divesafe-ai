@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; --fg:#0b1f2e; --bg:#f4f8fa; --card:#fff; --line:#cfdce4; --accent:#0a5f86; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6f1f6; --bg:#06141e; --card:#0c2231; --line:#22485f; --accent:#6fd3e6; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+main { max-width: 46rem; margin: 0 auto; padding: 1.25rem; }
+h1 { font-size: 1.6rem; margin: .5rem 0; } h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
+.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1rem 1.1rem; margin:1rem 0; }
+.card.warn { border-left:6px solid #d99a00; } .card.ai { border-style:dashed; }
+.disclaimer { border:1px solid var(--line); border-left:6px solid var(--accent); padding:.6rem .8rem; border-radius:8px; font-size:.9rem; }
+label { display:block; font-weight:600; margin:.9rem 0 .25rem; }
+input, select { width:100%; padding:.6rem; border:1px solid var(--line); border-radius:8px; font:inherit; background:var(--bg); color:var(--fg); }
+.row { display:flex; gap:.5rem; } .row input { flex:2; } .row select { flex:1.2; }
+button { margin-top:1rem; padding:.7rem 1.2rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+@media (prefers-color-scheme: dark) { button { color:#06141e; } }
+button:disabled { opacity:.6; cursor:wait; } button.link { background:none; color:var(--accent); text-decoration:underline; padding:0; margin:0; }
+.error { color:#b00020; font-weight:600; } @media (prefers-color-scheme: dark) { .error { color:#ff8a9b; } }
+.hint { font-size:.85rem; opacity:.8; } .label { margin:0; font-size:.85rem; opacity:.8; }
+.badge { display:inline-block; margin:.2rem 0 .6rem; padding:.45rem 1rem; border-radius:999px; font-weight:800; font-size:1.25rem; letter-spacing:.02em; border:3px solid currentColor; }
+.badge.go { color:#0a7a3d; } .badge.caution { color:#a86b00; } .badge.nogo { color:#b00020; } .badge.insufficient { color:#5a5f66; }
+.pending { background:#fff4cc; color:#3a2c00; padding:.6rem .8rem; border-radius:8px; font-weight:700; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; } dt { font-weight:600; } dd { margin:0; overflow-wrap:anywhere; }
+li { margin:.5rem 0; overflow-wrap:anywhere; }
+a { color:var(--accent); }
