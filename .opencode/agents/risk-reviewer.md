@@ -1,6 +1,7 @@
 ---
 description: Read-only reviewer for the risk model, thresholds, uncertainty handling, failure modes, the human gate and unsafe recommendations. Required for changes to risk, domain, agents or safety tests.
 mode: subagent
+model: cliproxyapi/claude-opus-5-5#high
 permissions:
   - action: "*"
     resource: "*"
