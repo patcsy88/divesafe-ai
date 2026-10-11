@@ -67,6 +67,16 @@ def test_only_a_decider_can_record_the_human_decision() -> None:
     assert client.post(url, json=body, headers=HEADERS[Role.DECIDER]).status_code == 200
 
 
+def test_listing_sites_needs_the_viewer_role_and_an_empty_registry_is_not_an_error() -> None:
+    client, _ = _client()
+    assert client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).status_code == 200
+    for role in (Role.ASSESSOR, Role.DECIDER):
+        assert client.get("/v1/sites", headers=HEADERS[role]).status_code == 403
+    client.app.state.divesafe.sites = {}  # type: ignore[attr-defined]
+    body = client.get("/v1/sites", headers=HEADERS[Role.VIEWER]).json()
+    assert body["sites"] == [] and "Decision support only" in body["notice"]
+
+
 def test_an_assessor_can_create_but_not_read_or_decide() -> None:
     client, make = _client()
     aid = make()

@@ -47,6 +47,11 @@ export interface AssessmentRecord {
   ruleset_version: string;
   created_by: string | null;
   assigned_decider: string | null;
+  actual_conditions: {
+    reported_at: string;
+    reported_by: string;
+    observations: Record<string, unknown>;
+  } | null;
   human_decision: {
     decided_by: string;
     decision: Recommendation;
@@ -60,10 +65,72 @@ export interface AssessmentView {
   record: AssessmentRecord;
   status: string;
   llm_tightened: boolean;
+  overrides_to_less_severe: boolean;
   confidence_note: string;
   outcome_note: string;
   status_note: string;
   agent_note: string;
   attributions: string[];
+  notice: string;
+}
+
+export interface EvidenceItem {
+  id: string;
+  category: string;
+  source: string;
+  source_version: string | null;
+  retrieved_at: string;
+  valid_at: string;
+  valid_until: string | null;
+  is_forecast: boolean;
+  data_kind: string;
+  upstream: string[];
+  upstream_known: boolean;
+  quality: string;
+  quality_notes: string[];
+  value: Record<string, unknown>;
+}
+
+export interface EvidenceEntry {
+  item: EvidenceItem;
+  effective_quality: string;
+  retrieval_age_minutes_at_assessment: number | null;
+  future_dated: boolean;
+}
+
+export interface EvidenceView {
+  assessment_id: string;
+  assessed_at: string;
+  evidence: EvidenceEntry[];
+  evidence_issues: string[];
+  unevaluated_factors: string[];
+  evidence_note: string;
+  notice: string;
+}
+
+export interface SiteConstraint {
+  id: string;
+  factor: string;
+  description: string;
+  threshold_status: string;
+  source: string | null;
+}
+
+export interface SiteView {
+  site: {
+    id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    coordinate_source: string;
+    area_names: string[];
+    constraints: SiteConstraint[];
+  };
+  hazards_note: string;
+  notice: string;
+}
+
+export interface SiteListView {
+  sites: SiteView[];
   notice: string;
 }

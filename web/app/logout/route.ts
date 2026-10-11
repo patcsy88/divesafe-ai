@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 import { endSession } from "../../lib/auth.ts";
 
 // Reached when the API rejects a stored key, so a revoked key does not look signed in.
-export async function GET(request: Request): Promise<NextResponse> {
+// The redirect is relative so it stays on whatever origin the person is using.
+export async function GET(): Promise<Response> {
   await endSession();
-  return NextResponse.redirect(new URL("/login", request.url));
+  return new Response(null, { status: 307, headers: { location: "/login" } });
 }

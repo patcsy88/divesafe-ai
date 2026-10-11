@@ -272,3 +272,11 @@ class SiteView(BaseModel):
         else:
             note = f"No hazards, local rules or site knowledge are registered for this site. {base}"
         return cls(site=site, hazards_note=note)
+
+
+class SiteListView(BaseModel):
+    """Every registered site, as registered. A site missing from this list is unregistered, not
+    unsafe or safe."""
+
+    sites: tuple[SiteView, ...]
+    notice: str = DISCLAIMER

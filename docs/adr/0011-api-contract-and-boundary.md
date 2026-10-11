@@ -16,6 +16,7 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
   the engine's effective quality and age at assessment, plus source issues) and
   `GET /v1/sites/{id}` (the site as registered; no hazards are held, and the response says absence
   of a listed hazard is not absence of hazards).
+- `GET /v1/sites` lists every registered site (viewer role), added for the web UI (ADR 0017).
 - Not added yet: `GET /v1/sites/search` (one registered site; search needs verified site data) and
   an asynchronous job model with `assessment_status` (assessments run inline; add it when a real
   LLM adapter makes them slow).

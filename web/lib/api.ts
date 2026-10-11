@@ -1,11 +1,14 @@
 import { API_TIMEOUT_MS, apiBaseUrl } from "./config.ts";
-import type { AssessmentView } from "./types.ts";
+import { plain } from "./present.ts";
+import type { AssessmentView, EvidenceView, SiteListView } from "./types.ts";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  refused: boolean;
+  constructor(status: number, message: string, refused = false) {
     super(message);
     this.status = status;
+    this.refused = refused;
   }
 }
 
@@ -13,25 +16,30 @@ const ID = /^[0-9a-f]{32}$/;
 
 export function describeFailure(status: number, detail: unknown, retryAfter: string | null): string {
   if (status === 401) return "The server did not accept this API key.";
-  if (status === 403) return "This key does not have the role needed for that.";
+  if (status === 403) {
+    return "Not permitted: this key lacks the role, or you are not the person this assessment is assigned to.";
+  }
   if (status === 404) return "Not found.";
+  if (status === 409) {
+    return typeof detail === "string" ? plain(detail).slice(0, 300) : "That cannot be done in the current state.";
+  }
   if (status === 429) return `Too many requests. Wait ${retryAfter ?? "a moment"} seconds and retry.`;
   if (status === 422) {
-    if (typeof detail === "string") return detail.slice(0, 300);
+    if (typeof detail === "string") return plain(detail).slice(0, 300);
     if (Array.isArray(detail)) {
       return detail
         .slice(0, 5)
         .map((e: unknown) => {
           const item = (e ?? {}) as { loc?: unknown; msg?: unknown };
           const where = Array.isArray(item.loc) ? item.loc.join(".") : "";
-          return `${where}: ${String(item.msg ?? "invalid").slice(0, 120)}`;
+          return `${plain(where)}: ${plain(String(item.msg ?? "invalid")).slice(0, 120)}`;
         })
         .join("; ");
     }
     return "The request was not accepted.";
   }
   if (status === 503) return "The service is unavailable. Nothing was recorded.";
-  return "Something went wrong. The outcome is unknown: check for a new assessment before retrying.";
+  return "Something went wrong. The outcome is unknown: check whether it was recorded before trying again.";
 }
 
 async function call(path: string, key: string, init: RequestInit = {}): Promise<unknown> {
@@ -49,7 +57,7 @@ async function call(path: string, key: string, init: RequestInit = {}): Promise<
       },
     });
   } catch {
-    throw new ApiError(0, "The DiveSafe service did not answer. The outcome is unknown: check for a new assessment before retrying.");
+    throw new ApiError(0, "The DiveSafe service did not answer, so the outcome is unknown: check whether it was recorded before trying again.");
   }
   let body: unknown = null;
   try {
@@ -62,18 +70,19 @@ async function call(path: string, key: string, init: RequestInit = {}): Promise<
     throw new ApiError(
       response.status,
       describeFailure(response.status, detail, response.headers.get("retry-after")),
+      typeof detail === "string" && detail.startsWith("nothing was recorded"),
     );
   }
   return body;
 }
 
-export async function checkKey(key: string, siteId: string): Promise<void> {
+export async function checkKey(key: string): Promise<void> {
   // 401 means the key is unknown. 403 means it is valid but lacks the viewer role, which is
   // acceptable here: roles are independent and an assessor may not be able to read.
   try {
-    await call(`/v1/sites/${encodeURIComponent(siteId)}`, key);
+    await call("/v1/sites", key);
   } catch (error) {
-    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) return;
+    if (error instanceof ApiError && error.status === 403 && error.refused) return;
     throw error;
   }
 }
@@ -96,4 +105,37 @@ export async function createAssessment(key: string, body: CreateBody): Promise<A
 export async function getAssessment(key: string, id: string): Promise<AssessmentView> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
   return (await call(`/v1/assessments/${encodeURIComponent(id)}`, key)) as AssessmentView;
+}
+
+export async function getEvidence(key: string, id: string): Promise<EvidenceView> {
+  if (!ID.test(id)) throw new ApiError(404, "Not found.");
+  return (await call(`/v1/assessments/${encodeURIComponent(id)}/evidence`, key)) as EvidenceView;
+}
+
+export async function listSites(key: string): Promise<SiteListView> {
+  return (await call("/v1/sites", key)) as SiteListView;
+}
+
+export async function recordDecision(
+  key: string,
+  id: string,
+  body: { decision: string; rationale?: string },
+): Promise<AssessmentView> {
+  if (!ID.test(id)) throw new ApiError(404, "Not found.");
+  return (await call(`/v1/assessments/${encodeURIComponent(id)}/decision`, key, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })) as AssessmentView;
+}
+
+export async function recordActualConditions(
+  key: string,
+  id: string,
+  observations: Record<string, string | number>,
+): Promise<AssessmentView> {
+  if (!ID.test(id)) throw new ApiError(404, "Not found.");
+  return (await call(`/v1/assessments/${encodeURIComponent(id)}/actual-conditions`, key, {
+    method: "POST",
+    body: JSON.stringify({ observations }),
+  })) as AssessmentView;
 }

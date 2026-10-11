@@ -26,6 +26,7 @@ from divesafe.api.schemas import (
     CreateAssessmentRequest,
     DecisionRequest,
     EvidenceView,
+    SiteListView,
     SiteView,
 )
 from divesafe.api.state import AppState, build_default_state
@@ -228,6 +229,10 @@ def create_app(state: AppState | None = None) -> FastAPI:
         principal: Annotated[Principal, Depends(READ)],
     ) -> EvidenceView:
         return EvidenceView.of(_load(assessment_id))
+
+    @app.get("/v1/sites", tags=["sites"])
+    def list_sites(principal: Annotated[Principal, Depends(READ)]) -> SiteListView:
+        return SiteListView(sites=tuple(SiteView.of(s) for s in app_state.sites.values()))
 
     @app.get("/v1/sites/{site_id}", tags=["sites"])
     def get_site(

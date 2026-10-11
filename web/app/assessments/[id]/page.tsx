@@ -1,5 +1,9 @@
+import { Fragment } from "react";
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import Banner from "../../../components/Banner.tsx";
+import ConditionsForm from "../../../components/ConditionsForm.tsx";
+import DecisionForm from "../../../components/DecisionForm.tsx";
 import { ApiError, getAssessment } from "../../../lib/api.ts";
 import { requireKey } from "../../../lib/auth.ts";
 import { badgeClass, formatWhen, labelFor, plain } from "../../../lib/present.ts";
@@ -22,12 +26,16 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
   const r = view.record;
   const pending = view.status !== "DECIDED";
   const decision = r.human_decision;
+  const started = Date.parse(r.plan.planned_start) <= Date.now();
 
   return (
     <>
       <header className="top">
         <h1>Assessment</h1>
-        <a href="/">New assessment</a>
+        <nav className="sub">
+          <Link href={`/assessments/${encodeURIComponent(r.id)}/evidence`}>Evidence</Link>
+          <Link href="/">New assessment</Link>
+        </nav>
       </header>
       <Banner />
 
@@ -68,7 +76,12 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             <dt>Decision</dt>
             <dd>{labelFor(decision.decision)}</dd>
             <dt>Override of the system</dt>
-            <dd>{decision.is_override ? "Yes" : "No"}</dd>
+            <dd>
+              {decision.is_override ? "Yes" : "No"}
+              {view.overrides_to_less_severe && (
+                <strong> · overrides to a LESS SEVERE outcome than the system recommended</strong>
+              )}
+            </dd>
             {decision.override_rationale && (
               <>
                 <dt>Rationale</dt>
@@ -80,6 +93,47 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           </dl>
         </section>
       )}
+
+      {pending && r.assigned_decider && (
+        <>
+          <p className="hint">
+            Only {plain(r.assigned_decider)} can record this decision. The service checks who you
+            are; if you are someone else it will refuse and nothing is recorded.
+          </p>
+          <DecisionForm
+            id={r.id}
+            system={r.final_recommendation}
+            context={`Rules alone: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
+          />
+        </>
+      )}
+
+      {r.actual_conditions && (
+        <section className="card">
+          <h2>Conditions reported afterwards</h2>
+          <p className="hint">
+            Reported by {plain(r.actual_conditions.reported_by)} at{" "}
+            {formatWhen(r.actual_conditions.reported_at)}. A report, not a measurement by the system.
+          </p>
+          <dl>
+            {Object.entries(r.actual_conditions.observations).map(([k, v]) => (
+              <Fragment key={k}>
+                <dt>{plain(k)}</dt>
+                <dd>{plain(String(v))}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </section>
+      )}
+
+      {!pending && !r.actual_conditions &&
+        (started ? (
+          <ConditionsForm id={r.id} />
+        ) : (
+          <p className="hint">
+            Conditions can be reported once the planned start time ({formatWhen(r.plan.planned_start)}) has passed.
+          </p>
+        ))}
 
       <section className="card">
         <h2>The dive plan</h2>

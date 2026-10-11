@@ -36,3 +36,23 @@ export function formatWhen(iso: string): string {
 export function plain(text: string): string {
   return text.replace(/[^\P{Cc}\n]|\p{Cf}/gu, "");
 }
+
+const NOT_MEASURED = ["forecast", "model", "prediction"];
+
+// What kind of statement this item is. Only an observation is called measured.
+export function provenanceLabel(dataKind: string): string {
+  if (dataKind === "observation") return "measured";
+  if (NOT_MEASURED.includes(dataKind)) return `${dataKind}, not measured`;
+  if (dataKind === "notice" || dataKind === "knowledge") return `${dataKind}: text, not a measurement`;
+  return "kind unknown: not a measurement";
+}
+
+// Display order only, used to warn before a less severe choice. The service decides what an
+// override is and records it; this never gates or changes anything.
+const SEVERITY = ["GO", "CAUTION", "INSUFFICIENT EVIDENCE", "NO-GO"];
+
+export function isLessSevere(choice: string, system: string): boolean {
+  const c = SEVERITY.indexOf(choice);
+  const s = SEVERITY.indexOf(system);
+  return c !== -1 && s !== -1 && c < s;
+}

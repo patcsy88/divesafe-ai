@@ -51,3 +51,19 @@ test("an unknown outcome on a failed write is not reported as nothing recorded",
   }
   assert.match(describeFailure(503, null, null), /Nothing was recorded/);
 });
+
+test("a warning or knowledge item is never called measured", async () => {
+  const { provenanceLabel, isLessSevere } = await import("../lib/present.ts");
+  assert.equal(provenanceLabel("observation"), "measured");
+  for (const kind of ["forecast", "model", "prediction"]) assert.match(provenanceLabel(kind), /not measured/);
+  for (const kind of ["notice", "knowledge", "", "surprise"]) assert.ok(provenanceLabel(kind) !== "measured", kind);
+  assert.ok(isLessSevere("GO", "NO-GO") && isLessSevere("CAUTION", "INSUFFICIENT EVIDENCE"));
+  assert.ok(!isLessSevere("NO-GO", "GO") && !isLessSevere("GO", "GO"));
+  assert.ok(!isLessSevere("GO", "SAFE") && !isLessSevere("", "NO-GO"));
+});
+
+test("echoed failure text is stripped of bidi characters", () => {
+  assert.ok(!describeFailure(409, "a\u202Eb", null).includes("\u202E"));
+  assert.ok(!describeFailure(422, "a\u202Eb", null).includes("\u202E"));
+  assert.ok(!describeFailure(422, [{ loc: ["x\u202E"], msg: "m\u202E" }], null).includes("\u202E"));
+});

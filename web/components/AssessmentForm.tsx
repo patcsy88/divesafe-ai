@@ -2,17 +2,20 @@
 
 import { useActionState } from "react";
 import { runAssessment, type FormState } from "../app/actions.ts";
-import { SITES } from "../lib/sites.ts";
 
 const initial: FormState = { error: null };
 
-export default function AssessmentForm() {
+export default function AssessmentForm({
+  sites,
+}: {
+  sites: ReadonlyArray<{ id: string; label: string }>;
+}) {
   const [state, action, pending] = useActionState(runAssessment, initial);
   return (
     <form action={action} className="card">
       <label htmlFor="site_id">Dive site</label>
       <select id="site_id" name="site_id" required>
-        {SITES.map((s) => (
+        {sites.map((s) => (
           <option key={s.id} value={s.id}>{s.label}</option>
         ))}
       </select>

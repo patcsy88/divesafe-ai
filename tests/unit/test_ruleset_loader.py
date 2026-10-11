@@ -209,6 +209,8 @@ def test_no_ruleset_of_limits_is_shipped_in_the_repository() -> None:
         str(p.relative_to(root))
         for p in list(root.rglob("*.json")) + list(root.rglob("*.jsonc"))
         if ".venv" not in p.parts
+        and not p.is_relative_to(root / "web" / "node_modules")
+        and not p.is_relative_to(root / "web" / ".next")
         and "tests" not in p.parts
         and ".git" not in p.parts
         and '"definitions"' in p.read_text(errors="ignore")

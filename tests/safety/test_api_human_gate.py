@@ -120,6 +120,7 @@ def _create(client: TestClient, decider: str | None = None) -> dict[str, Any]:
         ("post", "/v1/assessments"),
         ("get", "/v1/assessments/" + "a" * 32),
         ("get", "/v1/assessments/" + "a" * 32 + "/evidence"),
+        ("get", "/v1/sites"),
         ("get", "/v1/sites/" + SITE_ID),
         ("post", "/v1/assessments/" + "a" * 32 + "/decision"),
         ("post", "/v1/assessments/" + "a" * 32 + "/actual-conditions"),
@@ -479,6 +480,15 @@ def test_site_endpoint_never_implies_the_site_is_free_of_hazards() -> None:
     assert client.get("/v1/sites/bad%20id", headers=AUTH_A).status_code == 422
 
 
+def test_site_list_needs_a_viewer_and_lists_only_registered_sites() -> None:
+    client, _, _ = _build()
+    assert client.get("/v1/sites").status_code == 401
+    body = client.get("/v1/sites", headers=AUTH_A).json()
+    assert [s["site"]["id"] for s in body["sites"]] == [SITE_ID]
+    assert all("does not mean there are none" in s["hazards_note"] for s in body["sites"])
+    assert "Decision support only" in body["notice"]
+
+
 def test_evidence_view_reports_the_engines_quality_not_the_connectors_claim() -> None:
     from divesafe.api.schemas import EvidenceView
 
@@ -525,10 +535,10 @@ def test_site_note_changes_when_constraints_are_registered() -> None:
 
 
 def test_views_never_grow_a_risk_level_or_confidence_label() -> None:
-    from divesafe.api.schemas import EvidenceEntry, EvidenceView, SiteView
+    from divesafe.api.schemas import EvidenceEntry, EvidenceView, SiteListView, SiteView
 
     banned = {"risk_level", "safety_score", "confidence_label", "safe"}
-    for model in (EvidenceView, EvidenceEntry, SiteView):
+    for model in (EvidenceView, EvidenceEntry, SiteView, SiteListView):
         assert not banned & set(model.model_fields)
 
 
@@ -552,6 +562,7 @@ def test_read_endpoints_are_not_cacheable() -> None:
     for path in (
         f"/v1/assessments/{aid}",
         f"/v1/assessments/{aid}/evidence",
+        "/v1/sites",
         f"/v1/sites/{SITE_ID}",
     ):
         assert client.get(path, headers=AUTH_A).headers["cache-control"] == "no-store"

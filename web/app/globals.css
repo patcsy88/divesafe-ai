@@ -22,3 +22,8 @@ button:disabled { opacity:.6; cursor:wait; } button.link { background:none; colo
 dl { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; } dt { font-weight:600; } dd { margin:0; overflow-wrap:anywhere; }
 li { margin:.5rem 0; overflow-wrap:anywhere; }
 a { color:var(--accent); }
+textarea { width:100%; padding:.6rem; border:1px solid var(--line); border-radius:8px; font:inherit; background:var(--bg); color:var(--fg); }
+nav.sub { display:flex; gap:1rem; margin:.5rem 0; }
+table { width:100%; border-collapse:collapse; font-size:.9rem; } th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere; }
+pre.value { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; font-size:.8rem; max-height:14rem; overflow:auto; }
+.tag { display:inline-block; padding:0 .45rem; border:1px solid var(--line); border-radius:6px; font-size:.8rem; margin-right:.3rem; }
