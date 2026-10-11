@@ -333,7 +333,7 @@ def test_oversized_bodies_are_refused_before_authentication() -> None:
 
 
 def test_deeply_nested_observations_do_not_cause_a_500() -> None:
-    client, clock, _ = _build()
+    client, clock, repo = _build()
     rid = _create(client)["record"]["id"]
     client.post(
         f"/v1/assessments/{rid}/decision",
@@ -347,7 +347,13 @@ def test_deeply_nested_observations_do_not_cause_a_500() -> None:
         content='{"observations": {"a": ' + nested + "}}",
         headers={**AUTH_A, "content-type": "application/json"},
     )
-    assert response.status_code == 422
+    # The status depends on the Python version: 3.11's json module raises RecursionError, which
+    # FastAPI reports as 400; newer versions parse it and our own depth check gives 422. What must
+    # hold everywhere is a clean client error that echoes nothing and records nothing.
+    assert response.status_code in {400, 422}
+    assert "[[[[" not in response.text
+    stored = repo.get(rid)
+    assert stored is not None and stored.actual_conditions is None
 
 
 def test_already_decided_is_reported_before_staleness() -> None:
