@@ -224,6 +224,22 @@ a documented machine-readable feed. The app's reviews say it often shows no data
 **unverified**: no API, no licence for automated reuse. Next step is a written request to JUPEM
 (owner), or manual attributed entry of published values. Do not scrape.
 
+**JUPEM second pass (2026-10-11).** Still no JUPEM page could be read: `www.jupem.gov.my` and
+`jupem.gov.my` (home, the price page, a news page on STAPS, the public page) all failed with
+transport errors or timed out from my tools, over https and http. Established from other pages:
+the app store listings for STAPS (publisher: Jabatan Digital Negara; copyright: JUPEM) say it shows
+seven consecutive days of tide forecast tables, derived from JUPEM tide gauge stations, free of
+charge, for a person using the app. Ratings are 1.4 of 5 (Apple) with reviews saying it shows no
+data. Neither listing mentions an API, a download or terms for reuse. A search of data.gov.my's
+API documentation found Data Catalogue, OpenDOSM, transport and Weather APIs, and no tide API;
+I did not find a JUPEM tide dataset there (the search itself returned little, so this is
+"not found", not "does not exist"). **Still unverified:** a documented feed, any licence for
+automated reuse, and whether Pulau Tioman is in the station list (a search snippet only).
+Free personal viewing in an app is not permission for DiveSafe to fetch or republish the values.
+**Route:** (1) the owner asks JUPEM in writing (the support email on the Play listing is
+roziana.ramlee@jupem.gov.my; confirm the right contact on JUPEM's own site first), or files a
+request at data.gov.my/data-request; (2) until answered, nothing is built.
+
 **Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
 credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
 requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
