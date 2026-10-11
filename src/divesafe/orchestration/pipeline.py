@@ -61,6 +61,10 @@ async def assess_dive(
         raise ValueError("pass either a provider or explicit agent output, not both")
     if plan.site_id != site.id:
         raise InvalidPlanError("plan.site_id does not match the site")
+    if provider is not None and clock is None:
+        raise ValueError(
+            "a clock is required with a provider, to judge the result again afterwards"
+        )
     if plan.planned_start < now:
         raise InvalidPlanError("planned_start is in the past; assess a future dive window")
 
@@ -91,28 +95,35 @@ async def assess_dive(
         findings, agent_issues = stage.findings, stage.issues
         proposal_ids = stage.proposal_evidence_ids
 
-    # A slow agent stage can take minutes. Judge the evidence again at the later time, and only
-    # tighten: stale evidence or a dive window that has since started can make the result worse,
-    # never better.
+    # A slow agent stage can take minutes. Judge the same evidence again at the later time and
+    # keep every earlier result as well: stale evidence, an expired rule or a dive window that has
+    # started can only add problems, never remove one.
     completed = now
+    unevaluated = assessment.unevaluated_factors
     if clock is not None:
         completed = max(now, clock())
         if completed > now:
             later = engine.assess(plan, evidence.items, completed)
-            tightened = list(later.rule_results)
-            if plan.planned_start < completed:
-                tightened.append(
+            rule_results.extend(r for r in later.rule_results if r not in rule_results)
+            if plan.planned_start <= completed:
+                rule_results.append(
                     RuleResult(
                         rule_id="assessment.window_started",
                         outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                         rationale="the dive start time passed while the assessment was running",
                     )
                 )
-            tightened.extend(issue_rules)
-            again = most_severe(tuple(r.outcome for r in tightened))
-            if again is not deterministic and most_severe((again, deterministic)) is again:
-                rule_results, deterministic = tightened, again
-                assessment = later
+            unevaluated = tuple(
+                sorted(set(unevaluated) | set(later.unevaluated_factors), key=lambda f: f.value)
+            )
+            again = most_severe(tuple(r.outcome for r in rule_results))
+            if again is not deterministic:
+                agent_issues = (
+                    *agent_issues,
+                    "the rules were re-judged after the agent stage; agent output reflects "
+                    "the earlier result",
+                )
+            deterministic = again
 
     reconciled = reconcile(deterministic, proposed)
     if reconciled.llm_attempted_downgrade and proposed is not None:
@@ -134,7 +145,7 @@ async def assess_dive(
         llm_attempted_downgrade=reconciled.llm_attempted_downgrade,
         confidence=None,
         evidence_issues=evidence.issues,
-        unevaluated_factors=assessment.unevaluated_factors,
+        unevaluated_factors=unevaluated,
         findings=findings,
         proposal_evidence_ids=proposal_ids,
         scenarios=scenarios,

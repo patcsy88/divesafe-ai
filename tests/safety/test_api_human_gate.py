@@ -572,3 +572,12 @@ def test_read_endpoints_are_not_cacheable() -> None:
         f"/v1/sites/{SITE_ID}",
     ):
         assert client.get(path, headers=AUTH_A).headers["cache-control"] == "no-store"
+
+
+def test_the_api_judges_again_when_the_clock_passes_the_start_during_the_request() -> None:
+    client, _, _ = _build()
+    readings = iter([T0])  # the request time; every later reading is two hours on
+    client.app.state.divesafe.clock = lambda: next(readings, T0 + timedelta(hours=2))  # type: ignore[attr-defined]
+    record = _create(client)["record"]
+    assert any(r["rule_id"] == "assessment.window_started" for r in record["rule_results"])
+    assert record["final_recommendation"] == "INSUFFICIENT EVIDENCE"

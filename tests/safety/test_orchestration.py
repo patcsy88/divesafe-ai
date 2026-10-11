@@ -25,7 +25,9 @@ from divesafe.domain import (
     DivePlan,
     EvidenceItem,
     Recommendation,
+    RiskFactorKind,
     RuleResult,
+    ThresholdStatus,
 )
 from divesafe.orchestration import (
     AlreadyDecidedError,
@@ -381,3 +383,100 @@ def test_a_better_result_at_the_later_time_is_never_taken() -> None:
     record = _run(engine=engine, clock=lambda: NOW + timedelta(minutes=1))
     assert record.deterministic_recommendation is R.NO_GO
     assert record.final_recommendation is R.NO_GO
+
+
+# --- re-judging after a slow stage keeps every problem ----------------------------------------
+
+
+class _ExpiringGoRule(_GoRule):
+    rule_id = "synthetic.expiring"
+
+    def __init__(self, expires_at: datetime) -> None:
+        self.expires_at = expires_at
+
+
+def _timed_engine(rule: Any) -> RiskRulesEngine:
+    return RiskRulesEngine(
+        [rule],
+        EvidencePolicy(LIVE, timedelta(hours=1), degraded_may_support_go=True),  # synthetic
+        "synthetic",
+        required_factors=frozenset(),
+    )
+
+
+def test_a_started_window_is_recorded_even_when_the_first_result_was_already_blocking() -> None:
+    record = _run(
+        marine=ConnectorTransportError("down"), clock=lambda: START + timedelta(minutes=1)
+    )
+    assert record.deterministic_recommendation is R.INSUFFICIENT_EVIDENCE
+    assert any(r.rule_id == "assessment.window_started" for r in record.rule_results)
+    assert any(r.rule_id == "evidence.connector_issues" for r in record.rule_results)
+
+
+def test_a_dive_starting_exactly_at_completion_counts_as_started() -> None:
+    record = _run(clock=lambda: START)
+    assert any(r.rule_id == "assessment.window_started" for r in record.rule_results)
+    assert record.final_recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_only_the_started_window_makes_a_fresh_result_worse() -> None:
+    before = _run(clock=lambda: START - timedelta(seconds=1))
+    assert before.final_recommendation is R.GO  # nothing changed: still fresh, not started
+    assert not any(r.rule_id == "assessment.window_started" for r in before.rule_results)
+    after = _run(clock=lambda: START + timedelta(minutes=1))
+    assert after.final_recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_rule_that_expires_during_the_stage_is_recorded_and_its_factor_is_unevaluated() -> None:
+    expires = NOW + timedelta(minutes=5)
+    engine = _timed_engine(_ExpiringGoRule(expires))
+    on_time = _run(engine=engine)
+    assert on_time.final_recommendation is R.GO
+    later = _run(engine=engine, clock=lambda: expires + timedelta(seconds=1))
+    assert later.final_recommendation is R.INSUFFICIENT_EVIDENCE
+    assert any(r.rule_id.startswith("rule.expired.") for r in later.rule_results)
+
+
+def test_the_earlier_results_are_kept_and_the_connector_issue_appears_once() -> None:
+    record = _run(marine=ConnectorTransportError("down"), clock=lambda: NOW + timedelta(minutes=1))
+    ids = [r.rule_id for r in record.rule_results]
+    assert ids.count("evidence.connector_issues") == 1
+    assert len(ids) == len(set(ids))
+
+
+def test_a_changed_result_after_the_stage_is_noted_for_the_agent_output() -> None:
+    record = _run(clock=lambda: START + timedelta(minutes=1))
+    assert any("re-judged" in i for i in record.agent_issues)
+    unchanged = _run(clock=lambda: NOW + timedelta(seconds=1))
+    assert not any("re-judged" in i for i in unchanged.agent_issues)
+
+
+def test_a_provider_without_a_clock_is_refused() -> None:
+    from divesafe.models import FakeProvider
+
+    with pytest.raises(ValueError, match="clock"):
+        _run(provider=FakeProvider(reply="{}"))
+
+
+def test_a_factor_whose_rule_expires_during_the_stage_becomes_unevaluated() -> None:
+    expires = NOW + timedelta(minutes=5)
+
+    class _Covering(_ExpiringGoRule):
+        def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
+            return RuleResult(
+                rule_id=self.rule_id,
+                outcome=R.GO,
+                rationale="synthetic",
+                factor=RiskFactorKind.WAVE_HEIGHT,
+                threshold_status=ThresholdStatus.VALIDATED,
+            )
+
+    engine = RiskRulesEngine(
+        [_Covering(expires)],
+        EvidencePolicy(LIVE, timedelta(hours=1), degraded_may_support_go=True),  # synthetic
+        "synthetic",
+        required_factors=frozenset({RiskFactorKind.WAVE_HEIGHT}),
+    )
+    assert _run(engine=engine).unevaluated_factors == ()
+    later = _run(engine=engine, clock=lambda: expires + timedelta(seconds=1))
+    assert later.unevaluated_factors == (RiskFactorKind.WAVE_HEIGHT,)

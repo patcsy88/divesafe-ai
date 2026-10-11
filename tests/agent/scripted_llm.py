@@ -155,6 +155,7 @@ def run_pipeline(
             engine=risk_engine or engine(with_warning_rule=with_warning_rule),
             now=NOW,
             provider=provider,
+            clock=lambda: NOW,
             **extra,
         )
     )

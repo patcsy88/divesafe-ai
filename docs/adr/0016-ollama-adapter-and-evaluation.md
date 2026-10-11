@@ -76,10 +76,12 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   connectors need. The worker deadline is the call budget minus the first-byte timeout minus 1 s,
   because the deadline is checked between reads and one read or the connect can take a further
   first-byte timeout; the thread therefore ends before the agent's own timeout does.
-- **A slow stage cannot leave a stale result.** After the stage the pipeline reads the clock again
-  and judges the same evidence at that later time. It adds an `assessment.window_started` rule if
-  the planned start has passed, keeps the connector-issue rule, and takes the new result only if it
-  is more severe. The record's `created_at` is the later time. The result can only get worse.
+- **A slow stage cannot leave a stale result.** A provider requires a clock. After the stage the
+  pipeline reads it again and judges the same evidence at that later time. Every earlier rule
+  result is kept and every new one is added (stale evidence, an expired rule, newly unevaluated
+  factors), plus `assessment.window_started` if the planned start is at or before that time. The
+  result can only get worse, a change is noted in `agent_issues` (the agent output reflects the
+  earlier result), and `created_at` is the later time.
 - **Intended use:** a slow single-GPU server, for example 1 call at a time, 90 s to the first byte,
   200 s per call and 900 s per stage.
 
