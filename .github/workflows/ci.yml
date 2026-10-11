@@ -11,7 +11,7 @@ permissions:
 jobs:
   test:
     name: test (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -34,8 +34,8 @@ jobs:
     env:
       DIVESAFE_TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:5432/divesafe_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -51,14 +51,14 @@ jobs:
         run: "! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log"
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
