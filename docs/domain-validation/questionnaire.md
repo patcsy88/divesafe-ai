@@ -172,7 +172,7 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** Only MET Malaysia marine and weather warnings, as free text that can cover several sea areas in one notice. A daily text forecast service exists and is a candidate source, but it is **not connected**. There is no hourly weather data.
+**Data we hold:** Only MET Malaysia marine and weather warnings, as free text that can cover several sea areas in one notice. A daily text forecast for the island (rain, thunderstorm, haze wording and daily min/max temperature, no wind or waves) is connected as context only; it cannot support any limit. There is no hourly weather data.
 
 **Questions:**
 

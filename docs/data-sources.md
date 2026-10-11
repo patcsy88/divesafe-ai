@@ -42,7 +42,7 @@ reachable but not yet approved or implemented. Nothing here has been called from
 | Category | Provider | Official? | Access / licence | Update cadence | Resolution | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | `marine_warnings`, `weather` (warnings) | data.gov.my Weather API (`api.data.gov.my/weather/warning`), data from MET Malaysia | Yes (Government of Malaysia) | Keyless. Rate limit 4 requests/min. Terms of Use page not retrievable, so licence is unverified. | Warnings "when required" | Per warning (text) | **Implemented** (`divesafe.data.data_gov_my_warnings`) |
-| `weather` (general) | data.gov.my Weather API (`/weather/forecast`) | Yes (MET Malaysia) | As above | Daily | State, district, town, division and "recreation centre" locations | Candidate, low value (daily text summary, Malay values) |
+| `weather` (general) | data.gov.my Weather API (`/weather/forecast`) | Yes (MET Malaysia) | As above | Daily | State, district, town, division and "recreation centre" locations | **Implemented** (`divesafe.data.data_gov_my_forecast`); island-level, no marine values, not required by any policy |
 | `waves_swell`, `sea_temperature`, `currents` (not `tides`) | Open-Meteo Marine API (`marine-api.open-meteo.com/v1/marine`), built on DWD, MeteoFrance, ECMWF and NCEP wave/ocean models | No (aggregator of agency model output) | Keyless for **non-commercial use only**; CC BY 4.0 with required attribution to DWD and Open-Meteo; under 10,000 calls/day, 5,000/hour, 600/min | Models update every 6-24 h | About 8-25 km grid; hourly | **Implemented** (`divesafe.data.open_meteo_marine`); regional model output only, never site-level or observed |
 | `tides` (official) | JUPEM tide predictions (Peninsular Malaysia, 12 locations; printed tables and the STAPS mobile app) | Yes | No API found; printed volume is paid | Annual tables | Station | **Gap**: no machine-readable source verified |
 | `wind` | Open-Meteo Forecast API (`api.open-meteo.com/v1/forecast`), hourly `wind_speed_10m`, `wind_gusts_10m`, `wind_direction_10m` from the provider's automatically selected national weather model | No (aggregator of agency model output) | Keyless for **non-commercial use only**; CC BY 4.0; link "Weather data by Open-Meteo.com" required next to displayed data; under 10,000 calls/day | Model-dependent (3-hourly to 6-hourly runs) | Model-dependent (docs: 1 to 55 km) | **Implemented** (`divesafe.data.open_meteo_wind`); model forecast, never site-level or observed |
@@ -316,10 +316,28 @@ has no built-in default and must be chosen per category with a documented reason
 
 ### Not yet done (connectors)
 
+- **Known gaps from the forecast connector review (2026-10-11):**
+  - No single-flight: concurrent assessments all miss the cache before the first call returns, so
+    a burst can use the 4-a-minute data.gov.my budget and make the warnings call fail. That ends as
+    `INSUFFICIENT EVIDENCE` (safe), but one user could do it to everyone. The forecast is capped at
+    1 of the 4 calls, which helps only partly.
+  - The warnings request's `timestamp_start` is the window start minus 30 days to the second, so it
+    is almost never a cache hit. Rounding it down to the day would allow caching.
+  - The weather specialist can receive warnings, wind and forecast items together; the agent cap is
+    120 items (`agents/runner.py`). A dive window of up to 24 hours adds at most 2 forecast items. If
+    the cap is exceeded the specialist's finding is dropped (an `AgentError`, recorded as an agent
+    issue), not the assessment.
+  - Forecast freshness is judged from our retrieval time, not the provider's issue time, and the
+    `date` is read as a UTC+8 day without the both-zones hedge the warnings use. Harmless while
+    `weather` is not a required category; fix both before it ever is.
+  - The data.gov.my licence and attribution are unverified, and no attribution is emitted for
+    either data.gov.my connector.
+
 - **Rate limiting and caching (done, per process):** `CachingRateLimitedGetter` caches for 60 s
-  and enforces a per-host minimum interval (15 s for data.gov.my, 0.5 s for Open-Meteo). A
-  blocked call fails closed. The daily Open-Meteo quota (10,000) is not tracked, and limits are
-  not shared across workers.
+  and enforces a per-host minimum interval (0.5 s for Open-Meteo) and call budgets: 4 a minute for
+  data.gov.my (of which the forecast may use 1, so it cannot starve the warnings), and Open-Meteo's
+  600 a minute, 5,000 an hour and 10,000 a day. A blocked call fails closed. Limits are per process
+  and not shared across workers.
 - **Attribution display (API done):** every assessment response includes `attributions`; any UI
   must show them.
 - **data.gov.my licence** is still unverified (Terms of Use page not retrievable).

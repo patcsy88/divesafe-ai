@@ -99,5 +99,5 @@ class UrllibJsonGetter:
             raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
         try:
             return json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
             raise ConnectorResponseError(f"{_label(url)} did not return valid JSON") from exc

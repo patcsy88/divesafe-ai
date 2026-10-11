@@ -16,7 +16,8 @@ Facts and limits:
   quality note says so; it is never guessed.
 - `date` is a calendar day. It is read as a Malaysia-time (UTC+8) day, which is an inference, as
   the docs do not state a timezone.
-- The text is untrusted input (see `untrusted_text`).
+- The text is untrusted input. `untrusted_text` is a label for readers; the protection is that the
+  prompt layer puts the whole `value` of this category inside the untrusted block.
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ MET_FORECAST = "met-malaysia:general-forecast"
 MALAYSIA_TIME = timezone(timedelta(hours=8), "MYT")
 PAGE_LIMIT = 100
 MAX_PHRASE = 200
+MAX_DAYS = 8
+# Data-sanity bounds for a daily air temperature in Celsius. Not a safety limit.
+TEMP_RANGE = (-10, 60)
 
 # site id -> (location_id, location_name) in the Weather API.
 FORECAST_LOCATIONS: dict[str, tuple[str, str]] = {
@@ -100,6 +104,8 @@ def _phrase(value: object, label: str) -> str:
 def _temperature(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConnectorResponseError(f"{label} is not a whole number")
+    if not TEMP_RANGE[0] <= value <= TEMP_RANGE[1]:
+        raise ConnectorResponseError(f"{label} is outside the plausible range")
     return value
 
 
@@ -160,6 +166,8 @@ class DataGovMyForecastConnector:
 
         first = window_start.astimezone(MALAYSIA_TIME).date()
         last = (window_end.astimezone(MALAYSIA_TIME) - timedelta(microseconds=1)).date()
+        if (last - first).days >= MAX_DAYS:
+            raise ConnectorResponseError("the window is longer than the forecast can cover")
         needed = [first + timedelta(days=n) for n in range((last - first).days + 1)]
         missing = [d for d in needed if d not in by_day]
         if missing:

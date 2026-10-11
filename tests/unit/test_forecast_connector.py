@@ -162,3 +162,18 @@ def test_a_site_without_a_registered_location_is_refused_before_any_request() ->
 def test_a_reversed_window_is_a_programming_error() -> None:
     with pytest.raises(ValueError, match="window_end"):
         _run(start=END, end=START)
+
+
+@pytest.mark.parametrize("bad", [10**400, -999, 61, -11, True])
+def test_an_implausible_temperature_is_rejected(bad: Any) -> None:
+    rows = copy.deepcopy(FIXTURE)
+    for row in rows:
+        if row["date"] == "2026-10-12":
+            row["max_temp"] = bad
+    with pytest.raises(ConnectorResponseError):
+        _run(rows)
+
+
+def test_a_window_longer_than_the_forecast_can_cover_is_rejected() -> None:
+    with pytest.raises(ConnectorResponseError, match="longer than"):
+        _run(start=START, end=START.replace(day=25))

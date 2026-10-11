@@ -38,6 +38,7 @@ class QuotaGroup:
     name: str
     hosts: frozenset[str]
     limits: tuple[tuple[float, int], ...]
+    path_prefix: str = ""
 
 
 OPEN_METEO_QUOTA = QuotaGroup(
@@ -52,7 +53,18 @@ DATA_GOV_MY_QUOTA = QuotaGroup(
     hosts=frozenset({"api.data.gov.my"}),
     limits=((60.0, 4),),
 )
-DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (OPEN_METEO_QUOTA, DATA_GOV_MY_QUOTA)
+# The optional forecast may use at most one of those four, so it cannot starve the warnings feed.
+DATA_GOV_MY_FORECAST_QUOTA = QuotaGroup(
+    name="data-gov-my-forecast",
+    hosts=frozenset({"api.data.gov.my"}),
+    limits=((60.0, 1),),
+    path_prefix="/weather/forecast",
+)
+DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (
+    OPEN_METEO_QUOTA,
+    DATA_GOV_MY_QUOTA,
+    DATA_GOV_MY_FORECAST_QUOTA,
+)
 
 
 class CachingRateLimitedGetter:
@@ -85,7 +97,7 @@ class CachingRateLimitedGetter:
         last = self._last_call.get(host)
         if last is not None and now - last < self._min.get(host, 0.0):
             raise ConnectorTransportError(f"local rate limit for {host}; try again shortly")
-        self._reserve_quota(host, now)
+        self._reserve_quota(host, urllib.parse.urlsplit(url).path, now)
         self._last_call[host] = now
 
         payload = await self._inner.get_json(url, params)
@@ -94,10 +106,10 @@ class CachingRateLimitedGetter:
         self._cache[key] = (now, copy.deepcopy(payload))
         return payload
 
-    def _reserve_quota(self, host: str, now: float) -> None:
-        for group in self._quotas:
-            if host not in group.hosts:
-                continue
+    def _reserve_quota(self, host: str, path: str, now: float) -> None:
+        applicable = [g for g in self._quotas if host in g.hosts and path.startswith(g.path_prefix)]
+        # Check every group before spending from any, so a refusal costs nothing anywhere.
+        for group in applicable:
             spent = self._spent[group.name]
             longest = max(window for window, _ in group.limits)
             while spent and now - spent[0] > longest:
@@ -108,4 +120,5 @@ class CachingRateLimitedGetter:
                     raise ConnectorTransportError(
                         f"local call budget for {group.name} is used up; try again later"
                     )
-            spent.append(now)
+        for group in applicable:
+            self._spent[group.name].append(now)

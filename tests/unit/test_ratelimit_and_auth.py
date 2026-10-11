@@ -245,20 +245,60 @@ def test_a_blocked_call_never_reaches_the_provider() -> None:
     assert inner.calls == 1
 
 
-def test_data_gov_my_allows_four_calls_a_minute_across_endpoints_and_then_refuses() -> None:
+def test_data_gov_my_allows_four_calls_a_minute_and_then_refuses() -> None:
     from divesafe.data.ratelimit import DEFAULT_MIN_INTERVAL_SECONDS
 
     inner, clock = _Inner(), _Clock()
     g = CachingRateLimitedGetter(
         inner, clock=clock, min_interval_seconds=DEFAULT_MIN_INTERVAL_SECONDS
     )
-    urls = ["https://api.data.gov.my/weather/forecast/", "https://api.data.gov.my/weather/warning/"]
+    warning = "https://api.data.gov.my/weather/warning/"
     for i in range(4):
-        _get(g, urls[i % 2], n=str(i))
+        _get(g, warning, n=str(i))
     assert inner.calls == 4
     with pytest.raises(ConnectorTransportError, match="budget"):
-        _get(g, urls[0], n="99")
+        _get(g, warning, n="99")
     assert inner.calls == 4
     clock.t += 61
-    _get(g, urls[0], n="100")
+    _get(g, warning, n="100")
     assert inner.calls == 5
+
+
+def test_the_forecast_cannot_use_more_than_one_of_the_four_data_gov_my_calls() -> None:
+    from divesafe.data.ratelimit import DEFAULT_MIN_INTERVAL_SECONDS
+
+    inner, clock = _Inner(), _Clock()
+    g = CachingRateLimitedGetter(
+        inner, clock=clock, min_interval_seconds=DEFAULT_MIN_INTERVAL_SECONDS
+    )
+    forecast, warning = (
+        "https://api.data.gov.my/weather/forecast/",
+        "https://api.data.gov.my/weather/warning/",
+    )
+    _get(g, forecast, n="1")
+    with pytest.raises(ConnectorTransportError, match="data-gov-my-forecast"):
+        _get(g, forecast, n="2")
+    for i in range(3):
+        _get(g, warning, n=str(i))
+    assert inner.calls == 4
+    with pytest.raises(ConnectorTransportError):
+        _get(g, warning, n="9")
+
+
+def test_a_refused_forecast_call_does_not_spend_the_shared_budget() -> None:
+    from divesafe.data.ratelimit import DEFAULT_MIN_INTERVAL_SECONDS
+
+    inner, clock = _Inner(), _Clock()
+    g = CachingRateLimitedGetter(
+        inner, clock=clock, min_interval_seconds=DEFAULT_MIN_INTERVAL_SECONDS
+    )
+    forecast, warning = (
+        "https://api.data.gov.my/weather/forecast/",
+        "https://api.data.gov.my/weather/warning/",
+    )
+    _get(g, forecast, n="1")
+    for i in range(5):
+        with pytest.raises(ConnectorTransportError):
+            _get(g, forecast, n=f"x{i}")
+    for i in range(3):
+        _get(g, warning, n=str(i))

@@ -48,3 +48,32 @@ def test_oversized_response_is_refused() -> None:
     with pytest.raises(ConnectorResponseError):
         read_limited(io.BytesIO(b"x" * 101), 100)
     assert read_limited(io.BytesIO(b"x" * 100), 100) == b"x" * 100
+
+
+class _Response(io.BytesIO):
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[" * 200_000,  # RecursionError on some Python versions, ValueError-family on others
+        b"1" * 5_000,  # an integer longer than the interpreter's digit limit: ValueError
+        b"\xff\xfe not json",
+        b"{not json",
+    ],
+)
+def test_a_body_that_cannot_be_parsed_is_a_response_error_never_another_exception(
+    body: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Opener:
+        def open(self, request: object, timeout: float) -> _Response:
+            return _Response(body)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: _Opener())
+    with pytest.raises(ConnectorResponseError):
+        asyncio.run(UrllibJsonGetter().get_json("https://api.data.gov.my/weather/forecast/", {}))
