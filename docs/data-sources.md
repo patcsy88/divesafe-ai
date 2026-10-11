@@ -215,6 +215,15 @@ evidence category and timing questions only.
 results across users, then register a key (kept in the environment, never in the repository);
 (c) decide whether tide height alone, without tidal streams, is worth connecting.
 
+**JUPEM check (2026-10-11, incomplete).** A search shows JUPEM's STAPS page and app (a table of
+tide forecasts for Malaysian stations, seven days free, per the Play Store listing) and a JUPEM
+product page listing paid tidal data (MYR 5.00 per month per station) and printed tables. The
+search snippet for the station list shows Pulau Tioman among the stations. From my tools
+`jupem.gov.my` returned transport errors on every page, so I could not read the terms or look for
+a documented machine-readable feed. The app's reviews say it often shows no data. Treat as
+**unverified**: no API, no licence for automated reuse. Next step is a written request to JUPEM
+(owner), or manual attributed entry of published values. Do not scrape.
+
 **Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
 credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
 requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
