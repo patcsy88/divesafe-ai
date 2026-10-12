@@ -71,6 +71,18 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   the first-byte timeout plus 1 s. The adapter exposes `call_timeout_seconds` and
   `stage_timeout_seconds`; the agent runner reads them and caps them at its own ceilings (a missing,
   non-numeric, boolean, non-finite or non-positive value falls back to the default).
+- **Output-token cap is a setting.** `DIVESAFE_LLM_MAX_OUTPUT_TOKENS` (1500, 256 to 8000). Both
+  adapters expose `max_output_tokens`; the runner reads it and caps it at 8000 (a non-integer,
+  boolean or non-positive value falls back to 1500). A reasoning model thinks inside this budget:
+  `gpt-oss-20b` on llama.cpp stopped at `length` on scenario calls at 1500. Raising it relaxes no
+  acceptance rule: a `length` stop is still refused, the schema limits and the 20,000-character
+  output limit are unchanged, and a longer reply is refused, never trimmed. A larger cap needs
+  larger call and stage time budgets, or calls end as timeouts instead. The 1 MiB response limit
+  also applies: a streamed reply costs roughly 100 to 250 bytes per token, so on an
+  OpenAI-compatible server about 4000 to 5000 tokens can already exceed it (an estimate, not
+  measured), and the reply is refused. On a hosted endpoint a larger cap raises billable output
+  per call. The constructors accept 1 or more; `Settings` requires 256. With Ollama a large cap
+  against a small `num_ctx` may shift the context; this is not checked.
 - **Threads.** Model calls run on a pool owned by the provider (one worker per allowed concurrent
   call) and queue there, so a line of slow calls cannot use up the default threads the data
   connectors need. The worker deadline is the call budget minus the first-byte timeout minus 1 s,

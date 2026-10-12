@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from divesafe.config.settings import Settings
 
@@ -27,7 +27,7 @@ class LLMRequest(BaseModel):
 
     messages: tuple[ChatMessage, ...]
     temperature: float = 0.0
-    max_output_tokens: int | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=8000)
     json_schema: dict[str, object] | None = None
 
 

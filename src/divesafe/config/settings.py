@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     llm_stage_timeout_seconds: float = Field(default=150.0, gt=0, le=1800, allow_inf_nan=False)
     llm_first_byte_timeout_seconds: float = Field(default=15.0, gt=0, le=300, allow_inf_nan=False)
     llm_max_concurrent_calls: int = Field(default=4, ge=1, le=8)
+    # Output tokens per call. A reasoning model spends part of it thinking, so it may need more.
+    llm_max_output_tokens: int = Field(default=1500, ge=256, le=8000)
 
     # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
     # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.

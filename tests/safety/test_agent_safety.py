@@ -438,3 +438,18 @@ def test_provider_registration_cannot_overwrite_an_existing_adapter() -> None:
 
     with pytest.raises(ValueError, match="already registered"):
         register_provider("fake", lambda s: FakeProvider())
+
+
+def test_an_over_long_reply_is_refused_not_trimmed() -> None:
+    import asyncio
+
+    from divesafe.agents import runner
+    from divesafe.agents.runner import AgentError, call_structured
+
+    provider = FakeProvider(lambda request: "x" * (runner.MAX_OUTPUT_CHARS + 1))
+    with pytest.raises(AgentError, match="too long"):
+        asyncio.run(
+            call_structured(
+                provider, task="t", user_message="x", output=Finding, allowed_ids=frozenset()
+            )
+        )

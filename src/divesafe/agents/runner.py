@@ -19,6 +19,7 @@ from divesafe.models import ChatMessage, LLMProvider, LLMRequest
 
 CALL_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 1500
+MAX_OUTPUT_TOKENS_CEILING = 8000
 MAX_OUTPUT_CHARS = 20_000
 MAX_EVIDENCE_ITEMS = 120
 MAX_PROMPT_CHARS = 200_000
@@ -55,6 +56,16 @@ def stage_timeout(provider: object) -> float:
     )
 
 
+def output_tokens(provider: object) -> int:
+    """The output-token cap for one call. A reasoning model spends part of it thinking, so a
+    provider may declare a larger one; anything that is not a whole number in range is ignored
+    and a value above the ceiling is capped."""
+    value = getattr(provider, "max_output_tokens", None)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return MAX_OUTPUT_TOKENS
+    return min(value, MAX_OUTPUT_TOKENS_CEILING)
+
+
 _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
 T = TypeVar("T", bound=BaseModel)
@@ -87,7 +98,7 @@ async def call_structured(
             ChatMessage(role="user", content=user_message),
         ),
         temperature=0.0,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
+        max_output_tokens=output_tokens(provider),
         json_schema=output.model_json_schema(),
     )
     try:

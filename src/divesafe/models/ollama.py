@@ -146,6 +146,16 @@ MAX_FIRST_BYTE_TIMEOUT_SECONDS = 300.0
 MAX_CONCURRENT_CEILING = 8
 
 
+MAX_OUTPUT_TOKENS_CEILING = 8000
+
+
+def check_output_tokens(tokens: int) -> None:
+    if isinstance(tokens, bool) or not isinstance(tokens, int):
+        raise ValueError("the LLM output-token cap must be a whole number")
+    if not 1 <= tokens <= MAX_OUTPUT_TOKENS_CEILING:
+        raise ValueError("the LLM output-token cap is out of range")
+
+
 def check_budgets(call: float, stage: float, first_byte: float, concurrent: int) -> None:
     numbers = (call, stage, first_byte)
     if any(isinstance(n, bool) or not isinstance(n, int | float) for n in numbers):
@@ -182,6 +192,7 @@ class OllamaProvider:
         stage_timeout_seconds: float = 150.0,
         first_byte_timeout_seconds: float = SOCKET_TIMEOUT_SECONDS,
         max_concurrent_calls: int = MAX_CONCURRENT_CALLS,
+        max_output_tokens: int = 1500,
     ) -> None:
         if not model.strip():
             raise ValueError("an Ollama model name is required (DIVESAFE_LLM_MODEL)")
@@ -213,6 +224,8 @@ class OllamaProvider:
             first_byte_timeout_seconds,
             max_concurrent_calls,
         )
+        check_output_tokens(max_output_tokens)
+        self.max_output_tokens = max_output_tokens
         self.call_timeout_seconds = call_timeout_seconds
         self.stage_timeout_seconds = stage_timeout_seconds
         # The deadline is checked between reads, and one read or the connect can take a further
@@ -263,6 +276,7 @@ def _factory(settings: Settings) -> OllamaProvider:
         stage_timeout_seconds=settings.llm_stage_timeout_seconds,
         first_byte_timeout_seconds=settings.llm_first_byte_timeout_seconds,
         max_concurrent_calls=settings.llm_max_concurrent_calls,
+        max_output_tokens=settings.llm_max_output_tokens,
     )
 
 

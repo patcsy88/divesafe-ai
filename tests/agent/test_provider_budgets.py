@@ -52,3 +52,69 @@ def test_an_absurd_declared_budget_is_capped_not_trusted() -> None:
         stage_timeout(_Slow(0, stage_timeout_seconds=1e9)) == runner.STAGE_TIMEOUT_CEILING_SECONDS
     )
     assert call_timeout(_Slow(0, call_timeout_seconds=10**400)) == runner.CALL_TIMEOUT_SECONDS
+
+
+def test_the_output_token_cap_defaults_and_ignores_nonsense() -> None:
+    from divesafe.agents.runner import output_tokens
+
+    assert output_tokens(_Slow(0)) == runner.MAX_OUTPUT_TOKENS
+    for bad in (None, 0, -1, True, 1.5, "4000", float("nan")):
+        assert output_tokens(_Slow(0, max_output_tokens=bad)) == runner.MAX_OUTPUT_TOKENS
+
+
+def test_a_declared_output_cap_is_used_and_capped_at_the_ceiling() -> None:
+    from divesafe.agents.runner import output_tokens
+
+    assert output_tokens(_Slow(0, max_output_tokens=4000)) == 4000
+    assert output_tokens(_Slow(0, max_output_tokens=10**9)) == runner.MAX_OUTPUT_TOKENS_CEILING
+
+
+def test_the_request_carries_the_providers_output_cap() -> None:
+    seen: list[int | None] = []
+
+    class _Spy(_Slow):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            seen.append(request.max_output_tokens)
+            return await super().complete(request)
+
+    kwargs = dict(task="t", user_message="x", output=Finding, allowed_ids=frozenset())
+    for provider in (_Spy(0), _Spy(0, max_output_tokens=4000)):
+        with pytest.raises(AgentError):
+            asyncio.run(call_structured(provider, **kwargs))  # type: ignore[arg-type]
+    assert seen == [runner.MAX_OUTPUT_TOKENS, 4000]
+
+
+def test_the_output_cap_boundaries_and_ceilings_agree() -> None:
+    from divesafe.agents.runner import output_tokens
+    from divesafe.config.settings import Settings
+    from divesafe.models import ollama
+    from divesafe.models.ollama import OllamaProvider
+    from divesafe.models.openai_compatible import OpenAICompatibleProvider
+
+    assert runner.MAX_OUTPUT_TOKENS_CEILING == ollama.MAX_OUTPUT_TOKENS_CEILING == 8000
+    assert Settings(_env_file=None).llm_max_output_tokens == runner.MAX_OUTPUT_TOKENS
+    for ok in (256, 8000):
+        assert Settings(_env_file=None, llm_max_output_tokens=ok).llm_max_output_tokens == ok
+    for ok in (1, 8000):
+        assert output_tokens(_Slow(0, max_output_tokens=ok)) == ok
+        assert OllamaProvider("m", "http://localhost:11434", max_output_tokens=ok)
+        assert OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=ok)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), 1500.0, 10**9, "1500", None, True])
+def test_both_constructors_refuse_a_bad_output_cap(bad: object) -> None:
+    from divesafe.models.ollama import OllamaProvider
+    from divesafe.models.openai_compatible import OpenAICompatibleProvider
+
+    with pytest.raises(ValueError):
+        OllamaProvider("m", "http://localhost:11434", max_output_tokens=bad)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=bad)  # type: ignore[arg-type]
+
+
+def test_a_request_bounds_its_output_tokens() -> None:
+    from pydantic import ValidationError
+
+    for bad in (0, -1, 8001):
+        with pytest.raises(ValidationError):
+            LLMRequest(messages=(), max_output_tokens=bad)

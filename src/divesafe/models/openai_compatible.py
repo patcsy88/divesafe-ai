@@ -38,6 +38,7 @@ from divesafe.models.ollama import (
     MAX_STREAM_LINES,
     SOCKET_TIMEOUT_SECONDS,
     check_budgets,
+    check_output_tokens,
     is_loopback,
 )
 
@@ -206,6 +207,7 @@ class OpenAICompatibleProvider:
         stage_timeout_seconds: float = 150.0,
         first_byte_timeout_seconds: float = SOCKET_TIMEOUT_SECONDS,
         max_concurrent_calls: int = 4,
+        max_output_tokens: int = 1500,
     ) -> None:
         if not model.strip():
             raise ValueError("a model name is required (DIVESAFE_LLM_MODEL)")
@@ -240,6 +242,8 @@ class OpenAICompatibleProvider:
             first_byte_timeout_seconds,
             max_concurrent_calls,
         )
+        check_output_tokens(max_output_tokens)
+        self.max_output_tokens = max_output_tokens
         self.call_timeout_seconds = call_timeout_seconds
         self.stage_timeout_seconds = stage_timeout_seconds
         # The deadline is checked between reads; one read or the connect can take a further
@@ -295,6 +299,7 @@ def _factory(settings: Settings) -> OpenAICompatibleProvider:
         stage_timeout_seconds=settings.llm_stage_timeout_seconds,
         first_byte_timeout_seconds=settings.llm_first_byte_timeout_seconds,
         max_concurrent_calls=settings.llm_max_concurrent_calls,
+        max_output_tokens=settings.llm_max_output_tokens,
     )
 
 

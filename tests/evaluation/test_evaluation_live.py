@@ -60,6 +60,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
         llm_stage_timeout_seconds=env("DIVESAFE_EVAL_STAGE_TIMEOUT", "150"),  # type: ignore[arg-type]
         llm_first_byte_timeout_seconds=env("DIVESAFE_EVAL_FIRST_BYTE", "15"),  # type: ignore[arg-type]
         llm_max_concurrent_calls=env("DIVESAFE_EVAL_CONCURRENCY", "4"),  # type: ignore[arg-type]
+        llm_max_output_tokens=env("DIVESAFE_EVAL_MAX_OUTPUT_TOKENS", "1500"),  # type: ignore[arg-type]
         ollama_plain_http_hosts=env("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS"),
         llm_allowed_hosts=env("DIVESAFE_EVAL_ALLOWED_HOSTS"),
     )
@@ -68,6 +69,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
         "stage_timeout_seconds": budgets.llm_stage_timeout_seconds,
         "first_byte_timeout_seconds": budgets.llm_first_byte_timeout_seconds,
         "max_concurrent_calls": budgets.llm_max_concurrent_calls,
+        "max_output_tokens": budgets.llm_max_output_tokens,
     }
     if PROVIDER == "ollama":
         base = env("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
