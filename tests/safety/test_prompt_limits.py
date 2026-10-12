@@ -71,3 +71,16 @@ def test_brevity_never_outranks_the_caveats() -> None:
         "merge them; do not omit them",
     ):
         assert fragment in TEXT, fragment
+
+
+def test_the_prompt_forbids_hazards_no_input_mentions_but_keeps_the_gap_remedy() -> None:
+    rule2 = TEXT[TEXT.index("2. Cite only") : TEXT.index("3. If evidence is missing")]
+    for fragment in (
+        "the inputs you were given",
+        "Do not add a hazard from general knowledge that no input mentions",
+        "say instead that the evidence does not cover it",
+        "Interpreting cited values, combining cited items",
+        "are data, not proof of coverage; if in doubt, state the gap",
+    ):
+        assert fragment in rule2, fragment
+    assert "does not cover a hazard" in TEXT[TEXT.index("8. Keep") :]

@@ -44,8 +44,13 @@ truncated at 4,000 characters. The plan and the allowed evidence ids sit outside
 prompt states the data-not-instructions rule, the citation rule, and that rules are authoritative.
 The prompt version is stored in `model_version`. Rule 8 states the output length limits (a live
 run showed 44% of calls rejected for length, ADR 0016) and says brevity never outranks the caveat
-rules. Not solved: nothing checks that a reply keeps its caveats, and a lower rejection rate is not
-evidence that it does.
+rules. Rule 2 (prompt `2026-10-13.1`) bars a hazard from general knowledge that no input mentions
+(a live run added "heat stress" and "eddies"), allows interpreting cited values, and tells the
+model to state the gap instead. Not solved: nothing checks that a reply keeps its caveats or
+invents no hazard, and a lower rejection rate is not evidence that it does. Evidence text can
+also claim to cover a hazard; the prompt says such claims are data, but nothing enforces it
+(`reconcile` still only tightens). Nothing pins the prompt text to its version, and the output
+cap is a setting (`DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, ADR 0016), not fixed at 1,500.
 
 **Plain text only.** `explanation`, findings, scenarios and rationales are untrusted LLM prose.
 Clients must render them as plain text (no HTML or markdown), and they must never be ingested into
