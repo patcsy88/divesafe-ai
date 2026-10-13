@@ -1,6 +1,6 @@
 # ADR 0019: Asynchronous assessment creation
 
-Status: proposed (for the user to decide; nothing is built)
+Status: accepted by the user on 2026-10-14 (option 3); not yet reviewed by the security-reviewer and risk-reviewer, and nothing is built
 
 ## Context
 
@@ -50,14 +50,18 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 - The web UI polls with a back-off up to a limit, shows "running" and "failed" plainly, and still
   holds no risk logic.
 
-## Open questions for the user
+## Decisions
 
-1. Option 2 or 3?
-2. How long is a `RUNNING` row kept before it counts as `FAILED` (suggest the overall deadline plus
-   a margin)?
-3. How long are `FAILED` rows kept?
-4. What cap on runs in flight per server?
-5. Should the existing synchronous behaviour stay as an option (`Prefer: wait`) for scripts?
+1. **Option 3**: pending state is stored.
+2. **A `RUNNING` row counts as `FAILED`** after the overall deadline plus a margin. The lease is a
+   setting derived from the stage timeout, not a number in code.
+3. **`FAILED` rows are kept 7 days**, then deleted (`DIVESAFE_FAILED_RUN_RETENTION_DAYS`). Cleanup
+   runs at startup and periodically and touches only `FAILED` rows. Completed assessment records
+   are never deleted by it.
+4. **At most 4 runs in flight per server** (`DIVESAFE_MAX_RUNS_IN_FLIGHT`), counted from the stored
+   `RUNNING` rows so the cap holds across workers. The count and the insert happen in one
+   transaction. Beyond the cap, `POST` returns `429` with `Retry-After`; runs are not queued.
+5. **The synchronous mode is dropped.** There is one path. Scripts poll the `Location` URL.
 
 ## Not solved
 
