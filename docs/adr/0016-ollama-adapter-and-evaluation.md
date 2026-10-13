@@ -99,7 +99,21 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 
 ## Not solved
 
-- No live run has been made: real-model behaviour is still unmeasured. No model is recommended.
+- Live runs so far (synthetic cases, 7 per run, one run each unless stated; no model is
+  recommended, and none of this shows a model is safe):
+  - `qwen3.5:9b` through Ollama: 7 of 7 usable proposals.
+  - `claude-haiku-4-5` through a local proxy (OpenAI-compatible): 7 of 7, but 25% to 44% of calls
+    were refused for length across prompt versions. The model ignores stated character limits.
+  - `gpt-oss-20b` on llama.cpp (OpenAI-compatible): at 1500 output tokens 6 of 7 and 5 of 7 usable
+    in two runs; every failure was a reasoning model stopping at `length`. At 4000 tokens, 7 of 7 and
+    no failed calls with prompt `2026-10-11.2`, and again with `2026-10-13.1`.
+  - In every run: rule accuracy 1.0, no under-severe result, no downgrade attempt, no injection
+    echo. Runs of the same model at temperature 0 differed, so small gaps are noise.
+  - Invented hazards: with `2026-10-11.2` replies added "heat stress" and "eddies" (not in the
+    evidence). With `2026-10-13.1` "heat stress" disappeared but "eddies" stayed in 6 of 7 cases,
+    now worded as a gap. Nothing checks for this; it can only add caution. Accepted for now.
+  - Not measured: other servers (vLLM, LM Studio), repeat runs, and whether a reply keeps its
+    caveats beyond a hand-read sample of 4 cases.
 - The scenarios are not reviewed by a diving professional and do not measure real-world safety or
   explanation quality.
 - Citation validity checks that ids exist, not that they support the claim. Faithfulness needs a
