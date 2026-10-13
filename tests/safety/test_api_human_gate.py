@@ -596,3 +596,31 @@ def test_the_provider_is_closed_when_the_app_shuts_down() -> None:
     with client:
         assert closed == []
     assert closed == [True]
+
+
+def test_shutdown_survives_a_provider_without_close_or_whose_close_fails() -> None:
+    from divesafe.models import FakeProvider
+
+    class _Broken(FakeProvider):
+        def close(self) -> None:
+            raise RuntimeError("secret prompt text")
+
+    for provider in (None, FakeProvider(), _Broken()):
+        client, _, _ = _build(provider=provider)
+        with client:
+            pass
+
+
+def test_an_async_close_is_awaited() -> None:
+    from divesafe.models import FakeProvider
+
+    closed: list[bool] = []
+
+    class _Async(FakeProvider):
+        async def close(self) -> None:  # type: ignore[override]
+            closed.append(True)
+
+    client, _, _ = _build(provider=_Async())
+    with client:
+        pass
+    assert closed == [True]

@@ -8,6 +8,7 @@ reported as client errors and internals are never echoed.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import re
 import uuid
@@ -105,10 +106,17 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        close = getattr(app_state.provider, "close", None)
-        if callable(close):
-            close()
+        try:
+            yield
+        finally:
+            close = getattr(app_state.provider, "close", None)
+            if callable(close):
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # shutdown must go on; the error text may hold request data
+                    logger.error("the model provider did not close cleanly")
 
     hidden = settings.environment == "production"
     app = FastAPI(

@@ -103,7 +103,7 @@ async def assess_dive(
     unevaluated = assessment.unevaluated_factors
     if clock is not None:
         completed = max(now, clock())
-        if completed > now:
+        if completed > now or plan.planned_start <= completed:
             later = engine.assess(plan, evidence.items, completed)
             rule_results.extend(r for r in later.rule_results if r not in rule_results)
             if plan.planned_start <= completed:

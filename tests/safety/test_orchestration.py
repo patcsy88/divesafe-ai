@@ -487,5 +487,13 @@ def test_the_outcome_note_tells_the_reader_the_dive_start_passed() -> None:
 
     late = AssessmentView.of(_run(clock=lambda: START + timedelta(minutes=1))).outcome_note
     early = AssessmentView.of(_run(clock=lambda: START - timedelta(seconds=1))).outcome_note
-    assert "start time passed" in late and "new assessment" in late
-    assert "start time passed" not in early
+    assert "planned start passed" in late and "not fully assessed" in late
+    assert "still applies" in late and "plan a later start" in late
+    assert "planned start passed" not in early
+    assert late.count("planned start passed") == 1
+
+
+def test_a_dive_starting_now_is_recorded_even_when_the_clock_did_not_move() -> None:
+    record = _run(now=START, clock=lambda: START)
+    assert any(r.rule_id == "assessment.window_started" for r in record.rule_results)
+    assert record.final_recommendation is R.INSUFFICIENT_EVIDENCE

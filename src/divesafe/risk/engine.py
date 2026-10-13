@@ -111,13 +111,12 @@ CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
 # Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
-RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.")
+RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.", "rule.")
 ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_REQUIRED_PREFIX,
     EVIDENCE_QUALITY_PREFIX,
     CITES_UNUSABLE_PREFIX,
     DUPLICATE_IDS_RULE,
-    WINDOW_STARTED_RULE,
 )
 
 
@@ -277,6 +276,16 @@ class RiskRulesEngine:
             ]
         if result is None:
             return []
+        if result.rule_id != rule.rule_id:
+            # A result must carry its own rule's id, or it could pose as an engine message. The
+            # replacement keeps the more severe outcome: it may add a problem, never soften one.
+            return [
+                RuleResult(
+                    rule_id=f"rule.error.{rule.rule_id}",
+                    outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
+                    rationale="The rule returned a result under a different id.",
+                )
+            ]
         if result.threshold_status == ThresholdStatus.VALIDATED and expires_at is None:
             # A validated limit must expire, or a stale review would keep permitting GO.
             return [

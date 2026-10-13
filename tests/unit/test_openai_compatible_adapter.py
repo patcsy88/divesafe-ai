@@ -435,3 +435,34 @@ def test_a_closed_provider_refuses_new_calls_for_both_adapters() -> None:
         with pytest.raises(error, match="closed"):
             asyncio.run(provider.complete(request))
         provider.close()  # closing twice is harmless
+
+
+def test_close_shuts_the_executor_and_cancels_a_queued_call() -> None:
+    import asyncio
+    import threading
+
+    from divesafe.models import ChatMessage, LLMRequest
+
+    release = threading.Event()
+
+    def blocking(url: str, body: bytes, timeout: float) -> bytes:
+        release.wait(5)
+        return b"data: [DONE]\n\n"
+
+    provider = OpenAICompatibleProvider(
+        "m", "http://localhost:8000/v1", transport=blocking, max_concurrent_calls=1
+    )
+    request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
+
+    async def scenario() -> list[object]:
+        running = asyncio.ensure_future(provider.complete(request))
+        queued = asyncio.ensure_future(provider.complete(request))
+        await asyncio.sleep(0.2)
+        provider.close()
+        release.set()
+        return await asyncio.gather(running, queued, return_exceptions=True)
+
+    first, second = asyncio.run(scenario())
+    assert isinstance(second, asyncio.CancelledError)
+    assert provider._executor._shutdown  # type: ignore[attr-defined]
+    assert first is not None

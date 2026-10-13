@@ -153,6 +153,12 @@ class AssessmentView(BaseModel):
             r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
         ]
         outcome_note = _OUTCOME_NOTES[record.final_recommendation]
+        if any(r.rule_id == WINDOW_STARTED_RULE for r in record.rule_results):
+            outcome_note += (
+                " The planned start passed before this assessment finished, so this dive window "
+                "was not fully assessed. Every problem found in it still applies. A start time "
+                "that has passed cannot be assessed again: plan a later start for a new one."
+            )
         if record.llm_tightened:
             outcome_note = (
                 f"Rules alone: {record.deterministic_recommendation.value}. An unverified LLM "
@@ -169,11 +175,6 @@ class AssessmentView(BaseModel):
         )
         if partial:
             outcome_note += " Partly evaluated (aspects not evaluated): " + "; ".join(partial) + "."
-        if any(r.rule_id == WINDOW_STARTED_RULE for r in record.rule_results):
-            outcome_note += (
-                " The dive start time passed while this assessment was running, so it is "
-                "out of date: start a new assessment."
-            )
         if record.unevaluated_factors:
             names = ", ".join(k.value for k in record.unevaluated_factors)
             outcome_note += f" Not evaluated (no validated threshold): {names}."

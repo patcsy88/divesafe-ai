@@ -151,6 +151,20 @@ default and the production configuration do not set, and validated evidence must
 window. A `GO` or `CAUTION` that cites stale or unaccepted evidence is downgraded. Rules still
 receive all evidence so hazard rules are never blinded.
 
+## Reserved rule ids
+
+The engine and the pipeline emit rule ids that start with `assessment.`, `evidence.`, `ruleset.` or
+`rule.`. A configured rule may not use these prefixes (the engine refuses to start), and a result
+that carries a different id from its rule's is replaced by a `rule.error.<id>` result that keeps
+the more severe outcome and is at least INSUFFICIENT EVIDENCE. The API recognises engine messages
+by prefix, so this stops a rule from posing as one. The check is case-sensitive; only code authors
+can add rules, and signed-off definitions always become `definition.<id>`. A structured origin
+field on `RuleResult` would be sturdier than prefixes and is not built.
+
+When the planned start has passed by the time the agent stage ends, the pipeline adds
+`assessment.window_started` (INSUFFICIENT EVIDENCE). The outcome note then says the window was not
+fully assessed and that the problems found still apply.
+
 ## Non-numeric policy rules
 
 - `WarningNeedsHumanReadingRule` ([ADR 0005](adr/0005-warnings-need-human-reading.md)): any

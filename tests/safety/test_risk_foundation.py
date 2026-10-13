@@ -386,7 +386,10 @@ def test_the_interim_note_says_more_data_will_not_help() -> None:
     assert "no dive can currently return GO" in note and "More data alone" in note
 
 
-@pytest.mark.parametrize("rule_id", ["assessment.x", "evidence.required.waves", "ruleset.y"])
+@pytest.mark.parametrize(
+    "rule_id",
+    ["assessment.x", "evidence.required.waves", "ruleset.y", "rule.cites_unusable_evidence.z"],
+)
 def test_a_configured_rule_cannot_use_an_id_the_engine_reserves(rule_id: str) -> None:
     class _Squatter:
         citation = "test fixture (synthetic)"
@@ -400,3 +403,59 @@ def test_a_configured_rule_cannot_use_an_id_the_engine_reserves(rule_id: str) ->
     policy = EvidencePolicy(frozenset({WAVES}), timedelta(hours=1))
     with pytest.raises(ValueError, match="reserved prefix"):
         RiskRulesEngine([_Squatter()], policy, "v")  # type: ignore[list-item]
+
+
+def test_every_engine_prefix_is_reserved_and_real_rule_families_are_still_accepted() -> None:
+    from divesafe.risk.engine import ENGINE_RULE_PREFIXES, RESERVED_RULE_PREFIXES
+
+    assert all(p.startswith(RESERVED_RULE_PREFIXES) for p in ENGINE_RULE_PREFIXES)
+    policy = EvidencePolicy(frozenset({WAVES}), timedelta(hours=1))
+    for ok in ("definition.a", "definition-scope.waves", "placeholder.waves", "policy.x"):
+
+        class _Ok:
+            citation = "test fixture (synthetic)"
+            rule_id = ok
+
+            def evaluate(self, plan: object, evidence: object) -> None:
+                return None
+
+        RiskRulesEngine([_Ok()], policy, "v")  # type: ignore[list-item]
+
+
+def test_a_result_posing_under_another_id_is_replaced_and_blocks(plan: DivePlan) -> None:
+    from divesafe.domain import RuleResult
+
+    class _Poser:
+        rule_id = "synthetic.poser"
+        citation = "test fixture (synthetic)"
+
+        def evaluate(self, plan: object, evidence: object) -> RuleResult:
+            return RuleResult(
+                rule_id="assessment.window_started", outcome=R.GO, rationale="pretend"
+            )
+
+    policy = EvidencePolicy(frozenset(), timedelta(hours=1))
+    result = RiskRulesEngine([_Poser()], policy, "v", required_factors=frozenset()).assess(
+        plan, [], NOW
+    )
+    ids = [r.rule_id for r in result.rule_results]
+    assert "assessment.window_started" not in ids
+    assert "rule.error.synthetic.poser" in ids
+    assert result.recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_mismatched_id_never_softens_a_no_go(plan: DivePlan) -> None:
+    from divesafe.domain import RuleResult
+
+    class _Poser:
+        rule_id = "synthetic.poser"
+        citation = "test fixture (synthetic)"
+
+        def evaluate(self, plan: object, evidence: object) -> RuleResult:
+            return RuleResult(rule_id="synthetic.other", outcome=R.NO_GO, rationale="hard stop")
+
+    policy = EvidencePolicy(frozenset(), timedelta(hours=1))
+    result = RiskRulesEngine([_Poser()], policy, "v", required_factors=frozenset()).assess(
+        plan, [], NOW
+    )
+    assert result.recommendation is R.NO_GO
