@@ -84,3 +84,17 @@ def test_the_prompt_forbids_hazards_no_input_mentions_but_keeps_the_gap_remedy()
     ):
         assert fragment in rule2, fragment
     assert "does not cover a hazard" in TEXT[TEXT.index("8. Keep") :]
+
+
+PINNED = ("2026-10-13.1", "b402ea729dcabf06d7a73897b99b057d3664b78cffdf60e8680df41820cf1926")
+
+
+def test_the_prompt_text_is_pinned_to_its_version() -> None:
+    import hashlib
+
+    from divesafe.agents.prompts import PROMPT_VERSION
+
+    digest = hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()
+    assert (PROMPT_VERSION, digest) == PINNED, (
+        "the system prompt changed: bump PROMPT_VERSION and update PINNED"
+    )
