@@ -109,11 +109,15 @@ EVIDENCE_REQUIRED_PREFIX: Final = "evidence.required."
 EVIDENCE_QUALITY_PREFIX: Final = "evidence.quality"
 CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
+WINDOW_STARTED_RULE: Final = "assessment.window_started"
+# Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
+RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.")
 ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_REQUIRED_PREFIX,
     EVIDENCE_QUALITY_PREFIX,
     CITES_UNUSABLE_PREFIX,
     DUPLICATE_IDS_RULE,
+    WINDOW_STARTED_RULE,
 )
 
 
@@ -173,6 +177,8 @@ class RiskRulesEngine:
         for rule in rules:
             if not rule.citation.strip():
                 raise ValueError(f"rule '{rule.rule_id}' has no source citation")
+            if rule.rule_id.startswith(RESERVED_RULE_PREFIXES):
+                raise ValueError(f"rule id '{rule.rule_id}' uses a reserved prefix")
         self._rules = tuple(rules)
         self._required_factors = required_factors
         self._policy = policy

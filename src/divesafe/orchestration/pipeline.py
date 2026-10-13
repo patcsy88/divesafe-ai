@@ -25,6 +25,7 @@ from divesafe.domain import (
 )
 from divesafe.models import LLMProvider
 from divesafe.risk import RiskRulesEngine, reconcile
+from divesafe.risk.engine import WINDOW_STARTED_RULE
 from divesafe.services import gather_evidence
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ async def assess_dive(
             if plan.planned_start <= completed:
                 rule_results.append(
                     RuleResult(
-                        rule_id="assessment.window_started",
+                        rule_id=WINDOW_STARTED_RULE,
                         outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                         rationale="the dive start time passed while the assessment was running",
                     )

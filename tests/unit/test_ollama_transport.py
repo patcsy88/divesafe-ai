@@ -127,22 +127,24 @@ def test_environment_proxies_are_ignored(server: str, monkeypatch: pytest.Monkey
     assert _complete(server) == "ok"
 
 
-def test_too_many_calls_in_flight_are_refused(server: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(mod, "_SLOTS", threading.BoundedSemaphore(1))
-    mod._SLOTS.acquire()
+def test_too_many_calls_in_flight_are_refused(server: str) -> None:
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
     with pytest.raises(OllamaError, match="in flight"):
-        mod._post(f"{server}/api/chat", b"{}", 0.1)
+        mod._post(f"{server}/api/chat", b"{}", 0.1, slots=slots)
 
 
-def test_the_concurrency_limit_is_small() -> None:
+def test_the_concurrency_limit_is_small_and_each_provider_has_its_own_slots() -> None:
     assert 1 <= mod.MAX_CONCURRENT_CALLS <= 8
-    sem = mod._SLOTS
+    provider = OllamaProvider("m", "http://localhost:11434")
+    sem = provider._transport.keywords["slots"]  # type: ignore[attr-defined]
     taken = 0
     while sem.acquire(blocking=False):
         taken += 1
     for _ in range(taken):
         sem.release()
     assert taken == mod.MAX_CONCURRENT_CALLS
+    assert not hasattr(mod, "_SLOTS")
 
 
 def test_a_redirect_is_never_followed_to_a_live_second_server(server: str) -> None:

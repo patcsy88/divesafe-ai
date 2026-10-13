@@ -480,3 +480,12 @@ def test_a_factor_whose_rule_expires_during_the_stage_becomes_unevaluated() -> N
     assert _run(engine=engine).unevaluated_factors == ()
     later = _run(engine=engine, clock=lambda: expires + timedelta(seconds=1))
     assert later.unevaluated_factors == (RiskFactorKind.WAVE_HEIGHT,)
+
+
+def test_the_outcome_note_tells_the_reader_the_dive_start_passed() -> None:
+    from divesafe.api.schemas import AssessmentView
+
+    late = AssessmentView.of(_run(clock=lambda: START + timedelta(minutes=1))).outcome_note
+    early = AssessmentView.of(_run(clock=lambda: START - timedelta(seconds=1))).outcome_note
+    assert "start time passed" in late and "new assessment" in late
+    assert "start time passed" not in early

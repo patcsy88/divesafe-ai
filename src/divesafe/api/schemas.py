@@ -17,7 +17,7 @@ from divesafe.domain import (
     effective_quality,
 )
 from divesafe.risk import NOT_EVALUATED_MARKER
-from divesafe.risk.engine import ENGINE_RULE_PREFIXES
+from divesafe.risk.engine import ENGINE_RULE_PREFIXES, WINDOW_STARTED_RULE
 
 DISCLAIMER = (
     "Decision support only. The final decision belongs to the diver, dive master or dive leader. "
@@ -169,6 +169,11 @@ class AssessmentView(BaseModel):
         )
         if partial:
             outcome_note += " Partly evaluated (aspects not evaluated): " + "; ".join(partial) + "."
+        if any(r.rule_id == WINDOW_STARTED_RULE for r in record.rule_results):
+            outcome_note += (
+                " The dive start time passed while this assessment was running, so it is "
+                "out of date: start a new assessment."
+            )
         if record.unevaluated_factors:
             names = ", ".join(k.value for k in record.unevaluated_factors)
             outcome_note += f" Not evaluated (no validated threshold): {names}."

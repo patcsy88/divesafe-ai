@@ -32,7 +32,6 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 15.0
 MAX_CONCURRENT_CALLS = 4
 _CHUNK = 64 * 1024
-_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_CALLS)
 _LOOPBACK_NAMES = frozenset({"localhost"})
 
 Transport = Callable[[str, bytes, float], bytes]
@@ -63,7 +62,7 @@ def _post(
     body: bytes,
     timeout: float,
     *,
-    slots: threading.BoundedSemaphore | None = None,
+    slots: threading.BoundedSemaphore,
     socket_timeout: float | None = None,
 ) -> bytes:
     """POST with no proxy (environment proxies would carry the prompt elsewhere), no redirects, a
@@ -73,7 +72,6 @@ def _post(
     request = urllib.request.Request(  # noqa: S310 (scheme and host checked at construction)
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    slots = slots if slots is not None else _SLOTS
     if not slots.acquire(timeout=timeout):
         raise OllamaError("too many Ollama calls are already in flight")
     try:

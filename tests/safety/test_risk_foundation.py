@@ -384,3 +384,19 @@ def test_the_interim_note_says_more_data_will_not_help() -> None:
     engine = build_engine(Settings(evidence_max_age_minutes=60))
     note = AssessmentView.of(run_pipeline(None, risk_engine=engine)).outcome_note
     assert "no dive can currently return GO" in note and "More data alone" in note
+
+
+@pytest.mark.parametrize("rule_id", ["assessment.x", "evidence.required.waves", "ruleset.y"])
+def test_a_configured_rule_cannot_use_an_id_the_engine_reserves(rule_id: str) -> None:
+    class _Squatter:
+        citation = "test fixture (synthetic)"
+
+        def __init__(self) -> None:
+            self.rule_id = rule_id
+
+        def evaluate(self, plan: object, evidence: object) -> None:
+            return None
+
+    policy = EvidencePolicy(frozenset({WAVES}), timedelta(hours=1))
+    with pytest.raises(ValueError, match="reserved prefix"):
+        RiskRulesEngine([_Squatter()], policy, "v")  # type: ignore[list-item]
