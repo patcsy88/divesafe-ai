@@ -19,10 +19,12 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 - **Safety of the call:**
   - Streamed (see the amendments), no redirects, and environment proxies are ignored (a proxy would carry the
     prompt somewhere the egress flag never approved).
-  - Response capped at 1 MiB, read in chunks with `read1`, under a 50 s total deadline (the
-    agent runner waits 60 s) and a 15 s per-read timeout. `read(n)` was rejected because a
+  - Response capped at 1 MiB, read in chunks with `read1`, under a total deadline (by default
+    the 60 s call budget minus the first-byte timeout minus 1 s, so the thread ends before the
+    agent runner gives up) and a first-byte timeout per read (15 s by default). `read(n)` was rejected because a
     server sending one byte at a time defeated the deadline.
-  - At most 4 calls in flight; extra callers are refused, not queued without bound.
+  - At most `DIVESAFE_LLM_MAX_CONCURRENT_CALLS` (4 by default) calls in flight per provider; extra
+    calls queue on the provider's own pool, and each still has its own deadline.
   - Errors are fixed strings with no prompt, response or URL content; deeply nested JSON is a fixed
     error. The request is never logged. The model name is required (`DIVESAFE_LLM_MODEL`); the
     schema goes in `format`.
@@ -120,7 +122,7 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   human-rated sample.
 - Injection detection is a screening heuristic over marker phrases and does not catch a
   paraphrase. It is not a gate.
-- - A request now lasts as long as the whole stage (plus up to 30 s of evidence gathering). The web
+- A request now lasts as long as the whole stage (plus up to 30 s of evidence gathering). The web
   client waits 120 s, so a stage longer than about 90 s shows "outcome unknown" in the UI while the
   API still stores a pending record, and a retry after more than 10 minutes cannot be replayed.
   Creating assessments asynchronously (202 and poll) would fix it and needs its own ADR.
@@ -133,7 +135,12 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
 - The stored `model_version` is the name only, not a digest; pulling and pinning a model is the
   operator's job.
 - The total deadline is checked between reads only: waiting for a slot, connecting, DNS and one
-  read can run past it, so a worker thread can outlive the 60 s stage timeout.
+  read can run past it, so a worker thread can outlive the stage timeout.
 - Ollama has no authentication here; a remote server must be protected by the network or a proxy.
-- Worker threads cannot be cancelled: a call that outlives the agent timeout ends at its own 50 s
-  deadline.
+- Worker threads cannot be cancelled: a call that outlives the agent timeout ends at its own
+  deadline (the call budget minus the first-byte timeout minus 1 s).
+- A queued call starts its own deadline when it starts running, not when it was queued, so a call
+  can wait behind others for longer than the call budget. The stage timeout still bounds the whole
+  stage.
+- The provider's `close()` (called on app shutdown) refuses new calls and does not wait for a call
+  in flight; its thread ends at its own deadline.

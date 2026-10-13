@@ -11,6 +11,8 @@ import hashlib
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated
 
@@ -101,8 +103,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
     if app_state.decision_max_age is None:
         logger.warning("DIVESAFE_DECISION_MAX_AGE_MINUTES is unset: decisions have no age limit")
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        close = getattr(app_state.provider, "close", None)
+        if callable(close):
+            close()
+
     hidden = settings.environment == "production"
     app = FastAPI(
+        lifespan=lifespan,
         title="DiveSafe AI",
         version=__version__,
         description=(

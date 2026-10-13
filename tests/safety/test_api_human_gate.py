@@ -581,3 +581,18 @@ def test_the_api_judges_again_when_the_clock_passes_the_start_during_the_request
     record = _create(client)["record"]
     assert any(r["rule_id"] == "assessment.window_started" for r in record["rule_results"])
     assert record["final_recommendation"] == "INSUFFICIENT EVIDENCE"
+
+
+def test_the_provider_is_closed_when_the_app_shuts_down() -> None:
+    from divesafe.models import FakeProvider
+
+    closed: list[bool] = []
+
+    class _Closable(FakeProvider):
+        def close(self) -> None:
+            closed.append(True)
+
+    client, _, _ = _build(provider=_Closable())
+    with client:
+        assert closed == []
+    assert closed == [True]

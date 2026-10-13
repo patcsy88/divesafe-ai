@@ -417,3 +417,21 @@ def test_the_output_token_cap_comes_from_settings_for_both_adapters() -> None:
 def test_the_settings_bound_the_output_token_cap(bad: int) -> None:
     with pytest.raises(ValueError):
         Settings(llm_max_output_tokens=bad)
+
+
+def test_a_closed_provider_refuses_new_calls_for_both_adapters() -> None:
+    import asyncio
+
+    from divesafe.models import ChatMessage, LLMRequest
+    from divesafe.models.ollama import OllamaError, OllamaProvider
+    from divesafe.models.openai_compatible import OpenAICompatibleError
+
+    request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
+    for provider, error in (
+        (OpenAICompatibleProvider("m", "http://localhost:8000/v1"), OpenAICompatibleError),
+        (OllamaProvider("m", "http://localhost:11434"), OllamaError),
+    ):
+        provider.close()
+        with pytest.raises(error, match="closed"):
+            asyncio.run(provider.complete(request))
+        provider.close()  # closing twice is harmless

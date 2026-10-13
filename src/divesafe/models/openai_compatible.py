@@ -249,6 +249,7 @@ class OpenAICompatibleProvider:
         # The deadline is checked between reads; one read or the connect can take a further
         # `first_byte` seconds, so the worker thread ends before the agent's own timeout does.
         self._deadline = call_timeout_seconds - first_byte_timeout_seconds - 1.0
+        self._closed = False
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent_calls, thread_name_prefix="openai-compat"
         )
@@ -279,7 +280,14 @@ class OpenAICompatibleProvider:
             }
         return json.dumps(payload).encode()
 
+    def close(self) -> None:
+        """Refuse new calls and let the worker threads end; a call in flight is not waited for."""
+        self._closed = True
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        if self._closed:
+            raise OpenAICompatibleError("the model provider is closed")
         body = self._body(request)
         raw = await asyncio.get_running_loop().run_in_executor(
             self._executor, self._transport, self._url, body, self._deadline
