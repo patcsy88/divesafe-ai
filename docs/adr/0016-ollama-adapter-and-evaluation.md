@@ -144,3 +144,8 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   stage.
 - The provider's `close()` (called on app shutdown) refuses new calls and does not wait for a call
   in flight; its thread ends at its own deadline.
+- Python joins executor threads at interpreter exit, so after shutdown the process can stay up until
+  an in-flight call reaches its deadline (close to the call budget), and the prompt is still being
+  sent to the model server meanwhile. A call cancelled by `close()` while queued gives its caller a
+  `CancelledError`, so no record is stored. Closing the socket from `close()` needs the watchdog
+  named in ADR 0018.
