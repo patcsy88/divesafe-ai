@@ -16,6 +16,7 @@ from divesafe.services.repository import (
     RecordNotFoundError,
     RepositoryIntegrityError,
     RepositoryUnavailableError,
+    RunAwareRepository,
     UnstorableRecordError,
     check_successor,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "PostgresAssessmentRepository",
     "RecordExistsError",
     "RecordNotFoundError",
+    "RunAwareRepository",
     "RepositoryIntegrityError",
     "RepositoryUnavailableError",
     "UnstorableRecordError",

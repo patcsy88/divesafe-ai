@@ -263,9 +263,7 @@ def test_every_route_except_health_requires_a_role_and_a_limit() -> None:
         if not isinstance(route, APIRoute) or route.path in open_paths:
             continue
         calls = [d.call for d in route.dependant.dependencies]
-        assert any(getattr(c, "__qualname__", "").startswith("require_role") for c in calls), (
-            route.path
-        )
+        assert any(getattr(c, "__qualname__", "").startswith("require_any_role") for c in calls), route.path
         checked += 1
     assert checked >= 6
 

@@ -38,9 +38,9 @@ from divesafe.risk import (
     placeholder_rules,
 )
 from divesafe.services import (
-    AssessmentRepository,
     InMemoryAssessmentRepository,
     PostgresAssessmentRepository,
+    RunAwareRepository,
 )
 
 # Interim and unreviewed: no verified tide source exists and no limit is signed off yet, so
@@ -66,9 +66,29 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+# Past its deadline a run still holds its lease for this long, so a run always gives up first.
+RUN_LEASE_MARGIN = timedelta(seconds=60)
+
+
+@dataclass(frozen=True)
+class RunLimits:
+    """Operational limits for assessment runs (ADR 0019); not safety limits."""
+
+    max_in_flight: int = 4
+    max_per_actor: int = 2
+    deadline: timedelta = timedelta(seconds=240)
+    retry_after_seconds: int = 30
+    shutdown_grace: timedelta = timedelta(seconds=10)
+    failed_retention: timedelta = timedelta(days=7)
+
+    @property
+    def lease(self) -> timedelta:
+        return self.deadline + RUN_LEASE_MARGIN
+
+
 @dataclass
 class AppState:
-    repository: AssessmentRepository
+    repository: RunAwareRepository
     connectors: Sequence[Connector]
     engine: RiskRulesEngine | None
     authenticator: Authenticator
@@ -78,6 +98,7 @@ class AppState:
     provider: LLMProvider | None = None
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(default_limits()))
     trusted_proxies: frozenset[str] = frozenset()
+    runs: RunLimits = field(default_factory=RunLimits)
 
 
 def default_limits(
@@ -161,7 +182,7 @@ def build_provider(settings: Settings) -> LLMProvider | None:
     return provider
 
 
-def build_repository(settings: Settings) -> AssessmentRepository:
+def build_repository(settings: Settings) -> RunAwareRepository:
     if settings.database_url is None:
         return InMemoryAssessmentRepository()
     repository = PostgresAssessmentRepository(settings.database_url.get_secret_value())
@@ -205,4 +226,12 @@ def build_default_state(settings: Settings) -> AppState:
             )
         ),
         trusted_proxies=settings.trusted_proxy_set(),
+        runs=RunLimits(
+            max_in_flight=settings.max_runs_in_flight,
+            max_per_actor=settings.max_runs_per_actor,
+            deadline=timedelta(seconds=settings.effective_run_deadline_seconds()),
+            retry_after_seconds=settings.run_retry_after_seconds,
+            shutdown_grace=timedelta(seconds=settings.run_shutdown_grace_seconds),
+            failed_retention=timedelta(days=settings.failed_run_retention_days),
+        ),
     )

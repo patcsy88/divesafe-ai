@@ -24,6 +24,10 @@ def _require_tls(dsn: str) -> None:
         raise ValueError("production needs sslmode=require, verify-ca or verify-full in the DSN")
 
 
+# The longest the connectors may take together (their own per-request timeout is below this).
+CONNECTOR_BUDGET_SECONDS = 30.0
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DIVESAFE_",
@@ -67,6 +71,11 @@ class Settings(BaseSettings):
     def plain_http_host_set(self) -> frozenset[str]:
         return _host_set(self.ollama_plain_http_hosts, "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS")
 
+    def effective_run_deadline_seconds(self) -> float:
+        if self.run_deadline_seconds is not None:
+            return self.run_deadline_seconds
+        return self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + 30.0
+
     def llm_allowed_host_set(self) -> frozenset[str]:
         return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
 
@@ -83,6 +92,14 @@ class Settings(BaseSettings):
     api_key_hashes: SecretStr | None = None
 
     # Per-actor operational limits (abuse and upstream-quota protection, not safety limits).
+    # Assessment runs (ADR 0019). Operational limits, not safety limits. The lease is the run
+    # deadline plus a fixed margin, so a run gives up before its lease can expire.
+    max_runs_in_flight: int = Field(default=4, ge=1, le=64)
+    max_runs_per_actor: int = Field(default=2, ge=1, le=64)
+    run_deadline_seconds: float | None = Field(default=None, ge=30, le=7200, allow_inf_nan=False)
+    run_retry_after_seconds: int = Field(default=30, ge=1, le=600)
+    run_shutdown_grace_seconds: float = Field(default=10.0, ge=0, le=120, allow_inf_nan=False)
+    failed_run_retention_days: int = Field(default=7, ge=1, le=365)
     rate_limit_create_per_minute: int = Field(default=10, gt=0, le=10_000)
     rate_limit_decide_per_minute: int = Field(default=30, gt=0, le=10_000)
     rate_limit_read_per_minute: int = Field(default=120, gt=0, le=10_000)
@@ -109,6 +126,17 @@ class Settings(BaseSettings):
         if self.llm_call_timeout_seconds < 2 * self.llm_first_byte_timeout_seconds + 1:
             raise ValueError(
                 "one LLM call's timeout must be at least twice the first-byte timeout plus 1 s"
+            )
+        if self.max_runs_per_actor > self.max_runs_in_flight:
+            raise ValueError("DIVESAFE_MAX_RUNS_PER_ACTOR cannot exceed the in-flight cap")
+        if (
+            self.run_deadline_seconds is not None
+            and self.run_deadline_seconds
+            < self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS
+        ):
+            raise ValueError(
+                "DIVESAFE_RUN_DEADLINE_SECONDS must cover the LLM stage timeout plus the "
+                f"{CONNECTOR_BUDGET_SECONDS:.0f} s connector budget"
             )
         self.llm_allowed_host_set()
         plain_hosts = self.plain_http_host_set()

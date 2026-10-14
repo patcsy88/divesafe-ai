@@ -25,6 +25,7 @@ from divesafe.services.runs import (
     PendingRun,
     RunMismatchError,
     RunState,
+    RunStore,
 )
 
 
@@ -63,6 +64,10 @@ class AssessmentRepository(Protocol):
     def get(self, assessment_id: str) -> AssessmentRecord | None: ...
 
     def replace(self, expected: AssessmentRecord, new: AssessmentRecord) -> None: ...
+
+
+class RunAwareRepository(AssessmentRepository, RunStore, Protocol):
+    """What the API needs: assessment storage plus pending runs (ADR 0019)."""
 
 
 _APPEND_ONLY = ("human_decision", "actual_conditions")

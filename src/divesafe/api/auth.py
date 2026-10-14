@@ -213,16 +213,27 @@ def require_role(role: Role, *, limit_key: str) -> Callable[[Request], Principal
     """Authenticate, check the role (403), then apply the actor's rate limit (429).
 
     A denied request is not charged to the limiter."""
+    return require_any_role((role,), limit_key=limit_key)
+
+
+def require_any_role(roles: tuple[Role, ...], *, limit_key: str) -> Callable[[Request], Principal]:
+    """As `require_role`, for an endpoint that more than one role may use."""
 
     if limit_key not in LIMIT_KEYS:
         raise ValueError(f"unknown limit key {limit_key!r}")
+    if not roles:
+        raise ValueError("at least one role is required")
 
     def dependency(request: Request) -> Principal:
         principal = require_principal(request)
-        if role not in principal.roles:
+        if not any(role in principal.roles for role in roles):
             logger.warning(
                 "forbidden",
-                extra={"actor": principal.actor, "role": role.value, "limit_key": limit_key},
+                extra={
+                    "actor": principal.actor,
+                    "role": "|".join(r.value for r in roles),
+                    "limit_key": limit_key,
+                },
             )
             raise HTTPException(
                 status_code=403, detail=_REFUSED + "this key is not permitted to do that"
