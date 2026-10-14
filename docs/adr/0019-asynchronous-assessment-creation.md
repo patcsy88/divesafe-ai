@@ -160,7 +160,17 @@ service may run several workers. Option 2 is acceptable only for a single-worker
   compare-and-set completion (a late, failed or wrong-token run stores nothing), bounded cleanup
   with failure counts, and the least-privilege checks in `verify`. The PostgreSQL tests ran
   locally against a throwaway container and in CI.
-- Stage 2 (API and background runner) and stage 3 (web) are not built.
+- **Stage 2 (API and runner): built.** `POST` returns 202 with `Location`; `RunManager`
+  (`api/runner.py`) owns the tasks, applies the run deadline, completes by compare-and-set and
+  stores only a fixed failure code. Shutdown refuses new runs, waits a grace period, cancels and
+  marks runs failed, then closes the provider. `GET` returns `RunStatusView` while a run is
+  pending or failed. A key without the viewer role reads only its own runs and sees a finished
+  record without the decision. `gather_evidence` has an overall timeout. Tests:
+  `tests/safety/test_api_async_runs.py`; the older create tests now create, then poll.
+- Stage 3 (web) is not built: the web app still expects a 201 and must be changed before it can
+  create an assessment against this API.
+- Not yet covered: a run that dies with its process is marked failed only when its lease expires
+  and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.
 - The failure counts table is written by cleanup only; nothing reads it yet.
 
 ## Not solved

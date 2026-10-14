@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.api_polling import create_and_poll
 from tests.safety.test_api_human_gate import (
     PLAN,
     _build,
@@ -30,8 +31,8 @@ def _client(limits: dict[str, Limit] | None = None) -> tuple[TestClient, Callabl
     entries[_hash("key-all")] = KeyEntry("everyone", frozenset(Role))
     state.authenticator = ApiKeyAuthenticator(entries)
     state.limiter = RateLimiter(limits or default_limits())
-    return client, lambda: client.post(
-        "/v1/assessments", json=PLAN_D, headers={"Authorization": "Bearer key-all"}
+    return client, lambda: create_and_poll(
+        client, PLAN_D, {"Authorization": "Bearer key-all"}
     ).json()["record"]["id"]
 
 
@@ -77,12 +78,15 @@ def test_listing_sites_needs_the_viewer_role_and_an_empty_registry_is_not_an_err
     assert body["sites"] == [] and "Decision support only" in body["notice"]
 
 
-def test_an_assessor_can_create_but_not_read_or_decide() -> None:
+def test_an_assessor_can_create_and_read_only_its_own_but_cannot_decide() -> None:
     client, make = _client()
-    aid = make()
+    aid = make()  # created by another key
     h = HEADERS[Role.ASSESSOR]
-    assert client.post("/v1/assessments", json=PLAN_D, headers=h).status_code == 201
-    assert client.get(f"/v1/assessments/{aid}", headers=h).status_code == 403
+    mine = create_and_poll(client, PLAN_D, h)
+    assert mine.status_code == 200 and mine.json()["record"]["human_decision"] is None
+    # Someone else's assessment is not revealed: 404, not 403, so its existence is not either.
+    assert client.get(f"/v1/assessments/{aid}", headers=h).status_code == 404
+    assert client.get(f"/v1/assessments/{aid}/evidence", headers=h).status_code == 403
 
 
 def test_a_decider_cannot_create_assessments() -> None:
@@ -125,8 +129,8 @@ def test_creating_assessments_is_limited_per_actor_with_retry_after() -> None:
     assert [
         client.post("/v1/assessments", json=PLAN_D, headers=h).status_code for _ in range(2)
     ] == [
-        201,
-        201,
+        202,
+        202,
     ]
     limited = client.post("/v1/assessments", json=PLAN_D, headers=h)
     assert limited.status_code == 429
@@ -141,13 +145,13 @@ def test_one_actors_limit_does_not_throttle_another() -> None:
     client, _ = _client(default_limits(create_per_minute=1))
     assert (
         client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
-        == 201
+        == 202
     )
     assert (
         client.post(
             "/v1/assessments", json=PLAN_D, headers={"Authorization": "Bearer key-all"}
         ).status_code
-        == 201
+        == 202
     )
 
 
@@ -160,7 +164,7 @@ def test_a_forbidden_request_is_not_counted_against_the_limit() -> None:
         )
     assert (
         client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
-        == 201
+        == 202
     )
 
 
@@ -170,7 +174,7 @@ def test_unauthenticated_requests_cannot_exhaust_an_actors_limit() -> None:
         assert client.post("/v1/assessments", json=PLAN).status_code == 401
     assert (
         client.post("/v1/assessments", json=PLAN_D, headers=HEADERS[Role.ASSESSOR]).status_code
-        == 201
+        == 202
     )
 
 
@@ -263,7 +267,9 @@ def test_every_route_except_health_requires_a_role_and_a_limit() -> None:
         if not isinstance(route, APIRoute) or route.path in open_paths:
             continue
         calls = [d.call for d in route.dependant.dependencies]
-        assert any(getattr(c, "__qualname__", "").startswith("require_any_role") for c in calls), route.path
+        assert any(getattr(c, "__qualname__", "").startswith("require_any_role") for c in calls), (
+            route.path
+        )
         checked += 1
     assert checked >= 6
 

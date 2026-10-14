@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.api_polling import create_and_poll, started
 
 from divesafe.api.app import create_app
 from divesafe.api.auth import ApiKeyAuthenticator, KeyEntry, Role
@@ -18,6 +19,7 @@ from divesafe.api.state import (
     INTERIM_REQUIRED_CATEGORIES,
     INTERIM_RULESET_VERSION,
     AppState,
+    RunLimits,
 )
 from divesafe.data import (
     SITES,
@@ -75,6 +77,8 @@ def _build(
     max_age: timedelta | None = None,
     engine: bool = True,
     provider: Any = None,
+    live: bool = True,
+    runs: RunLimits | None = None,
 ) -> tuple[TestClient, _Clock, InMemoryAssessmentRepository]:
     clock, repo = _Clock(), InMemoryAssessmentRepository()
     rules = RiskRulesEngine(
@@ -99,16 +103,18 @@ def _build(
         sites=SITES,
         decision_max_age=max_age,
         provider=provider,
+        runs=runs if runs is not None else RunLimits(),
     )
-    return TestClient(create_app(state)), clock, repo
+    client = TestClient(create_app(state))
+    return (started(client) if live else client), clock, repo
 
 
 def _create(client: TestClient, decider: str | None = None) -> dict[str, Any]:
     body = PLAN if decider is None else {**PLAN, "decider": decider}
-    response = client.post("/v1/assessments", json=body, headers=AUTH_A)
-    assert response.status_code == 201, response.text
-    body: dict[str, Any] = response.json()
-    return body
+    response = create_and_poll(client, body, AUTH_A)
+    assert response.status_code == 200, response.text
+    result: dict[str, Any] = response.json()
+    return result
 
 
 # --- authentication ------------------------------------------------------------------------
@@ -375,10 +381,12 @@ def test_internal_failures_are_opaque_500s_not_client_errors() -> None:
 
     client, _, _ = _build()
     client.app.state.divesafe.connectors = [_Broken()]  # type: ignore[attr-defined]
-    quiet = TestClient(client.app, raise_server_exceptions=False)
-    response = quiet.post("/v1/assessments", json=PLAN, headers=AUTH_A)
-    assert response.status_code == 500
-    assert response.json() == {"detail": "internal error"}
+    response = create_and_poll(client, PLAN, AUTH_A)
+    # The run failed; it is reported as failed, never as a result, and says nothing of why.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "internal"
+    assert "record" not in body and "secret internal detail" not in response.text
 
 
 def test_health_discloses_non_durable_storage() -> None:
@@ -576,7 +584,7 @@ def test_read_endpoints_are_not_cacheable() -> None:
 
 def test_the_api_judges_again_when_the_clock_passes_the_start_during_the_request() -> None:
     client, _, _ = _build()
-    readings = iter([T0])  # the request time; every later reading is two hours on
+    readings = iter([T0, T0])  # the request check and the run start; every later one is 2 h on
     client.app.state.divesafe.clock = lambda: next(readings, T0 + timedelta(hours=2))  # type: ignore[attr-defined]
     record = _create(client)["record"]
     assert any(r["rule_id"] == "assessment.window_started" for r in record["rule_results"])
@@ -592,7 +600,7 @@ def test_the_provider_is_closed_when_the_app_shuts_down() -> None:
         def close(self) -> None:
             closed.append(True)
 
-    client, _, _ = _build(provider=_Closable())
+    client, _, _ = _build(provider=_Closable(), live=False)
     with client:
         assert closed == []
     assert closed == [True]
@@ -606,7 +614,7 @@ def test_shutdown_survives_a_provider_without_close_or_whose_close_fails() -> No
             raise RuntimeError("secret prompt text")
 
     for provider in (None, FakeProvider(), _Broken()):
-        client, _, _ = _build(provider=provider)
+        client, _, _ = _build(provider=provider, live=False)
         with client:
             pass
 
@@ -620,7 +628,7 @@ def test_an_async_close_is_awaited() -> None:
         async def close(self) -> None:  # type: ignore[override]
             closed.append(True)
 
-    client, _, _ = _build(provider=_Async())
+    client, _, _ = _build(provider=_Async(), live=False)
     with client:
         pass
     assert closed == [True]

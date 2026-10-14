@@ -24,14 +24,16 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from divesafe import __version__
-from divesafe.api.auth import Principal, Role, require_role
+from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
+from divesafe.api.runner import RunManager
 from divesafe.api.schemas import (
     ActualConditionsRequest,
     AssessmentView,
     CreateAssessmentRequest,
     DecisionRequest,
     EvidenceView,
+    RunStatusView,
     SiteListView,
     SiteView,
 )
@@ -41,9 +43,7 @@ from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
 from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
-    InvalidPlanError,
     NotAssignedDeciderError,
-    UnsafeConfigurationError,
     assess_dive,
     check_assigned,
     decide,
@@ -52,11 +52,18 @@ from divesafe.orchestration import (
 from divesafe.services import (
     ConflictError,
     InMemoryAssessmentRepository,
-    RecordExistsError,
     RecordNotFoundError,
     RepositoryIntegrityError,
     RepositoryUnavailableError,
     UnstorableRecordError,
+)
+from divesafe.services.runs import (
+    CapacityError,
+    FailureCode,
+    NewRun,
+    PendingRun,
+    RunMismatchError,
+    RunState,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +87,8 @@ def _idempotent_id(actor: str, key: str) -> str:
 
 
 READ = require_role(Role.VIEWER, limit_key="read")
+# A key without the viewer role may still poll the runs it started (ADR 0019).
+READ_OWN = require_any_role((Role.VIEWER, Role.ASSESSOR), limit_key="read")
 CREATE = require_role(Role.ASSESSOR, limit_key="create")
 DECIDE = require_role(Role.DECIDER, limit_key="decide")
 
@@ -104,11 +113,20 @@ def create_app(state: AppState | None = None) -> FastAPI:
     if app_state.decision_max_age is None:
         logger.warning("DIVESAFE_DECISION_MAX_AGE_MINUTES is unset: decisions have no age limit")
 
+    runner = RunManager(
+        app_state.repository, deadline=app_state.runs.deadline, grace=app_state.runs.shutdown_grace
+    )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        runner.start_cleanup(app_state.runs.failed_retention)
         try:
             yield
         finally:
+            try:
+                await runner.shutdown()  # before the provider closes, so cancelled runs end first
+            except Exception:
+                logger.error("running assessments did not stop cleanly")
             close = getattr(app_state.provider, "close", None)
             if callable(close):
                 try:
@@ -141,6 +159,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         return response
 
     app.state.divesafe = app_state
+    app.state.runner = runner
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -175,9 +194,30 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.exception("unhandled error", extra={"path": request.url.path})
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
-    def _load(assessment_id: str) -> AssessmentRecord:
+    def _may_see(run: PendingRun, principal: Principal) -> bool:
+        return (
+            Role.VIEWER in principal.roles
+            or run.created_by == principal.actor
+            or run.assigned_decider == principal.actor
+        )
+
+    def _load(assessment_id: str, principal: Principal | None = None) -> AssessmentRecord:
         record = app_state.repository.get(assessment_id)
         if record is None:
+            run = app_state.repository.get_run(assessment_id)
+            if run is None:
+                record = app_state.repository.get(assessment_id)  # finished between the reads
+                if record is not None:
+                    return record
+            if run is not None and principal is not None and _may_see(run, principal):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "nothing was recorded; this assessment has no result yet"
+                        if run.state is RunState.RUNNING
+                        else "nothing was recorded; this assessment did not finish"
+                    ),
+                )
             raise HTTPException(status_code=404, detail="assessment not found")
         return record
 
@@ -199,17 +239,21 @@ def create_app(state: AppState | None = None) -> FastAPI:
             "storage": "durable" if durable else "in-memory (not durable)",
         }
 
-    @app.post("/v1/assessments", status_code=201, tags=["assessments"])
+    @app.post("/v1/assessments", status_code=202, tags=["assessments"])
     async def create_assessment(
         body: CreateAssessmentRequest,
         principal: Annotated[Principal, Depends(CREATE)],
         response: Response,
         idempotency_key: Annotated[str | None, Header()] = None,
-    ) -> AssessmentView:
+    ) -> AssessmentView | RunStatusView:
         if idempotency_key is not None and not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
             raise HTTPException(
                 status_code=422,
                 detail="Idempotency-Key must be 16 to 128 letters, digits, '.', '_' or '-'",
+            )
+        if runner.closing:
+            raise HTTPException(
+                status_code=503, detail="the server is shutting down; nothing was recorded"
             )
         if app_state.engine is None:
             raise HTTPException(
@@ -274,56 +318,119 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 existing.model_copy(update={"human_decision": None, "actual_conditions": None})
             )
 
+        engine = app_state.engine
+        if not engine.policy.required_categories:
+            raise HTTPException(status_code=503, detail="server configuration is unsafe")
+        if plan.planned_start < app_state.clock():
+            raise HTTPException(
+                status_code=422, detail="planned_start is in the past; assess a future dive window"
+            )
         if idempotency_key is not None:
             earlier = await run_in_threadpool(app_state.repository.get, assessment_id)
             if earlier is not None:
                 return replay(earlier)
         try:
-            record = await assess_dive(
-                created_by=principal.actor,
-                assigned_decider=decider,
-                assessment_id=assessment_id,
-                plan=plan,
-                site=site,
-                connectors=app_state.connectors,
-                engine=app_state.engine,
-                now=app_state.clock(),
-                provider=app_state.provider,
-                clock=app_state.clock,
+            admission = await run_in_threadpool(
+                lambda: app_state.repository.admit(
+                    NewRun(
+                        id=assessment_id,
+                        created_by=principal.actor,
+                        assigned_decider=decider,
+                        plan=plan,
+                    ),
+                    max_in_flight=app_state.runs.max_in_flight,
+                    max_per_actor=app_state.runs.max_per_actor,
+                    lease=app_state.runs.lease,
+                )
             )
-        except InvalidPlanError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except UnsafeConfigurationError as exc:
-            logger.error("unsafe configuration", extra={"detail": str(exc)})
-            raise HTTPException(status_code=503, detail="server configuration is unsafe") from exc
-        try:
-            await run_in_threadpool(app_state.repository.create, record)
-        except RecordExistsError:
-            # Two requests with one key raced; the other stored first. Not a failure for this one.
-            if idempotency_key is None:
-                raise
+        except RunMismatchError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="this Idempotency-Key was already used for a different request",
+            ) from exc
+        except CapacityError as exc:
+            logger.warning(
+                "run refused: at capacity", extra={"actor": principal.actor, "scope": exc.scope}
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="nothing was recorded; too many assessments are running, try again later",
+                headers={"Retry-After": str(app_state.runs.retry_after_seconds)},
+            ) from exc
+        if admission.kind == "completed":
             stored = await run_in_threadpool(app_state.repository.get, assessment_id)
             if stored is None:
-                raise
+                raise HTTPException(status_code=404, detail="assessment not found")
             return replay(stored)
-        logger.info(
-            "assessment stored", extra={"assessment_id": record.id, "actor": principal.actor}
-        )
-        return AssessmentView.of(record)
+        assert admission.run is not None
+        if admission.kind == "failed":
+            raise HTTPException(
+                status_code=409,
+                detail="nothing was recorded; this run did not finish. Use a new Idempotency-Key",
+            )
+        if admission.kind == "started":
+            assert admission.run_token is not None
+            clock = app_state.clock
+
+            async def work() -> AssessmentRecord:
+                return await assess_dive(
+                    created_by=principal.actor,
+                    assigned_decider=decider,
+                    assessment_id=assessment_id,
+                    plan=plan,
+                    site=site,
+                    connectors=app_state.connectors,
+                    engine=engine,
+                    now=clock(),
+                    provider=app_state.provider,
+                    clock=clock,
+                )
+
+            try:
+                runner.start(assessment_id, admission.run_token, principal.actor, work)
+            except RuntimeError as exc:
+                await run_in_threadpool(
+                    app_state.repository.fail,
+                    assessment_id,
+                    admission.run_token,
+                    FailureCode.SHUTDOWN,
+                )
+                raise HTTPException(
+                    status_code=503, detail="the server is shutting down; nothing was recorded"
+                ) from exc
+        response.headers["Location"] = f"/v1/assessments/{assessment_id}"
+        return RunStatusView.of(admission.run)
 
     @app.get("/v1/assessments/{assessment_id}", tags=["assessments"])
     def get_assessment(
         assessment_id: AssessmentId,
-        principal: Annotated[Principal, Depends(READ)],
-    ) -> AssessmentView:
-        return AssessmentView.of(_load(assessment_id))
+        principal: Annotated[Principal, Depends(READ_OWN)],
+    ) -> AssessmentView | RunStatusView:
+        viewer = Role.VIEWER in principal.roles
+        record = app_state.repository.get(assessment_id)
+        run = None if record is not None else app_state.repository.get_run(assessment_id)
+        if record is None and run is None:
+            # A run can finish between the two reads above: look for the record once more.
+            record = None
+        if record is not None:
+            if viewer:
+                return AssessmentView.of(record)
+            if record.created_by != principal.actor:
+                raise HTTPException(status_code=404, detail="assessment not found")
+            # A create-only key sees the record as it was created, as a replay does.
+            return AssessmentView.of(
+                record.model_copy(update={"human_decision": None, "actual_conditions": None})
+            )
+        if run is None or not (viewer or run.created_by == principal.actor):
+            raise HTTPException(status_code=404, detail="assessment not found")
+        return RunStatusView.of(run)
 
     @app.get("/v1/assessments/{assessment_id}/evidence", tags=["assessments"])
     def get_evidence(
         assessment_id: AssessmentId,
         principal: Annotated[Principal, Depends(READ)],
     ) -> EvidenceView:
-        return EvidenceView.of(_load(assessment_id))
+        return EvidenceView.of(_load(assessment_id, principal))
 
     @app.get("/v1/sites", tags=["sites"])
     def list_sites(principal: Annotated[Principal, Depends(READ)]) -> SiteListView:
@@ -371,7 +478,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             )
             return AssessmentView.of(existing)
 
-        record = _load(assessment_id)
+        record = _load(assessment_id, principal)
         _require_assigned(record, principal)
         if record.human_decision is not None:
             # A retry of the very same decision (same person, outcome and reason) after an
@@ -438,7 +545,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         body: ActualConditionsRequest,
         principal: Annotated[Principal, Depends(DECIDE)],
     ) -> AssessmentView:
-        record = _load(assessment_id)
+        record = _load(assessment_id, principal)
         _require_assigned(record, principal)
         now = app_state.clock()
         if record.human_decision is not None and now < record.plan.planned_start:

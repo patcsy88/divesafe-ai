@@ -160,6 +160,7 @@ def test_a_writer_waiting_on_the_row_lock_gets_a_conflict_not_a_database_error(
 
 def test_the_api_stores_and_decides_through_postgres(stored: PostgresAssessmentRepository) -> None:
     from fastapi.testclient import TestClient
+    from tests.api_polling import create_and_poll, started
     from tests.safety.test_api_human_gate import AUTH_A, PLAN, _build
 
     from divesafe.api.app import create_app
@@ -167,8 +168,8 @@ def test_the_api_stores_and_decides_through_postgres(stored: PostgresAssessmentR
     client, _, _ = _build()
     state = client.app.state.divesafe  # type: ignore[attr-defined]
     state.repository = stored
-    api = TestClient(create_app(state))
-    created = api.post("/v1/assessments", json=PLAN, headers=AUTH_A).json()
+    api = started(TestClient(create_app(state)))
+    created = create_and_poll(api, PLAN, AUTH_A).json()
     aid = created["record"]["id"]
     assert stored.get(aid) is not None
     decision = {"decision": "INSUFFICIENT EVIDENCE", "rationale": "reviewed"}
@@ -322,27 +323,35 @@ def test_the_api_does_not_block_the_event_loop_on_storage() -> None:
     import asyncio
 
     from fastapi.testclient import TestClient
+    from tests.api_polling import create_and_poll, started
     from tests.safety.test_api_human_gate import AUTH_A, PLAN, _build
 
     from divesafe.api.app import create_app
     from divesafe.services import InMemoryAssessmentRepository
 
     class Probe(InMemoryAssessmentRepository):
-        on_event_loop: bool | None = None
+        seen: list[bool] = []
 
-        def create(self, record: object) -> None:
+        def _probe(self) -> None:
             try:
                 asyncio.get_running_loop()
-                Probe.on_event_loop = True
+                Probe.seen.append(True)
             except RuntimeError:
-                Probe.on_event_loop = False
-            super().create(record)  # type: ignore[arg-type]
+                Probe.seen.append(False)
+
+        def admit(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            self._probe()
+            return super().admit(*args, **kwargs)  # type: ignore[arg-type]
+
+        def complete(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            self._probe()
+            return super().complete(*args, **kwargs)  # type: ignore[arg-type]
 
     client, _, _ = _build()
     state = client.app.state.divesafe  # type: ignore[attr-defined]
     state.repository = Probe()
-    TestClient(create_app(state)).post("/v1/assessments", json=PLAN, headers=AUTH_A)
-    assert Probe.on_event_loop is False
+    create_and_poll(started(TestClient(create_app(state))), PLAN, AUTH_A)
+    assert Probe.seen and not any(Probe.seen)  # admission and completion both ran off the loop
 
 
 # --- outage, errors and secrets ------------------------------------------------------------------

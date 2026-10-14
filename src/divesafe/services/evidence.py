@@ -64,10 +64,21 @@ async def gather_evidence(
     window_start: datetime,
     window_end: datetime,
     now: datetime,
+    *,
+    timeout_seconds: float = 30.0,
 ) -> EvidenceSet:
+    """Fetch from every connector at once. A connector that has not answered within the overall
+    timeout becomes an issue, like any other failure, so one stuck source cannot hold a run."""
+
     async def run(connector: Connector) -> tuple[str, FetchResult | None, str | None]:
         try:
-            return connector.name, await connector.fetch(site, window_start, window_end, now), None
+            result = await asyncio.wait_for(
+                connector.fetch(site, window_start, window_end, now), timeout_seconds
+            )
+            return connector.name, result, None
+        except TimeoutError:
+            logger.warning("connector timed out", extra={"connector": connector.name})
+            return connector.name, None, "TimeoutError: no answer within the time allowed"
         except ConnectorError as exc:
             logger.warning("connector failed", extra={"connector": connector.name, "site": site.id})
             return connector.name, None, f"{type(exc).__name__}: {exc}"

@@ -4,6 +4,7 @@ or turn a recorded decision into an error, and must never let a different reques
 from __future__ import annotations
 
 import pytest
+from tests.api_polling import create_and_poll
 from tests.safety.test_api_human_gate import AUTH_A, AUTH_B, PLAN, _build, _create
 
 pytestmark = pytest.mark.safety
@@ -18,9 +19,9 @@ def _count(repo: object) -> int:
 
 def test_a_retried_create_returns_the_same_record_and_stores_one() -> None:
     client, _, repo = _build()
-    first = client.post("/v1/assessments", json=PLAN, headers=H)
+    first = create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY})
     again = client.post("/v1/assessments", json=PLAN, headers=H)
-    assert first.status_code == 201 and again.status_code == 200
+    assert first.status_code == 200 and again.status_code == 200
     assert again.headers["idempotent-replay"] == "true"
     assert first.json()["record"]["id"] == again.json()["record"]["id"]
     assert _count(repo) == 1
@@ -29,7 +30,7 @@ def test_a_retried_create_returns_the_same_record_and_stores_one() -> None:
 def test_without_a_key_two_creates_make_two_records() -> None:
     client, _, repo = _build()
     for _ in range(2):
-        assert client.post("/v1/assessments", json=PLAN, headers=AUTH_A).status_code == 201
+        assert create_and_poll(client, PLAN, AUTH_A).status_code == 200
     assert _count(repo) == 2
 
 
@@ -43,10 +44,12 @@ def test_the_same_key_with_a_different_plan_is_refused_not_replayed() -> None:
 
 def test_one_persons_key_cannot_reach_another_persons_record() -> None:
     client, _, repo = _build()
-    mine = client.post("/v1/assessments", json=PLAN, headers=H).json()["record"]["id"]
-    theirs = client.post(
-        "/v1/assessments", json=PLAN, headers={**AUTH_B, "Idempotency-Key": KEY}
-    ).json()["record"]["id"]
+    mine = create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY}).json()[
+        "record"
+    ]["id"]
+    theirs = create_and_poll(client, PLAN, AUTH_B, extra_headers={"Idempotency-Key": KEY}).json()[
+        "record"
+    ]["id"]
     assert mine != theirs and _count(repo) == 2
 
 
@@ -139,7 +142,9 @@ def test_a_create_only_key_cannot_read_a_later_decision_by_repeating_its_create(
     client, _ = _client()
     assert isinstance(client, TestClient)
     mine = {**HEADERS[Role.ASSESSOR], "Idempotency-Key": KEY}
-    first = client.post("/v1/assessments", json=PLAN_D, headers=mine)
+    first = create_and_poll(
+        client, PLAN_D, HEADERS[Role.ASSESSOR], extra_headers={"Idempotency-Key": KEY}
+    )
     rid = first.json()["record"]["id"]
     decided = client.post(
         f"/v1/assessments/{rid}/decision",
@@ -175,11 +180,11 @@ def test_the_same_key_with_a_different_decider_is_refused() -> None:
     assert other.status_code == 422 and _count(repo) == 1
 
 
-def test_a_racing_create_with_the_same_key_gets_the_stored_record() -> None:
-    from divesafe.services import RecordExistsError
-
+def test_a_create_that_finds_the_run_already_complete_at_admission_gets_the_stored_record() -> None:
     client, _, repo = _build()
-    first = client.post("/v1/assessments", json=PLAN, headers=H).json()["record"]["id"]
+    first = create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY}).json()[
+        "record"
+    ]["id"]
     real_get, calls = repo.get, [0]
 
     def blind_first_get(assessment_id: str):  # type: ignore[no-untyped-def]
@@ -187,14 +192,6 @@ def test_a_racing_create_with_the_same_key_gets_the_stored_record() -> None:
         return None if calls[0] == 1 else real_get(assessment_id)
 
     repo.get = blind_first_get  # type: ignore[method-assign]
-    real_create = repo.create
-
-    def create(record):  # type: ignore[no-untyped-def]
-        if record.id == first:
-            raise RecordExistsError(record.id)
-        real_create(record)
-
-    repo.create = create  # type: ignore[method-assign]
     raced = client.post("/v1/assessments", json=PLAN, headers=H)
     assert raced.status_code == 200 and raced.json()["record"]["id"] == first
 

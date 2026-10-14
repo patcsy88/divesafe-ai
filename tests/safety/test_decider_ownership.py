@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.api_polling import create_and_poll
 from tests.safety.test_api_human_gate import AUTH_A, AUTH_B, PLAN, _build, _create
 
 from divesafe.api.auth import ApiKeyAuthenticator, KeyEntry, Role
@@ -101,12 +102,8 @@ def test_an_assessor_can_name_a_decider_and_cannot_decide_themselves() -> None:
             _h("s"): KeyEntry("starter", frozenset({Role.ASSESSOR})),
         }
     )
-    created = client.post(
-        "/v1/assessments",
-        json={**PLAN, "decider": "Alice"},
-        headers={"Authorization": "Bearer s"},
-    )
-    assert created.status_code == 201
+    created = create_and_poll(client, {**PLAN, "decider": "Alice"}, {"Authorization": "Bearer s"})
+    assert created.status_code == 200
     url = f"/v1/assessments/{created.json()['record']['id']}/decision"
     assert client.post(url, json=SAFE, headers={"Authorization": "Bearer s"}).status_code == 403
     assert client.post(url, json=SAFE, headers={"Authorization": "Bearer a"}).status_code == 200
