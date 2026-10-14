@@ -136,6 +136,35 @@ CREATE TRIGGER assessments_no_truncate_guard
 """
 
 
+_V2 = """
+CREATE TABLE IF NOT EXISTS public.pending_runs (
+    id               text PRIMARY KEY CHECK (id ~ '^[0-9A-Za-z._-]{1,64}$'),
+    created_by       text NOT NULL CHECK (length(created_by) BETWEEN 1 AND 200),
+    assigned_decider text NOT NULL CHECK (length(assigned_decider) BETWEEN 1 AND 200),
+    plan             jsonb NOT NULL CHECK (jsonb_typeof(plan) = 'object'),
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    state            text NOT NULL CHECK (state IN ('RUNNING', 'FAILED')),
+    token_hash       text NOT NULL CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    lease_expires_at timestamptz NOT NULL,
+    failed_at        timestamptz,
+    failure_code     text CHECK (failure_code IN
+        ('timeout', 'storage', 'internal', 'shutdown', 'start_passed')),
+    CHECK ((state = 'FAILED') = (failed_at IS NOT NULL)),
+    CHECK ((state = 'FAILED') = (failure_code IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS pending_runs_running_lease
+    ON public.pending_runs (lease_expires_at) WHERE state = 'RUNNING';
+CREATE INDEX IF NOT EXISTS pending_runs_failed_at
+    ON public.pending_runs (failed_at) WHERE state = 'FAILED';
+
+CREATE TABLE IF NOT EXISTS public.run_failure_counts (
+    code text PRIMARY KEY CHECK (code IN
+        ('timeout', 'storage', 'internal', 'shutdown', 'start_passed')),
+    n    bigint NOT NULL CHECK (n >= 0)
+);
+"""
+
+
 class MigrationError(RuntimeError):
     """The migration history and the code disagree, or a migration list is malformed. Messages
     never contain connection details."""
@@ -152,7 +181,10 @@ class Migration:
         return hashlib.sha256(self.sql.encode()).hexdigest()
 
 
-MIGRATIONS: tuple[Migration, ...] = (Migration(1, "assessments table and guard triggers", _V1),)
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(1, "assessments table and guard triggers", _V1),
+    Migration(2, "pending runs and failure counts", _V2),
+)
 
 Applied = tuple[int, str, str]  # version, name, checksum
 

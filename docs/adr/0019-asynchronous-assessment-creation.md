@@ -151,6 +151,18 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 - Making production refuse to start without `DIVESAFE_DECISION_MAX_AGE_MINUTES` is raised, not
   decided: the value must come from the owner.
 
+## Build status
+
+- **Stage 1 (storage): built.** Migration 2 adds `pending_runs` and `run_failure_counts`.
+  `RunStore` (`services/runs.py`) is implemented by the in-memory and PostgreSQL repositories and
+  both pass `tests/unit/test_run_store_contract.py`. Covered: admission under a lock with the
+  server and per-actor caps, joins that compare plan, decider and creator, a lease, a
+  compare-and-set completion (a late, failed or wrong-token run stores nothing), bounded cleanup
+  with failure counts, and the least-privilege checks in `verify`. The PostgreSQL tests ran
+  locally against a throwaway container and in CI.
+- Stage 2 (API and background runner) and stage 3 (web) are not built.
+- The failure counts table is written by cleanup only; nothing reads it yet.
+
 ## Not solved
 
 - Cancelling a run. Worker threads for model calls cannot be cancelled (ADR 0016).

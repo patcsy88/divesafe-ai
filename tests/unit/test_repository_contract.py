@@ -48,6 +48,7 @@ def reset_test_database() -> None:
         for trigger in GUARD_TRIGGERS:
             conn.execute(f"ALTER TABLE assessments DISABLE TRIGGER {trigger}")
         conn.execute("TRUNCATE assessments")
+        conn.execute("TRUNCATE pending_runs, run_failure_counts")
         for trigger in GUARD_TRIGGERS:
             conn.execute(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
 

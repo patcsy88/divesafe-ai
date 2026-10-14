@@ -12,10 +12,13 @@ application role only verifies that the guard is present and enabled, and refuse
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from typing import Any
 
 import psycopg
@@ -23,7 +26,7 @@ from psycopg import sql
 from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
 
-from divesafe.domain import AssessmentRecord
+from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.services.migrations import GUARD_TRIGGERS, migrate, schema_problems
 from divesafe.services.repository import (
     ConflictError,
@@ -35,11 +38,27 @@ from divesafe.services.repository import (
     UnstorableRecordError,
     check_successor,
 )
+from divesafe.services.runs import (
+    Admission,
+    CapacityError,
+    CleanupResult,
+    FailureCode,
+    NewRun,
+    PendingRun,
+    RunMismatchError,
+    RunState,
+)
 
 CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
+
+_RUNS_LOCK_KEY = 7_281_903_115
+_RUN_COLUMNS = (
+    "id, created_by, assigned_decider, plan::text, created_at, state, lease_expires_at, "
+    "failed_at, failure_code"
+)
 
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
@@ -55,6 +74,8 @@ def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
     try:
         with psycopg.connect(admin_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
             conn.execute("REVOKE ALL ON public.assessments FROM PUBLIC")
+            conn.execute("REVOKE ALL ON public.pending_runs FROM PUBLIC")
+            conn.execute("REVOKE ALL ON public.run_failure_counts FROM PUBLIC")
             if app_role is not None:
                 role = sql.Identifier(app_role)
                 conn.execute(sql.SQL("GRANT SELECT ON public.schema_migrations TO {}").format(role))
@@ -66,6 +87,27 @@ def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
                 )
                 conn.execute(
                     sql.SQL("GRANT SELECT, INSERT, UPDATE ON public.assessments TO {}").format(role)
+                )
+                conn.execute(
+                    sql.SQL(
+                        "GRANT SELECT, INSERT, UPDATE, DELETE ON public.pending_runs TO {}"
+                    ).format(role)
+                )
+                conn.execute(
+                    sql.SQL(
+                        "GRANT SELECT, INSERT, UPDATE ON public.run_failure_counts TO {}"
+                    ).format(role)
+                )
+                conn.execute(
+                    sql.SQL(
+                        "REVOKE TRUNCATE, TRIGGER, REFERENCES ON public.pending_runs FROM {}"
+                    ).format(role)
+                )
+                conn.execute(
+                    sql.SQL(
+                        "REVOKE DELETE, TRUNCATE, TRIGGER, REFERENCES "
+                        "ON public.run_failure_counts FROM {}"
+                    ).format(role)
                 )
                 conn.execute(
                     sql.SQL(
@@ -170,7 +212,13 @@ class PostgresAssessmentRepository:
                     "has_table_privilege('public.assessments', 'TRUNCATE'), "
                     "has_table_privilege('public.assessments', 'TRIGGER'), "
                     "COALESCE(has_table_privilege('public.schema_migrations', 'INSERT, UPDATE, "
-                    "DELETE, TRUNCATE'), false) "
+                    "DELETE, TRUNCATE'), false), "
+                    "COALESCE((SELECT pg_get_userbyid(relowner) = current_user FROM pg_class "
+                    "WHERE oid = to_regclass('public.pending_runs')), false), "
+                    "COALESCE(has_table_privilege('public.pending_runs', 'TRUNCATE, TRIGGER'), "
+                    "false), "
+                    "COALESCE(has_table_privilege('public.run_failure_counts', "
+                    "'DELETE, TRUNCATE'), false) "
                     "FROM pg_class c WHERE c.oid = 'public.assessments'::regclass"
                 ).fetchone()
                 assert row is not None
@@ -181,6 +229,9 @@ class PostgresAssessmentRepository:
                     "can TRUNCATE",
                     "can alter triggers",
                     "can write the migration history",
+                    "owns the pending runs table",
+                    "can TRUNCATE or alter triggers on the pending runs table",
+                    "can delete the failure counts",
                 )
                 problems += [
                     f"the application role {n}" for n, flag in zip(names, row, strict=True) if flag
@@ -242,3 +293,162 @@ class PostgresAssessmentRepository:
             raise UnstorableRecordError("the record would not read back identical")
         if AssessmentRecord.model_validate_json(row[0]) != record:
             raise UnstorableRecordError("the record would not read back identical")
+
+    # --- pending runs (ADR 0019) ----------------------------------------------------------------
+    # Leases and counts use the database clock, so several workers cannot disagree about time.
+
+    @staticmethod
+    def _run_from(row: tuple[Any, ...]) -> PendingRun:
+        return PendingRun(
+            id=row[0],
+            created_by=row[1],
+            assigned_decider=row[2],
+            plan=DivePlan.model_validate_json(row[3]),
+            created_at=row[4],
+            state=RunState(row[5]),
+            lease_expires_at=row[6],
+            failed_at=row[7],
+            failure_code=None if row[8] is None else FailureCode(row[8]),
+        )
+
+    @staticmethod
+    def _expire(conn: psycopg.Connection[Any], run_id: str) -> None:
+        conn.execute(
+            "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
+            "failure_code = 'timeout' WHERE id = %s AND state = 'RUNNING' "
+            "AND lease_expires_at <= clock_timestamp()",
+            (run_id,),
+        )
+
+    def admit(
+        self, run: NewRun, *, max_in_flight: int, max_per_actor: int, lease: timedelta
+    ) -> Admission:
+        _storable(run.plan.model_dump(mode="json"))
+        token = secrets.token_urlsafe(32)
+        with _storage_errors(), self._connect() as conn, conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
+            if conn.execute("SELECT 1 FROM public.assessments WHERE id = %s", (run.id,)).fetchone():
+                return Admission(kind="completed")
+            self._expire(conn, run.id)
+            row = conn.execute(
+                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
+            ).fetchone()
+            if row is not None:
+                existing = self._run_from(row)
+                if (
+                    existing.plan != run.plan
+                    or existing.assigned_decider != run.assigned_decider
+                    or existing.created_by != run.created_by
+                ):
+                    raise RunMismatchError(run.id)
+                kind = "joined" if existing.state is RunState.RUNNING else "failed"
+                return Admission(kind=kind, run=existing)
+            counts = conn.execute(
+                "SELECT count(*), count(*) FILTER (WHERE created_by = %s) "
+                "FROM public.pending_runs "
+                "WHERE state = 'RUNNING' AND lease_expires_at > clock_timestamp()",
+                (run.created_by,),
+            ).fetchone()
+            assert counts is not None
+            if counts[0] >= max_in_flight:
+                raise CapacityError("server")
+            if counts[1] >= max_per_actor:
+                raise CapacityError("actor")
+            conn.execute(
+                "INSERT INTO public.pending_runs (id, created_by, assigned_decider, plan, "
+                "created_at, state, token_hash, lease_expires_at) VALUES "
+                "(%s, %s, %s, %s::jsonb, clock_timestamp(), 'RUNNING', %s, "
+                "clock_timestamp() + %s)",
+                (
+                    run.id,
+                    run.created_by,
+                    run.assigned_decider,
+                    run.plan.model_dump_json(),
+                    hashlib.sha256(token.encode()).hexdigest(),
+                    lease,
+                ),
+            )
+            stored = conn.execute(
+                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
+            ).fetchone()
+            assert stored is not None
+            return Admission(kind="started", run=self._run_from(stored), run_token=token)
+
+    def get_run(self, run_id: str) -> PendingRun | None:
+        with _storage_errors(), self._connect() as conn, conn.transaction():
+            self._expire(conn, run_id)
+            row = conn.execute(
+                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
+            ).fetchone()
+            return None if row is None else self._run_from(row)
+
+    def complete(self, record: AssessmentRecord, run_token: str) -> bool:
+        """Store the record and drop the run in one transaction, only if this run still holds a
+        live lease and the token matches. Otherwise nothing is stored."""
+        if record.human_decision is not None or record.actual_conditions is not None:
+            raise InvalidSuccessorError("a new record cannot already carry a decision")
+        _storable(record.model_dump())
+        with _storage_errors(), self._connect() as conn, conn.transaction():
+            row = conn.execute(
+                "SELECT token_hash FROM public.pending_runs WHERE id = %s AND state = 'RUNNING' "
+                "AND lease_expires_at > clock_timestamp() FOR UPDATE",
+                (record.id,),
+            ).fetchone()
+            if row is None or not secrets.compare_digest(
+                row[0], hashlib.sha256(run_token.encode()).hexdigest()
+            ):
+                return False
+            try:
+                with conn.transaction():
+                    conn.execute(
+                        "INSERT INTO public.assessments (id, record) VALUES (%s, %s::jsonb)",
+                        (record.id, record.model_dump_json()),
+                    )
+            except UniqueViolation:
+                return False
+            self._read_back_must_match(conn, record)
+            conn.execute("DELETE FROM public.pending_runs WHERE id = %s", (record.id,))
+            return True
+
+    def fail(self, run_id: str, run_token: str, code: FailureCode) -> bool:
+        with _storage_errors(), self._connect() as conn, conn.transaction():
+            cursor = conn.execute(
+                "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
+                "failure_code = %s WHERE id = %s AND state = 'RUNNING' AND token_hash = %s",
+                (code.value, run_id, hashlib.sha256(run_token.encode()).hexdigest()),
+            )
+            return cursor.rowcount == 1
+
+    def cleanup(self, *, retention: timedelta, batch: int) -> CleanupResult:
+        """Mark expired running rows failed, then delete failed rows older than `retention` in a
+        bounded batch, counting them by code first. Never touches `assessments`."""
+        with _storage_errors(), self._connect() as conn, conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
+            marked = conn.execute(
+                "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
+                "failure_code = 'timeout' WHERE id IN (SELECT id FROM public.pending_runs "
+                "WHERE state = 'RUNNING' AND lease_expires_at <= clock_timestamp() LIMIT %s)",
+                (batch,),
+            ).rowcount
+            old = conn.execute(
+                "DELETE FROM public.pending_runs WHERE id IN (SELECT id FROM "
+                "public.pending_runs WHERE state = 'FAILED' "
+                "AND failed_at <= clock_timestamp() - %s ORDER BY failed_at LIMIT %s) "
+                "RETURNING failure_code",
+                (retention, batch),
+            ).fetchall()
+            tally: dict[str, int] = {}
+            for (code,) in old:
+                tally[str(code)] = tally.get(str(code), 0) + 1
+            for code, n in tally.items():
+                conn.execute(
+                    "INSERT INTO public.run_failure_counts (code, n) VALUES (%s, %s) "
+                    "ON CONFLICT (code) DO UPDATE SET n = public.run_failure_counts.n + %s",
+                    (code, n, n),
+                )
+            return CleanupResult(marked_failed=marked, deleted=len(old))
+
+    def failure_counts(self) -> dict[str, int]:
+        with _storage_errors(), self._connect() as conn:
+            rows = conn.execute("SELECT code, n FROM public.run_failure_counts").fetchall()
+            return {str(c): int(n) for c, n in rows}

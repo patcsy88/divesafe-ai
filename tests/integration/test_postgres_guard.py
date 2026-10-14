@@ -474,25 +474,28 @@ def test_a_failing_migration_rolls_back_completely_and_is_not_recorded() -> None
     from divesafe.services.migrations import MIGRATIONS, Migration, migrate
 
     _postgres()
-    bad = Migration(2, "bad", "CREATE TABLE half_done (x int); SELECT 1/0;")
+    bad = Migration(len(MIGRATIONS) + 1, "bad", "CREATE TABLE half_done (x int); SELECT 1/0;")
     with pytest.raises(Exception, match="could not apply"):
         migrate(DSN, (*MIGRATIONS, bad))  # type: ignore[arg-type]
     with psycopg.connect(DSN) as conn:  # type: ignore[arg-type]
         assert conn.execute("SELECT to_regclass('public.half_done')").fetchone() == (None,)
-        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (1,)
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (
+            len(MIGRATIONS),
+        )
 
 
 def test_a_good_second_migration_is_applied_once_and_recorded() -> None:
     from divesafe.services.migrations import MIGRATIONS, Migration, migrate
 
     _postgres()
-    extra = Migration(2, "scratch", "CREATE TABLE migration_scratch (x int)")
+    nxt = len(MIGRATIONS) + 1
+    extra = Migration(nxt, "scratch", "CREATE TABLE migration_scratch (x int)")
     try:
-        assert migrate(DSN, (*MIGRATIONS, extra)) == [2]  # type: ignore[arg-type]
+        assert migrate(DSN, (*MIGRATIONS, extra)) == [nxt]  # type: ignore[arg-type]
         assert migrate(DSN, (*MIGRATIONS, extra)) == []  # type: ignore[arg-type]
     finally:
         _sql("DROP TABLE IF EXISTS migration_scratch")
-        _sql("DELETE FROM schema_migrations WHERE version = 2")
+        _sql("DELETE FROM schema_migrations WHERE version = %s", (nxt,))
 
 
 def test_an_edited_applied_migration_is_refused_by_the_runner() -> None:
@@ -501,10 +504,12 @@ def test_an_edited_applied_migration_is_refused_by_the_runner() -> None:
     _postgres()
     edited = Migration(1, MIGRATIONS[0].name, MIGRATIONS[0].sql + "\n-- edited")
     with pytest.raises(MigrationError, match="changed after it was applied"):
-        migrate(DSN, (edited,))  # type: ignore[arg-type]
+        migrate(DSN, (edited, *MIGRATIONS[1:]))  # type: ignore[arg-type]
 
 
 def test_startup_refuses_a_database_behind_or_ahead_of_the_code() -> None:
+    from divesafe.services.migrations import MIGRATIONS
+
     repo = _postgres()
     assert isinstance(repo, PostgresAssessmentRepository)
     try:
@@ -519,8 +524,8 @@ def test_startup_refuses_a_database_behind_or_ahead_of_the_code() -> None:
         _sql("DELETE FROM schema_migrations")
         _postgres()
         _sql(
-            "INSERT INTO schema_migrations (version, name, checksum) VALUES (2, 'future', %s)",
-            ("1" * 64,),
+            "INSERT INTO schema_migrations (version, name, checksum) VALUES (%s, 'future', %s)",
+            (len(MIGRATIONS) + 1, "1" * 64),
         )
         assert any("ahead of this code" in p for p in repo.verify(least_privilege=False))
     finally:
@@ -531,8 +536,12 @@ def test_startup_refuses_a_database_behind_or_ahead_of_the_code() -> None:
 def test_the_application_role_can_read_but_not_write_the_migration_history(
     app_role_dsn: str,
 ) -> None:
+    from divesafe.services.migrations import MIGRATIONS
+
     with psycopg.connect(app_role_dsn) as conn:
-        assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone() == (
+            len(MIGRATIONS),
+        )
     for statement in (
         "DELETE FROM schema_migrations",
         "UPDATE schema_migrations SET checksum = repeat('0', 64)",
@@ -549,15 +558,16 @@ def test_two_runners_at_once_apply_a_migration_exactly_once() -> None:
     from divesafe.services.migrations import MIGRATIONS, Migration, migrate
 
     _postgres()
-    slow = Migration(2, "slow", "SELECT pg_sleep(1); CREATE TABLE migration_scratch (x int)")
+    nxt = len(MIGRATIONS) + 1
+    slow = Migration(nxt, "slow", "SELECT pg_sleep(1); CREATE TABLE migration_scratch (x int)")
     try:
         with ThreadPoolExecutor(2) as pool:
             futures = [pool.submit(migrate, DSN, (*MIGRATIONS, slow)) for _ in range(2)]  # type: ignore[arg-type]
             results = sorted(f.result() for f in futures)
-        assert results == [[], [2]]
+        assert results == [[], [nxt]]
     finally:
         _sql("DROP TABLE IF EXISTS migration_scratch")
-        _sql("DELETE FROM schema_migrations WHERE version = 2")
+        _sql("DELETE FROM schema_migrations WHERE version = %s", (nxt,))
 
 
 def test_a_migration_that_leaves_the_guard_disabled_is_rolled_back() -> None:
@@ -565,7 +575,9 @@ def test_a_migration_that_leaves_the_guard_disabled_is_rolled_back() -> None:
 
     _postgres()
     sneaky = Migration(
-        2, "sneaky", "ALTER TABLE public.assessments DISABLE TRIGGER assessments_insert_guard"
+        len(MIGRATIONS) + 1,
+        "sneaky",
+        "ALTER TABLE public.assessments DISABLE TRIGGER assessments_insert_guard",
     )
     # `guarded` refuses the wording; bypass it to prove the post-check also holds
     import divesafe.services.migrations as mod
@@ -578,7 +590,9 @@ def test_a_migration_that_leaves_the_guard_disabled_is_rolled_back() -> None:
     finally:
         mod.guarded = original
     with psycopg.connect(DSN) as conn:  # type: ignore[arg-type]
-        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (1,)
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (
+            len(MIGRATIONS),
+        )
     assert PostgresAssessmentRepository(DSN).verify(least_privilege=False) == []  # type: ignore[arg-type]
 
 
@@ -617,7 +631,11 @@ def test_migrate_itself_refuses_a_migration_that_touches_the_guard() -> None:
     from divesafe.services.migrations import MIGRATIONS, Migration, MigrationError, migrate
 
     _postgres()
-    evil = Migration(2, "evil", "DROP TRIGGER assessments_append_only_guard ON public.assessments")
+    evil = Migration(
+        len(MIGRATIONS) + 1,
+        "evil",
+        "DROP TRIGGER assessments_append_only_guard ON public.assessments",
+    )
     with pytest.raises(MigrationError, match="touches the audit guard"):
         migrate(DSN, (*MIGRATIONS, evil))  # type: ignore[arg-type]
     assert PostgresAssessmentRepository(DSN).verify(least_privilege=False) == []  # type: ignore[arg-type]
@@ -634,3 +652,77 @@ def test_installing_again_takes_back_write_access_to_the_migration_history(
     assert any("migration history" in p for p in app.verify(least_privilege=True))
     install_schema(DSN, "divesafe_app_test")
     assert app.verify(least_privilege=True) == []
+
+
+# --- pending runs (ADR 0019) -----------------------------------------------------------------
+
+
+def test_the_application_role_can_use_runs_but_cannot_touch_assessments_through_them(
+    app_role_dsn: str,
+) -> None:
+    from datetime import timedelta
+
+    from tests.unit.test_run_store_contract import _run
+
+    from divesafe.services import NewRun
+
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    admission = app.admit(_run(), max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5))
+    assert admission.kind == "started" and admission.run_token
+    assert app.cleanup(retention=timedelta(days=7), batch=10).deleted == 0
+    assert isinstance(_run(), NewRun)
+    for statement in (
+        "TRUNCATE pending_runs",
+        "ALTER TABLE pending_runs DISABLE TRIGGER ALL",
+        "DELETE FROM assessments",
+        "DELETE FROM run_failure_counts",
+        "TRUNCATE run_failure_counts",
+        "DROP TABLE pending_runs",
+    ):
+        with psycopg.connect(app_role_dsn) as conn, pytest.raises(psycopg.errors.Error):
+            conn.execute(statement)  # type: ignore[call-overload]
+
+
+def test_verification_flags_an_application_role_that_can_truncate_runs_or_edit_counts(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("GRANT TRUNCATE ON pending_runs TO divesafe_app_test")
+    assert any("pending runs table" in p for p in app.verify(least_privilege=True))
+    _sql("REVOKE TRUNCATE ON pending_runs FROM divesafe_app_test")
+    _sql("GRANT DELETE ON run_failure_counts TO divesafe_app_test")
+    assert any("failure counts" in p for p in app.verify(least_privilege=True))
+
+
+def test_the_run_table_refuses_a_failed_row_without_a_code_and_unknown_codes() -> None:
+    _postgres()
+    for state, failed_at, code in (
+        ("FAILED", "now()", "NULL"),
+        ("RUNNING", "NULL", "'timeout'"),
+        ("FAILED", "now()", "'boom'"),
+    ):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _sql(
+                "INSERT INTO pending_runs (id, created_by, assigned_decider, plan, state, "
+                f"token_hash, lease_expires_at, failed_at, failure_code) VALUES ('x', 'a', 'b', "
+                f"'{{}}', '{state}', repeat('a', 64), now(), {failed_at}, {code})"
+            )
+
+
+def test_a_complete_and_a_late_run_are_decided_by_the_database_clock() -> None:
+    from datetime import timedelta
+
+    from tests.unit.test_run_store_contract import _completed, _run
+
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    token = repo.admit(
+        _run(), max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5)
+    ).run_token
+    assert token is not None
+    _sql("UPDATE pending_runs SET lease_expires_at = now() - interval '1 second'")
+    assert repo.complete(_completed(), token) is False
+    assert repo.get("r1") is None

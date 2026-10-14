@@ -19,8 +19,28 @@ from divesafe.services.repository import (
     UnstorableRecordError,
     check_successor,
 )
+from divesafe.services.runs import (
+    Admission,
+    CapacityError,
+    CleanupResult,
+    FailureCode,
+    NewRun,
+    PendingRun,
+    RunMismatchError,
+    RunState,
+    RunStore,
+)
 
 __all__ = [
+    "Admission",
+    "CapacityError",
+    "CleanupResult",
+    "FailureCode",
+    "NewRun",
+    "PendingRun",
+    "RunMismatchError",
+    "RunState",
+    "RunStore",
     "AssessmentRepository",
     "ConflictError",
     "DuplicateEvidenceError",
