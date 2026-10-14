@@ -129,6 +129,10 @@ async function failed(
         };
       }
     } catch (inner) {
+      if (inner instanceof ApiError && inner.status === 401) {
+        await endSession();
+        redirect("/login");
+      }
       if (inner instanceof ApiError) return { error: error.message };
       throw inner;
     }

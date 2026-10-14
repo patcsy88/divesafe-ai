@@ -1,6 +1,6 @@
 import { API_TIMEOUT_MS, apiBaseUrl } from "./config.ts";
 import { plain } from "./present.ts";
-import { classify, type Fetched } from "./status.ts";
+import { classify, idOf, type Fetched } from "./status.ts";
 import type { AssessmentView, EvidenceView, SiteListView } from "./types.ts";
 
 export class ApiError extends Error {
@@ -131,15 +131,27 @@ export async function createAssessment(
     ),
   );
   if (reply === null) throw new ApiError(0, UNREADABLE);
-  const id = reply.kind === "run" ? reply.view.id : reply.view.record.id;
+  const id = idOf(reply);
   if (!ID.test(id)) throw new ApiError(0, UNREADABLE);
   return id;
 }
 
 export async function getAssessment(key: string, id: string): Promise<Fetched> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
-  const reply = classify(await call(`/v1/assessments/${encodeURIComponent(id)}`, key));
-  if (reply === null) throw new ApiError(0, UNREADABLE);
+  let body: unknown;
+  try {
+    body = await call(`/v1/assessments/${encodeURIComponent(id)}`, key);
+  } catch (error) {
+    // A failed read changes nothing, so "nothing was recorded" would be untrue: the run may well
+    // still finish.
+    if (error instanceof ApiError && error.status === 503) {
+      throw new ApiError(503, "Could not check right now, so the outcome is unknown. Try again shortly.");
+    }
+    throw error;
+  }
+  const reply = classify(body);
+  // A reply about some other assessment must never be shown (or decided) under this address.
+  if (reply === null || idOf(reply) !== id) throw new ApiError(0, UNREADABLE);
   return reply;
 }
 

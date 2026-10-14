@@ -18,11 +18,15 @@ const run = (over: Record<string, unknown> = {}) => ({
 const record = (over: Record<string, unknown> = {}) => ({
   id: ID,
   final_recommendation: "NO-GO",
+  deterministic_recommendation: "NO-GO",
+  proposed_recommendation: null,
   human_decision: null,
+  actual_conditions: null,
   ...over,
 });
 const finished = (status: string, rec: Record<string, unknown> = record()) => ({ status, record: rec });
-const DECIDED_REC = record({ human_decision: { decision: "NO-GO" } });
+const DECISION = { decision: "NO-GO", decided_by: "alice", decided_at: "2026-10-10T00:00:00Z" };
+const DECIDED_REC = record({ human_decision: DECISION });
 
 const real = globalThis.fetch;
 afterEach(() => {
@@ -65,6 +69,54 @@ test("malformed bodies are refused", () => {
   assert.equal(classify(finished("PENDING_HUMAN", record({ id: 5 }))), null);
 });
 
+test("a recommendation outside the four known values is refused, never shown as inconclusive", () => {
+  for (const bad of ["SAFE", "go", "NO_GO", "", null, 3]) {
+    assert.equal(classify(finished("PENDING_HUMAN", record({ final_recommendation: bad }))), null, String(bad));
+    assert.equal(classify(finished("PENDING_HUMAN", record({ deterministic_recommendation: bad }))), null, String(bad));
+  }
+  assert.equal(classify(finished("PENDING_HUMAN", record({ proposed_recommendation: "SAFE" }))), null);
+  assert.equal(classify(finished("PENDING_HUMAN", record({ proposed_recommendation: "CAUTION" })))?.kind, "assessment");
+});
+
+test("a decision that is not a real decision cannot make a record look decided or undecided", () => {
+  for (const bad of [false, 0, "", {}, true, [], { ...DECISION, decision: "SAFE" }, { ...DECISION, decided_by: 1 }]) {
+    assert.equal(classify(finished("DECIDED", record({ human_decision: bad }))), null, JSON.stringify(bad));
+    assert.equal(classify(finished("PENDING_HUMAN", record({ human_decision: bad }))), null, JSON.stringify(bad));
+  }
+  assert.equal(classify(finished("PENDING_HUMAN", record({ human_decision: undefined }))), null);
+});
+
+test("actual conditions must be absent or an object", () => {
+  assert.equal(classify(finished("PENDING_HUMAN", record({ actual_conditions: "x" }))), null);
+  assert.equal(classify(finished("PENDING_HUMAN", record({ actual_conditions: false }))), null);
+});
+
+test("a run with a field the API does not send, or a field of the wrong type, is refused", () => {
+  assert.equal(classify(run({ extra: 1 })), null);
+  assert.equal(classify(run({ notice: 5 })), null);
+  assert.equal(classify(run({ status_note: null })), null);
+  assert.equal(classify(run({ failure_code: 5 })), null);
+  assert.equal(classify(run({ failure_code: "timeout" })), null); // RUNNING has no failure code
+  assert.equal(classify(run({ status: "FAILED", failure_code: null }))?.kind, "run");
+});
+
+test("a reply about another assessment is never shown under this address", async () => {
+  reply(run({ id: "b".repeat(32) }));
+  await assert.rejects(() => getAssessment("k-12345678", ID), /does not recognise/);
+  reply(finished("PENDING_HUMAN", record({ id: "b".repeat(32) })));
+  await assert.rejects(() => getAssessment("k-12345678", ID), /does not recognise/);
+  reply(run());
+  assert.equal((await getAssessment("k-12345678", ID)).kind, "run");
+});
+
+test("a 503 on a read does not claim that nothing was recorded", async () => {
+  reply({ detail: "x" }, 503);
+  await assert.rejects(
+    () => getAssessment("k-12345678", ID),
+    (error: Error) => /outcome is unknown/.test(error.message) && !/Nothing was recorded/i.test(error.message),
+  );
+});
+
 test("a create takes only the id, from a run or from a replayed record", async () => {
   reply(run(), 202);
   assert.equal(await createAssessment("k-12345678", body), ID);
@@ -90,6 +142,9 @@ test("failure codes have fixed wording, and an unknown code is not echoed", () =
   }
   assert.equal(failureText("<script>alert(1)</script>"), failureText(null));
   assert.ok(!failureText("<script>").includes("script"));
+  for (const inherited of ["__proto__", "toString", "constructor", "hasOwnProperty"]) {
+    assert.equal(failureText(inherited), failureText(null), inherited);
+  }
 });
 
 test("the page keeps a run apart from the badge, the pending banner and the forms", () => {
@@ -97,14 +152,20 @@ test("the page keeps a run apart from the badge, the pending banner and the form
     fileURLToPath(new URL("../app/assessments/[id]/page.tsx", import.meta.url)),
     "utf8",
   );
-  const runBranch = page.slice(page.indexOf('fetched.kind === "run"'), page.indexOf("const view = fetched.view"));
+  const runBranch = page
+    .slice(page.indexOf('fetched.kind === "run"'), page.indexOf("const view = fetched.view"))
+    .replace(/\s+/g, " ");
   assert.ok(runBranch.length > 0);
   for (const forbidden of ["badgeClass", "DecisionForm", "ConditionsForm", "PENDING HUMAN", "labelFor"]) {
     assert.ok(!runBranch.includes(forbidden), `the run screen uses ${forbidden}`);
   }
   assert.ok(!/status !== "DECIDED"/.test(page), "an unknown status must not fall into pending");
   assert.ok(runBranch.includes("NO RESULT."), "the run screen must say there is no result");
-  assert.ok(runBranch.includes("not INSUFFICIENT EVIDENCE"), "a failed run must not read as an outcome");
+  assert.ok(runBranch.includes("NO RESULT YET."), "the running screen must say there is no result");
+  assert.equal((runBranch.match(/Do not act on this page/g) ?? []).length, 2);
+  assert.ok(runBranch.includes("INSUFFICIENT EVIDENCE either"), "a failed run must not read as an outcome");
+  assert.ok(runBranch.includes("does not mean conditions are acceptable"));
+  assert.ok(!runBranch.includes("status_note"), "the run screen uses fixed wording, not the server's");
   assert.ok(runBranch.includes("<RunProgress />"), "a running run must keep checking");
 });
 

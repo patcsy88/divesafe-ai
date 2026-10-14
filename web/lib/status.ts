@@ -1,3 +1,4 @@
+import { RECOMMENDATIONS } from "./present.ts";
 import type { AssessmentView, RunStatusView } from "./types.ts";
 
 // What the API sent back for an assessment address: a finished assessment, or a run that has not
@@ -10,36 +11,67 @@ export type Fetched =
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const isRecommendation = (value: unknown): boolean =>
+  typeof value === "string" && (RECOMMENDATIONS as readonly string[]).includes(value);
+
+const RUN_KEYS = new Set(["id", "status", "created_at", "failure_code", "status_note", "notice"]);
+
+function classifyRun(body: Record<string, unknown>, status: "RUNNING" | "FAILED"): Fetched | null {
+  // The API forbids extra fields on a run, so any other field means this is not a run reply.
+  if (Object.keys(body).some((k) => !RUN_KEYS.has(k))) return null;
+  if (typeof body.id !== "string" || typeof body.created_at !== "string") return null;
+  if (typeof body.status_note !== "string" || typeof body.notice !== "string") return null;
+  const code = body.failure_code;
+  if (code !== null && typeof code !== "string") return null;
+  if (status === "RUNNING" && code !== null) return null;
+  return { kind: "run", view: body as unknown as RunStatusView };
+}
+
+function classifyAssessment(
+  body: Record<string, unknown>,
+  status: "PENDING_HUMAN" | "DECIDED",
+): Fetched | null {
+  const record = body.record;
+  if (!isObject(record) || typeof record.id !== "string") return null;
+  if (!isRecommendation(record.final_recommendation)) return null;
+  if (!isRecommendation(record.deterministic_recommendation)) return null;
+  const proposed = record.proposed_recommendation;
+  if (proposed !== null && !isRecommendation(proposed)) return null;
+  const decision = record.human_decision;
+  if (decision !== null) {
+    // A decision is a real object with a known outcome, or the reply is not trusted.
+    if (!isObject(decision) || !isRecommendation(decision.decision)) return null;
+    if (typeof decision.decided_by !== "string" || typeof decision.decided_at !== "string") return null;
+  }
+  const actual = record.actual_conditions;
+  if (actual !== null && !isObject(actual)) return null;
+  // The API derives the status from the decision. If they disagree, trust neither.
+  if ((decision !== null) !== (status === "DECIDED")) return null;
+  return { kind: "assessment", view: body as unknown as AssessmentView };
+}
+
 export function classify(body: unknown): Fetched | null {
   if (!isObject(body)) return null;
   const status = body.status;
-  if (status === "PENDING_HUMAN" || status === "DECIDED") {
-    const record = body.record;
-    if (!isObject(record)) return null;
-    if (typeof record.id !== "string" || typeof record.final_recommendation !== "string") return null;
-    // The API derives the status from the decision. If they disagree, trust neither.
-    const decided = record.human_decision !== null && record.human_decision !== undefined;
-    if (decided !== (status === "DECIDED")) return null;
-    return { kind: "assessment", view: body as unknown as AssessmentView };
-  }
-  if (status === "RUNNING" || status === "FAILED") {
-    // A run never carries a result. If one is present the reply is not what it claims to be.
-    if ("record" in body || "final_recommendation" in body || "recommendation" in body) return null;
-    if (typeof body.id !== "string" || typeof body.status_note !== "string") return null;
-    return { kind: "run", view: body as unknown as RunStatusView };
-  }
+  if (status === "PENDING_HUMAN" || status === "DECIDED") return classifyAssessment(body, status);
+  if (status === "RUNNING" || status === "FAILED") return classifyRun(body, status);
   return null;
 }
 
+// The id a reply is about, so a caller can check it is the one it asked for.
+export function idOf(fetched: Fetched): string {
+  return fetched.kind === "run" ? fetched.view.id : fetched.view.record.id;
+}
+
 // Fixed wording for the failure codes the API can store. An unknown code gets the generic line.
-const FAILURE_TEXT: Record<string, string> = {
-  timeout: "It took longer than the time allowed.",
-  storage: "The result could not be stored.",
-  internal: "The service hit an internal error.",
-  shutdown: "The service was stopping.",
-  start_passed: "The planned start time passed before the assessment began.",
-};
+const FAILURE_TEXT = new Map<string, string>([
+  ["timeout", "It took longer than the time allowed."],
+  ["storage", "The result could not be stored."],
+  ["internal", "The service hit an internal error."],
+  ["shutdown", "The service was stopping."],
+  ["start_passed", "The planned start time passed before the assessment began. Choose a later start time."],
+]);
 
 export function failureText(code: string | null): string {
-  return (code !== null && FAILURE_TEXT[code]) || "The reason is not known.";
+  return (code !== null && FAILURE_TEXT.get(code)) || "The reason is not known.";
 }

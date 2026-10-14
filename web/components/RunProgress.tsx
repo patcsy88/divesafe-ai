@@ -1,10 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 
-const EVERY_MS = 3_000;
-// Longer than the API's own run deadline, so reaching this means the API did not answer either.
+// Waits between checks, growing to a cap so a slow run does not mean many requests.
+const DELAYS_MS = [3_000, 3_000, 5_000, 5_000, 10_000, 15_000];
+// A fixed limit on how long this page keeps asking. The API's own deadline can be longer if the
+// operator set it so, in which case the run may still finish after this page gives up.
 const GIVE_UP_AFTER_MS = 6 * 60_000;
 
 // Asks the server to render this page again until the run has finished. It decides nothing: what
@@ -12,22 +14,36 @@ const GIVE_UP_AFTER_MS = 6 * 60_000;
 export default function RunProgress() {
   const router = useRouter();
   const [gaveUp, setGaveUp] = useState(false);
+  const [busy, startRefresh] = useTransition();
+  // Counts checks made, and also waits skipped while the tab was hidden, so the timer restarts.
+  const [round, setRound] = useState(0);
+
   useEffect(() => {
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (Date.now() - started > GIVE_UP_AFTER_MS) {
-        clearInterval(timer);
-        setGaveUp(true);
+    const timer = setTimeout(() => setGaveUp(true), GIVE_UP_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    // One refresh at a time, so a slow API is not asked again before it has answered.
+    if (gaveUp || busy) return;
+    const delay = DELAYS_MS[Math.min(round, DELAYS_MS.length - 1)];
+    const timer = setTimeout(() => {
+      if (document.hidden) {
+        setRound((n) => n + 1);
         return;
       }
-      router.refresh();
-    }, EVERY_MS);
-    return () => clearInterval(timer);
-  }, [router]);
+      startRefresh(() => {
+        router.refresh();
+      });
+      setRound((n) => n + 1);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [busy, gaveUp, round, router]);
+
   if (gaveUp) {
     return (
       <p role="alert" className="error">
-        Still running; outcome unknown. Nothing has been assessed and nothing may be acted on.
+        No answer yet; outcome unknown. It may have finished or failed. Nothing may be acted on.
         Reload this page to check again.
       </p>
     );

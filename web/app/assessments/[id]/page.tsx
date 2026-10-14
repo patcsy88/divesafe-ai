@@ -38,16 +38,24 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <Banner />
         <section className="card">
           <p className="label">{failed ? "Did not finish" : "Running"}</p>
-          <p className="pending" role="status">
-            NO RESULT. {plain(run.status_note)}
-          </p>
-          {failed && <p>{failedReason(run.failure_code)}</p>}
           {failed ? (
-            <p className="hint">
-              This is not INSUFFICIENT EVIDENCE: nothing was assessed. Start a new assessment.
-            </p>
+            <>
+              <p className="error" role="alert">
+                NO RESULT. The assessment did not finish. Do not act on this page.
+              </p>
+              <p>{failedReason(run.failure_code)}</p>
+              <p className="hint">
+                This is not a result. It does not mean conditions are acceptable, and it is not
+                INSUFFICIENT EVIDENCE either: nothing was checked. Start a new assessment.
+              </p>
+            </>
           ) : (
-            <RunProgress />
+            <>
+              <p className="pending" role="status">
+                NO RESULT YET. Nothing has been assessed. Do not act on this page.
+              </p>
+              <RunProgress />
+            </>
           )}
         </section>
         <p className="hint">{plain(run.notice)}</p>
