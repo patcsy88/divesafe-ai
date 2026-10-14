@@ -459,3 +459,44 @@ def test_a_mismatched_id_never_softens_a_no_go(plan: DivePlan) -> None:
         plan, [], NOW
     )
     assert result.recommendation is R.NO_GO
+
+
+def test_a_rule_that_changes_its_id_after_construction_is_replaced(plan: DivePlan) -> None:
+    from divesafe.domain import RuleResult
+
+    class _Shifty:
+        citation = "test fixture (synthetic)"
+
+        built = False
+
+        @property
+        def rule_id(self) -> str:
+            return "evidence.required.waves" if self.built else "synthetic.shifty"
+
+        def evaluate(self, plan: object, evidence: object) -> RuleResult:
+            return RuleResult(rule_id="evidence.required.waves", outcome=R.NO_GO, rationale="x")
+
+    policy = EvidencePolicy(frozenset(), timedelta(hours=1))
+    rule = _Shifty()
+    engine = RiskRulesEngine([rule], policy, "v", required_factors=frozenset())
+    rule.built = True
+    result = engine.assess(plan, [], NOW)
+    assert "evidence.required.waves" not in [r.rule_id for r in result.rule_results]
+    assert result.recommendation is R.NO_GO
+
+
+def test_a_replaced_result_keeps_its_reason_for_the_human(plan: DivePlan) -> None:
+    from divesafe.domain import RuleResult
+
+    class _Poser:
+        rule_id = "synthetic.poser"
+        citation = "test fixture (synthetic)"
+
+        def evaluate(self, plan: object, evidence: object) -> RuleResult:
+            return RuleResult(rule_id="synthetic.other", outcome=R.NO_GO, rationale="hard stop")
+
+    policy = EvidencePolicy(frozenset(), timedelta(hours=1))
+    result = RiskRulesEngine([_Poser()], policy, "v", required_factors=frozenset()).assess(
+        plan, [], NOW
+    )
+    assert any("hard stop" in r.rationale for r in result.rule_results)

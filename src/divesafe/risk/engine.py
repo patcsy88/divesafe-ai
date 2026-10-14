@@ -179,6 +179,8 @@ class RiskRulesEngine:
             if rule.rule_id.startswith(RESERVED_RULE_PREFIXES):
                 raise ValueError(f"rule id '{rule.rule_id}' uses a reserved prefix")
         self._rules = tuple(rules)
+        # Read once: a rule whose id changes later is then caught by the result-id check.
+        self._rule_ids = tuple(rule.rule_id for rule in rules)
         self._required_factors = required_factors
         self._policy = policy
         self._ruleset_version = ruleset_version
@@ -201,8 +203,8 @@ class RiskRulesEngine:
                     factor=RiskFactorKind.DATA_QUALITY,
                 )
             )
-        for rule in self._rules:
-            results.extend(self._run_rule(rule, plan, evidence, now))
+        for rule, rule_id in zip(self._rules, self._rule_ids, strict=True):
+            results.extend(self._run_rule(rule, rule_id, plan, evidence, now))
 
         if not results:
             results.append(
@@ -249,14 +251,14 @@ class RiskRulesEngine:
 
     @staticmethod
     def _run_rule(
-        rule: Rule, plan: DivePlan, evidence: Sequence[EvidenceItem], now: datetime
+        rule: Rule, rule_id: str, plan: DivePlan, evidence: Sequence[EvidenceItem], now: datetime
     ) -> list[RuleResult]:
         expires_at: datetime | None = getattr(rule, "expires_at", None)
         try:
             if expires_at is not None and now >= expires_at:
                 return [
                     RuleResult(
-                        rule_id=f"rule.expired.{rule.rule_id}",
+                        rule_id=f"rule.expired.{rule_id}",
                         outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                         rationale=(
                             "The signed-off review of this rule has expired, so it is not "
@@ -266,31 +268,35 @@ class RiskRulesEngine:
                 ]
             result = rule.evaluate(plan, evidence)
         except Exception:  # fail closed on ANY rule failure, so this catch is deliberately broad
-            logger.exception("rule raised", extra={"rule_id": rule.rule_id})
+            logger.exception("rule raised", extra={"rule_id": rule_id})
             return [
                 RuleResult(
-                    rule_id=f"rule.error.{rule.rule_id}",
+                    rule_id=f"rule.error.{rule_id}",
                     outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                     rationale="The rule failed to evaluate.",
                 )
             ]
         if result is None:
             return []
-        if result.rule_id != rule.rule_id:
+        if result.rule_id != rule_id:
+            logger.warning("rule returned a result under another id", extra={"rule_id": rule_id})
             # A result must carry its own rule's id, or it could pose as an engine message. The
             # replacement keeps the more severe outcome: it may add a problem, never soften one.
             return [
                 RuleResult(
-                    rule_id=f"rule.error.{rule.rule_id}",
+                    rule_id=f"rule.error.{rule_id}",
                     outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
-                    rationale="The rule returned a result under a different id.",
+                    rationale=(
+                        "The rule returned a result under a different id. Its own rationale: "
+                        + result.rationale
+                    ),
                 )
             ]
         if result.threshold_status == ThresholdStatus.VALIDATED and expires_at is None:
             # A validated limit must expire, or a stale review would keep permitting GO.
             return [
                 RuleResult(
-                    rule_id=f"rule.validated_without_expiry.{rule.rule_id}",
+                    rule_id=f"rule.validated_without_expiry.{rule_id}",
                     outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                     rationale="A VALIDATED result must come from a rule that declares an expiry.",
                 )
