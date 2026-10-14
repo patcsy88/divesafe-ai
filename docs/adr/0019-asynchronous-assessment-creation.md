@@ -167,8 +167,12 @@ service may run several workers. Option 2 is acceptable only for a single-worker
   pending or failed. A key without the viewer role reads only its own runs and sees a finished
   record without the decision. `gather_evidence` has an overall timeout. Tests:
   `tests/safety/test_api_async_runs.py`; the older create tests now create, then poll.
-- Stage 3 (web) is not built: the web app still expects a 201 and must be changed before it can
-  create an assessment against this API.
+- **Stage 3 (web): built.** `web/lib/status.ts` classifies every reply with an explicit allow-list
+  (`PENDING_HUMAN`, `DECIDED`, `RUNNING`, `FAILED`); an unknown status, a status that disagrees with
+  the decision, or a run that carries a result is an error screen. A create takes only the id from
+  the reply. A run has its own screen with no badge, pending banner or forms, and
+  `RunProgress` refreshes the page every 3 s and stops after 6 minutes with "Still running;
+  outcome unknown". Tests: `web/tests/status.test.ts`. The web call timeout is now 30 s.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.
 - The failure counts table is written by cleanup only; nothing reads it yet.

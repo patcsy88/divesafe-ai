@@ -50,7 +50,7 @@ export default function AssessmentForm({
 
       {state.error && <p role="alert" className="error">{state.error}</p>}
       <button type="submit" disabled={pending}>
-        {pending ? "Assessing… this can take a minute" : "Run assessment"}
+        {pending ? "Starting…" : "Run assessment"}
       </button>
     </form>
   );

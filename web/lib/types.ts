@@ -74,6 +74,16 @@ export interface AssessmentView {
   notice: string;
 }
 
+// A run that has no assessment yet (ADR 0019). It has no recommendation and is not a result.
+export interface RunStatusView {
+  id: string;
+  status: "RUNNING" | "FAILED";
+  created_at: string;
+  failure_code: string | null;
+  status_note: string;
+  notice: string;
+}
+
 export interface EvidenceItem {
   id: string;
   category: string;

@@ -4,17 +4,18 @@ import { notFound, redirect } from "next/navigation";
 import Banner from "../../../components/Banner.tsx";
 import ConditionsForm from "../../../components/ConditionsForm.tsx";
 import DecisionForm from "../../../components/DecisionForm.tsx";
+import RunProgress from "../../../components/RunProgress.tsx";
 import { ApiError, getAssessment } from "../../../lib/api.ts";
 import { requireKey } from "../../../lib/auth.ts";
 import { badgeClass, formatWhen, labelFor, plain } from "../../../lib/present.ts";
-import type { AssessmentView } from "../../../lib/types.ts";
+import { failureText as failedReason, type Fetched } from "../../../lib/status.ts";
 
 export default async function AssessmentPage({ params }: { params: Promise<{ id: string }> }) {
   const key = await requireKey();
   const { id } = await params;
-  let view: AssessmentView;
+  let fetched: Fetched;
   try {
-    view = await getAssessment(key, id);
+    fetched = await getAssessment(key, id);
   } catch (error) {
     if (error instanceof ApiError) {
       if (error.status === 401) redirect("/logout");
@@ -23,8 +24,39 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
     }
     throw error;
   }
+  if (fetched.kind === "run") {
+    const run = fetched.view;
+    const failed = run.status === "FAILED";
+    return (
+      <>
+        <header className="top">
+          <h1>Assessment</h1>
+          <nav className="sub">
+            <Link href="/">New assessment</Link>
+          </nav>
+        </header>
+        <Banner />
+        <section className="card">
+          <p className="label">{failed ? "Did not finish" : "Running"}</p>
+          <p className="pending" role="status">
+            NO RESULT. {plain(run.status_note)}
+          </p>
+          {failed && <p>{failedReason(run.failure_code)}</p>}
+          {failed ? (
+            <p className="hint">
+              This is not INSUFFICIENT EVIDENCE: nothing was assessed. Start a new assessment.
+            </p>
+          ) : (
+            <RunProgress />
+          )}
+        </section>
+        <p className="hint">{plain(run.notice)}</p>
+      </>
+    );
+  }
+  const view = fetched.view;
   const r = view.record;
-  const pending = view.status !== "DECIDED";
+  const pending = view.status === "PENDING_HUMAN";
   const decision = r.human_decision;
   const started = Date.parse(r.plan.planned_start) <= Date.now();
 

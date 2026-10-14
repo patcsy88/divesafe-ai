@@ -32,4 +32,5 @@ export function trustProxy(env: Record<string, string | undefined> = process.env
 }
 
 export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
-export const API_TIMEOUT_MS = 120_000;
+// Creating an assessment now returns at once (ADR 0019), so no call waits for a pipeline.
+export const API_TIMEOUT_MS = 30_000;

@@ -1,5 +1,6 @@
 import { API_TIMEOUT_MS, apiBaseUrl } from "./config.ts";
 import { plain } from "./present.ts";
+import { classify, type Fetched } from "./status.ts";
 import type { AssessmentView, EvidenceView, SiteListView } from "./types.ts";
 
 export class ApiError extends Error {
@@ -109,23 +110,37 @@ export interface CreateBody {
 // result instead of making a second record. Only a well-formed key is sent.
 export const RETRY_KEY = /^[A-Za-z0-9._-]{16,128}$/;
 
+const UNREADABLE =
+  "The service sent a reply this page does not recognise, so nothing is shown as a result. Check whether the assessment was recorded.";
+
+// The API now answers a create with 202 and a run to poll, or with 200 and the finished record
+// when the same retry key was used before. Either way only the id is taken from it; the result is
+// always read afterwards from the assessment address.
 export async function createAssessment(
   key: string,
   body: CreateBody,
   retryKey?: string,
-): Promise<AssessmentView> {
-  return (await call(
-    "/v1/assessments",
-    key,
-    { method: "POST", body: JSON.stringify(body) },
-    undefined,
-    retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
-  )) as AssessmentView;
+): Promise<string> {
+  const reply = classify(
+    await call(
+      "/v1/assessments",
+      key,
+      { method: "POST", body: JSON.stringify(body) },
+      undefined,
+      retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
+    ),
+  );
+  if (reply === null) throw new ApiError(0, UNREADABLE);
+  const id = reply.kind === "run" ? reply.view.id : reply.view.record.id;
+  if (!ID.test(id)) throw new ApiError(0, UNREADABLE);
+  return id;
 }
 
-export async function getAssessment(key: string, id: string): Promise<AssessmentView> {
+export async function getAssessment(key: string, id: string): Promise<Fetched> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
-  return (await call(`/v1/assessments/${encodeURIComponent(id)}`, key)) as AssessmentView;
+  const reply = classify(await call(`/v1/assessments/${encodeURIComponent(id)}`, key));
+  if (reply === null) throw new ApiError(0, UNREADABLE);
+  return reply;
 }
 
 export async function getEvidence(key: string, id: string): Promise<EvidenceView> {

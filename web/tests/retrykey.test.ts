@@ -12,7 +12,8 @@ const capture = () => {
   seen.length = 0;
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     seen.push(new Headers(init?.headers).get("idempotency-key"));
-    return new Response("{}", { status: 200 });
+    const run = { id: "a".repeat(32), status: "RUNNING", created_at: "2026-10-10T00:00:00Z", failure_code: null, status_note: "n", notice: "n" };
+    return new Response(JSON.stringify(run), { status: 202 });
   }) as typeof fetch;
 };
 const body = { site_id: "s", planned_start: "2026-10-10T08:00:00+08:00", planned_duration_minutes: 40, max_depth_m: 18 };

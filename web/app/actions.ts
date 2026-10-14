@@ -14,6 +14,7 @@ import { endSession, requireKey, startSession } from "../lib/auth.ts";
 import { trustProxy } from "../lib/config.ts";
 import { parseObservations } from "../lib/observations.ts";
 import { RECOMMENDATIONS } from "../lib/present.ts";
+import type { AssessmentView } from "../lib/types.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
 import { forwardedAddress, LoginThrottle, sourceOf } from "../lib/throttle.ts";
 
@@ -75,7 +76,7 @@ export async function runAssessment(_prev: FormState, data: FormData): Promise<F
 
   let id: string;
   try {
-    const view = await createAssessment(
+    id = await createAssessment(
       key,
       {
         site_id: site,
@@ -86,7 +87,6 @@ export async function runAssessment(_prev: FormState, data: FormData): Promise<F
       },
       text(data, "retry_key"),
     );
-    id = view.record.id;
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       await endSession();
@@ -107,7 +107,7 @@ async function failed(
   fallback: string,
   key: string,
   id: string,
-  recorded: (view: Awaited<ReturnType<typeof getAssessment>>) => boolean,
+  recorded: (view: AssessmentView) => boolean,
   differs?: string,
 ): Promise<FormState> {
   if (error instanceof ApiError && error.status === 401) {
@@ -116,8 +116,11 @@ async function failed(
   }
   if (error instanceof ApiError && error.status === 409) {
     // A second tab or a retry: only go to the record if a fresh read shows what was submitted.
+    // A run that has no record yet has nothing recorded, so the refusal stands.
     try {
-      const view = await getAssessment(key, id);
+      const fetched = await getAssessment(key, id);
+      if (fetched.kind !== "assessment") return { error: error.message };
+      const view = fetched.view;
       if (recorded(view)) redirect(`/assessments/${id}`);
       if (differs && view.record.human_decision) {
         return {
