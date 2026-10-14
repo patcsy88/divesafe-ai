@@ -69,29 +69,36 @@ class RunManager:
             if stored:
                 logger.info("assessment stored", extra={"assessment_id": run_id, "actor": actor})
                 return
+            # The lease ran out or the id was already finished: nothing was stored.
             logger.error("run lost its lease before completing", extra={"assessment_id": run_id})
-            return
+            code = FailureCode.TIMEOUT
         except asyncio.CancelledError:
             code = FailureCode.SHUTDOWN
             raise
-        except TimeoutError:
+        except TimeoutError as exc:
             code = FailureCode.TIMEOUT
-        except InvalidPlanError:
+            self._log_failure(run_id, actor, exc)
+        except InvalidPlanError as exc:
             code = FailureCode.START_PASSED
-        except RepositoryUnavailableError:
+            self._log_failure(run_id, actor, exc)
+        except RepositoryUnavailableError as exc:
             code = FailureCode.STORAGE
-        except Exception as exc:
-            logger.error(
-                "run failed",
-                extra={"assessment_id": run_id, "actor": actor, "error_type": type(exc).__name__},
-            )
+            self._log_failure(run_id, actor, exc)
+        except BaseException as exc:  # a run must always end in a stored code
             code = FailureCode.INTERNAL
-        except BaseException:
-            code = FailureCode.INTERNAL
-            raise
+            self._log_failure(run_id, actor, exc)
+            if not isinstance(exc, Exception):
+                raise
         finally:
             if code is not None:
                 await self._mark_failed(run_id, run_token, code)
+
+    @staticmethod
+    def _log_failure(run_id: str, actor: str, exc: BaseException) -> None:
+        logger.error(
+            "run failed",
+            extra={"assessment_id": run_id, "actor": actor, "error_type": type(exc).__name__},
+        )
 
     async def _mark_failed(self, run_id: str, run_token: str, code: FailureCode) -> None:
         try:

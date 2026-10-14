@@ -320,3 +320,79 @@ def test_a_run_that_finishes_between_the_two_reads_is_not_reported_missing() -> 
     for path in (f"/v1/assessments/{rid}", f"/v1/assessments/{rid}/evidence"):
         calls[0] = 0
         assert client.get(path, headers=AUTH_A).status_code == 200
+
+
+def test_a_run_whose_start_passes_before_it_begins_is_failed_as_start_passed() -> None:
+    client, _, repo = _build()
+    readings = iter([T0])  # the request check; the run itself then sees a start that has passed
+    client.app.state.divesafe.clock = lambda: next(readings, T0 + timedelta(hours=2))
+    r = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
+    body = poll(client, r.headers["location"], AUTH_A).json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "start_passed"
+    assert repo.get(r.json()["id"]) is None
+
+
+def test_a_run_that_cannot_store_its_result_is_failed_as_storage_and_stores_nothing() -> None:
+    from divesafe.services import RepositoryUnavailableError
+
+    client, _, repo = _build()
+
+    def broken(*args: object, **kwargs: object) -> bool:
+        raise RepositoryUnavailableError("down")
+
+    repo.complete = broken  # type: ignore[method-assign]
+    r = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
+    body = poll(client, r.headers["location"], AUTH_A).json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "storage"
+    assert repo.get(r.json()["id"]) is None
+
+
+def test_a_run_that_cannot_complete_is_failed_and_frees_its_slot() -> None:
+    client, _, repo = _build(runs=RunLimits(max_in_flight=1, max_per_actor=1))
+    repo.complete = lambda *a, **k: False  # type: ignore[method-assign]
+    r = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
+    body = poll(client, r.headers["location"], AUTH_A).json()
+    assert body["status"] == "FAILED" and repo.get(r.json()["id"]) is None
+    assert client.post("/v1/assessments", json=PLAN, headers=AUTH_A).status_code == 202
+
+
+def test_a_stranger_gets_the_same_answer_for_a_run_and_a_missing_id_on_every_route() -> None:
+    client, gate, _ = _held()
+    client.app.state.divesafe.authenticator = ApiKeyAuthenticator(
+        {
+            _hash("key-for-alice-test-only"): KeyEntry("alice", frozenset(Role)),
+            _hash("k-mallory"): KeyEntry("mallory", frozenset({Role.ASSESSOR, Role.DECIDER})),
+        }
+    )
+    try:
+        rid = client.post("/v1/assessments", json=PLAN, headers=AUTH_A).json()["id"]
+        _wait(gate.entered)
+        other, missing = {"Authorization": "Bearer k-mallory"}, "f" * 32
+        for tail, body in (
+            ("decision", {"decision": "GO"}),
+            ("actual-conditions", {"observations": {"v": 1}}),
+        ):
+            a = client.post(f"/v1/assessments/{rid}/{tail}", json=body, headers=other)
+            b = client.post(f"/v1/assessments/{missing}/{tail}", json=body, headers=other)
+            assert (a.status_code, a.json()) == (b.status_code, b.json())
+    finally:
+        gate.release.set()
+
+
+def test_a_non_viewer_cannot_read_another_actors_finished_record() -> None:
+    from tests.safety.test_api_roles_and_limits import HEADERS, PLAN_D, _client
+
+    client, make = _client()
+    theirs = make()
+    mine = HEADERS[Role.ASSESSOR]
+    assert client.get(f"/v1/assessments/{theirs}", headers=mine).status_code == 404
+    assert create_and_poll(client, PLAN_D, mine).status_code == 200
+
+
+def test_the_status_notes_are_the_fixed_reviewed_wording() -> None:
+    from divesafe.api.schemas import _RUN_NOTES
+
+    assert _RUN_NOTES[RunState.RUNNING] == "No result yet. Nothing has been assessed. Do not act."
+    failed = _RUN_NOTES[RunState.FAILED]
+    assert "not a result and not INSUFFICIENT EVIDENCE" in failed
+    assert "nothing was assessed" in failed

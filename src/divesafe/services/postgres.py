@@ -327,12 +327,19 @@ class PostgresAssessmentRepository:
         token = secrets.token_urlsafe(32)
         with _storage_errors(), self._connect() as conn, conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
-            if conn.execute("SELECT 1 FROM public.assessments WHERE id = %s", (run.id,)).fetchone():
-                return Admission(kind="completed")
             self._expire(conn, run.id)
+            # The run is read before the record: a completion that commits between the two reads
+            # is then seen by the second, so a finished id never starts a second run.
             row = conn.execute(
                 f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
             ).fetchone()
+            if (
+                row is None
+                and conn.execute(
+                    "SELECT 1 FROM public.assessments WHERE id = %s", (run.id,)
+                ).fetchone()
+            ):
+                return Admission(kind="completed")
             if row is not None:
                 existing = self._run_from(row)
                 if (

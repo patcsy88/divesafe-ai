@@ -26,6 +26,7 @@ def _require_tls(dsn: str) -> None:
 
 # The longest the connectors may take together (their own per-request timeout is below this).
 CONNECTOR_BUDGET_SECONDS = 30.0
+RUN_MARGIN_SECONDS = 30.0
 
 
 class Settings(BaseSettings):
@@ -74,7 +75,7 @@ class Settings(BaseSettings):
     def effective_run_deadline_seconds(self) -> float:
         if self.run_deadline_seconds is not None:
             return self.run_deadline_seconds
-        return self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + 30.0
+        return self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
 
     def llm_allowed_host_set(self) -> frozenset[str]:
         return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
@@ -132,11 +133,11 @@ class Settings(BaseSettings):
         if (
             self.run_deadline_seconds is not None
             and self.run_deadline_seconds
-            < self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS
+            < self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
         ):
             raise ValueError(
                 "DIVESAFE_RUN_DEADLINE_SECONDS must cover the LLM stage timeout plus the "
-                f"{CONNECTOR_BUDGET_SECONDS:.0f} s connector budget"
+                f"{CONNECTOR_BUDGET_SECONDS:.0f} s connector budget plus {RUN_MARGIN_SECONDS:.0f} s"
             )
         self.llm_allowed_host_set()
         plain_hosts = self.plain_http_host_set()

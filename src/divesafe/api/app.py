@@ -411,7 +411,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         run = None if record is not None else app_state.repository.get_run(assessment_id)
         if record is None and run is None:
             # A run can finish between the two reads above: look for the record once more.
-            record = None
+            record = app_state.repository.get(assessment_id)
         if record is not None:
             if viewer:
                 return AssessmentView.of(record)

@@ -36,7 +36,7 @@ def test_without_a_key_two_creates_make_two_records() -> None:
 
 def test_the_same_key_with_a_different_plan_is_refused_not_replayed() -> None:
     client, _, repo = _build()
-    client.post("/v1/assessments", json=PLAN, headers=H)
+    create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY})
     other = client.post("/v1/assessments", json={**PLAN, "max_depth_m": 31}, headers=H)
     assert other.status_code == 422 and "different request" in other.json()["detail"]
     assert _count(repo) == 1
@@ -124,7 +124,7 @@ def test_a_repeat_of_a_create_after_the_window_is_refused_not_served_as_current(
     from datetime import timedelta
 
     client, clock, repo = _build()
-    client.post("/v1/assessments", json=PLAN, headers=H)
+    create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY})
     clock.now += timedelta(minutes=11)
     late = client.post("/v1/assessments", json=PLAN, headers=H)
     assert late.status_code == 409 and "nothing was recorded" in late.json()["detail"]
@@ -163,7 +163,7 @@ def test_a_create_only_key_cannot_read_a_later_decision_by_repeating_its_create(
 
 def test_a_tz_equal_start_is_the_same_request() -> None:
     client, _, repo = _build()
-    client.post("/v1/assessments", json=PLAN, headers=H)
+    create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY})
     start = PLAN["planned_start"]
     assert isinstance(start, str)
     from datetime import datetime, timedelta, timezone
@@ -175,7 +175,9 @@ def test_a_tz_equal_start_is_the_same_request() -> None:
 
 def test_the_same_key_with_a_different_decider_is_refused() -> None:
     client, _, repo = _build()
-    client.post("/v1/assessments", json={**PLAN, "decider": "alice"}, headers=H)
+    create_and_poll(
+        client, {**PLAN, "decider": "alice"}, AUTH_A, extra_headers={"Idempotency-Key": KEY}
+    )
     other = client.post("/v1/assessments", json={**PLAN, "decider": "bob"}, headers=H)
     assert other.status_code == 422 and _count(repo) == 1
 

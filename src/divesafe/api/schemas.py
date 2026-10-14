@@ -19,7 +19,7 @@ from divesafe.domain import (
 )
 from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import ENGINE_RULE_PREFIXES, WINDOW_STARTED_RULE
-from divesafe.services.runs import PendingRun, RunState
+from divesafe.services.runs import FailureCode, PendingRun, RunState
 
 DISCLAIMER = (
     "Decision support only. The final decision belongs to the diver, dive master or dive leader. "
@@ -213,14 +213,25 @@ class AssessmentView(BaseModel):
         )
 
 
+_RUN_NOTES: dict[RunState, str] = {
+    RunState.RUNNING: "No result yet. Nothing has been assessed. Do not act.",
+    RunState.FAILED: (
+        "The assessment did not complete. This is not a result and not INSUFFICIENT EVIDENCE: "
+        "nothing was assessed. Start a new one."
+    ),
+}
+
+
 class RunStatusView(BaseModel):
     """A run that has no assessment yet. It carries no recommendation, evidence or model text;
     its notes are fixed and nothing here may be acted on as an outcome."""
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     status: Literal["RUNNING", "FAILED"]
     created_at: datetime
-    failure_code: str | None = None
+    failure_code: FailureCode | None = None
     status_note: str
     notice: str = DISCLAIMER
 
@@ -231,16 +242,8 @@ class RunStatusView(BaseModel):
             id=run.id,
             status="RUNNING" if running else "FAILED",
             created_at=run.created_at,
-            failure_code=None
-            if running
-            else (run.failure_code.value if run.failure_code else None),
-            status_note=(
-                "The assessment is still running. There is no result yet and nothing may be "
-                "decided or acted on. Poll this address again."
-                if running
-                else "The assessment did not finish and no result was recorded. Nothing may be "
-                "acted on. Start a new assessment with a new Idempotency-Key."
-            ),
+            failure_code=None if running else run.failure_code,
+            status_note=_RUN_NOTES[run.state],
         )
 
 

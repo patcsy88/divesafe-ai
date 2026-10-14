@@ -252,3 +252,29 @@ def test_cleanup_never_touches_an_assessment(store: Any) -> None:
     store.complete(_completed(), token)
     store.cleanup(retention=timedelta(0), batch=50)
     assert store.get("r1") == _completed()
+
+
+def test_a_finished_id_never_starts_a_second_run_when_admission_races_completion_smoke(
+    store: Any,
+) -> None:
+    token = _admit(store, _run()).run_token
+    assert token is not None
+    results: list[str] = []
+    gate = threading.Barrier(2)
+
+    def finish() -> None:
+        gate.wait()
+        store.complete(_completed(), token)
+
+    def retry() -> None:
+        gate.wait()
+        for _ in range(20):
+            results.append(_admit(store, _run()).kind)
+
+    threads = [threading.Thread(target=finish), threading.Thread(target=retry)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert "started" not in results
+    assert store.get_run("r1") is None

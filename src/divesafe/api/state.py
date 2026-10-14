@@ -76,7 +76,7 @@ class RunLimits:
 
     max_in_flight: int = 4
     max_per_actor: int = 2
-    deadline: timedelta = timedelta(seconds=240)
+    deadline: timedelta = timedelta(seconds=210)
     retry_after_seconds: int = 30
     shutdown_grace: timedelta = timedelta(seconds=10)
     failed_retention: timedelta = timedelta(days=7)

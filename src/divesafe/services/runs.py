@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.domain.base import Frozen
@@ -65,7 +65,7 @@ class Admission(Frozen):
 
     kind: Literal["started", "joined", "failed", "completed"]
     run: PendingRun | None = None
-    run_token: str | None = None
+    run_token: str | None = Field(default=None, repr=False)
 
 
 class CleanupResult(Frozen):

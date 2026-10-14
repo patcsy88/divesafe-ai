@@ -90,7 +90,7 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 **Admission**
 7. One transaction under an advisory lock (Postgres) or the repository lock (memory): join check
    first, then the server-wide count, then a per-actor count, then the insert. Only `RUNNING` rows
-   with an unexpired lease count. A per-actor cap (`DIVESAFE_MAX_RUNS_IN_FLIGHT_PER_ACTOR`) stops one
+   with an unexpired lease count. A per-actor cap (`DIVESAFE_MAX_RUNS_PER_ACTOR`) stops one
    key taking the whole server; polling is never needed to free a slot.
 8. Joining by Idempotency-Key compares plan, assigned decider and creator and refuses any mismatch
    with 422. It happens before the cap, so a retry is never met with 429. Two concurrent POSTs with
