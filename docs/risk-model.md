@@ -161,6 +161,8 @@ by prefix, so this stops a rule from posing as one. The check is case-sensitive;
 can add rules, and signed-off definitions always become `definition.<id>`. A structured origin
 field on `RuleResult` would be sturdier than prefixes and is not built.
 
+### Window started
+
 When the planned start has passed by the time the agent stage ends, the pipeline adds
 `assessment.window_started` (INSUFFICIENT EVIDENCE). The outcome note then says the window was not
 fully assessed and that the problems found still apply.
