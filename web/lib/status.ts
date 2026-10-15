@@ -47,6 +47,9 @@ function classifyAssessment(
   if (actual !== null && !isObject(actual)) return null;
   // The API derives the status from the decision. If they disagree, trust neither.
   if ((decision !== null) !== (status === "DECIDED")) return null;
+  // Whether the decision was hidden from this key must be stated, and a hidden one cannot be shown.
+  if (typeof body.decision_withheld !== "boolean") return null;
+  if (body.decision_withheld && decision !== null) return null;
   return { kind: "assessment", view: body as unknown as AssessmentView };
 }
 

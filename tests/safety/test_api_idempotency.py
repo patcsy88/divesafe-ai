@@ -161,6 +161,36 @@ def test_a_create_only_key_cannot_read_a_later_decision_by_repeating_its_create(
     assert "Secret reasoning" not in again.text
 
 
+def test_a_create_only_key_is_not_told_a_decided_record_is_pending() -> None:
+    from tests.safety.test_api_roles_and_limits import HEADERS, PLAN_D, _client
+
+    from divesafe.api.auth import Role
+
+    client, _ = _client()
+    mine = {**HEADERS[Role.ASSESSOR], "Idempotency-Key": KEY}
+    first = create_and_poll(
+        client, PLAN_D, HEADERS[Role.ASSESSOR], extra_headers={"Idempotency-Key": KEY}
+    )
+    rid = first.json()["record"]["id"]
+    # Before any decision the key still cannot see decisions, so it is told that, not "pending".
+    assert first.json()["decision_withheld"] is True
+    decided = client.post(
+        f"/v1/assessments/{rid}/decision",
+        json={"decision": "NO-GO", "rationale": "Secret reasoning."},
+        headers=HEADERS[Role.DECIDER],
+    )
+    assert decided.status_code == 200, decided.text
+    replay = client.post("/v1/assessments", json=PLAN_D, headers=mine)
+    read = client.get(f"/v1/assessments/{rid}", headers=HEADERS[Role.ASSESSOR])
+    for body in (replay.json(), read.json()):
+        assert body["decision_withheld"] is True
+        assert "Awaiting a human decision" not in body["status_note"]
+        assert "not shown here" in body["status_note"]
+        assert body["record"]["human_decision"] is None
+    seen = client.get(f"/v1/assessments/{rid}", headers=HEADERS[Role.VIEWER]).json()
+    assert seen["decision_withheld"] is False and seen["status"] == "DECIDED"
+
+
 def test_a_tz_equal_start_is_the_same_request() -> None:
     client, _, repo = _build()
     create_and_poll(client, PLAN, AUTH_A, extra_headers={"Idempotency-Key": KEY})

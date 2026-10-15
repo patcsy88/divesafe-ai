@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 
 from divesafe.agents import run_agent_stage
+from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, DiveSite
 from divesafe.domain import (
     AssessmentRecord,
@@ -35,6 +36,14 @@ class InvalidPlanError(ValueError):
     """The dive plan is unusable (wrong site, or a window that has already started)."""
 
 
+class StartPassedError(InvalidPlanError):
+    """The planned start is no longer in the future; choosing a later one fixes it."""
+
+
+class SiteMismatchError(InvalidPlanError):
+    """The plan names a different site from the one given: a bug in the caller, not in the plan."""
+
+
 class UnsafeConfigurationError(ValueError):
     """The pipeline was configured in a way that could yield a result on no evidence."""
 
@@ -55,22 +64,30 @@ async def assess_dive(
     created_by: str | None = None,
     assigned_decider: str | None = None,
     clock: Callable[[], datetime] | None = None,
+    connector_timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
     if provider is not None and (proposed is not None or scenarios or explanation):
         raise ValueError("pass either a provider or explicit agent output, not both")
     if plan.site_id != site.id:
-        raise InvalidPlanError("plan.site_id does not match the site")
+        raise SiteMismatchError("plan.site_id does not match the site")
     if provider is not None and clock is None:
         raise ValueError(
             "a clock is required with a provider, to judge the result again afterwards"
         )
     if plan.planned_start < now:
-        raise InvalidPlanError("planned_start is in the past; assess a future dive window")
+        raise StartPassedError("planned_start is in the past; assess a future dive window")
 
     window_end = plan.planned_start + timedelta(minutes=plan.planned_duration_minutes)
-    evidence = await gather_evidence(connectors, site, plan.planned_start, window_end, now)
+    evidence = await gather_evidence(
+        connectors,
+        site,
+        plan.planned_start,
+        window_end,
+        now,
+        timeout_seconds=connector_timeout_seconds,
+    )
 
     assessment = engine.assess(plan, evidence.items, now)
     rule_results = list(assessment.rule_results)

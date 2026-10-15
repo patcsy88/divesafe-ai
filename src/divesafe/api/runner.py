@@ -16,7 +16,7 @@ from datetime import timedelta
 from fastapi.concurrency import run_in_threadpool
 
 from divesafe.domain import AssessmentRecord
-from divesafe.orchestration import InvalidPlanError
+from divesafe.orchestration import StartPassedError
 from divesafe.services import RepositoryUnavailableError
 from divesafe.services.runs import FailureCode, RunStore
 
@@ -78,7 +78,7 @@ class RunManager:
         except TimeoutError as exc:
             code = FailureCode.TIMEOUT
             self._log_failure(run_id, actor, exc)
-        except InvalidPlanError as exc:
+        except StartPassedError as exc:
             code = FailureCode.START_PASSED
             self._log_failure(run_id, actor, exc)
         except RepositoryUnavailableError as exc:

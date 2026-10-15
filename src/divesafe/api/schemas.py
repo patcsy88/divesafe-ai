@@ -134,6 +134,13 @@ class ActualConditionsRequest(_Request):
         return value
 
 
+_WITHHELD_NOTE = (
+    "This key cannot see human decisions or later reports. Whether a decision has been recorded "
+    "is not shown here; it does not mean none was. Do not act on this result without asking "
+    "the assigned decider."
+)
+
+
 class AssessmentView(BaseModel):
     record: AssessmentRecord
     status: Literal["PENDING_HUMAN", "DECIDED"]
@@ -144,7 +151,16 @@ class AssessmentView(BaseModel):
     status_note: str
     agent_note: str
     attributions: tuple[str, ...]
+    decision_withheld: bool = False
     notice: str = DISCLAIMER
+
+    @classmethod
+    def withheld(cls, record: AssessmentRecord) -> AssessmentView:
+        """The record as a create-only key may see it: a human decision and later reports are
+        not shown, so the status below says nothing about whether one exists."""
+        stripped = record.model_copy(update={"human_decision": None, "actual_conditions": None})
+        view = cls.of(stripped)
+        return view.model_copy(update={"decision_withheld": True, "status_note": _WITHHELD_NOTE})
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentView:

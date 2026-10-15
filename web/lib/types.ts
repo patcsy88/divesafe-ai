@@ -71,6 +71,8 @@ export interface AssessmentView {
   status_note: string;
   agent_note: string;
   attributions: string[];
+  // True when this key may not see human decisions: then status says nothing about one.
+  decision_withheld: boolean;
   notice: string;
 }
 

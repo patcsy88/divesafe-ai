@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from divesafe import __version__
+from divesafe.agents.runner import stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
 from divesafe.api.runner import RunManager
@@ -39,6 +40,7 @@ from divesafe.api.schemas import (
 )
 from divesafe.api.state import AppState, build_default_state
 from divesafe.config import configure_logging, get_settings
+from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, RUN_MARGIN_SECONDS
 from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
 from divesafe.orchestration import (
     AlreadyDecidedError,
@@ -112,6 +114,14 @@ def create_app(state: AppState | None = None) -> FastAPI:
         )
     if app_state.decision_max_age is None:
         logger.warning("DIVESAFE_DECISION_MAX_AGE_MINUTES is unset: decisions have no age limit")
+
+    if app_state.provider is not None:
+        needed = stage_timeout(app_state.provider) + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+        if app_state.runs.deadline.total_seconds() < needed:
+            raise RuntimeError(
+                "the run deadline is shorter than the model provider's stage timeout plus the "
+                "connector budget and margin; every run would be cut off mid-stage"
+            )
 
     runner = RunManager(
         app_state.repository, deadline=app_state.runs.deadline, grace=app_state.runs.shutdown_grace
@@ -314,9 +324,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 return AssessmentView.of(existing)
             # A create-only key must not use a repeat to read what happened since: it gets the
             # record as it was when it created it.
-            return AssessmentView.of(
-                existing.model_copy(update={"human_decision": None, "actual_conditions": None})
-            )
+            return AssessmentView.withheld(existing)
 
         engine = app_state.engine
         if not engine.policy.required_categories:
@@ -418,9 +426,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if record.created_by != principal.actor:
                 raise HTTPException(status_code=404, detail="assessment not found")
             # A create-only key sees the record as it was created, as a replay does.
-            return AssessmentView.of(
-                record.model_copy(update={"human_decision": None, "actual_conditions": None})
-            )
+            return AssessmentView.withheld(record)
         if run is None or not (viewer or run.created_by == principal.actor):
             raise HTTPException(status_code=404, detail="assessment not found")
         return RunStatusView.of(run)

@@ -64,7 +64,8 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
   }
   const view = fetched.view;
   const r = view.record;
-  const pending = view.status === "PENDING_HUMAN";
+  const withheld = view.decision_withheld;
+  const pending = view.status === "PENDING_HUMAN" && !withheld;
   const decision = r.human_decision;
   const started = Date.parse(r.plan.planned_start) <= Date.now();
 
@@ -84,10 +85,16 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <p className={badgeClass(r.final_recommendation)}>{labelFor(r.final_recommendation)}</p>
         {pending && (
           <p className="pending" role="status">
-            PENDING HUMAN DECISION. {view.status_note}
+            PENDING HUMAN DECISION. {plain(view.status_note)}
           </p>
         )}
-        <p>{view.outcome_note}</p>
+        {withheld && (
+          <p className="pending" role="status">
+            DECISION NOT SHOWN TO THIS KEY. It does not mean none was made. Do not act on this
+            result without asking the assigned decider.
+          </p>
+        )}
+        <p>{plain(view.outcome_note)}</p>
         <dl>
           <dt>Rules alone</dt>
           <dd>{labelFor(r.deterministic_recommendation)}</dd>
@@ -101,9 +108,9 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             </>
           )}
           <dt>Confidence</dt>
-          <dd>{view.confidence_note}</dd>
+          <dd>{plain(view.confidence_note)}</dd>
           <dt>Ruleset</dt>
-          <dd>{r.ruleset_version}</dd>
+          <dd>{plain(r.ruleset_version)}</dd>
         </dl>
       </section>
 
@@ -166,7 +173,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         </section>
       )}
 
-      {!pending && !r.actual_conditions &&
+      {!pending && !withheld && !r.actual_conditions &&
         (started ? (
           <ConditionsForm id={r.id} />
         ) : (
@@ -179,17 +186,17 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <h2>The dive plan</h2>
         <dl>
           <dt>Site</dt>
-          <dd>{r.plan.site_id}</dd>
+          <dd>{plain(r.plan.site_id)}</dd>
           <dt>Start</dt>
           <dd>{formatWhen(r.plan.planned_start)}</dd>
           <dt>Duration</dt>
-          <dd>{r.plan.planned_duration_minutes} minutes</dd>
+          <dd>{plain(String(r.plan.planned_duration_minutes))} minutes</dd>
           <dt>Maximum depth</dt>
-          <dd>{r.plan.max_depth_m} m</dd>
+          <dd>{plain(String(r.plan.max_depth_m))} m</dd>
           <dt>Requested by</dt>
-          <dd>{r.created_by ?? "unknown"}</dd>
+          <dd>{r.created_by ? plain(r.created_by) : "unknown"}</dd>
           <dt>Decision to be recorded by</dt>
-          <dd>{r.assigned_decider ?? "nobody (this record cannot be decided)"}</dd>
+          <dd>{r.assigned_decider ? plain(r.assigned_decider) : "nobody (this record cannot be decided)"}</dd>
         </dl>
       </section>
 
@@ -213,7 +220,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           </p>
           <ul>
             {r.unevaluated_factors.map((f) => (
-              <li key={f}>{f}</li>
+              <li key={f}>{plain(f)}</li>
             ))}
           </ul>
         </section>
@@ -224,8 +231,8 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <ul>
           {r.rule_results.map((rule, i) => (
             <li key={`${rule.rule_id}-${i}`}>
-              <strong>{labelFor(rule.outcome)}</strong> · {rule.rule_id}
-              {rule.factor ? ` · ${rule.factor}` : ""}
+              <strong>{labelFor(rule.outcome)}</strong> · {plain(rule.rule_id)}
+              {rule.factor ? ` · ${plain(rule.factor)}` : ""}
               <br />
               <span>{plain(rule.rationale)}</span>
             </li>
@@ -242,12 +249,12 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           </p>
           {r.findings.map((f, i) => (
             <p key={`f-${i}`}>
-              <strong>{f.agent}:</strong> {plain(f.summary)}
+              <strong>{plain(f.agent)}:</strong> {plain(f.summary)}
             </p>
           ))}
           {r.scenarios.map((s, i) => (
             <p key={`s-${i}`}>
-              <strong>{s.kind}:</strong> {plain(s.summary)}
+              <strong>{plain(s.kind)}:</strong> {plain(s.summary)}
             </p>
           ))}
           {r.explanation && <p>{plain(r.explanation)}</p>}
@@ -266,9 +273,9 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       )}
 
       {view.attributions.length > 0 && (
-        <p className="hint">Data: {view.attributions.join("; ")}</p>
+        <p className="hint">Data: {plain(view.attributions.join("; "))}</p>
       )}
-      <p className="hint">{view.notice}</p>
+      <p className="hint">{plain(view.notice)}</p>
     </>
   );
 }

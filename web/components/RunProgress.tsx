@@ -2,12 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-
-// Waits between checks, growing to a cap so a slow run does not mean many requests.
-const DELAYS_MS = [3_000, 3_000, 5_000, 5_000, 10_000, 15_000];
-// A fixed limit on how long this page keeps asking. The API's own deadline can be longer if the
-// operator set it so, in which case the run may still finish after this page gives up.
-const GIVE_UP_AFTER_MS = 6 * 60_000;
+import { delayFor, GIVE_UP_AFTER_MS } from "../lib/polling.ts";
 
 // Asks the server to render this page again until the run has finished. It decides nothing: what
 // the page shows is whatever the API says, and nothing here is a result.
@@ -26,7 +21,7 @@ export default function RunProgress() {
   useEffect(() => {
     // One refresh at a time, so a slow API is not asked again before it has answered.
     if (gaveUp || busy) return;
-    const delay = DELAYS_MS[Math.min(round, DELAYS_MS.length - 1)];
+    const delay = delayFor(round);
     const timer = setTimeout(() => {
       if (document.hidden) {
         setRound((n) => n + 1);

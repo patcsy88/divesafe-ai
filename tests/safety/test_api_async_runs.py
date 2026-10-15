@@ -260,6 +260,74 @@ def test_an_unfinished_connector_becomes_an_issue_not_a_hang() -> None:
     assert result.items == () and any("stuck" in i and "Timeout" in i for i in result.issues)
 
 
+def test_an_unexpected_error_in_a_run_stores_nothing_and_leaks_no_text() -> None:
+    import gc
+    import logging
+
+    class _Collect(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__(logging.DEBUG)
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    class _Broken:
+        name = "broken"
+
+        async def fetch(self, *args: object) -> Any:
+            raise RuntimeError("secret internal detail")
+
+    # The app replaces the root handlers at start-up, so listen on the loggers that matter.
+    sink = _Collect()
+    watched = [logging.getLogger(n) for n in ("divesafe", "asyncio")]
+    client, _, repo = _build()
+    client.app.state.divesafe.connectors = [_Broken()]
+    for logger in watched:
+        logger.addHandler(sink)
+    try:
+        done = create_and_poll(client, PLAN, AUTH_A)
+        gc.collect()  # a task whose error nobody retrieved is reported when it is collected
+    finally:
+        for logger in watched:
+            logger.removeHandler(sink)
+    body = done.json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "internal"
+    rid = body["id"]
+    assert repo.get(rid) is None and repo._runs[rid].state is RunState.FAILED
+    assert repo._runs[rid].failure_code is FailureCode.INTERNAL
+    failures = [r for r in sink.records if r.getMessage() == "run failed"]
+    assert len(failures) == 1 and failures[0].__dict__["error_type"] == "RuntimeError"
+    for record in sink.records:
+        assert "secret internal detail" not in repr(record.__dict__)
+        assert "secret internal detail" not in record.getMessage()
+        assert record.exc_info is None and record.exc_text is None
+    assert not [r for r in sink.records if r.name == "asyncio" and r.levelno >= logging.ERROR]
+
+
+def test_evidence_that_goes_stale_during_a_run_is_judged_again_and_nothing_is_dropped() -> None:
+    later_start = {**PLAN, "planned_start": "2026-10-08T22:00:00Z"}  # still ahead after the jump
+    steady, _, _ = _build()
+    before = create_and_poll(steady, later_start, AUTH_A).json()["record"]
+    assert not any(r["rationale"].startswith("No fresh") for r in before["rule_results"])
+
+    client, _, _ = _build()
+    readings = iter([T0, T0])  # the request check and the run start; later readings are 2 h on
+    client.app.state.divesafe.clock = lambda: next(readings, T0 + timedelta(hours=2))
+    after = create_and_poll(client, later_start, AUTH_A).json()["record"]
+
+    assert any(
+        r["rule_id"] == "evidence.required.marine_warnings"
+        and r["rationale"].startswith("No fresh 'marine_warnings'")
+        for r in after["rule_results"]
+    )
+    assert not any(r["rule_id"] == "assessment.window_started" for r in after["rule_results"])
+    for earlier in before["rule_results"]:
+        assert earlier in after["rule_results"]  # re-judging adds problems, never removes one
+    assert after["created_at"] == (T0 + timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    assert after["final_recommendation"] == "INSUFFICIENT EVIDENCE"
+
+
 def test_create_and_poll_end_to_end_still_gives_a_pending_human_result() -> None:
     client, _, _ = _build()
     done = create_and_poll(client, PLAN, AUTH_A)
@@ -330,6 +398,72 @@ def test_a_run_whose_start_passes_before_it_begins_is_failed_as_start_passed() -
     body = poll(client, r.headers["location"], AUTH_A).json()
     assert body["status"] == "FAILED" and body["failure_code"] == "start_passed"
     assert repo.get(r.json()["id"]) is None
+
+
+def test_a_wrong_site_is_an_internal_failure_not_a_start_that_passed() -> None:
+    from divesafe.orchestration import SiteMismatchError, StartPassedError
+
+    assert not issubclass(SiteMismatchError, StartPassedError)
+    client, _, repo = _build()
+    other = next(iter(client.app.state.divesafe.sites.values())).model_copy(update={"id": "other"})
+    client.app.state.divesafe.sites = {PLAN["site_id"]: other}
+    r = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
+    body = poll(client, r.headers["location"], AUTH_A).json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "internal"
+    assert repo.get(r.json()["id"]) is None
+
+
+def test_the_connector_budget_has_one_source_and_reaches_the_evidence_gather() -> None:
+    import inspect
+
+    from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
+    from divesafe.orchestration import assess_dive
+    from divesafe.services import gather_evidence
+
+    for function in (assess_dive, gather_evidence):
+        name = "connector_timeout_seconds" if function is assess_dive else "timeout_seconds"
+        assert inspect.signature(function).parameters[name].default == CONNECTOR_BUDGET_SECONDS
+
+
+def test_the_pipeline_passes_its_connector_budget_on_to_the_gather() -> None:
+    from datetime import UTC, datetime
+
+    from divesafe.domain import DivePlan
+    from divesafe.orchestration import assess_dive
+
+    class _Stuck:
+        name = "stuck"
+
+        async def fetch(self, *args: object) -> Any:
+            await asyncio.sleep(30)
+
+    client, _, _ = _build()
+    site = next(iter(client.app.state.divesafe.sites.values()))
+    now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
+    run = assess_dive(
+        assessment_id="a" * 32,
+        plan=DivePlan(**PLAN),
+        site=site,
+        connectors=[_Stuck()],
+        engine=client.app.state.divesafe.engine,
+        now=now,
+        connector_timeout_seconds=0.05,
+    )
+    # The ceiling is below the 30 s default, so a budget that is not passed on fails here.
+    record = asyncio.run(asyncio.wait_for(run, 5))
+    assert any("stuck" in i and "Timeout" in i for i in record.evidence_issues)
+    assert record.final_recommendation.value == "INSUFFICIENT EVIDENCE"
+
+
+def test_a_deadline_shorter_than_the_providers_stage_is_refused_at_start() -> None:
+    from divesafe.models import FakeProvider
+
+    class _Slow(FakeProvider):
+        stage_timeout_seconds = 900.0
+
+    with pytest.raises(RuntimeError, match="stage timeout"):
+        _build(provider=_Slow(), live=False, runs=RunLimits(deadline=timedelta(seconds=210)))
+    _build(provider=_Slow(), live=False, runs=RunLimits(deadline=timedelta(seconds=960)))
 
 
 def test_a_run_that_cannot_store_its_result_is_failed_as_storage_and_stores_nothing() -> None:

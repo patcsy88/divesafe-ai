@@ -218,7 +218,9 @@ class PostgresAssessmentRepository:
                     "COALESCE(has_table_privilege('public.pending_runs', 'TRUNCATE, TRIGGER'), "
                     "false), "
                     "COALESCE(has_table_privilege('public.run_failure_counts', "
-                    "'DELETE, TRUNCATE'), false) "
+                    "'DELETE, TRUNCATE'), false), "
+                    "COALESCE((SELECT pg_get_userbyid(relowner) = current_user FROM pg_class "
+                    "WHERE oid = to_regclass('public.run_failure_counts')), false) "
                     "FROM pg_class c WHERE c.oid = 'public.assessments'::regclass"
                 ).fetchone()
                 assert row is not None
@@ -232,6 +234,7 @@ class PostgresAssessmentRepository:
                     "owns the pending runs table",
                     "can TRUNCATE or alter triggers on the pending runs table",
                     "can delete the failure counts",
+                    "owns the failure counts table",
                 )
                 problems += [
                     f"the application role {n}" for n, flag in zip(names, row, strict=True) if flag

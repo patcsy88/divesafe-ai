@@ -13,7 +13,13 @@ from divesafe.orchestration.human_gate import (
     decide,
     report_actual_conditions,
 )
-from divesafe.orchestration.pipeline import InvalidPlanError, UnsafeConfigurationError, assess_dive
+from divesafe.orchestration.pipeline import (
+    InvalidPlanError,
+    SiteMismatchError,
+    StartPassedError,
+    UnsafeConfigurationError,
+    assess_dive,
+)
 from divesafe.orchestration.ruleset import (
     LoadedRuleset,
     Refusal,
@@ -35,6 +41,8 @@ __all__ = [
     "check_assigned",
     "DecisionRequiredError",
     "InvalidPlanError",
+    "SiteMismatchError",
+    "StartPassedError",
     "UnsafeConfigurationError",
     "assess_dive",
     "decide",

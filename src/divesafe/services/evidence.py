@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
 from divesafe.domain import DataCategory, EvidenceItem
 
@@ -65,7 +66,7 @@ async def gather_evidence(
     window_end: datetime,
     now: datetime,
     *,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
 ) -> EvidenceSet:
     """Fetch from every connector at once. A connector that has not answered within the overall
     timeout becomes an issue, like any other failure, so one stuck source cannot hold a run."""

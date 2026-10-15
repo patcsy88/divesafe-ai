@@ -1,6 +1,6 @@
 # ADR 0019: Asynchronous assessment creation
 
-Status: accepted by the user on 2026-10-14 (option 3); reviewed by the security-reviewer and risk-reviewer (no safety blockers; requirements below); nothing is built
+Status: accepted by the user on 2026-10-14 (option 3); reviewed by the security-reviewer and risk-reviewer (no safety blockers; requirements below); built in three stages (see Build status)
 
 ## Context
 
@@ -95,7 +95,9 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 8. Joining by Idempotency-Key compares plan, assigned decider and creator and refuses any mismatch
    with 422. It happens before the cap, so a retry is never met with 429. Two concurrent POSTs with
    one key start exactly one run. A key whose run is `FAILED` gets 409 ("nothing was recorded; use a
-   new key"), and the run is never restarted. After completion the current replay rules apply.
+   new key"), and the run is never restarted while its row exists. Cleanup deletes `FAILED` rows
+   after the retention period (7 days by default); after that the same key starts a new run, so
+   `FAILED` is terminal only for the retention period. After completion the current replay rules apply.
 9. All input validation (site, plan, decider, start in the past, empty policy) finishes before 202.
 10. A 429 starts with "nothing was recorded", carries `Retry-After` from settings, and still uses the
     per-actor create quota. New settings are bounded; the lease must exceed the stage timeout plus
@@ -131,7 +133,7 @@ service may run several workers. Option 2 is acceptable only for a single-worker
     `FAILED` never use the recommendation badge, the pending-decision banner or the decision form,
     and an unknown status is an error screen. Today an unrecognised value falls through to the
     INSUFFICIENT EVIDENCE badge and `status !== "DECIDED"` shows the pending banner, so both must
-    change. If polling stops at its limit the UI says "Still running; outcome unknown".
+    change. If polling stops at its limit the UI says "No answer yet; outcome unknown".
 
 **Tests**
 19. The synchronous-create safety tests are moved to create, poll, assert. None is deleted or
@@ -171,8 +173,27 @@ service may run several workers. Option 2 is acceptable only for a single-worker
   (`PENDING_HUMAN`, `DECIDED`, `RUNNING`, `FAILED`); an unknown status, a status that disagrees with
   the decision, or a run that carries a result is an error screen. A create takes only the id from
   the reply. A run has its own screen with no badge, pending banner or forms, and
-  `RunProgress` refreshes the page every 3 s and stops after 6 minutes with "Still running;
+  `RunProgress` refreshes the page with a back-off from 3 s to 15 s and stops after 6 minutes with "No answer yet;
   outcome unknown". Tests: `web/tests/status.test.ts`. The web call timeout is now 30 s.
+- **Follow-ups after review (built):**
+  - A key without the viewer role is told that decisions are not shown to it, not that the record
+    is pending: `AssessmentView.decision_withheld` is true and `status_note` is fixed text. The web
+    allow-list requires the flag, refuses a withheld reply that carries a decision, and shows
+    neither the pending banner nor the decision or conditions forms.
+  - `StartPassedError` and `SiteMismatchError` are separate subclasses of `InvalidPlanError`; only
+    the first is stored as `start_passed`. A site mismatch is `internal`.
+  - `CONNECTOR_BUDGET_SECONDS` is the single source of the connector budget. `assess_dive` takes
+    `connector_timeout_seconds` and passes it to `gather_evidence`. `create_app` refuses to start if
+    the run deadline is shorter than the provider's own stage timeout plus the connector budget and
+    margin, which covers a provider whose budget differs from the settings.
+  - API tests: an unexpected error ends the run `FAILED`/`internal`, stores nothing, logs only the
+    exception type and reaches no asyncio handler; evidence that goes stale during a run is judged
+    again and no earlier result is dropped (requirement 20).
+  - `PostgresAssessmentRepository.verify` also reports an application role that owns
+    `run_failure_counts`.
+  - Every API string on the assessment page goes through `plain()`, guarded by a source test.
+    The conflict handling in `failed()` and the polling back-off moved into `web/lib/conflict.ts`
+    and `web/lib/polling.ts`, where they are tested directly.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.
 - The failure counts table is written by cleanup only; nothing reads it yet.
@@ -181,5 +202,11 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 
 - Cancelling a run. Worker threads for model calls cannot be cancelled (ADR 0016).
 - Notifying the user when a run ends; the UI only polls.
+- The web page stops polling after 6 minutes, fixed in code, while the run deadline can be set up
+  to 7200 s. A run longer than that finishes unseen; reloading the page shows it.
+- The application role can still reset `run_failure_counts` rows it is allowed to update. Nothing
+  reads the counts yet.
+- Rendering of `RunProgress` itself is checked by reading its source, not by a renderer; the web
+  package has no browser or React test tooling.
 - Reviewers: this changes the API, persistence and the web flow, so it needs the security-reviewer
   and the risk-reviewer before it is built.

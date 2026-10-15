@@ -706,6 +706,19 @@ def test_verification_flags_an_application_role_that_can_truncate_runs_or_edit_c
     assert any("failure counts" in p for p in app.verify(least_privilege=True))
 
 
+def test_verification_flags_an_application_role_that_owns_the_failure_counts(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("ALTER TABLE run_failure_counts OWNER TO divesafe_app_test")
+    try:
+        assert any("owns the failure counts" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("ALTER TABLE run_failure_counts OWNER TO postgres")
+    assert app.verify(least_privilege=True) == []
+
+
 def test_the_run_table_refuses_a_failed_row_without_a_code_and_unknown_codes() -> None:
     _postgres()
     for state, failed_at, code in (

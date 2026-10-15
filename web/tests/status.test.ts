@@ -24,7 +24,11 @@ const record = (over: Record<string, unknown> = {}) => ({
   actual_conditions: null,
   ...over,
 });
-const finished = (status: string, rec: Record<string, unknown> = record()) => ({ status, record: rec });
+const finished = (status: string, rec: Record<string, unknown> = record(), withheld: unknown = false) => ({
+  status,
+  record: rec,
+  decision_withheld: withheld,
+});
 const DECISION = { decision: "NO-GO", decided_by: "alice", decided_at: "2026-10-10T00:00:00Z" };
 const DECIDED_REC = record({ human_decision: DECISION });
 
@@ -46,6 +50,24 @@ test("a finished assessment is accepted only when its status matches its decisio
   assert.equal(classify(finished("DECIDED", DECIDED_REC))?.kind, "assessment");
   assert.equal(classify(finished("DECIDED")), null);
   assert.equal(classify(finished("PENDING_HUMAN", DECIDED_REC)), null);
+});
+
+test("a reply must say whether the decision was withheld, and a withheld one carries no decision", () => {
+  const { decision_withheld: _unused, ...missing } = finished("PENDING_HUMAN");
+  assert.equal(classify(missing), null);
+  assert.equal(classify({ ...finished("PENDING_HUMAN"), decision_withheld: undefined }), null);
+  for (const bad of ["false", 0, null]) {
+    assert.equal(classify(finished("PENDING_HUMAN", record(), bad)), null, String(bad));
+  }
+  assert.equal(classify(finished("PENDING_HUMAN", record(), true))?.kind, "assessment");
+  assert.equal(classify(finished("DECIDED", DECIDED_REC, true)), null);
+});
+
+test("the page does not call a withheld decision pending or offer the forms for it", () => {
+  const source = readFileSync(fileURLToPath(new URL("../app/assessments/[id]/page.tsx", import.meta.url)), "utf8");
+  assert.ok(source.includes('view.status === "PENDING_HUMAN" && !withheld'));
+  assert.ok(source.includes("!pending && !withheld && !r.actual_conditions"));
+  assert.ok(source.includes("DECISION NOT SHOWN TO THIS KEY"));
 });
 
 test("an unknown status is refused, not shown as pending or as a result", () => {
@@ -175,3 +197,17 @@ const body = {
   planned_duration_minutes: 40,
   max_depth_m: 18,
 };
+
+test("every API value the assessment page prints goes through plain()", () => {
+  const source = readFileSync(fileURLToPath(new URL("../app/assessments/[id]/page.tsx", import.meta.url)), "utf8");
+  // Text expressions only: a brace that is not an attribute value (`=`) or a template slot (`$`).
+  // Booleans, counts and values that pass through labelFor/formatWhen cannot carry hostile text.
+  const printed = [...source.matchAll(/(?<![=$])\{([^{}]*\b(?:view|run|r|rule|f|s|decision)\.[^{}]*)\}/g)].map(
+    (m) => m[1] ?? "",
+  );
+  const bare = printed.filter(
+    (e) =>
+      !/plain\(|labelFor\(|formatWhen\(|\.length|\.map\(|llm_tightened|overrides_to_less_severe|is_override|\.status|failedReason|\.proposed_recommendation|\.actual_conditions|\.assigned_decider \&\&/.test(e),
+  );
+  assert.deepEqual(bare, []);
+});

@@ -12,6 +12,7 @@ import {
 } from "../lib/api.ts";
 import { endSession, requireKey, startSession } from "../lib/auth.ts";
 import { trustProxy } from "../lib/config.ts";
+import { resolveConflict } from "../lib/conflict.ts";
 import { parseObservations } from "../lib/observations.ts";
 import { RECOMMENDATIONS } from "../lib/present.ts";
 import type { AssessmentView } from "../lib/types.ts";
@@ -115,27 +116,13 @@ async function failed(
     redirect("/login");
   }
   if (error instanceof ApiError && error.status === 409) {
-    // A second tab or a retry: only go to the record if a fresh read shows what was submitted.
-    // A run that has no record yet has nothing recorded, so the refusal stands.
-    try {
-      const fetched = await getAssessment(key, id);
-      if (fetched.kind !== "assessment") return { error: error.message };
-      const view = fetched.view;
-      if (recorded(view)) redirect(`/assessments/${id}`);
-      if (differs && view.record.human_decision) {
-        return {
-          error: `${differs} The decision already recorded is ${view.record.human_decision.decision}; yours was not recorded.`,
-          renewKey: true,
-        };
-      }
-    } catch (inner) {
-      if (inner instanceof ApiError && inner.status === 401) {
-        await endSession();
-        redirect("/login");
-      }
-      if (inner instanceof ApiError) return { error: error.message };
-      throw inner;
+    const outcome = await resolveConflict(error, () => getAssessment(key, id), recorded, differs);
+    if (outcome.kind === "login") {
+      await endSession();
+      redirect("/login");
     }
+    if (outcome.kind === "record") redirect(`/assessments/${id}`);
+    return { error: outcome.error, ...(outcome.renewKey ? { renewKey: true } : {}) };
   }
   return { error: error instanceof ApiError ? error.message : fallback };
 }
