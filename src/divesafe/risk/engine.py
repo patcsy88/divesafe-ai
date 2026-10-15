@@ -16,6 +16,7 @@ must carry a source citation, and must come from reviewed sources (docs/risk-mod
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -112,6 +113,23 @@ DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
 # Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
 RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.", "rule.")
+# A signed-off definition id may be 100 characters and is prefixed with "definition.".
+RULE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9._-]{1,128}")
+# Problems with a named rule: it failed, its review expired, or it declares no expiry.
+RULE_ERROR_PREFIX: Final = "rule.error."
+RULE_EXPIRED_PREFIX: Final = "rule.expired."
+RULE_NO_EXPIRY_PREFIX: Final = "rule.validated_without_expiry."
+RULE_PROBLEM_PREFIXES: Final = (RULE_ERROR_PREFIX, RULE_EXPIRED_PREFIX, RULE_NO_EXPIRY_PREFIX)
+# What the API says about each, as fixed text: a rule's own words are never repeated for these.
+RULE_PROBLEM_WORDING: Final = {
+    RULE_ERROR_PREFIX: (
+        "failed to evaluate or returned a malformed result. Its result was not trusted, so this "
+        "counts as at least INSUFFICIENT EVIDENCE, and any more severe outcome it gave still "
+        "applies."
+    ),
+    RULE_EXPIRED_PREFIX: "its signed-off review has expired, so it was not applied.",
+    RULE_NO_EXPIRY_PREFIX: "is marked validated but declares no expiry, so it was not applied.",
+}
 ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_REQUIRED_PREFIX,
     EVIDENCE_QUALITY_PREFIX,
@@ -173,14 +191,18 @@ class RiskRulesEngine:
     ) -> None:
         if not ruleset_version.strip():
             raise ValueError("ruleset_version must be set")
-        for rule in rules:
+        # Read once: the id checked here is the id kept, and a rule whose id changes later is
+        # caught by the result-id check.
+        ids = tuple(rule.rule_id for rule in rules)
+        for rule, rule_id in zip(rules, ids, strict=True):
             if not rule.citation.strip():
-                raise ValueError(f"rule '{rule.rule_id}' has no source citation")
-            if rule.rule_id.startswith(RESERVED_RULE_PREFIXES):
-                raise ValueError(f"rule id '{rule.rule_id}' uses a reserved prefix")
+                raise ValueError(f"rule '{rule_id}' has no source citation")
+            if not RULE_ID_PATTERN.fullmatch(rule_id):
+                raise ValueError("rule id must be 1 to 128 letters, digits, '.', '_' or '-'")
+            if rule_id.lower().startswith(RESERVED_RULE_PREFIXES):
+                raise ValueError(f"rule id '{rule_id}' uses a reserved prefix")
         self._rules = tuple(rules)
-        # Read once: a rule whose id changes later is then caught by the result-id check.
-        self._rule_ids = tuple(rule.rule_id for rule in rules)
+        self._rule_ids = ids
         self._required_factors = required_factors
         self._policy = policy
         self._ruleset_version = ruleset_version
@@ -258,7 +280,7 @@ class RiskRulesEngine:
             if expires_at is not None and now >= expires_at:
                 return [
                     RuleResult(
-                        rule_id=f"rule.expired.{rule_id}",
+                        rule_id=f"{RULE_EXPIRED_PREFIX}{rule_id}",
                         outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                         rationale=(
                             "The signed-off review of this rule has expired, so it is not "
@@ -271,7 +293,7 @@ class RiskRulesEngine:
             logger.exception("rule raised", extra={"rule_id": rule_id})
             return [
                 RuleResult(
-                    rule_id=f"rule.error.{rule_id}",
+                    rule_id=f"{RULE_ERROR_PREFIX}{rule_id}",
                     outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                     rationale="The rule failed to evaluate.",
                 )
@@ -284,7 +306,7 @@ class RiskRulesEngine:
             # replacement keeps the more severe outcome: it may add a problem, never soften one.
             return [
                 RuleResult(
-                    rule_id=f"rule.error.{rule_id}",
+                    rule_id=f"{RULE_ERROR_PREFIX}{rule_id}",
                     outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
                     rationale=(
                         "The rule returned a result under a different id. Its own rationale: "
@@ -296,7 +318,7 @@ class RiskRulesEngine:
             # A validated limit must expire, or a stale review would keep permitting GO.
             return [
                 RuleResult(
-                    rule_id=f"rule.validated_without_expiry.{rule_id}",
+                    rule_id=f"{RULE_NO_EXPIRY_PREFIX}{rule_id}",
                     outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                     rationale="A VALIDATED result must come from a rule that declares an expiry.",
                 )

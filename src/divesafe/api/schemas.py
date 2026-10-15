@@ -18,7 +18,11 @@ from divesafe.domain import (
     effective_quality,
 )
 from divesafe.risk import NOT_EVALUATED_MARKER
-from divesafe.risk.engine import ENGINE_RULE_PREFIXES, WINDOW_STARTED_RULE
+from divesafe.risk.engine import (
+    ENGINE_RULE_PREFIXES,
+    RULE_PROBLEM_WORDING,
+    WINDOW_STARTED_RULE,
+)
 from divesafe.services.runs import FailureCode, PendingRun, RunState
 
 DISCLAIMER = (
@@ -178,6 +182,12 @@ class AssessmentView(BaseModel):
         problems = [
             r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
         ]
+        rule_problems = [
+            f"Rule {r.rule_id.removeprefix(prefix)}: {wording}"
+            for r in record.rule_results
+            for prefix, wording in RULE_PROBLEM_WORDING.items()
+            if r.rule_id.startswith(prefix)
+        ]
         outcome_note = _OUTCOME_NOTES[record.final_recommendation]
         if any(r.rule_id == WINDOW_STARTED_RULE for r in record.rule_results):
             outcome_note += (
@@ -192,6 +202,8 @@ class AssessmentView(BaseModel):
             ) + outcome_note
         if problems:
             outcome_note += " Evidence problems: " + " ".join(problems)
+        if rule_problems:
+            outcome_note += " Rule problems: " + " ".join(sorted(set(rule_problems)))
         partial = sorted(
             {
                 f"{r.factor.value}: {_aspects_not_evaluated(r.rationale)}"

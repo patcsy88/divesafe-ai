@@ -157,9 +157,16 @@ The engine and the pipeline emit rule ids that start with `assessment.`, `eviden
 `rule.`. A configured rule may not use these prefixes (the engine refuses to start), and a result
 that carries a different id from its rule's is replaced by a `rule.error.<id>` result that keeps
 the more severe outcome and is at least INSUFFICIENT EVIDENCE. The API recognises engine messages
-by prefix, so this stops a rule from posing as one. The check is case-sensitive; only code authors
+by prefix, so this stops a rule from posing as one. Only code authors
 can add rules, and signed-off definitions always become `definition.<id>`. A structured origin
 field on `RuleResult` would be sturdier than prefixes and is not built.
+
+The engine reads each rule's id once, so the id it checks is the id it keeps. A registered id must
+be 1 to 128 letters, digits, `.`, `_` or `-`, and the reserved-prefix check ignores case. The API
+names a rule that failed, whose review expired or that declares no expiry in the outcome note
+under "Rule problems", in fixed wording. The rule's own rationale is not repeated there, because
+for a replaced result it is exactly the text the engine did not trust; it stays in the rule
+results for the audit trail.
 
 ### Window started
 
