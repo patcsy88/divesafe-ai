@@ -209,6 +209,8 @@ service may run several workers. Option 2 is acceptable only for a single-worker
     is not wrapped in `plain()` or on a short list of named fixed-text expressions. `ApiError`
     strips control and bidi characters from every message. This covers the evidence, sites and
     home pages and the site name in the form.
+  - Only the run's own deadline is stored as `timeout`: the runner checks that its deadline
+    actually expired, so a `TimeoutError` raised inside the work is stored as `internal`.
   - Mutation checks were run for every test added in this round and the earlier follow-ups.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.

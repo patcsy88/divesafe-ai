@@ -530,3 +530,16 @@ def test_the_status_notes_are_the_fixed_reviewed_wording() -> None:
     failed = _RUN_NOTES[RunState.FAILED]
     assert "not a result and not INSUFFICIENT EVIDENCE" in failed
     assert "nothing was assessed" in failed
+
+
+def test_a_timeout_raised_inside_the_work_is_internal_not_the_run_deadline() -> None:
+    client, _, repo = _build()
+
+    def boom(*args: object, **kwargs: object) -> Any:
+        raise TimeoutError("a library timed out")
+
+    client.app.state.divesafe.engine.assess = boom
+    body = create_and_poll(client, PLAN, AUTH_A).json()
+    assert body["status"] == "FAILED" and body["failure_code"] == "internal"
+    assert repo._runs[body["id"]].failure_code is FailureCode.INTERNAL
+    assert repo.get(body["id"]) is None

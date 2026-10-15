@@ -62,8 +62,9 @@ class RunManager:
         work: Callable[[], Awaitable[AssessmentRecord]],
     ) -> None:
         code: FailureCode | None = None
+        deadline = asyncio.timeout(self._deadline.total_seconds())
         try:
-            async with asyncio.timeout(self._deadline.total_seconds()):
+            async with deadline:
                 record = await work()
             stored = await run_in_threadpool(self._store.complete, record, run_token)
             if stored:
@@ -76,7 +77,8 @@ class RunManager:
             code = FailureCode.SHUTDOWN
             raise
         except TimeoutError as exc:
-            code = FailureCode.TIMEOUT
+            # Only the run's own deadline is a timeout; one raised from inside the work is a bug.
+            code = FailureCode.TIMEOUT if deadline.expired() else FailureCode.INTERNAL
             self._log_failure(run_id, actor, exc)
         except StartPassedError as exc:
             code = FailureCode.START_PASSED
