@@ -205,6 +205,10 @@ service may run several workers. Option 2 is acceptable only for a single-worker
     all three tables, flags an application role that owns or is a member of the owner of a guard
     function, checks each guard trigger calls its own function, and reports a missing run table as
     a problem (tables are passed as oids, so a missing table is no longer an opaque outage).
+  - `web/tests/plain.test.ts` scans every page and component and fails on any printed value that
+    is not wrapped in `plain()` or on a short list of named fixed-text expressions. `ApiError`
+    strips control and bidi characters from every message. This covers the evidence, sites and
+    home pages and the site name in the form.
   - Mutation checks were run for every test added in this round and the earlier follow-ups.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.

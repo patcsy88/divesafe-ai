@@ -213,17 +213,3 @@ const body = {
   planned_duration_minutes: 40,
   max_depth_m: 18,
 };
-
-test("every API value the assessment page prints goes through plain()", () => {
-  const source = readFileSync(fileURLToPath(new URL("../app/assessments/[id]/page.tsx", import.meta.url)), "utf8");
-  // Text expressions only: a brace that is not an attribute value (`=`) or a template slot (`$`).
-  // Booleans, counts and values that pass through labelFor/formatWhen cannot carry hostile text.
-  const printed = [...source.matchAll(/(?<![=$])\{([^{}]*\b(?:view|run|r|rule|f|s|decision)\.[^{}]*)\}/g)].map(
-    (m) => m[1] ?? "",
-  );
-  const bare = printed.filter(
-    (e) =>
-      !/plain\(|labelFor\(|formatWhen\(|\.length|\.map\(|llm_tightened|overrides_to_less_severe|is_override|\.status|failedReason|\.proposed_recommendation|\.actual_conditions|\.assigned_decider \&\&/.test(e),
-  );
-  assert.deepEqual(bare, []);
-});

@@ -33,7 +33,7 @@ export default async function SitesPage() {
             <dt>Id</dt>
             <dd>{plain(s.site.id)}</dd>
             <dt>Position</dt>
-            <dd>{s.site.latitude}, {s.site.longitude} ({plain(s.site.coordinate_source)})</dd>
+            <dd>{plain(String(s.site.latitude))}, {plain(String(s.site.longitude))} ({plain(s.site.coordinate_source)})</dd>
             {s.site.area_names.length > 0 && (
               <>
                 <dt>Areas</dt>
@@ -58,7 +58,7 @@ export default async function SitesPage() {
           <p className="hint">{plain(s.hazards_note)} Not listing a hazard does not mean there are none.</p>
         </section>
       ))}
-      <p className="hint">{list.notice}</p>
+      <p className="hint">{plain(list.notice)}</p>
     </>
   );
 }

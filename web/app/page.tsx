@@ -4,6 +4,7 @@ import AssessmentForm from "../components/AssessmentForm.tsx";
 import { logout } from "./actions.ts";
 import { ApiError, listSites } from "../lib/api.ts";
 import { requireKey } from "../lib/auth.ts";
+import { plain } from "../lib/present.ts";
 import { redirect } from "next/navigation";
 
 export default async function Home() {
@@ -12,7 +13,7 @@ export default async function Home() {
   let problem: string | null = null;
   try {
     const list = await listSites(key);
-    sites = list.sites.map((s) => ({ id: s.site.id, label: s.site.name }));
+    sites = list.sites.map((s) => ({ id: s.site.id, label: plain(s.site.name) }));
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) redirect("/logout");
     problem = error instanceof ApiError ? error.message : "Could not load the sites.";

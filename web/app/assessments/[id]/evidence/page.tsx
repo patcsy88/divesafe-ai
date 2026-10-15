@@ -74,7 +74,7 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
               {future_dated
                 ? " (dated after the assessment: treat with suspicion)"
                 : retrieval_age_minutes_at_assessment !== null
-                  ? `, ${retrieval_age_minutes_at_assessment} min before the assessment`
+                  ? `, ${plain(String(retrieval_age_minutes_at_assessment))} min before the assessment`
                   : ""}
             </dd>
             <dt>Refers to</dt>
@@ -94,7 +94,7 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
           </details>
         </section>
       ))}
-      <p className="hint">{view.notice}</p>
+      <p className="hint">{plain(view.notice)}</p>
     </>
   );
 }

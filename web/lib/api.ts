@@ -7,7 +7,7 @@ export class ApiError extends Error {
   status: number;
   refused: boolean;
   constructor(status: number, message: string, refused = false) {
-    super(message);
+    super(plain(message));
     this.status = status;
     this.refused = refused;
   }
