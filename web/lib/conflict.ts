@@ -13,20 +13,16 @@ export async function resolveConflict(
   refusal: ApiError,
   read: () => Promise<Fetched>,
   recorded: (view: AssessmentView) => boolean,
-  differs?: string,
+  // What to tell the person when the record holds something other than what they submitted.
+  differs?: (view: AssessmentView) => string | null,
 ): Promise<ConflictOutcome> {
   try {
     const fetched = await read();
     if (fetched.kind !== "assessment") return { kind: "error", error: refusal.message };
     const view = fetched.view;
     if (recorded(view)) return { kind: "record" };
-    if (differs && view.record.human_decision) {
-      return {
-        kind: "error",
-        error: `${differs} The decision already recorded is ${view.record.human_decision.decision}; yours was not recorded.`,
-        renewKey: true,
-      };
-    }
+    const other = differs?.(view) ?? null;
+    if (other !== null) return { kind: "error", error: other, renewKey: true };
   } catch (inner) {
     if (inner instanceof ApiError && inner.status === 401) return { kind: "login" };
     if (inner instanceof ApiError) return { kind: "error", error: refusal.message };

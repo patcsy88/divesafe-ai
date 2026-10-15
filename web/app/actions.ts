@@ -13,7 +13,7 @@ import {
 import { endSession, requireKey, startSession } from "../lib/auth.ts";
 import { trustProxy } from "../lib/config.ts";
 import { resolveConflict } from "../lib/conflict.ts";
-import { parseObservations } from "../lib/observations.ts";
+import { parseObservations, sameObservations } from "../lib/observations.ts";
 import { RECOMMENDATIONS } from "../lib/present.ts";
 import type { AssessmentView } from "../lib/types.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
@@ -109,7 +109,7 @@ async function failed(
   key: string,
   id: string,
   recorded: (view: AssessmentView) => boolean,
-  differs?: string,
+  differs?: (view: AssessmentView) => string | null,
 ): Promise<FormState> {
   if (error instanceof ApiError && error.status === 401) {
     await endSession();
@@ -154,7 +154,10 @@ export async function submitDecision(_prev: FormState, data: FormData): Promise<
       (v) =>
         v.record.human_decision?.decision === decision &&
         (v.record.human_decision.override_rationale ?? "") === rationale,
-      "A different decision is already on record.",
+      (v) =>
+        v.record.human_decision
+          ? `A different decision is already on record: ${v.record.human_decision.decision}. Yours was not recorded.`
+          : null,
     );
   }
   redirect(`/assessments/${id}`);
@@ -169,7 +172,17 @@ export async function submitActualConditions(_prev: FormState, data: FormData): 
   try {
     await recordActualConditions(key, id, parsed.observations);
   } catch (error) {
-    return failed(error, "Could not record the conditions.", key, id, (v) => v.record.actual_conditions !== null);
+    return failed(
+      error,
+      "Could not record the conditions.",
+      key,
+      id,
+      (v) => sameObservations(v.record.actual_conditions?.observations, parsed.observations),
+      (v) =>
+        v.record.actual_conditions
+          ? "Different conditions were already reported. Yours were not recorded."
+          : null,
+    );
   }
   redirect(`/assessments/${id}`);
 }

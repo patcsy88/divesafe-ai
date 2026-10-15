@@ -211,6 +211,9 @@ service may run several workers. Option 2 is acceptable only for a single-worker
     home pages and the site name in the form.
   - Only the run's own deadline is stored as `timeout`: the runner checks that its deadline
     actually expired, so a `TimeoutError` raised inside the work is stored as `internal`.
+  - After a 409 on the conditions form, the page goes to the record only when the stored
+    observations equal the submitted ones (`sameObservations`); different stored conditions are
+    reported as such and the retry key is renewed. This matches how a 409 on a decision works.
   - Mutation checks were run for every test added in this round and the earlier follow-ups.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.

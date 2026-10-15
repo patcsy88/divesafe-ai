@@ -31,3 +31,14 @@ export function parseObservations(get: (name: string) => string): Parsed {
   }
   return { ok: true, observations };
 }
+
+// True only when the observations on record are exactly the ones submitted: same names, same values.
+export function sameObservations(
+  stored: Record<string, unknown> | undefined,
+  submitted: Record<string, string | number>,
+): boolean {
+  if (!stored) return false;
+  const names = Object.keys(submitted);
+  if (Object.keys(stored).length !== names.length) return false;
+  return names.every((name) => Object.hasOwn(stored, name) && stored[name] === submitted[name]);
+}
