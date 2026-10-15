@@ -98,3 +98,37 @@ def test_the_prompt_text_is_pinned_to_its_version() -> None:
     assert (PROMPT_VERSION, digest) == PINNED, (
         "the system prompt changed: bump PROMPT_VERSION and update PINNED"
     )
+
+
+CHARS_PER_TOKEN_ASSUMED = 3  # an assumption, not a measurement; replace it when one is recorded
+
+
+def _longest_free_text_chars() -> int:
+    items = int(re.search(r"at most (\d+) risk factors", TEXT).group(1))  # type: ignore[union-attr]
+    item_chars = _stated("risk factor, conflicting signal and uncertainty")
+    finding = _stated("every summary") + 2 * items * item_chars
+    proposal = _stated("every rationale") + items * item_chars
+    return max(finding, proposal)
+
+
+def test_the_longest_allowed_free_text_fits_the_default_output_cap_on_the_stated_assumption() -> (
+    None
+):
+    """Only the free text the prompt limits. Not counted: JSON keys, quotes and brackets,
+    `confidence`, and up to 120 evidence ids (their number depends on the evidence). A reasoning
+    model also spends part of the cap thinking, so a provider may declare a larger cap, and an
+    operator may set a smaller one: neither is checked here. A reply that ignores the stated limits
+    is refused, not trimmed."""
+    from divesafe.agents.runner import MAX_OUTPUT_CHARS, MAX_OUTPUT_TOKENS
+
+    worst = _longest_free_text_chars()
+    assert worst <= MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN_ASSUMED
+    assert worst < MAX_OUTPUT_CHARS
+
+
+def test_a_smaller_output_cap_would_fail_the_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from divesafe.agents import runner
+
+    monkeypatch.setattr(runner, "MAX_OUTPUT_TOKENS", 1000)
+    with pytest.raises(AssertionError):
+        test_the_longest_allowed_free_text_fits_the_default_output_cap_on_the_stated_assumption()

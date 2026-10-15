@@ -226,7 +226,8 @@ class Report:
 
     @property
     def schema_failure_rate(self) -> float:
-        """Rejected agent issues over the calls a full stage would make. A stage timeout is one
+        """Agent issues (schema rejections, token-limit stops, timeouts) over the calls a full stage
+        would make; the name is historical. A stage timeout is one
         issue for many lost calls, so this understates in that case."""
         return sum(c.agent_issues for c in self.cases) / (len(self.cases) * CALLS_PER_FULL_STAGE)
 

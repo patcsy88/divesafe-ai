@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from divesafe.config.settings import Settings
-from divesafe.models.llm import LLMRequest, LLMResponse, register_provider
+from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -39,6 +39,10 @@ Transport = Callable[[str, bytes, float], bytes]
 
 class OllamaError(RuntimeError):
     """The server was unreachable or returned something unusable. Messages are fixed strings."""
+
+
+class OllamaTokenLimitError(OllamaError, TokenLimitError):
+    """The reply stopped at the output-token limit."""
 
 
 def is_loopback(host: str) -> bool:
@@ -133,6 +137,8 @@ def _join_stream(raw: bytes) -> str:
             raise bad
         parts.append(content)
         last = x
+    if last is not None and last.get("done") is True and last.get("done_reason") == "length":
+        raise OllamaTokenLimitError
     if last is None or last.get("done") is not True or last.get("done_reason", "stop") != "stop":
         raise bad
     return "".join(parts)

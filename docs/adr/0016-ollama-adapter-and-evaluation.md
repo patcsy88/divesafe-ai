@@ -149,3 +149,20 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   sent to the model server meanwhile. A call cancelled by `close()` while queued gives its caller a
   `CancelledError`, so no record is stored. Closing the socket from `close()` needs the watchdog
   named in ADR 0018.
+
+## Amendment (2026-10-16): token-limit stops
+
+- A stream that ends with `done_reason` "length" now raises `OllamaTokenLimitError`, a subclass of
+  both `OllamaError` and `TokenLimitError` (`models/llm.py`, fixed message, no reply text). The reply
+  is still refused, never trimmed or repaired. The agent runner turns it into the fixed issue
+  `<task>: output stopped at the token limit`, so an evaluation can tell it from a schema rejection.
+- The label is what the server reported, not something the code checked. A misbehaving server can
+  send "length" to cause a refusal; the reply is refused either way.
+- The evaluation JSON records a `budgets` block (output tokens, timeouts, concurrency).
+- The invented-hazard gap also covers invented reassurances and dropped caveats. Nothing detects
+  any of these; `test_an_invented_hazard_in_a_valid_reply_is_accepted_and_stored_unflagged` pins that
+  and is not coverage.
+- `schema_failure_rate` counts all agent issues (rejections, token-limit stops, timeouts).
+- A test checks the free text the prompt allows fits the default 1500-token cap on an assumed 3
+  characters per token (an assumption, not a measurement). It ignores JSON overhead, evidence ids,
+  thinking tokens and an operator's lower cap.

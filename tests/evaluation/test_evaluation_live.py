@@ -100,6 +100,13 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
                 "run_at": datetime.now(UTC).isoformat(),
                 "code_sha": _sha(),
                 "prompt_version": PROMPT_VERSION,
+                "budgets": {
+                    "max_output_tokens": budgets.llm_max_output_tokens,
+                    "call_timeout_seconds": budgets.llm_call_timeout_seconds,
+                    "stage_timeout_seconds": budgets.llm_stage_timeout_seconds,
+                    "first_byte_timeout_seconds": budgets.llm_first_byte_timeout_seconds,
+                    "max_concurrent_calls": budgets.llm_max_concurrent_calls,
+                },
                 "summary": report.summary(),
                 "cases": [c.raw_record for c in report.cases],
             },

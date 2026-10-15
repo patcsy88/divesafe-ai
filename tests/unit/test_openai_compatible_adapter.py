@@ -117,7 +117,6 @@ def _lines(*lines: str) -> bytes:
         _event("x").encode(),  # no finish, no [DONE]: cut off
         (_event("x") + "data: [DONE]\n\n").encode(),  # [DONE] without a stop reason
         (_event("x") + _event(None, "stop")).encode(),  # no [DONE]
-        (_event("x") + _event(None, "length") + "data: [DONE]\n").encode(),  # token limit
         (_event("x") + _event(None, "content_filter") + "data: [DONE]\n").encode(),
         (_event("x") + _event(None, "tool_calls") + "data: [DONE]\n").encode(),
         (_event("x") + _event(None, "stop") + "data: [DONE]\n" + _event("late")).encode(),
@@ -466,3 +465,13 @@ def test_close_shuts_the_executor_and_cancels_a_queued_call() -> None:
     assert isinstance(second, asyncio.CancelledError)
     assert provider._executor._shutdown  # type: ignore[attr-defined]
     assert first is not None
+
+
+def test_a_reply_stopped_by_the_token_limit_is_refused_with_its_own_error() -> None:
+    from divesafe.models import TokenLimitError
+
+    raw = (_event("x") + _event(None, "length") + "data: [DONE]\n").encode()
+    with pytest.raises(TokenLimitError) as caught:
+        join_sse(raw)
+    assert isinstance(caught.value, OpenAICompatibleError)
+    assert str(caught.value) == "the model stopped at the output-token limit"

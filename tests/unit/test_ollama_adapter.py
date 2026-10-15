@@ -241,8 +241,12 @@ def _stream(*lines: dict[str, object]) -> bytes:
 
 def test_a_reply_stopped_by_the_token_limit_is_refused() -> None:
     cut = _stream({"message": {"content": '{"a"'}, "done": True, "done_reason": "length"})
-    with pytest.raises(OllamaError):
+    from divesafe.models import TokenLimitError
+
+    with pytest.raises(TokenLimitError) as caught:
         _run(OllamaProvider("m1", transport=_Recorder(cut)))
+    assert isinstance(caught.value, OllamaError)
+    assert str(caught.value) == "the model stopped at the output-token limit"
     ok = _stream({"message": {"content": "x"}, "done": True, "done_reason": "stop"})
     assert _run(OllamaProvider("m1", transport=_Recorder(ok))) == "x"
 

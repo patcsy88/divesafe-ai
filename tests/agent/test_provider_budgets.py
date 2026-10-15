@@ -118,3 +118,18 @@ def test_a_request_bounds_its_output_tokens() -> None:
     for bad in (0, -1, 8001):
         with pytest.raises(ValidationError):
             LLMRequest(messages=(), max_output_tokens=bad)
+
+
+def test_a_reply_stopped_at_the_token_limit_has_its_own_fixed_message() -> None:
+    from divesafe.models.llm import TokenLimitError
+
+    class _Cut:
+        name, model, external = "cut", "m", False
+
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            raise TokenLimitError
+
+    kwargs = dict(task="t", user_message="x", output=Finding, allowed_ids=frozenset())
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(call_structured(_Cut(), **kwargs))  # type: ignore[arg-type]
+    assert str(caught.value) == "t: output stopped at the token limit"

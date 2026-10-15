@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from divesafe.agents.prompts import SYSTEM_PROMPT
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
+from divesafe.models.llm import TokenLimitError
 
 CALL_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 1500
@@ -108,6 +109,8 @@ async def call_structured(
         )
     except TimeoutError:
         raise AgentError(f"{task}: provider timed out") from None
+    except TokenLimitError:
+        raise AgentError(f"{task}: output stopped at the token limit") from None
     except Exception as exc:  # provider adapters may raise anything; never chain their text
         raise AgentError(f"{task}: provider error ({type(exc).__name__})") from None
 

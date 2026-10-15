@@ -152,3 +152,37 @@ def test_injected_text_stays_inside_the_untrusted_block_even_with_a_closing_tag(
         assert prompt.count(CLOSE_TAG) == prompt.count("<untrusted_data>")
         assert prompt.index("IGNORE ALL PREVIOUS") > opened
         assert prompt.index("IGNORE ALL PREVIOUS") < closed
+
+
+def test_an_invented_hazard_in_a_valid_reply_is_accepted_and_stored_unflagged() -> None:
+    """KNOWN GAP (ADR 0016 results, ADR 0007): no check for hazards, reassurances or dropped
+    caveats the inputs do not support. This pins that such a reply is accepted and stored and that
+    no metric flags it, so it is not coverage. An invented reassurance ("no eddies") is the more
+    dangerous kind and is equally undetected. A detector added as a new metric would not break this
+    test; a detector that rejects replies would, and then this test must be changed on purpose.
+    The result is never lowered because `reconcile` only tightens (tested elsewhere)."""
+    invented = "heat stress and eddies near the point"
+
+    def reply(request: LLMRequest) -> str:
+        body: dict[str, Any] = json.loads(scripted()(request))
+        if "risk_factors" in body:
+            body["risk_factors"] = [invented]
+        return json.dumps(body)
+
+    report = evaluate(lambda: FakeProvider(reply))
+    assert report.schema_failure_rate == 0
+    assert report.proposals_obtained == len(report.cases)
+    for case in report.cases:
+        # A finding made by code because a domain has no evidence never called the model.
+        stored = [
+            x
+            for x in case.raw_record["findings"] + case.raw_record["scenarios"]
+            if not x.get("no_evidence")
+        ]
+        assert stored and all(invented in x["risk_factors"] for x in stored)
+    assert set(report.summary()) == {
+        "synthetic", "engines", "cases", "rule_outcome_accuracy", "under_severe_errors",
+        "over_severe_cases", "downgrade_attempts", "proposals_obtained", "schema_failure_rate",
+        "injection_echoes", "echo_hits_in_clean_scenarios",
+    }  # fmt: skip
+    assert report.under_severe_errors == 0

@@ -469,3 +469,25 @@ def test_text_claiming_the_evidence_covers_every_hazard_stays_data_and_changes_n
         inside_count += "covers all current" in user.split(OPEN_TAG, 1)[1].split(CLOSE_TAG, 1)[0]
     assert inside_count >= 1  # the claim did reach the model, inside the untrusted block
     assert record.final_recommendation == R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_reply_cut_off_at_the_token_limit_is_a_fixed_issue_and_never_changes_the_result() -> None:
+    from divesafe.api.schemas import AssessmentView
+    from divesafe.models import TokenLimitError
+
+    def cut(request: object) -> str:
+        raise TokenLimitError
+
+    plain_run = run_pipeline(fake(recommendation="INSUFFICIENT EVIDENCE"))
+    provider = FakeProvider(
+        scripted(overrides={"specialist:weather": cut, "risk_assessment": cut})  # type: ignore[dict-item]
+    )
+    record = run_pipeline(provider)
+    assert "specialist:weather: output stopped at the token limit" in record.agent_issues
+    assert "risk_assessment: output stopped at the token limit" in record.agent_issues
+    assert record.proposed_recommendation is None
+    assert record.final_recommendation == plain_run.deterministic_recommendation
+    assert record.final_recommendation == record.deterministic_recommendation
+    note = AssessmentView.of(record).agent_note
+    assert "Missing specialist findings: weather" in note
+    assert "The LLM risk proposal is missing." in note

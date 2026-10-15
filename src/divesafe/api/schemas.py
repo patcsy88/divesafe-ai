@@ -82,6 +82,8 @@ def _agent_note(record: AssessmentRecord) -> str:
         )
         if names:
             note += f" Missing specialist findings: {', '.join(names)}."
+        if any(i.startswith("risk_assessment:") for i in record.agent_issues):
+            note += " The LLM risk proposal is missing."
         if any(i.startswith("agent stage: timed out") for i in record.agent_issues):
             note += " The agent stage timed out: scenarios and the proposal may be missing."
     return note

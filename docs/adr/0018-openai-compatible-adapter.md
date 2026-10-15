@@ -85,3 +85,11 @@ host and setting the opt-in is the operator's explicit acceptance.
 - The injection screen, the web timeout coupling and the missing server-wide cap on assessments are
   unchanged (ADR 0016).
 - Hosted-service data terms are not reviewed here.
+
+## Amendment (2026-10-16): token-limit stops
+
+A `finish_reason` of "length" now raises `OpenAICompatibleTokenLimitError` (also a `TokenLimitError`,
+fixed message). The reply is still refused and the agent issue reads
+`<task>: output stopped at the token limit`. The classification is what the server reported, and it
+is raised as soon as "length" is seen, so a malformed event after it is also labelled this way.
+Other non-"stop" reasons still raise the generic error. See ADR 0016.

@@ -9,6 +9,7 @@ from divesafe.models.llm import (
     LLMRequest,
     LLMResponse,
     ProviderNotAvailableError,
+    TokenLimitError,
     create_provider,
     register_provider,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "LLMRequest",
     "LLMResponse",
     "ProviderNotAvailableError",
+    "TokenLimitError",
     "create_provider",
     "register_provider",
 ]

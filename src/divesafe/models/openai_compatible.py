@@ -32,7 +32,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from divesafe.config.settings import Settings
-from divesafe.models.llm import LLMRequest, LLMResponse, register_provider
+from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
 from divesafe.models.ollama import (
     MAX_RESPONSE_BYTES,
     MAX_STREAM_LINES,
@@ -51,6 +51,10 @@ Transport = Callable[[str, bytes, float], bytes]
 
 class OpenAICompatibleError(RuntimeError):
     """The server was unreachable or returned something unusable. Messages are fixed strings."""
+
+
+class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
+    """The reply stopped at the output-token limit."""
 
 
 class _LoopbackConnection(http.client.HTTPConnection):
@@ -184,6 +188,8 @@ def join_sse(raw: bytes) -> str:
             parts.append(content)
         reason = choice.get("finish_reason")
         if reason is not None:
+            if reason == "length":
+                raise OpenAICompatibleTokenLimitError
             if reason != "stop":
                 raise bad
             finished = True

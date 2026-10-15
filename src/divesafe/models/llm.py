@@ -49,6 +49,14 @@ class LLMProvider(Protocol):
     async def complete(self, request: LLMRequest) -> LLMResponse: ...
 
 
+class TokenLimitError(RuntimeError):
+    """The model stopped at the output-token limit, so its reply is cut off and is refused.
+    The message is fixed; no reply text is carried."""
+
+    def __init__(self) -> None:
+        super().__init__("the model stopped at the output-token limit")
+
+
 class ProviderNotAvailableError(RuntimeError):
     """Raised when the configured provider has no registered adapter."""
 
