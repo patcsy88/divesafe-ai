@@ -70,6 +70,8 @@ async def gather_evidence(
 ) -> EvidenceSet:
     """Fetch from every connector at once. A connector that has not answered within the overall
     timeout becomes an issue, like any other failure, so one stuck source cannot hold a run."""
+    if not (0 < timeout_seconds <= CONNECTOR_BUDGET_SECONDS):  # also false for NaN
+        raise ValueError("timeout_seconds must be positive and within the connector budget")
 
     async def run(connector: Connector) -> tuple[str, FetchResult | None, str | None]:
         try:

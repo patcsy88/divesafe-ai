@@ -214,6 +214,9 @@ service may run several workers. Option 2 is acceptable only for a single-worker
   - After a 409 on the conditions form, the page goes to the record only when the stored
     observations equal the submitted ones (`sameObservations`); different stored conditions are
     reported as such and the retry key is renewed. This matches how a 409 on a decision works.
+  - `gather_evidence` refuses a connector budget that is not positive, finite and at most
+    `CONNECTOR_BUDGET_SECONDS` (zero, negative, NaN, infinity and larger values raise `ValueError`),
+    so `assess_dive` is covered too.
   - Mutation checks were run for every test added in this round and the earlier follow-ups.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.
@@ -228,7 +231,6 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 - `verify()` does not compare guard function bodies; a function the application role does not own
   but the owner later replaced is not detected. The application role can also delete `FAILED` rows
   before they are counted. These are operational counts, not audit data.
-- `connector_timeout_seconds` is not range-checked; the only caller passes the constant.
 - The application role can still reset `run_failure_counts` rows it is allowed to update. Nothing
   reads the counts yet.
 - Rendering of `RunProgress` itself is checked by reading its source, not by a renderer; the web

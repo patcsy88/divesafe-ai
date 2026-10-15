@@ -543,3 +543,47 @@ def test_a_timeout_raised_inside_the_work_is_internal_not_the_run_deadline() -> 
     assert body["status"] == "FAILED" and body["failure_code"] == "internal"
     assert repo._runs[body["id"]].failure_code is FailureCode.INTERNAL
     assert repo.get(body["id"]) is None
+
+
+@pytest.mark.parametrize("bad", [0, -1, -0.001, float("nan"), float("inf"), 30.001, 3600], ids=str)
+def test_a_connector_budget_that_is_not_positive_finite_and_within_the_ceiling_is_refused(
+    bad: float,
+) -> None:
+    from datetime import UTC, datetime
+
+    from divesafe.domain import DivePlan
+    from divesafe.orchestration import assess_dive
+    from divesafe.services.evidence import gather_evidence
+
+    client, _, _ = _build()
+    site = next(iter(client.app.state.divesafe.sites.values()))
+    now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
+    soon = now + timedelta(hours=1)
+    with pytest.raises(ValueError, match="connector budget"):
+        asyncio.run(gather_evidence([], site, now, soon, now, timeout_seconds=bad))
+    with pytest.raises(ValueError, match="connector budget"):
+        asyncio.run(
+            assess_dive(
+                assessment_id="a" * 32,
+                plan=DivePlan(**PLAN),
+                site=site,
+                connectors=[],
+                engine=client.app.state.divesafe.engine,
+                now=now,
+                connector_timeout_seconds=bad,
+            )
+        )
+
+
+def test_the_full_connector_budget_and_a_small_one_are_accepted() -> None:
+    from datetime import UTC, datetime
+
+    from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
+    from divesafe.services.evidence import gather_evidence
+
+    client, _, _ = _build()
+    site = next(iter(client.app.state.divesafe.sites.values()))
+    now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
+    for ok in (0.001, CONNECTOR_BUDGET_SECONDS):
+        got = asyncio.run(gather_evidence([], site, now, now, now, timeout_seconds=ok))
+        assert got.items == ()
