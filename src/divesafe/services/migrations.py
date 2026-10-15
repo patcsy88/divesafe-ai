@@ -24,6 +24,12 @@ GUARD_TRIGGERS = (
     "assessments_insert_guard",
     "assessments_no_truncate_guard",
 )
+# The function each guard trigger must call.
+GUARD_FUNCTIONS = {
+    "assessments_append_only_guard": "assessments_append_only",
+    "assessments_insert_guard": "assessments_insert_guard",
+    "assessments_no_truncate_guard": "assessments_no_truncate",
+}
 
 # A migration after the first may not touch the guard. Changing it needs a new reviewed decision
 # (risk-reviewer) and an explicit edit of this test-visible list, not a quiet SQL change.

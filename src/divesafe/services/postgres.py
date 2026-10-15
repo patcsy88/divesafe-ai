@@ -27,7 +27,12 @@ from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
 
 from divesafe.domain import AssessmentRecord, DivePlan
-from divesafe.services.migrations import GUARD_TRIGGERS, migrate, schema_problems
+from divesafe.services.migrations import (
+    GUARD_FUNCTIONS,
+    GUARD_TRIGGERS,
+    migrate,
+    schema_problems,
+)
 from divesafe.services.repository import (
     ConflictError,
     InvalidSuccessorError,
@@ -192,54 +197,88 @@ class PostgresAssessmentRepository:
                     problems += schema_problems(conn)
             except psycopg.errors.InsufficientPrivilege:
                 problems.append("the application role cannot read the migration history")
-            enabled = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT tgname FROM pg_trigger "
-                    "WHERE tgrelid = 'public.assessments'::regclass AND tgenabled = 'O'"
+            for table in ("pending_runs", "run_failure_counts"):
+                if conn.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone() == (
+                    None,
+                ):
+                    problems.append(
+                        f"the {table} table does not exist (run db_init as the owner role)"
+                    )
+            # Each guard trigger must be enabled and call its own function in `public`.
+            calls = {
+                str(name): str(function)
+                for name, function in conn.execute(
+                    "SELECT t.tgname, p.proname FROM pg_trigger t "
+                    "JOIN pg_proc p ON p.oid = t.tgfoid "
+                    "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE t.tgrelid = 'public.assessments'::regclass AND t.tgenabled = 'O' "
+                    "AND n.nspname = 'public'"
                 )
             }
             problems += [
                 f"guard trigger '{t}' is missing or disabled"
                 for t in GUARD_TRIGGERS
-                if t not in enabled
+                if t not in calls
+            ]
+            problems += [
+                f"guard trigger '{t}' does not call {GUARD_FUNCTIONS[t]}"
+                for t in GUARD_TRIGGERS
+                if t in calls and calls[t] != GUARD_FUNCTIONS[t]
             ]
             if least_privilege:
-                row = conn.execute(
-                    "SELECT pg_get_userbyid(c.relowner) = current_user, "
-                    "(SELECT rolsuper FROM pg_roles WHERE rolname = current_user), "
-                    "has_table_privilege('public.assessments', 'DELETE'), "
-                    "has_table_privilege('public.assessments', 'TRUNCATE'), "
-                    "has_table_privilege('public.assessments', 'TRIGGER'), "
-                    "COALESCE(has_table_privilege('public.schema_migrations', 'INSERT, UPDATE, "
-                    "DELETE, TRUNCATE'), false), "
-                    "COALESCE((SELECT pg_get_userbyid(relowner) = current_user FROM pg_class "
-                    "WHERE oid = to_regclass('public.pending_runs')), false), "
-                    "COALESCE(has_table_privilege('public.pending_runs', 'TRUNCATE, TRIGGER'), "
-                    "false), "
-                    "COALESCE(has_table_privilege('public.run_failure_counts', "
-                    "'DELETE, TRUNCATE'), false), "
-                    "COALESCE((SELECT pg_get_userbyid(relowner) = current_user FROM pg_class "
-                    "WHERE oid = to_regclass('public.run_failure_counts')), false) "
-                    "FROM pg_class c WHERE c.oid = 'public.assessments'::regclass"
-                ).fetchone()
-                assert row is not None
-                names = (
-                    "owns the table",
-                    "is a superuser",
-                    "can DELETE",
-                    "can TRUNCATE",
-                    "can alter triggers",
-                    "can write the migration history",
-                    "owns the pending runs table",
-                    "can TRUNCATE or alter triggers on the pending runs table",
-                    "can delete the failure counts",
-                    "owns the failure counts table",
-                )
-                problems += [
-                    f"the application role {n}" for n, flag in zip(names, row, strict=True) if flag
-                ]
+                problems += self._privilege_problems(conn)
         return problems
+
+    @staticmethod
+    def _privilege_problems(conn: psycopg.Connection[Any]) -> list[str]:
+        """Ownership counts through role membership too: a member of the owning role has the
+        owner's powers. Tables are passed as oids, so a missing table reads as false, not an
+        error."""
+
+        def owns(table: str) -> str:
+            return (
+                "COALESCE((SELECT pg_has_role(current_user, relowner, 'MEMBER') FROM pg_class "
+                f"WHERE oid = to_regclass('{table}')), false)"
+            )
+
+        def can(table: str, privileges: str) -> str:
+            return f"COALESCE(has_table_privilege(to_regclass('{table}'), '{privileges}'), false)"
+
+        functions = ", ".join(f"'{f}'" for f in sorted(set(GUARD_FUNCTIONS.values())))
+        checks = (
+            (owns("public.assessments"), "owns the table"),
+            (
+                "COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)",
+                "is a superuser",
+            ),
+            (can("public.assessments", "DELETE"), "can DELETE"),
+            (can("public.assessments", "TRUNCATE"), "can TRUNCATE"),
+            (can("public.assessments", "TRIGGER"), "can alter triggers"),
+            (
+                can("public.schema_migrations", "INSERT, UPDATE, DELETE, TRUNCATE"),
+                "can write the migration history",
+            ),
+            (owns("public.pending_runs"), "owns the pending runs table"),
+            (
+                can("public.pending_runs", "TRUNCATE, TRIGGER"),
+                "can TRUNCATE or alter triggers on the pending runs table",
+            ),
+            (can("public.run_failure_counts", "DELETE, TRUNCATE"), "can delete the failure counts"),
+            (owns("public.run_failure_counts"), "owns the failure counts table"),
+            (
+                "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                f"WHERE n.nspname = 'public' AND p.proname IN ({functions}) "
+                "AND pg_has_role(current_user, p.proowner, 'MEMBER'))",
+                "owns a guard function",
+            ),
+        )
+        row = conn.execute("SELECT " + ", ".join(sql for sql, _ in checks)).fetchone()
+        assert row is not None
+        return [
+            f"the application role {name}"
+            for (_, name), flag in zip(checks, row, strict=True)
+            if flag
+        ]
 
     def create(self, record: AssessmentRecord) -> None:
         if record.human_decision is not None or record.actual_conditions is not None:

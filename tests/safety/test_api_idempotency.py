@@ -174,6 +174,9 @@ def test_a_create_only_key_is_not_told_a_decided_record_is_pending() -> None:
     rid = first.json()["record"]["id"]
     # Before any decision the key still cannot see decisions, so it is told that, not "pending".
     assert first.json()["decision_withheld"] is True
+    assert first.json()["status"] == "DECISION_WITHHELD"
+    assert first.json()["overrides_to_less_severe"] is None
+    before = first.json()
     decided = client.post(
         f"/v1/assessments/{rid}/decision",
         json={"decision": "NO-GO", "rationale": "Secret reasoning."},
@@ -183,7 +186,11 @@ def test_a_create_only_key_is_not_told_a_decided_record_is_pending() -> None:
     replay = client.post("/v1/assessments", json=PLAN_D, headers=mine)
     read = client.get(f"/v1/assessments/{rid}", headers=HEADERS[Role.ASSESSOR])
     for body in (replay.json(), read.json()):
+        # Exactly what the key saw before the decision: nothing in the reply changes with it.
+        assert body == before
         assert body["decision_withheld"] is True
+        assert body["status"] == "DECISION_WITHHELD"
+        assert body["overrides_to_less_severe"] is None
         assert "Awaiting a human decision" not in body["status_note"]
         assert "not shown here" in body["status_note"]
         assert body["record"]["human_decision"] is None

@@ -65,7 +65,8 @@ export interface AssessmentView {
   record: AssessmentRecord;
   status: string;
   llm_tightened: boolean;
-  overrides_to_less_severe: boolean;
+  // null when the decision is withheld from this key.
+  overrides_to_less_severe: boolean | null;
   confidence_note: string;
   outcome_note: string;
   status_note: string;

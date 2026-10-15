@@ -194,6 +194,18 @@ service may run several workers. Option 2 is acceptable only for a single-worker
   - Every API string on the assessment page goes through `plain()`, guarded by a source test.
     The conflict handling in `failed()` and the polling back-off moved into `web/lib/conflict.ts`
     and `web/lib/polling.ts`, where they are tested directly.
+- **Review round 2 (built):**
+  - A key without the viewer role gets `status: "DECISION_WITHHELD"` and
+    `overrides_to_less_severe: null`, so no field says whether a decision exists. A test asserts the
+    reply is identical before and after a decision. The web allow-list requires the status, the
+    flag and the null override to agree, and refuses a withheld reply carrying a decision or later
+    conditions. Older web builds refuse the new status and show an error screen. The Evidence link
+    is hidden for withheld keys, which cannot read evidence.
+  - `PostgresAssessmentRepository.verify` counts membership in the owning role as ownership for
+    all three tables, flags an application role that owns or is a member of the owner of a guard
+    function, checks each guard trigger calls its own function, and reports a missing run table as
+    a problem (tables are passed as oids, so a missing table is no longer an opaque outage).
+  - Mutation checks were run for every test added in this round and the earlier follow-ups.
 - Not yet covered: a run that dies with its process is marked failed only when its lease expires
   and something reads it or cleanup runs; cleanup runs every 5 minutes in each worker.
 - The failure counts table is written by cleanup only; nothing reads it yet.
@@ -204,6 +216,10 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 - Notifying the user when a run ends; the UI only polls.
 - The web page stops polling after 6 minutes, fixed in code, while the run deadline can be set up
   to 7200 s. A run longer than that finishes unseen; reloading the page shows it.
+- `verify()` does not compare guard function bodies; a function the application role does not own
+  but the owner later replaced is not detected. The application role can also delete `FAILED` rows
+  before they are counted. These are operational counts, not audit data.
+- `connector_timeout_seconds` is not range-checked; the only caller passes the constant.
 - The application role can still reset `run_failure_counts` rows it is allowed to update. Nothing
   reads the counts yet.
 - Rendering of `RunProgress` itself is checked by reading its source, not by a renderer; the web

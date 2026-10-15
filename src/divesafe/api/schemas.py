@@ -143,8 +143,9 @@ _WITHHELD_NOTE = (
 
 class AssessmentView(BaseModel):
     record: AssessmentRecord
-    status: Literal["PENDING_HUMAN", "DECIDED"]
-    overrides_to_less_severe: bool
+    # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
+    status: Literal["PENDING_HUMAN", "DECIDED", "DECISION_WITHHELD"]
+    overrides_to_less_severe: bool | None
     llm_tightened: bool
     confidence_note: str
     outcome_note: str
@@ -157,10 +158,17 @@ class AssessmentView(BaseModel):
     @classmethod
     def withheld(cls, record: AssessmentRecord) -> AssessmentView:
         """The record as a create-only key may see it: a human decision and later reports are
-        not shown, so the status below says nothing about whether one exists."""
+        not shown, and neither the status nor the override flag says whether one exists."""
         stripped = record.model_copy(update={"human_decision": None, "actual_conditions": None})
         view = cls.of(stripped)
-        return view.model_copy(update={"decision_withheld": True, "status_note": _WITHHELD_NOTE})
+        return view.model_copy(
+            update={
+                "status": "DECISION_WITHHELD",
+                "overrides_to_less_severe": None,
+                "decision_withheld": True,
+                "status_note": _WITHHELD_NOTE,
+            }
+        )
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentView:

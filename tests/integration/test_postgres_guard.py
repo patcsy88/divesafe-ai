@@ -715,8 +715,89 @@ def test_verification_flags_an_application_role_that_owns_the_failure_counts(
     try:
         assert any("owns the failure counts" in p for p in app.verify(least_privilege=True))
     finally:
-        _sql("ALTER TABLE run_failure_counts OWNER TO postgres")
+        _sql("ALTER TABLE run_failure_counts OWNER TO CURRENT_USER")
     assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize(
+    ("table", "problem"),
+    [
+        ("assessments", "owns the table"),
+        ("pending_runs", "owns the pending runs table"),
+        ("run_failure_counts", "owns the failure counts table"),
+    ],
+)
+def test_verification_counts_membership_in_the_owning_role_as_ownership(
+    app_role_dsn: str, table: str, problem: str
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("DROP ROLE IF EXISTS divesafe_owner_group_test")
+    _sql("CREATE ROLE divesafe_owner_group_test NOLOGIN")
+    _sql(f"ALTER TABLE {table} OWNER TO divesafe_owner_group_test")
+    _sql("GRANT divesafe_owner_group_test TO divesafe_app_test")
+    try:
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"ALTER TABLE {table} OWNER TO CURRENT_USER")
+        _sql("DROP ROLE divesafe_owner_group_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_a_guard_function_the_application_role_owns(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("ALTER FUNCTION public.assessments_no_truncate() OWNER TO divesafe_app_test")
+    try:
+        assert any("owns a guard function" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("ALTER FUNCTION public.assessments_no_truncate() OWNER TO CURRENT_USER")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_of_a_database_missing_the_run_tables_is_a_problem_not_an_outage(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("ALTER TABLE pending_runs RENAME TO pending_runs_hidden")
+    _sql("ALTER TABLE run_failure_counts RENAME TO run_failure_counts_hidden")
+    try:
+        # A missing table must be reported, never hidden behind "storage unavailable", and its
+        # absence must not read as a privilege the role lacks.
+        problems = app.verify(least_privilege=True)
+    finally:
+        _sql("ALTER TABLE pending_runs_hidden RENAME TO pending_runs")
+        _sql("ALTER TABLE run_failure_counts_hidden RENAME TO run_failure_counts")
+    assert sorted(problems) == [
+        "the pending_runs table does not exist (run db_init as the owner role)",
+        "the run_failure_counts table does not exist (run db_init as the owner role)",
+    ]
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_a_guard_trigger_that_calls_another_function() -> None:
+    repo = _postgres()
+    _sql(
+        "CREATE OR REPLACE FUNCTION public.not_a_guard() RETURNS trigger LANGUAGE plpgsql "
+        "AS $$ BEGIN RETURN NEW; END; $$"
+    )
+    _sql("DROP TRIGGER assessments_insert_guard ON public.assessments")
+    _sql(
+        "CREATE TRIGGER assessments_insert_guard BEFORE INSERT ON public.assessments "
+        "FOR EACH ROW EXECUTE FUNCTION public.not_a_guard()"
+    )
+    try:
+        problems = repo.verify(least_privilege=False)
+        assert any("does not call assessments_insert_guard" in p for p in problems)
+    finally:
+        _sql("DROP TRIGGER assessments_insert_guard ON public.assessments")
+        _sql(
+            "CREATE TRIGGER assessments_insert_guard BEFORE INSERT ON public.assessments "
+            "FOR EACH ROW EXECUTE FUNCTION public.assessments_insert_guard()"
+        )
+        _sql("DROP FUNCTION public.not_a_guard()")
+    assert repo.verify(least_privilege=False) == []
 
 
 def test_the_run_table_refuses_a_failed_row_without_a_code_and_unknown_codes() -> None:

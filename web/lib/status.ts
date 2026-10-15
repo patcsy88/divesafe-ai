@@ -29,7 +29,7 @@ function classifyRun(body: Record<string, unknown>, status: "RUNNING" | "FAILED"
 
 function classifyAssessment(
   body: Record<string, unknown>,
-  status: "PENDING_HUMAN" | "DECIDED",
+  status: "PENDING_HUMAN" | "DECIDED" | "DECISION_WITHHELD",
 ): Fetched | null {
   const record = body.record;
   if (!isObject(record) || typeof record.id !== "string") return null;
@@ -46,17 +46,23 @@ function classifyAssessment(
   const actual = record.actual_conditions;
   if (actual !== null && !isObject(actual)) return null;
   // The API derives the status from the decision. If they disagree, trust neither.
-  if ((decision !== null) !== (status === "DECIDED")) return null;
-  // Whether the decision was hidden from this key must be stated, and a hidden one cannot be shown.
+  if (status !== "DECISION_WITHHELD" && (decision !== null) !== (status === "DECIDED")) return null;
+  // Whether the decision was hidden from this key must be stated, and agree with the status.
   if (typeof body.decision_withheld !== "boolean") return null;
-  if (body.decision_withheld && decision !== null) return null;
+  if (body.decision_withheld !== (status === "DECISION_WITHHELD")) return null;
+  // A hidden decision, and the later report that needs one, cannot be shown.
+  if (body.decision_withheld && (decision !== null || actual !== null)) return null;
+  const override = body.overrides_to_less_severe;
+  if (status === "DECISION_WITHHELD" ? override !== null : typeof override !== "boolean") return null;
   return { kind: "assessment", view: body as unknown as AssessmentView };
 }
 
 export function classify(body: unknown): Fetched | null {
   if (!isObject(body)) return null;
   const status = body.status;
-  if (status === "PENDING_HUMAN" || status === "DECIDED") return classifyAssessment(body, status);
+  if (status === "PENDING_HUMAN" || status === "DECIDED" || status === "DECISION_WITHHELD") {
+    return classifyAssessment(body, status);
+  }
   if (status === "RUNNING" || status === "FAILED") return classifyRun(body, status);
   return null;
 }

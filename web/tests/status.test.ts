@@ -24,10 +24,15 @@ const record = (over: Record<string, unknown> = {}) => ({
   actual_conditions: null,
   ...over,
 });
-const finished = (status: string, rec: Record<string, unknown> = record(), withheld: unknown = false) => ({
+const finished = (
+  status: string,
+  rec: Record<string, unknown> = record(),
+  withheld: unknown = status === "DECISION_WITHHELD",
+) => ({
   status,
   record: rec,
   decision_withheld: withheld,
+  overrides_to_less_severe: status === "DECISION_WITHHELD" ? null : false,
 });
 const DECISION = { decision: "NO-GO", decided_by: "alice", decided_at: "2026-10-10T00:00:00Z" };
 const DECIDED_REC = record({ human_decision: DECISION });
@@ -59,8 +64,19 @@ test("a reply must say whether the decision was withheld, and a withheld one car
   for (const bad of ["false", 0, null]) {
     assert.equal(classify(finished("PENDING_HUMAN", record(), bad)), null, String(bad));
   }
-  assert.equal(classify(finished("PENDING_HUMAN", record(), true))?.kind, "assessment");
+  assert.equal(classify(finished("DECISION_WITHHELD"))?.kind, "assessment");
+  assert.equal(classify(finished("DECISION_WITHHELD", DECIDED_REC)), null);
+  const actual = record({ actual_conditions: { reported_by: "x", reported_at: "t", observations: {} } });
+  assert.equal(classify(finished("DECISION_WITHHELD", actual)), null);
+});
+
+test("the status and the withheld flag must agree, and a withheld view has no override flag", () => {
+  assert.equal(classify(finished("PENDING_HUMAN", record(), true)), null);
   assert.equal(classify(finished("DECIDED", DECIDED_REC, true)), null);
+  assert.equal(classify(finished("DECISION_WITHHELD", record(), false)), null);
+  assert.equal(classify({ ...finished("DECISION_WITHHELD"), overrides_to_less_severe: false }), null);
+  assert.equal(classify({ ...finished("PENDING_HUMAN"), overrides_to_less_severe: null }), null);
+  assert.equal(classify({ ...finished("PENDING_HUMAN"), overrides_to_less_severe: undefined }), null);
 });
 
 test("the page does not call a withheld decision pending or offer the forms for it", () => {

@@ -74,7 +74,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       <header className="top">
         <h1>Assessment</h1>
         <nav className="sub">
-          <Link href={`/assessments/${encodeURIComponent(r.id)}/evidence`}>Evidence</Link>
+          {!withheld && <Link href={`/assessments/${encodeURIComponent(r.id)}/evidence`}>Evidence</Link>}
           <Link href="/">New assessment</Link>
         </nav>
       </header>
