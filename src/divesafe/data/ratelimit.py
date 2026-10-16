@@ -60,10 +60,18 @@ DATA_GOV_MY_FORECAST_QUOTA = QuotaGroup(
     limits=((60.0, 1),),
     path_prefix="/weather/forecast",
 )
+# MET developer guide (read 2026-10-16): 10 a minute and 2,000 a day. Its public page says 3 and
+# 1,000. The stricter pair is used because the two pages disagree.
+MET_API_QUOTA = QuotaGroup(
+    name="met-api",
+    hosts=frozenset({"api.met.gov.my"}),
+    limits=((60.0, 3), (86400.0, 1000)),
+)
 DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (
     OPEN_METEO_QUOTA,
     DATA_GOV_MY_QUOTA,
     DATA_GOV_MY_FORECAST_QUOTA,
+    MET_API_QUOTA,
 )
 
 

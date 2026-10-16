@@ -12,12 +12,15 @@ from divesafe.api.auth import Authenticator, build_authenticator
 from divesafe.api.ratelimit import Limit, RateLimiter
 from divesafe.config import Settings
 from divesafe.data import (
+    MET_API_HOSTS,
+    MET_API_QUOTA,
     SITES,
     CachingRateLimitedGetter,
     Connector,
     DataGovMyForecastConnector,
     DataGovMyWarningConnector,
     DiveSite,
+    MetApiMarineConnector,
     OpenMeteoMarineConnector,
     OpenMeteoWindConnector,
     UrllibJsonGetter,
@@ -194,6 +197,25 @@ def build_repository(settings: Settings) -> RunAwareRepository:
 
 def build_default_state(settings: Settings) -> AppState:
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
+    connectors: list[Connector] = [
+        OpenMeteoMarineConnector(getter),
+        OpenMeteoWindConnector(getter),
+        DataGovMyForecastConnector(getter),
+        DataGovMyWarningConnector(getter),
+    ]
+    if settings.met_api_token is not None:
+        met_getter = CachingRateLimitedGetter(
+            UrllibJsonGetter(
+                allowed_hosts=MET_API_HOSTS,
+                auth_header=(
+                    "Authorization",
+                    f"METToken {settings.met_api_token.get_secret_value()}",
+                ),
+            ),
+            min_interval_seconds={"api.met.gov.my": 0.0},
+            quotas=(MET_API_QUOTA,),
+        )
+        connectors.append(MetApiMarineConnector(met_getter))
     if settings.environment == "production" and not settings.trusted_proxy_set():
         logger.warning(
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "
@@ -201,12 +223,7 @@ def build_default_state(settings: Settings) -> AppState:
         )
     return AppState(
         repository=build_repository(settings),
-        connectors=[
-            OpenMeteoMarineConnector(getter),
-            OpenMeteoWindConnector(getter),
-            DataGovMyForecastConnector(getter),
-            DataGovMyWarningConnector(getter),
-        ],
+        connectors=connectors,
         engine=build_engine(settings),
         authenticator=build_authenticator(settings),
         clock=utc_now,

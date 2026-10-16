@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     def llm_allowed_host_set(self) -> frozenset[str]:
         return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
 
+    # MET Malaysia API token (api.met.gov.my). Unset: the MET marine connector is not used.
+    met_api_token: SecretStr | None = None
+
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.
     ruleset_path: Path | None = None

@@ -174,7 +174,15 @@ call made.
     connector (https, host allow-list, typed errors, quota guard, `degraded` quality). A second
     source cannot count as corroboration until its lineage is known (ADR 0010) and the dive
     professional gives a per-factor tolerance.
-  **Findings 2026-10-16 (token used; developer guide read while logged in; nothing connected):**
+  **Built 2026-10-16:** `MetApiMarineConnector` (`data/met_api_marine.py`), used only when
+  `DIVESAFE_MET_API_TOKEN` is set. Zone table `my-pahang-pulau-tioman` -> `LOCATION:499`. Items are
+  `degraded` forecasts, `upstream_known=False`, one per day for wind (`FMWS`, with `FMWD`) and
+  waves (`FMWH`). The whole range is kept under `ranges` (never `variables`, so no hourly rule
+  reads it) and `worst_case` is the upper end. The quota is 3 a minute and 1,000 a day. The
+  credentialed getter refuses redirects and has its own host list. No rule uses these values yet,
+  and a daily range with no issue time is not a window-covering hourly value. Wave statistic,
+  zone extent and the licence stay unknown.
+  **Findings 2026-10-16 (token used; developer guide read while logged in):**
   - **Base URL is `https://api.met.gov.my/v2.1/`**; `/v2/` is deprecated. Header
     `Authorization: METToken <token>`. The guide states 10 requests a minute and 2,000 a day; the
     public page says 3 and 1,000. **Plan for the stricter pair.** Responses carry `ETag` and

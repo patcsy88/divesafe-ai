@@ -21,6 +21,8 @@ USER_AGENT = "divesafe-ai/0.1 (non-commercial research; decision support only)"
 ALLOWED_HOSTS: frozenset[str] = frozenset(
     {"marine-api.open-meteo.com", "api.open-meteo.com", "api.data.gov.my"}
 )
+# Kept out of ALLOWED_HOSTS on purpose: only a getter built with a credential may call it.
+MET_API_HOSTS: frozenset[str] = frozenset({"api.met.gov.my"})
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
 
@@ -62,6 +64,15 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """For requests that carry a credential: a redirect is refused, so the header cannot follow."""
+
+    def redirect_request(  # type: ignore[no-untyped-def]
+        self, req, fp, code, msg, headers, newurl
+    ):
+        raise ConnectorTransportError("refusing a redirect on an authenticated request")
+
+
 class UrllibJsonGetter:
     def __init__(
         self,
@@ -69,11 +80,14 @@ class UrllibJsonGetter:
         deadline_seconds: float = 30.0,
         allowed_hosts: Collection[str] = ALLOWED_HOSTS,
         max_bytes: int = MAX_BYTES,
+        *,
+        auth_header: tuple[str, str] | None = None,
     ) -> None:
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
         self._allowed = allowed_hosts
         self._max_bytes = max_bytes
+        self._auth_header = auth_header
 
     async def get_json(self, url: str, params: Mapping[str, str]) -> Any:
         check_url(url, self._allowed)
@@ -86,9 +100,14 @@ class UrllibJsonGetter:
 
     def _get(self, url: str, params: Mapping[str, str]) -> Any:
         full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
-        opener = urllib.request.build_opener(_SafeRedirect(self._allowed))
+        headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        if self._auth_header is not None:
+            headers[self._auth_header[0]] = self._auth_header[1]
+            opener = urllib.request.build_opener(_NoRedirect())
+        else:
+            opener = urllib.request.build_opener(_SafeRedirect(self._allowed))
         request = urllib.request.Request(  # noqa: S310 (scheme and host checked above)
-            full, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
+            full, headers=headers
         )
         try:
             with opener.open(request, timeout=self._timeout) as response:
