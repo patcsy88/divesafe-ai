@@ -317,13 +317,31 @@ class RiskRulesEngine:
                     ),
                 )
             ]
+        if not set(result.evidence_ids) <= {e.id for e in evidence}:
+            logger.warning("rule cited unknown evidence", extra={"rule_id": rule_id})
+            # A citation of evidence we do not hold would make the record unbuildable and hide
+            # the result. The replacement drops the ids, keeps the outcome's severity.
+            return [
+                RuleResult(
+                    rule_id=f"{RULE_ERROR_PREFIX}{rule_id}",
+                    outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
+                    rationale=(
+                        "The rule cited evidence that was not supplied. Its own rationale: "
+                        + result.rationale
+                    ),
+                )
+            ]
         if result.threshold_status == ThresholdStatus.VALIDATED and expires_at is None:
             # A validated limit must expire, or a stale review would keep permitting GO.
             return [
                 RuleResult(
                     rule_id=f"{RULE_NO_EXPIRY_PREFIX}{rule_id}",
                     outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
-                    rationale="A VALIDATED result must come from a rule that declares an expiry.",
+                    rationale=(
+                        "A VALIDATED result must come from a rule that declares an expiry. Its "
+                        "own rationale: " + result.rationale
+                    ),
+                    evidence_ids=result.evidence_ids,
                 )
             ]
         return [result]

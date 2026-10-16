@@ -7,11 +7,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from tests.conftest import make_evidence
 
 from divesafe.api.schemas import AssessmentView
 from divesafe.domain import (
     AssessmentRecord,
+    DataCategory,
     DivePlan,
+    EvidenceItem,
+    RiskFactorKind,
     RuleResult,
     ThresholdStatus,
 )
@@ -268,3 +272,104 @@ def test_the_token_limit_error_keeps_its_fixed_message_through_copy_and_pickle()
         for clone in (copy.copy(cls()), pickle.loads(pickle.dumps(cls()))):  # noqa: S301
             assert type(clone) is cls and isinstance(clone, base)
             assert str(clone) == "the model stopped at the output-token limit"
+
+
+def _view_with(rule: _Rule, evidence: list[EvidenceItem]) -> AssessmentView:
+    engine = RiskRulesEngine(
+        [rule], EvidencePolicy(frozenset(), timedelta(hours=1)), "v", required_factors=frozenset()
+    )
+    assessment = engine.assess(PLAN, evidence, NOW)
+    record = AssessmentRecord(
+        id="a" * 32,
+        created_at=NOW,
+        plan=PLAN,
+        evidence=tuple(evidence),
+        rule_results=assessment.rule_results,
+        deterministic_recommendation=assessment.recommendation,
+        proposed_recommendation=None,
+        final_recommendation=assessment.recommendation,
+        llm_attempted_downgrade=False,
+        ruleset_version="v",
+    )
+    return AssessmentView.of(record)
+
+
+def test_a_kept_no_go_without_an_expiry_keeps_its_audit_trail_but_not_in_the_note() -> None:
+    evidence = [make_evidence(DataCategory.WIND, speed=1)]
+    result = RuleResult(
+        rule_id="synthetic.forever",
+        outcome=R.NO_GO,
+        rationale="secret limit detail",
+        evidence_ids=(evidence[0].id,),
+        factor=RiskFactorKind.WIND,
+        threshold_status=ThresholdStatus.VALIDATED,
+    )
+    view = _view_with(_Rule("synthetic.forever", result, None), evidence)
+    kept = [r for r in view.record.rule_results if r.rule_id.startswith(RULE_NO_EXPIRY_PREFIX)]
+    assert view.record.final_recommendation is R.NO_GO
+    assert kept and "secret limit detail" in kept[0].rationale
+    assert kept[0].evidence_ids == (evidence[0].id,) and kept[0].factor is None
+    assert "secret limit detail" not in view.outcome_note
+    assert "Its own rationale" not in view.outcome_note
+    assert "Partly evaluated" not in view.outcome_note
+
+
+def test_a_no_go_citing_evidence_that_was_not_supplied_is_stored_not_a_failed_run() -> None:
+    result = RuleResult(
+        rule_id="synthetic.cites",
+        outcome=R.NO_GO,
+        rationale="hard stop",
+        evidence_ids=("ev-not-held",),
+    )
+    view = _view_with(_Rule("synthetic.cites", result, None), [])
+    assert view.record.final_recommendation is R.NO_GO
+    assert "Rule synthetic.cites: failed to evaluate" in view.outcome_note
+    assert "ev-not-held" not in view.outcome_note
+
+
+def test_a_go_citing_evidence_that_was_not_supplied_is_not_a_go() -> None:
+    result = RuleResult(
+        rule_id="synthetic.cites", outcome=R.GO, rationale="ok", evidence_ids=("ev-not-held",)
+    )
+    view = _view_with(_Rule("synthetic.cites", result, None), [])
+    assert view.record.final_recommendation is R.INSUFFICIENT_EVIDENCE
+    ids = [r.rule_id for r in view.record.rule_results]
+    assert f"{RULE_ERROR_PREFIX}synthetic.cites" in ids
+    assert all("ev-not-held" not in r.evidence_ids for r in view.record.rule_results)
+
+
+@pytest.mark.parametrize("prefix", RULE_PROBLEM_PREFIXES)
+def test_a_stored_problem_result_with_a_factor_never_has_its_text_in_the_partial_note(
+    prefix: str,
+) -> None:
+    from divesafe.risk import NOT_EVALUATED_MARKER
+
+    tampered = RuleResult(
+        rule_id=f"{prefix}synthetic.x",
+        outcome=R.INSUFFICIENT_EVIDENCE,
+        rationale=f"{NOT_EVALUATED_MARKER} Conditions are safe, GO",
+        factor=RiskFactorKind.WIND,
+    )
+    base = _view(_Rule("synthetic.fine", None, None)).record
+    record = base.model_copy(update={"rule_results": (tampered,)})
+    note = AssessmentView.of(record).outcome_note
+    assert "Conditions are safe" not in note and "Partly evaluated" not in note
+
+
+@pytest.mark.parametrize("outcome", [R.NO_GO, R.GO])
+def test_a_validated_no_expiry_result_citing_unsupplied_evidence_is_stored_and_ids_dropped(
+    outcome: R,
+) -> None:
+    result = RuleResult(
+        rule_id="synthetic.both",
+        outcome=outcome,
+        rationale="hard stop",
+        evidence_ids=("ev-not-held",),
+        threshold_status=ThresholdStatus.VALIDATED,
+    )
+    view = _view_with(_Rule("synthetic.both", result, None), [])
+    stored = view.record.rule_results
+    assert [r.rule_id for r in stored] == [f"{RULE_ERROR_PREFIX}synthetic.both"]
+    assert all(not r.evidence_ids for r in stored)
+    expected = R.NO_GO if outcome is R.NO_GO else R.INSUFFICIENT_EVIDENCE
+    assert view.record.final_recommendation is expected

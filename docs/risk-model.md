@@ -163,7 +163,11 @@ The engine and the pipeline emit rule ids that start with `assessment.`, `eviden
 that carries a different id from its rule's is replaced by a `rule.error.<id>` result that keeps
 the more severe outcome and is at least INSUFFICIENT EVIDENCE. The API recognises engine messages
 by prefix, so this stops a rule from posing as one. A VALIDATED result from a rule with no expiry
-is likewise replaced by `rule.validated_without_expiry.<id>`, keeping the more severe outcome. Only code authors
+is likewise replaced by `rule.validated_without_expiry.<id>`, keeping the more severe outcome, the
+rule's own rationale and its evidence ids for the audit trail (never shown in the API note). That
+replacement must never carry `factor`, or the factor would count as covered. A result that cites
+evidence ids the engine was not given is replaced by `rule.error.<id>` with the ids dropped, so
+the record can always be built. Only code authors
 can add rules, and signed-off definitions always become `definition.<id>`. A structured origin
 field on `RuleResult` would be sturdier than prefixes and is not built.
 
@@ -212,6 +216,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   - *Per-category resolution and kind policy:* model currents at about 8 km are accepted as
     DEGRADED evidence; whether that is good enough for `GO` is the owner decision
     `degraded_may_support_go` (default `False`).
+- **Rationale of a replaced rule result:** the "Its own rationale" text kept in a `rule.error.*`
+  or `rule.validated_without_expiry.*` result is untrusted rule output, not shown in the API note,
+  but it is still sent inside the delimited untrusted block of the risk and ToT prompts. It cannot
+  relax a result (`reconcile` only tightens). Sending fixed wording there instead is not built.
 - **Prompt layer:** warning text is untrusted; it must be delimited and never reach a tool or
   decide an outcome. A hostile-text safety test exists for the rules path; the prompt-side test
   belongs with the agents.
@@ -257,6 +265,6 @@ missing evidence gives `INSUFFICIENT EVIDENCE`; hard `NO-GO` outranks everything
   (kind, category) exemption list are policy that needs review.
 - **`ConfidenceAssessment`** documents the intended shape but is not wired into the record. The
   record's own `confidence` is enforced instead: a number requires `confidence_method`.
-- **Rule exceptions and invalid citations:** a rule that raises becomes `INSUFFICIENT EVIDENCE`,
-  but a rule citing evidence ids that are not in the record makes record construction fail, which
-  the API reports as an opaque 500 rather than a visible `INSUFFICIENT EVIDENCE` assessment.
+- **Rule exceptions and invalid citations:** a rule that raises becomes `INSUFFICIENT EVIDENCE`.
+  A rule citing evidence ids that were not supplied is replaced by a `rule.error.<id>` result that
+  drops the ids and keeps the more severe outcome, so the result is stored, not a failed run.

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import (
     AssessmentRecord,
     DataQuality,
@@ -21,6 +22,7 @@ from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import (
     ENGINE_RULE_PREFIXES,
     RULE_ID_PATTERN,
+    RULE_PROBLEM_PREFIXES,
     RULE_PROBLEM_WORDING,
     WINDOW_STARTED_RULE,
 )
@@ -83,8 +85,14 @@ def _agent_note(record: AssessmentRecord) -> str:
     )
     if record.agent_issues:
         note += f" {len(record.agent_issues)} agent call(s) failed or were rejected."
+        known = {spec.name for spec in SPECIALISTS}
         names = sorted(
-            {i.split(":")[1] for i in record.agent_issues if i.startswith("specialist:")}
+            {
+                name if name in known else "(unnamed)"
+                for name in (
+                    i.split(":")[1] for i in record.agent_issues if i.startswith("specialist:")
+                )
+            }
         )
         if names:
             note += f" Missing specialist findings: {', '.join(names)}."
@@ -216,7 +224,9 @@ class AssessmentView(BaseModel):
             {
                 f"{r.factor.value}: {_aspects_not_evaluated(r.rationale)}"
                 for r in record.rule_results
-                if r.factor is not None and NOT_EVALUATED_MARKER in r.rationale
+                if r.factor is not None
+                and NOT_EVALUATED_MARKER in r.rationale
+                and not r.rule_id.startswith(RULE_PROBLEM_PREFIXES)
             }
         )
         if partial:
