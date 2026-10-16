@@ -62,9 +62,10 @@ def test_met_values_are_never_stored_under_the_hourly_keys() -> None:
         assert all("worst_case" not in r for r in item.value["ranges"].values())
 
 
-def _engine_result(*, may_support_go: bool, with_rules: bool):  # type: ignore[no-untyped-def]
+def _engine_result(*, may_support_go: bool):  # type: ignore[no-untyped-def]
     from datetime import timedelta
 
+    from tests.safety.test_rule_definitions import _iso, person
     from tests.safety.test_wind_evidence_safety import _wind_definition
 
     from divesafe.domain import DataCategory, DivePlan, RiskFactorKind
@@ -82,7 +83,15 @@ def _engine_result(*, may_support_go: bool, with_rules: bool):  # type: ignore[n
         timedelta(hours=1),
         degraded_may_support_go=may_support_go,
     )
-    rules = [DefinitionRule(_wind_definition())] if with_rules else []
+    # Sign-off dates relative to THIS file's clock, so the rule is in force here.
+    signed = _iso(now - timedelta(days=2))
+    definition = _wind_definition(
+        reviews=[{"reviewer": person("Reviewer Two"), "reviewed_on": signed}],
+        readback_confirmed_on=signed,
+        signed_off_on=signed,
+        expires_on=_iso(now + timedelta(days=30)),
+    )
+    rules = [DefinitionRule(definition)]
     engine = RiskRulesEngine(
         rules, policy, "synthetic", required_factors=frozenset({RiskFactorKind.WIND})
     )
@@ -147,12 +156,17 @@ def test_a_go_resting_on_met_daily_items_is_blocked_by_the_quality_guard_alone()
         r for r in blocked.rule_results if r.rule_id == "evidence.quality_insufficient_for_go"
     )
     assert "wind" in guard.rationale and "waves_swell" in guard.rationale
-    # With the guard switched off by policy the same rule gives GO, so the guard is what stopped it.
-    assert _go_result(may_support_go=True).recommendation.value == "GO"
+    # Control, not an endorsement: with the guard switched off by policy the same rule gives GO, so
+    # the guard is what stopped it. When the rule that a coarse daily item cannot stand in for a
+    # time-resolved one lands (docs/risk-model.md, MET known gap), this control must become non-GO;
+    # changing it then is the intended tightening, not a weakening.
+    control = _go_result(may_support_go=True)
+    assert control.recommendation.value == "GO"
+    assert all(r.rule_id != "evidence.quality_insufficient_for_go" for r in control.rule_results)
 
 
 def test_a_signed_wind_limit_cannot_be_evaluated_from_a_met_range() -> None:
-    result = _engine_result(may_support_go=True, with_rules=True)
+    result = _engine_result(may_support_go=True)
     assert result.recommendation.value == "INSUFFICIENT EVIDENCE"
     assert not any(r.rule_id.startswith("rule.error") for r in result.rule_results)
     (wind,) = [r for r in result.rule_results if r.rule_id == "definition.synthetic.wind_speed"]

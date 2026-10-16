@@ -195,7 +195,8 @@ call made.
   - A real marine response for `LOCATION:499` (fixture `met_api_marine_tioman_recorded_2026-10-16`):
     daily values only. `FMWS` wind speed is a range string (`"10-20"`, unit `km/h`), `FMWH` wave
     height a range string (`"0.5 - 1.0"`, unit `m`), `FMWD` wind direction a code (`"VRB"`, no
-    convention stated), plus weather text for morning, afternoon and night. **No issue time, no
+    convention stated; the connector accepts the 16 compass points and `VRB`, the compass points
+    being an assumption, and an unknown code rejects the whole response, wave ranges included), plus weather text for morning, afternoon and night. **No issue time, no
     model, no validity window** (`valid_from` and `valid_to` are null). The date is a calendar day
     at +08:00. Wave height does not say which statistic it is (significant height or maximum).
   - `start_date` must be today or later: no history.

@@ -428,7 +428,7 @@ def test_the_production_engine_is_conservative_by_default() -> None:
     from divesafe.api.state import build_engine
     from divesafe.config import Settings
 
-    engine = build_engine(Settings(evidence_max_age_minutes=60))
+    engine = build_engine(Settings(_env_file=None, evidence_max_age_minutes=60))  # type: ignore[call-arg]
     assert engine is not None
     policy = engine.policy
     assert policy.degraded_may_support_go is False

@@ -67,7 +67,7 @@ def _production_engine() -> RiskRulesEngine:
     from divesafe.api.state import build_engine
     from divesafe.config import Settings
 
-    engine = build_engine(Settings(evidence_max_age_minutes=60))
+    engine = build_engine(Settings(_env_file=None, evidence_max_age_minutes=60))  # type: ignore[call-arg]
     assert engine is not None
     return engine
 
@@ -361,7 +361,7 @@ def test_the_production_engine_cannot_return_go_or_caution_with_perfect_evidence
     from divesafe.api.state import INTERIM_REQUIRED_CATEGORIES, build_engine
     from divesafe.config import Settings
 
-    engine = build_engine(Settings(evidence_max_age_minutes=60))
+    engine = build_engine(Settings(_env_file=None, evidence_max_age_minutes=60))  # type: ignore[call-arg]
     assert engine is not None
     everything = [make_evidence(c) for c in DataCategory]
     plan = DivePlan(
@@ -381,7 +381,7 @@ def test_the_interim_note_says_more_data_will_not_help() -> None:
     from divesafe.api.state import build_engine
     from divesafe.config import Settings
 
-    engine = build_engine(Settings(evidence_max_age_minutes=60))
+    engine = build_engine(Settings(_env_file=None, evidence_max_age_minutes=60))  # type: ignore[call-arg]
     note = AssessmentView.of(run_pipeline(None, risk_engine=engine)).outcome_note
     assert "no dive can currently return GO" in note and "More data alone" in note
 

@@ -212,10 +212,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   series; dormant, as connectors reject partial data). Wind is km/h; limits stated in knots need an
   explicit, read-back conversion.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
-  corroboration logic must use `can_corroborate` (disagreement tightens whatever the lineage) ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)),
-  so sources that share an upstream product, or whose lineage is unknown, never corroborate each
-  other. Contradiction
-  detection must be defined per category in the reviewed ruleset (no tolerance is invented in
+  corroboration logic must use `can_corroborate`
+  ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an
+  upstream product, or whose lineage is unknown, never corroborate each other; disagreement
+  tightens whatever the lineage. Contradiction detection must be defined per category in the reviewed ruleset (no tolerance is invented in
   code). Until then, same-category conflicts are not detected.
 - **Validity window and quality are now enforced** by the engine ([ADR 0008](adr/0008-evidence-usability.md)).
   What remains before any `GO` rule is accepted:
