@@ -279,6 +279,8 @@ Free personal viewing in an app is not permission for DiveSafe to fetch or repub
 roziana.ramlee@jupem.gov.my; confirm the right contact on JUPEM's own site first), or files a
 request at data.gov.my/data-request; (2) until answered, nothing is built.
 
+**TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. Design and open items: [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) (proposed; needs the owner's decision).
+
 **Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
 credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
 requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
