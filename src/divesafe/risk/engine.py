@@ -128,7 +128,10 @@ RULE_PROBLEM_WORDING: Final = {
         "applies."
     ),
     RULE_EXPIRED_PREFIX: "its signed-off review has expired, so it was not applied.",
-    RULE_NO_EXPIRY_PREFIX: "is marked validated but declares no expiry, so it was not applied.",
+    RULE_NO_EXPIRY_PREFIX: (
+        "is marked validated but declares no expiry. Its result was not trusted, so this counts "
+        "as at least INSUFFICIENT EVIDENCE, and any more severe outcome it gave still applies."
+    ),
 }
 ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_REQUIRED_PREFIX,
@@ -195,10 +198,10 @@ class RiskRulesEngine:
         # caught by the result-id check.
         ids = tuple(rule.rule_id for rule in rules)
         for rule, rule_id in zip(rules, ids, strict=True):
-            if not rule.citation.strip():
-                raise ValueError(f"rule '{rule_id}' has no source citation")
             if not RULE_ID_PATTERN.fullmatch(rule_id):
                 raise ValueError("rule id must be 1 to 128 letters, digits, '.', '_' or '-'")
+            if not rule.citation.strip():
+                raise ValueError(f"rule '{rule_id}' has no source citation")
             if rule_id.lower().startswith(RESERVED_RULE_PREFIXES):
                 raise ValueError(f"rule id '{rule_id}' uses a reserved prefix")
         self._rules = tuple(rules)
@@ -319,7 +322,7 @@ class RiskRulesEngine:
             return [
                 RuleResult(
                     rule_id=f"{RULE_NO_EXPIRY_PREFIX}{rule_id}",
-                    outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                    outcome=most_severe((result.outcome, Recommendation.INSUFFICIENT_EVIDENCE)),
                     rationale="A VALIDATED result must come from a rule that declares an expiry.",
                 )
             ]

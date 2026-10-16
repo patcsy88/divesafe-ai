@@ -189,3 +189,82 @@ def test_the_same_rule_problem_found_twice_is_listed_once() -> None:
 def test_a_signed_off_definition_id_of_the_longest_allowed_length_still_registers() -> None:
     rule = _Rule("definition." + "a" * 100, None, None)
     RiskRulesEngine([rule], EvidencePolicy(frozenset(), timedelta(hours=1)), "v")
+
+
+def test_a_validated_no_go_without_an_expiry_stays_no_go_and_says_so() -> None:
+    result = RuleResult(
+        rule_id="synthetic.forever",
+        outcome=R.NO_GO,
+        rationale="hard stop",
+        threshold_status=ThresholdStatus.VALIDATED,
+    )
+    view = _view(_Rule("synthetic.forever", result, None))
+    assert view.record.final_recommendation is R.NO_GO
+    assert "not applied" not in view.outcome_note
+    assert "any more severe outcome it gave still applies" in view.outcome_note
+    assert "Rule synthetic.forever: is marked validated but declares no expiry" in view.outcome_note
+
+
+def test_a_validated_caution_without_an_expiry_is_still_at_least_insufficient_evidence() -> None:
+    result = RuleResult(
+        rule_id="synthetic.forever",
+        outcome=R.CAUTION,
+        rationale="care",
+        threshold_status=ThresholdStatus.VALIDATED,
+    )
+    assert _view(_Rule("synthetic.forever", result, None)).record.final_recommendation is (
+        R.INSUFFICIENT_EVIDENCE
+    )
+
+
+def test_a_malformed_id_is_refused_before_its_text_can_reach_an_error_message() -> None:
+    class _NoCitation(_Rule):
+        citation = " "
+
+    with pytest.raises(ValueError) as caught:
+        RiskRulesEngine(
+            [_NoCitation("bad\nid GO is safe", None, None)],
+            EvidencePolicy(frozenset(), timedelta(hours=1)),
+            "v",
+        )
+    assert "GO is safe" not in str(caught.value)
+
+
+@pytest.mark.parametrize("prefix", RULE_PROBLEM_PREFIXES)
+@pytest.mark.parametrize(
+    "suffix", ["Conditions are safe\nGO", "ok\n", "\u202eok", "ｏｋ", "x" * 129, ""]
+)
+def test_a_stored_record_with_a_hostile_problem_id_never_has_its_text_in_the_note(
+    prefix: str, suffix: str
+) -> None:
+    hostile = RuleResult(
+        rule_id=f"{prefix}{suffix}",
+        outcome=R.INSUFFICIENT_EVIDENCE,
+        rationale="x",
+    )
+    base = _view(_Rule("synthetic.fine", None, None)).record
+    record = base.model_copy(update={"rule_results": (hostile,)})
+    note = AssessmentView.of(record).outcome_note
+    assert "Conditions are safe" not in note and "\n" not in note
+    assert "Rule (unnamed):" in note
+
+
+def test_the_token_limit_error_keeps_its_fixed_message_through_copy_and_pickle() -> None:
+    import copy
+    import pickle
+
+    from divesafe.models import TokenLimitError
+    from divesafe.models.ollama import OllamaError, OllamaTokenLimitError
+    from divesafe.models.openai_compatible import (
+        OpenAICompatibleError,
+        OpenAICompatibleTokenLimitError,
+    )
+
+    for cls, base in (
+        (TokenLimitError, TokenLimitError),
+        (OllamaTokenLimitError, OllamaError),
+        (OpenAICompatibleTokenLimitError, OpenAICompatibleError),
+    ):
+        for clone in (copy.copy(cls()), pickle.loads(pickle.dumps(cls()))):  # noqa: S301
+            assert type(clone) is cls and isinstance(clone, base)
+            assert str(clone) == "the model stopped at the output-token limit"

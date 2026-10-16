@@ -117,12 +117,17 @@ def test_the_longest_allowed_free_text_fits_the_default_output_cap_on_the_stated
     """Only the free text the prompt limits. Not counted: JSON keys, quotes and brackets,
     `confidence`, and up to 120 evidence ids (their number depends on the evidence). A reasoning
     model also spends part of the cap thinking, so a provider may declare a larger cap, and an
-    operator may set a smaller one: neither is checked here. A reply that ignores the stated limits
-    is refused, not trimmed."""
+    operator may set a smaller one: neither is checked here. A reply that ignores the stated
+    limits is refused, not trimmed. The schema itself accepts about 7,000 characters per finding,
+    so this does NOT show that every reply the schema accepts fits the cap; one that does not is
+    refused as a token-limit stop."""
     from divesafe.agents.runner import MAX_OUTPUT_CHARS, MAX_OUTPUT_TOKENS
 
     worst = _longest_free_text_chars()
-    assert worst <= MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN_ASSUMED
+    assert worst <= MAX_OUTPUT_TOKENS * CHARS_PER_TOKEN_ASSUMED, (
+        f"{worst} chars > MAX_OUTPUT_TOKENS {MAX_OUTPUT_TOKENS} * CHARS_PER_TOKEN"
+        f" {CHARS_PER_TOKEN_ASSUMED}"
+    )
     assert worst < MAX_OUTPUT_CHARS
 
 
@@ -130,5 +135,7 @@ def test_a_smaller_output_cap_would_fail_the_check(monkeypatch: pytest.MonkeyPat
     from divesafe.agents import runner
 
     monkeypatch.setattr(runner, "MAX_OUTPUT_TOKENS", 1000)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError) as caught:
         test_the_longest_allowed_free_text_fits_the_default_output_cap_on_the_stated_assumption()
+    assert "MAX_OUTPUT_TOKENS" in str(caught.value) and "CHARS_PER_TOKEN" in str(caught.value)
+    assert _longest_free_text_chars() > 1000 * CHARS_PER_TOKEN_ASSUMED

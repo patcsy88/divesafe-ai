@@ -133,3 +133,4 @@ def test_a_reply_stopped_at_the_token_limit_has_its_own_fixed_message() -> None:
     with pytest.raises(AgentError) as caught:
         asyncio.run(call_structured(_Cut(), **kwargs))  # type: ignore[arg-type]
     assert str(caught.value) == "t: output stopped at the token limit"
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__

@@ -56,6 +56,9 @@ class TokenLimitError(RuntimeError):
     def __init__(self) -> None:
         super().__init__("the model stopped at the output-token limit")
 
+    def __reduce__(self) -> tuple[type[TokenLimitError], tuple[()]]:
+        return (type(self), ())
+
 
 class ProviderNotAvailableError(RuntimeError):
     """Raised when the configured provider has no registered adapter."""

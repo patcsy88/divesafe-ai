@@ -485,9 +485,27 @@ def test_a_reply_cut_off_at_the_token_limit_is_a_fixed_issue_and_never_changes_t
     record = run_pipeline(provider)
     assert "specialist:weather: output stopped at the token limit" in record.agent_issues
     assert "risk_assessment: output stopped at the token limit" in record.agent_issues
+
+    assert "The LLM risk proposal is missing." in AssessmentView.of(record).agent_note
     assert record.proposed_recommendation is None
     assert record.final_recommendation == plain_run.deterministic_recommendation
     assert record.final_recommendation == record.deterministic_recommendation
     note = AssessmentView.of(record).agent_note
     assert "Missing specialist findings: weather" in note
     assert "The LLM risk proposal is missing." in note
+
+
+def test_a_cut_off_proposal_that_would_have_raised_the_result_is_not_used() -> None:
+    def cut(request: object) -> str:
+        from divesafe.models import TokenLimitError
+
+        raise TokenLimitError
+
+    kwargs = {"warnings": [], "with_warning_rule": False}
+    whole = run_pipeline(fake(recommendation="NO-GO"), **kwargs)  # type: ignore[arg-type]
+    assert whole.deterministic_recommendation == R.GO and whole.final_recommendation == R.NO_GO
+    provider = FakeProvider(scripted(recommendation="NO-GO", overrides={"risk_assessment": cut}))  # type: ignore[dict-item]
+    record = run_pipeline(provider, **kwargs)  # type: ignore[arg-type]
+    assert record.proposed_recommendation is None
+    assert record.final_recommendation == record.deterministic_recommendation == R.GO
+    assert "risk_assessment: output stopped at the token limit" in record.agent_issues

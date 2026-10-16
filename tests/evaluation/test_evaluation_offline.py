@@ -158,8 +158,8 @@ def test_an_invented_hazard_in_a_valid_reply_is_accepted_and_stored_unflagged() 
     """KNOWN GAP (ADR 0016 results, ADR 0007): no check for hazards, reassurances or dropped
     caveats the inputs do not support. This pins that such a reply is accepted and stored and that
     no metric flags it, so it is not coverage. An invented reassurance ("no eddies") is the more
-    dangerous kind and is equally undetected. A detector added as a new metric would not break this
-    test; a detector that rejects replies would, and then this test must be changed on purpose.
+    dangerous kind and is equally undetected. Adding any metric, or a detector that rejects replies,
+    breaks this test; change it on purpose then.
     The result is never lowered because `reconcile` only tightens (tested elsewhere)."""
     invented = "heat stress and eddies near the point"
 

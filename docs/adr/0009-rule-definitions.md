@@ -53,8 +53,9 @@ as in-window evidence. (A first version cited them while the guard rejected them
 and `CAUTION` unreachable on hourly data; an engine-level regression test now covers it.)
 
 **Expiry is enforced by the engine,** not by the rule, and a `VALIDATED` result from a rule that
-declares no expiry is refused (`rule.validated_without_expiry`), so a rule cannot forget it: a rule with `expires_at` at or before `now`
-is not run and yields `rule.expired.<id>` (INSUFFICIENT EVIDENCE), so its factor is no longer
+declares no expiry is replaced by `rule.validated_without_expiry.<id>`, which keeps any more
+severe outcome and is at least INSUFFICIENT EVIDENCE, so a rule cannot forget it. A rule with
+`expires_at` at or before `now` is not run and yields `rule.expired.<id>` (INSUFFICIENT EVIDENCE), so its factor is no longer
 covered and `GO` is impossible until it is re-reviewed.
 
 **Loading** (`orchestration.ruleset`, kept out of the pure `risk` package) reads the file once with
@@ -124,3 +125,7 @@ settable by untrusted parties. A detached signature would be stronger and is not
 - **Margin is a single number** in the data's unit, applied to the worst value; it does not model
   forecast skill that varies with lead time.
 - **Direction conventions** come from the provider's documentation and are unverified.
+
+## Open question: expired rules
+
+An expired rule is reported (`rule.expired.*`) and not run, so a NO-GO it would have given is lost. Option: run it and keep only a NO-GO. This needs the risk owner's decision before any change.

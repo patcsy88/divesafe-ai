@@ -20,6 +20,7 @@ from divesafe.domain import (
 from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import (
     ENGINE_RULE_PREFIXES,
+    RULE_ID_PATTERN,
     RULE_PROBLEM_WORDING,
     WINDOW_STARTED_RULE,
 )
@@ -64,6 +65,11 @@ def _shape_exceeds(root: Any, *, max_depth: int, max_nodes: int) -> bool:
 
 def _aspects_not_evaluated(rationale: str) -> str:
     return rationale.split(NOT_EVALUATED_MARKER, 1)[1].strip().rstrip(".")
+
+
+def _shown_rule_id(name: str) -> str:
+    """A stored id is printed only if it is well formed; a stored record is not trusted."""
+    return name if RULE_ID_PATTERN.fullmatch(name) else "(unnamed)"
 
 
 def _agent_note(record: AssessmentRecord) -> str:
@@ -185,7 +191,7 @@ class AssessmentView(BaseModel):
             r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
         ]
         rule_problems = [
-            f"Rule {r.rule_id.removeprefix(prefix)}: {wording}"
+            f"Rule {_shown_rule_id(r.rule_id.removeprefix(prefix))}: {wording}"
             for r in record.rule_results
             for prefix, wording in RULE_PROBLEM_WORDING.items()
             if r.rule_id.startswith(prefix)

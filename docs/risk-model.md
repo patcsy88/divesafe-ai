@@ -132,6 +132,11 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 - `explanation`, `findings` and `scenarios` are LLM-generated and unverified. The API labels
   them. Specialist and scenario `confidence` values are uncalibrated self-estimates and are not
   the record `confidence`, which stays `None`.
+- Known gap: nothing checks a reply for invented hazards, invented reassurances or dropped
+  caveats. A reply that is well formed but wrong in these ways is accepted (ADR 0016; pinned by an
+  offline test that is explicitly not coverage).
+- Known gap: an expired rule is not run, so a NO-GO it would have returned is lost. Evaluating it
+  and keeping only a NO-GO needs the risk owner's decision (ADR 0009).
 - Known gap: no real model has been run. An Ollama adapter and an offline evaluation harness
   exist (ADR 0016), but the set is seven synthetic scenarios not reviewed by a diving
   professional, the injection screen is a marker heuristic that misses paraphrase, and no live run
@@ -157,7 +162,8 @@ The engine and the pipeline emit rule ids that start with `assessment.`, `eviden
 `rule.`. A configured rule may not use these prefixes (the engine refuses to start), and a result
 that carries a different id from its rule's is replaced by a `rule.error.<id>` result that keeps
 the more severe outcome and is at least INSUFFICIENT EVIDENCE. The API recognises engine messages
-by prefix, so this stops a rule from posing as one. Only code authors
+by prefix, so this stops a rule from posing as one. A VALIDATED result from a rule with no expiry
+is likewise replaced by `rule.validated_without_expiry.<id>`, keeping the more severe outcome. Only code authors
 can add rules, and signed-off definitions always become `definition.<id>`. A structured origin
 field on `RuleResult` would be sturdier than prefixes and is not built.
 

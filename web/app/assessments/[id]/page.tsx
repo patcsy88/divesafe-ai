@@ -95,6 +95,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           </p>
         )}
         <p>{plain(view.outcome_note)}</p>
+        {view.agent_note && <p>{plain(view.agent_note)}</p>}
         <dl>
           <dt>Rules alone</dt>
           <dd>{labelFor(r.deterministic_recommendation)}</dd>
