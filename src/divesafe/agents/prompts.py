@@ -15,7 +15,7 @@ from typing import Any
 
 from divesafe.domain import DivePlan, EvidenceItem, effective_quality, observation_from_evidence
 
-PROMPT_VERSION = "2026-10-13.1"
+PROMPT_VERSION = "2026-10-17.1"
 OPEN_TAG = "<untrusted_data>"
 CLOSE_TAG = "</untrusted_data>"
 MAX_STRING = 4000
@@ -85,6 +85,7 @@ def _payload_item(e: EvidenceItem) -> dict[str, Any]:
         "category": e.category.value,
         "source": e.source,
         "valid_at": e.valid_at.isoformat(),
+        "valid_until": e.valid_until.isoformat() if e.valid_until else None,
         "retrieved_at": e.retrieved_at.isoformat(),
         "is_forecast": e.is_forecast,
         "data_kind": e.data_kind.value,

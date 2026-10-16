@@ -275,9 +275,9 @@ def test_a_non_https_met_url_is_refused() -> None:
         asyncio.run(getter.get_json("http://api.met.gov.my/v2.1/data", {}))
 
 
-def test_an_authenticated_request_refuses_redirects() -> None:
+def test_an_authenticated_request_never_follows_a_redirect() -> None:
     handler = _NoRedirect()
-    with pytest.raises(ConnectorTransportError, match="redirect"):
+    assert (
         handler.redirect_request(
             urllib.request.Request("https://api.met.gov.my/x"),
             None,
@@ -286,6 +286,8 @@ def test_an_authenticated_request_refuses_redirects() -> None:
             {},  # type: ignore[arg-type]
             "https://evil.example/x",
         )
+        is None
+    )
 
 
 def _handlers_used(monkeypatch: pytest.MonkeyPatch, getter: UrllibJsonGetter) -> list[Any]:
@@ -435,3 +437,24 @@ def test_the_credential_goes_in_an_unredirected_header(monkeypatch: pytest.Monke
         asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
     assert seen["unredirected"] == {"Authorization": "METToken t"}
     assert "Authorization" not in seen["headers"]
+
+
+def test_the_host_list_guard_catches_a_copy_or_a_union() -> None:
+    from divesafe.data.http import ALLOWED_HOSTS
+
+    for hosts in (frozenset(ALLOWED_HOSTS), ALLOWED_HOSTS | MET_API_HOSTS):
+        with pytest.raises(ValueError, match="own host list"):
+            UrllibJsonGetter(allowed_hosts=hosts, auth_header=("Authorization", "METToken t"))
+
+
+def test_an_extreme_or_far_future_window_is_refused_before_any_request() -> None:
+    far = datetime(2026, 12, 1, tzinfo=UTC)
+    extreme = datetime(9999, 12, 31, 20, tzinfo=UTC)
+    for start, end in (
+        (far, datetime(2026, 12, 1, 4, tzinfo=UTC)),
+        (extreme, datetime(9999, 12, 31, 23, tzinfo=UTC)),
+    ):
+        getter = _Getter(FIXTURE)
+        with pytest.raises(ConnectorResponseError):
+            asyncio.run(MetApiMarineConnector(getter).fetch(TIOMAN_ISLAND, start, end, NOW))
+        assert getter.calls == []

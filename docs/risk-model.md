@@ -206,8 +206,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   support GO or CAUTION, and no rule reads `ranges`. `max_age` measures retrieval, not forecast
   age or lead time (no issue time is given). Before `degraded_may_support_go` is ever set, or a
   wind or wave definition is accepted, MET's range needs a role that can only tighten (or a
-  disagreement rule using `can_corroborate`), and the engine needs a rule that a coarse daily
-  item does not stand in for a time-resolved one. Wind is km/h; limits stated in knots need an
+  disagreement rule; independence (`can_corroborate`) limits agreement only, because sources that
+  disagree should tighten whatever their lineage), and the engine needs a rule that a coarse daily
+  item does not stand in for a time-resolved one (the same hides a hole in a partial hourly
+  series; dormant, as connectors reject partial data). Wind is km/h; limits stated in knots need an
   explicit, read-back conversion.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   disagreement or corroboration logic must use `can_corroborate` ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)),

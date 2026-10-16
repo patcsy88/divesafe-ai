@@ -108,13 +108,19 @@ class MetApiMarineConnector:
         zone = WATERS_ZONES.get(site.id)
         if zone is None:
             raise ConnectorResponseError("no waters zone is registered for this site")
-        first, last = _days(window_start, window_end)
+        try:
+            first, last = _days(window_start, window_end)
+            today = now.astimezone(MALAYSIA_TIME).date()
+        except OverflowError:
+            raise ConnectorResponseError("the window is outside the supported dates") from None
         if (last - first).days >= MAX_DAYS:
             raise ConnectorResponseError("the window is longer than the forecast can cover")
-        if first < now.astimezone(MALAYSIA_TIME).date():
+        if first < today:
             raise ConnectorResponseError(
                 "the forecast has no history; the window starts before today"
             )
+        if (first - today).days >= MAX_DAYS:
+            raise ConnectorResponseError("the window starts beyond the days the forecast covers")
         params = {
             "datasetid": "FORECAST",
             "datacategoryid": "MARINE",

@@ -66,12 +66,13 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """For requests that carry a credential: a redirect is refused, so the header cannot follow."""
+    """For requests that carry a credential: a redirect is never followed, so the header cannot
+    follow it. urllib then raises HTTPError for the 3xx, which is reported as an HTTP status."""
 
     def redirect_request(  # type: ignore[no-untyped-def]
         self, req, fp, code, msg, headers, newurl
     ):
-        raise ConnectorTransportError("refusing a redirect on an authenticated request")
+        return None
 
 
 class UrllibJsonGetter:
@@ -84,7 +85,7 @@ class UrllibJsonGetter:
         *,
         auth_header: tuple[str, str] | None = None,
     ) -> None:
-        if auth_header is not None and allowed_hosts is ALLOWED_HOSTS:
+        if auth_header is not None and not frozenset(allowed_hosts).isdisjoint(ALLOWED_HOSTS):
             raise ValueError("a getter with a credential needs its own host list")
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
@@ -122,7 +123,11 @@ class UrllibJsonGetter:
             raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
         except (http.client.HTTPException, ValueError):
             # The text of these can echo a header value, so it is dropped.
-            raise ConnectorTransportError(f"request to {_label(url)} failed") from None
+            echoed = True
+        else:
+            echoed = False
+        if echoed:
+            raise ConnectorTransportError(f"request to {_label(url)} failed")
         try:
             return json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:

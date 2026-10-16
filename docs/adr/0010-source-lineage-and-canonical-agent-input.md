@@ -29,7 +29,7 @@ product (known). Marine waves and wind: unknown (the producing model is not repo
 **Canonical agent input.** Agents read marine and wind evidence as canonical, unit-bearing
 conditions (`wave_height_m`, `current_speed_kmh`, `wind_speed_kmh`, ...) parsed by
 `observation_from_evidence`, plus the lineage, the engine's judged quality (not the connector's
-claim) and the connector's limitations. Provider variable names and the raw value are not sent.
+claim) and the connector's limitations. Provider variable names and the raw value are not sent (except daily ranges, e.g. MET, which have no typed form: their raw value is sent inside the untrusted block and holds only numbers, fixed text and a 1 to 3 letter code).
 A value that fails validation, or is in an unexpected unit (never converted), sends no provider
 data at all. Free-text notices keep their raw text, inside the existing untrusted block. Wind is
 now a typed observation. The system prompt gains a rule that agreement counts as corroboration
