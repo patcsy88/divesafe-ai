@@ -199,6 +199,16 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 
 ## Known gaps (tracked, not yet implemented)
 
+- **MET daily marine ranges (2026-10-16):** `MetApiMarineConnector` items are DEGRADED daily
+  ranges under `value["ranges"]`. The engine counts a +08:00 day as covering the dive window, so
+  they can make wind and waves "present" when the hourly source is missing; the result stays
+  INSUFFICIENT EVIDENCE only because the failed connector adds an issue, degraded data cannot
+  support GO or CAUTION, and no rule reads `ranges`. `max_age` measures retrieval, not forecast
+  age or lead time (no issue time is given). Before `degraded_may_support_go` is ever set, or a
+  wind or wave definition is accepted, MET's range needs a role that can only tighten (or a
+  disagreement rule using `can_corroborate`), and the engine needs a rule that a coarse daily
+  item does not stand in for a time-resolved one. Wind is km/h; limits stated in knots need an
+  explicit, read-back conversion.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   disagreement or corroboration logic must use `can_corroborate` ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)),
   so sources that share an upstream product, or whose lineage is unknown, never corroborate each

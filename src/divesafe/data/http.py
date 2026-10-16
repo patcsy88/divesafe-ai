@@ -8,6 +8,7 @@ strings.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -83,6 +84,8 @@ class UrllibJsonGetter:
         *,
         auth_header: tuple[str, str] | None = None,
     ) -> None:
+        if auth_header is not None and allowed_hosts is ALLOWED_HOSTS:
+            raise ValueError("a getter with a credential needs its own host list")
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
         self._allowed = allowed_hosts
@@ -102,13 +105,14 @@ class UrllibJsonGetter:
         full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         if self._auth_header is not None:
-            headers[self._auth_header[0]] = self._auth_header[1]
             opener = urllib.request.build_opener(_NoRedirect())
         else:
             opener = urllib.request.build_opener(_SafeRedirect(self._allowed))
         request = urllib.request.Request(  # noqa: S310 (scheme and host checked above)
             full, headers=headers
         )
+        if self._auth_header is not None:
+            request.add_unredirected_header(*self._auth_header)
         try:
             with opener.open(request, timeout=self._timeout) as response:
                 body = read_limited(response, self._max_bytes)
@@ -116,6 +120,9 @@ class UrllibJsonGetter:
             raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
+        except (http.client.HTTPException, ValueError):
+            # The text of these can echo a header value, so it is dropped.
+            raise ConnectorTransportError(f"request to {_label(url)} failed") from None
         try:
             return json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:

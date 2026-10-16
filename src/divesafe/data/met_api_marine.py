@@ -5,7 +5,8 @@ response (`tests/fixtures/met_api_marine_tioman_recorded_2026-10-16.json`) and t
 - One value per day per datatype, no issue time, no model, no validity window. The date is a
   calendar day at +08:00. Retrieval time is the only age we know.
 - `FMWS` wind speed and `FMWH` wave height are range strings ("10-20" km/h, "0.5 - 1.0" m). The
-  range is kept whole; the upper end is exposed as the worst case. A midpoint is never computed.
+  range is kept whole and its upper end is exposed as `upper`. That is the top of MET's stated
+  range, not a maximum for the site: no gusts, and conditions can exceed it. No midpoint is made.
 - `FMWD` wind direction is a code ("VRB") with no stated convention, so it is kept as text.
 - Wave height does not say which statistic it is (significant or maximum).
 - A waters zone is an area with no coordinates; how far it extends is not stated.
@@ -45,7 +46,6 @@ MET_MARINE = "met-malaysia:marine-forecast"
 MALAYSIA_TIME = timezone(timedelta(hours=8), "MYT")
 MAX_DAYS = 8
 MAX_RESULTS = 49  # the API pages at 50; a full page may be truncated
-MAX_DIRECTION = 20
 
 # site id -> (location id, location name) of the waters zone. Which zone belongs to which site is
 # a fixed, reviewed table; the response is checked against it.
@@ -59,8 +59,9 @@ _RANGES: dict[str, tuple[DataCategory, str, str]] = {
     "FMWH": (DataCategory.WAVES_SWELL, "wave_height", "m"),
 }
 _DIRECTION = "FMWD"
-_NUMBER = r"(\d{1,3}(?:\.\d{1,2})?)"
-_RANGE = re.compile(rf"^\s*{_NUMBER}\s*(?:-\s*{_NUMBER})?\s*$")
+_NUMBER = r"([0-9]{1,3}(?:\.[0-9]{1,2})?)"
+_RANGE = re.compile(rf"{_NUMBER}[ ]?(?:-[ ]?{_NUMBER})?")
+_DIRECTION_CODE = re.compile(r"[A-Z]{1,3}")
 # Data-sanity ceilings for parsing only. Not safety limits.
 _SANITY_MAX = {"km/h": 300.0, "m": 30.0}
 
@@ -69,7 +70,7 @@ def parse_range(value: object, unit: str, label: str) -> tuple[float, float]:
     """ "10-20" -> (10.0, 20.0); "1.5" -> (1.5, 1.5). Anything else is rejected, not guessed."""
     if not isinstance(value, str):
         raise ConnectorResponseError(f"{label} is not a range string")
-    match = _RANGE.match(value)
+    match = _RANGE.fullmatch(value.strip(" "))
     if match is None:
         raise ConnectorResponseError(f"{label} is not a number or a range of numbers")
     low = float(match.group(1))
@@ -108,6 +109,12 @@ class MetApiMarineConnector:
         if zone is None:
             raise ConnectorResponseError("no waters zone is registered for this site")
         first, last = _days(window_start, window_end)
+        if (last - first).days >= MAX_DAYS:
+            raise ConnectorResponseError("the window is longer than the forecast can cover")
+        if first < now.astimezone(MALAYSIA_TIME).date():
+            raise ConnectorResponseError(
+                "the forecast has no history; the window starts before today"
+            )
         params = {
             "datasetid": "FORECAST",
             "datacategoryid": "MARINE",
@@ -169,13 +176,8 @@ class MetApiMarineConnector:
                     f"the forecast does not cover the whole window (no {absent[0]} for {day})"
                 )
             direction = bounded_text(slot[_DIRECTION].get("value"), _DIRECTION)
-            if (
-                not direction.strip()
-                or direction != direction.strip()
-                or len(direction) > MAX_DIRECTION
-                or any(not c.isprintable() for c in direction)
-            ):
-                raise ConnectorResponseError("wind direction is empty, too long or not printable")
+            if _DIRECTION_CODE.fullmatch(direction) is None:
+                raise ConnectorResponseError("wind direction is not a 1 to 3 letter code")
             parsed: dict[str, tuple[float, float]] = {}
             for datatype, (_, _name, unit) in _RANGES.items():
                 raw = slot[datatype]
@@ -193,7 +195,7 @@ class MetApiMarineConnector:
                     f"{site.id}|{day}|{datatype}|{low}|{high}|{direction}".encode()
                 ).hexdigest()[:16]
                 ranges: dict[str, object] = {
-                    name: {"low": low, "high": high, "unit": unit, "worst_case": high}
+                    name: {"low": low, "high": high, "unit": unit, "upper": high}
                 }
                 value: dict[str, object] = {
                     "ranges": ranges,
@@ -223,7 +225,7 @@ class MetApiMarineConnector:
                         quality_notes=(
                             "daily range for a waters zone; no issue time, so its age is unknown",
                             "the producing model is not reported, so the lineage is unknown",
-                            "the range is kept whole; read the upper end as the worst case",
+                            "upper is the top of the stated range, not a site maximum",
                             "wave height does not say whether it is significant or maximum",
                             "no licence is named by the provider, only a liability disclaimer",
                         ),

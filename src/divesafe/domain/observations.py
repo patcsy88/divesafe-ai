@@ -90,6 +90,8 @@ def observation_from_evidence(item: EvidenceItem) -> EnvironmentalObservation | 
     Raises `pydantic.ValidationError` for implausible values (negative magnitude, bearing outside
     0-360, NaN), which callers must treat as unusable data.
     """
+    if "ranges" in item.value and "variables" not in item.value:
+        return None  # a daily range is not a reading; callers pass the value on as it is
     variables: dict[str, Any] = dict(item.value.get("variables", {}))
     units: Mapping[str, Any] = item.value.get("units", {})
     for name in variables:

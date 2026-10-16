@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +82,15 @@ class Settings(BaseSettings):
 
     # MET Malaysia API token (api.met.gov.my). Unset: the MET marine connector is not used.
     met_api_token: SecretStr | None = None
+
+    @field_validator("met_api_token")
+    @classmethod
+    def _met_token_shape(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not re.fullmatch(
+            r"[A-Za-z0-9._~+/=-]{1,256}", value.get_secret_value()
+        ):
+            raise ValueError("DIVESAFE_MET_API_TOKEN has an unexpected shape")
+        return value
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.

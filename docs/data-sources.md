@@ -144,8 +144,8 @@ call made.
   including strong wind and rough seas. A marine forecast is something `data.gov.my` lacks. Our
   source for this is a 2022 community copy of the documentation and the API home page, so
   **current behaviour is unverified until a token is used**; the marine forecast needs a start
-  date of today or later (no history). MET also states its open data may be reused for any
-  purpose.
+  date of today or later (no history). The MET Open Data page says its open datasets may be
+  reused, but names no licence; record the exact terms (not yet recorded).
 
   **Findings 2026-10-10 (nothing connected; no token yet):**
   - The MET website marine page (`met.gov.my/en/forecast/marine/waters/<code>/`) shows a 7-day
@@ -178,9 +178,9 @@ call made.
   `DIVESAFE_MET_API_TOKEN` is set. Zone table `my-pahang-pulau-tioman` -> `LOCATION:499`. Items are
   `degraded` forecasts, `upstream_known=False`, one per day for wind (`FMWS`, with `FMWD`) and
   waves (`FMWH`). The whole range is kept under `ranges` (never `variables`, so no hourly rule
-  reads it) and `worst_case` is the upper end. The quota is 3 a minute and 1,000 a day. The
+  reads it) and `upper` is the top of MET's stated range (not a site maximum: no gusts, can be exceeded). The quota is 3 a minute and 1,000 a day. The
   credentialed getter refuses redirects and has its own host list. No rule uses these values yet,
-  and a daily range with no issue time is not a window-covering hourly value. Wave statistic,
+  and the engine does count a daily +08:00 range as covering the dive window (known gap, risk-model.md). Wave statistic,
   zone extent and the licence stay unknown.
   **Findings 2026-10-16 (token used; developer guide read while logged in):**
   - **Base URL is `https://api.met.gov.my/v2.1/`**; `/v2/` is deprecated. Header
