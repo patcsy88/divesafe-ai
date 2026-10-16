@@ -1,6 +1,6 @@
 # ADR 0020: Tide predictions from TICON-4 tidal constants
 
-Status: PROPOSED (2026-10-17). Nothing is built. It reverses the owner's 2026-10-10 decision to skip tide height, so it needs the owner's acceptance first. It needs `risk-reviewer` and `security-reviewer` before any code, because it adds a data source, a dependency and a new evidence category value.
+Status: PROPOSED (2026-10-17). Nothing is built. The owner said "include tide predictions" on 2026-10-17, which reverses the 2026-10-10 skip (decision 1 below is settled). Decisions 2 and 3 and the open items remain. It needs `risk-reviewer` and `security-reviewer` before any code, because it adds a data source, a dependency and a new evidence category value.
 
 ## Context
 
@@ -10,7 +10,7 @@ tide.is shows tide times for Tioman. It has no API and no terms we could find, s
 
 ## What was checked (2026-10-17)
 
-- **Dataset:** TICON-4, Hart-Davis, Dettmering and Seitz (2025), DGFI-TUM, SEANOE, DOI 10.17882/109129. Licence **CC BY 4.0** (the landing page names it): attribution is required, commercial use is allowed. 50 constituents for 4,383 gauges per the landing page. The CSV we downloaded has 241,900 rows and 4,838 gauge names (the landing page says 4,383; not reconciled).
+- **Dataset:** TICON-4, Hart-Davis, Dettmering and Seitz (2025), DGFI-TUM, SEANOE, DOI 10.17882/109129. Licence **CC BY 4.0** (the landing page names it): attribution is required, commercial use is allowed. 50 constituents for 4,383 gauges per the landing page. The CSV we downloaded has 241,900 rows and 4,838 gauge names. The manual also says 4,838, so the landing page's 4,383 looks like a typo (reconciled 2026-10-17).
 - **A Tioman gauge exists:** `tioman-323a-mys-uhslc_rq`, 2.807°N 104.14°E, about 3 km from our reference point (2.7972, 104.166). Source UHSLC research quality. Record 13/11/1985 to 11/03/2020, 36 years, 285,475 observations, 0.0 missing, "No obvious issues", type Coastal. 50 constituents, M2 59.33, S2 18.46, K1 45.92, O1 34.24 (values as stored; unit unconfirmed, see below).
 - **Form of the tide:** (K1+O1)/(M2+S2) = 1.03, which is the mixed, mainly diurnal range of the usual classification. Heights and timing will therefore differ in character from a purely semi-diurnal coast, and a "high water at the same time each day" assumption would be wrong.
 - **Other Malaysian gauges in the file:** Sedili (96 km), Kuantan (154 km), Johor Bahru, Kukup, Keling, Cendering, Kelang, Lumut, Geting, Penang, Langkawi, Bintulu, Miri, Kota Kinabalu, Tawau, Sandakan. Only Tioman is near the first site.
@@ -18,7 +18,8 @@ tide.is shows tide times for Tioman. It has no API and no terms we could find, s
 
 ## Not established (must be closed before a connector)
 
-1. **Units and phase convention.** The TICON-4 manual (`.../data/122852.pdf`) could not be read by my tools. The TICON-3 manual says amplitude in cm and phase as a Greenwich phase lag, range 0 to 360. TICON-4's file has phases from -180 to 180, so the convention may differ. Amplitude units, the sign of the lag, the time zone (UTC assumed) and the treatment of nodal corrections are **unverified**. Someone must read the TICON-4 manual and record the answer here.
+1. **Units and phase convention.** The TICON-4 manual was read in full on 2026-10-17 (extracted with pypdf). It says only that `amp` is the "amplitude" and `pha` the "phase lag" of each constituent. It does **not** state the amplitude unit, the phase reference (Greenwich or local), the sign convention, or whether nodal corrections were applied in the analysis. It says gauge sources were checked for UTC versus local time references and that shifts were corrected where found, which suggests UTC but does not say so. The TICON-3 manual's cm and Greenwich-lag statement is not evidence for TICON-4 and has not been re-checked. Phases run from -180 to 180. Still **unverified**: unit, sign, time zone, nodal treatment. A plausible reading (cm, UTC, Greenwich lag) is a hypothesis to test against an independent prediction, not a fact. The authors (DGFI-TUM, contact on the SEANOE page) could be asked; no request has been drafted.
+   **What the manual does give:** Table 1 lists each constituent's Doodson number and frequency in degrees per hour. That is a citable source for those constants. Nodal factors and equilibrium arguments are not in it.
 2. **Datum.** The gauge's `datum_information` is "Unspecified". The constants give the tidal variation about the record's mean level. They do **not** give height above chart datum, lowest astronomical tide, or any level a diver or chart uses. tide.is takes its datum heights from a separate dataset (Hart-Davis, Sulzbach and Talke, SEANOE 10.17882/111620), which we have not read or licensed-checked. Until a datum is established, predictions may only be used as **relative** levels (change from mean), never as depth.
 3. **Accuracy at the dive site.** One harbour gauge cannot say what the tide does at a reef. Local shifts in timing and range are unknown. The reference gauge is about 3 km from the reference point.
 4. **A validation source.** No check yet that our predicted times match any independent prediction (JUPEM's tables, an almanac, tide.is read by a person for a spot-check only).
@@ -27,7 +28,7 @@ tide.is shows tide times for Tioman. It has no API and no terms we could find, s
 ## Options
 
 1. **Do nothing.** `tides` stays unevidenced. Honest, but assessments can never be complete.
-2. **Own harmonic synthesis.** Write the sum of cosines with nodal corrections and astronomical arguments. No dependency, but 50 constituents each need Doodson numbers, speeds, nodal factors and equilibrium arguments. Those are numeric constants from the literature; copying them from memory is the failure the project forbids. Only acceptable if every constant is taken from a cited table and tested.
+2. **Own harmonic synthesis.** Write the sum of cosines with nodal corrections and astronomical arguments. No dependency, but 50 constituents each need Doodson numbers, speeds, nodal factors and equilibrium arguments. Table 1 of the manual supplies the Doodson numbers and speeds; the rest are numeric constants from the literature; copying them from memory is the failure the project forbids. Only acceptable if every constant is taken from a cited table and tested.
 3. **Use an established harmonic-prediction library.** Smaller code, but a new dependency, which needs this ADR's acceptance and a licence, maintenance and supply-chain check. **No library has been evaluated here**; naming one would be a guess.
 4. **Fetch tide.is pages.** Rejected. No API and no terms, and the site is a small unofficial service.
 
