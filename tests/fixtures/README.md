@@ -10,6 +10,8 @@ run offline; they must not be treated as current conditions.
 | `data_gov_my_warning_recorded_2026-10-09.json` | data.gov.my Weather API (MET Malaysia), `limit=3` | 2026-10-09 | Unmodified. |
 | `data_gov_my_warning_incl_no_advisory_recorded_2026-10-09.json` | data.gov.my Weather API, issued since 2026-10-02, `limit=100` | 2026-10-09 | Unmodified. Includes an undated "No Advisory" tropical-cyclone notice. |
 | `data_gov_my_forecast_tioman_recorded_2026-10-11.json` | data.gov.my Weather API (MET Malaysia) 7-day forecast, `Rc024` Pulau Tioman, `limit=100` | 2026-10-11 | Unmodified; 7 daily rows (2026-10-11 to 2026-10-17). |
+| `met_api_marine_tioman_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/data`, `FORECAST`/`MARINE`, `LOCATION:499` (TIOMAN waters), today only | 2026-10-16 | Unmodified; 7 daily values. Contains no token. |
+| `met_api_locations_waters_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/locations?locationcategoryid=WATERS` | 2026-10-16 | Unmodified; 30 waters zones, none with coordinates. |
 
 Edge cases (nulls, wrong units, missing hours, truncation) are built in tests by mutating these
 files in code and are labelled synthetic there.

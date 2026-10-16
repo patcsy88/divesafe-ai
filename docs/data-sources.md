@@ -174,6 +174,23 @@ call made.
     connector (https, host allow-list, typed errors, quota guard, `degraded` quality). A second
     source cannot count as corroboration until its lineage is known (ADR 0010) and the dive
     professional gives a per-factor tolerance.
+  **Findings 2026-10-16 (token used; developer guide read while logged in; nothing connected):**
+  - **Base URL is `https://api.met.gov.my/v2.1/`**; `/v2/` is deprecated. Header
+    `Authorization: METToken <token>`. The guide states 10 requests a minute and 2,000 a day; the
+    public page says 3 and 1,000. **Plan for the stricter pair.** Responses carry `ETag` and
+    `Cache-Control: max-age=60`. No licence text is given, only a liability disclaimer.
+  - Marine forecast and warnings are included at registration. `/locations` needs
+    `locationcategoryid` (the category is `WATERS`, not `WATER`); without it, or with the wrong
+    value, it returned 403 "You do not have permission". `/datatypes` pages overlap by one entry.
+  - Waters zones are areas with no coordinates. **`LOCATION:499` is `TIOMAN`.** Neighbouring zones:
+    `502` Pahang, `501` Terengganu, `666` East Johor. How far zone 499 extends is not stated.
+  - A real marine response for `LOCATION:499` (fixture `met_api_marine_tioman_recorded_2026-10-16`):
+    daily values only. `FMWS` wind speed is a range string (`"10-20"`, unit `km/h`), `FMWH` wave
+    height a range string (`"0.5 - 1.0"`, unit `m`), `FMWD` wind direction a code (`"VRB"`, no
+    convention stated), plus weather text for morning, afternoon and night. **No issue time, no
+    model, no validity window** (`valid_from` and `valid_to` are null). The date is a calendar day
+    at +08:00. Wave height does not say which statistic it is (significant height or maximum).
+  - `start_date` must be today or later: no history.
 - **Not verified:** GEBCO, EMODnet, Meteomatics.
 - **Open-Meteo `visibility` is atmospheric**, not underwater: its docs describe viewing distance
   influenced by cloud, humidity and aerosols. It must never stand in for dive visibility.
