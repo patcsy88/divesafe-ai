@@ -8,6 +8,7 @@ strings.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.client
 import json
 import urllib.error
@@ -121,7 +122,8 @@ class UrllibJsonGetter:
             with opener.open(request, timeout=self._timeout) as response:
                 body = read_limited(response, self._max_bytes)
         except urllib.error.HTTPError as exc:
-            exc.close()
+            with contextlib.suppress(OSError):
+                exc.close()
             raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ConnectorTransportError(f"request to {_label(url)} failed") from exc

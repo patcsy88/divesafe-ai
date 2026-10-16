@@ -14,6 +14,22 @@ from divesafe.domain import (
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
+# Read by tests on purpose (the opt-in Postgres and live-evaluation runs); everything else from the
+# developer's shell or .env must not change what a test sees.
+_KEPT_ENV_PREFIXES = ("DIVESAFE_TEST_DATABASE_URL", "DIVESAFE_EVAL_")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    from divesafe.config import Settings
+
+    for name in list(os.environ):
+        if name.startswith("DIVESAFE_") and not name.startswith(_KEPT_ENV_PREFIXES):
+            monkeypatch.delenv(name)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
 
 @pytest.fixture
 def now() -> datetime:

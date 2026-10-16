@@ -44,7 +44,7 @@ SOURCE = "met-api-marine-forecast"
 SOURCE_VERSION = "v2.1"
 MET_MARINE = "met-malaysia:marine-forecast"
 MALAYSIA_TIME = timezone(timedelta(hours=8), "MYT")
-MAX_DAYS = 8
+MAX_DAYS = 7  # today and six more: the MET marine page shows a 7-day forecast (data-sources.md)
 MAX_RESULTS = 49  # the API pages at 50; a full page may be truncated
 
 # site id -> (location id, location name) of the waters zone. Which zone belongs to which site is
@@ -142,7 +142,7 @@ class MetApiMarineConnector:
                 "the forecast has no history; the window starts before today"
             )
         if (last - today).days >= MAX_DAYS:
-            raise ConnectorResponseError("the window starts beyond the days the forecast covers")
+            raise ConnectorResponseError("the window ends beyond the days the forecast covers")
         params = {
             "datasetid": "FORECAST",
             "datacategoryid": "MARINE",

@@ -149,7 +149,8 @@ call made.
 
   **Findings 2026-10-10 (nothing connected; no token yet):**
   - The MET website marine page (`met.gov.my/en/forecast/marine/waters/<code>/`) shows a 7-day
-    forecast by state waters (weather text, wind direction and speed range, wave range with no unit
+    forecast (the connector's horizon, `MAX_DAYS = 7`: a window may end on today + 6 in +08:00;
+    the API's own horizon is not stated and was not probed) by state waters (weather text, wind direction and speed range, wave range with no unit
     shown). It is HTML only, with no issue time, model or lineage. Its **copyright notice forbids
     copying, reproducing, publishing or commercially dealing with the site's contents without prior
     written consent**, so **do not scrape it**. `robots.txt` returns 404. A link to it for human

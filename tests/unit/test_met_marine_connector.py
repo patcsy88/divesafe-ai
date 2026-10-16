@@ -313,6 +313,8 @@ def test_a_getter_holding_a_credential_uses_the_no_redirect_handler(
     )
     handlers = _handlers_used(monkeypatch, getter)
     assert len(handlers) == 1 and isinstance(handlers[0], _NoRedirect)
+    # Subclassing is what stops build_opener adding the default, redirect-following handler.
+    assert issubclass(_NoRedirect, urllib.request.HTTPRedirectHandler)
 
 
 def test_a_getter_without_a_credential_keeps_the_host_checked_redirects(
@@ -489,7 +491,13 @@ def test_an_extreme_or_far_future_window_is_refused_before_any_request() -> None
         assert getter.calls == []
 
 
-def test_a_credentialed_getter_is_limited_to_the_met_host_and_a_frozen_copy() -> None:
+def test_a_credentialed_getter_is_limited_to_the_met_host_and_a_frozen_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def offline(self: Any, request: Any, timeout: float = 0) -> Any:
+        raise AssertionError(f"no request may be sent: {request.full_url}")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", offline)
     auth = ("Authorization", "METToken t")
     for hosts in ("api.met.gov.my", [], {"evil.example"}, {"api.met.gov.my", "evil.example"}):
         with pytest.raises((ValueError, TypeError)):
@@ -501,7 +509,7 @@ def test_a_credentialed_getter_is_limited_to_the_met_host_and_a_frozen_copy() ->
         asyncio.run(getter.get_json("https://evil.example/x", {}))
 
 
-@pytest.mark.parametrize(("end_offset", "request_made"), [(7, True), (8, False)])
+@pytest.mark.parametrize(("end_offset", "request_made"), [(6, True), (7, False)])
 def test_the_last_day_of_the_window_is_bounded_by_the_forecast_horizon(
     end_offset: int, request_made: bool
 ) -> None:
@@ -531,3 +539,25 @@ def test_an_error_response_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ConnectorTransportError, match="HTTP 302"):
         asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
     assert body.closed
+
+
+def test_a_failure_closing_an_error_response_is_still_a_connector_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    class _Body(io.BytesIO):
+        def close(self) -> None:
+            if not self.closed:
+                super().close()
+                raise OSError("socket already gone")
+
+    def refuse(self: Any, request: Any, timeout: float = 0) -> Any:
+        raise urllib.error.HTTPError(request.full_url, 503, "Busy", {}, _Body(b""))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    getter = UrllibJsonGetter(
+        allowed_hosts=MET_API_HOSTS, auth_header=("Authorization", "METToken t")
+    )
+    with pytest.raises(ConnectorTransportError, match="HTTP 503"):
+        asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
