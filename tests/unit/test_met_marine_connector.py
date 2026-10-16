@@ -412,13 +412,15 @@ def test_http_client_errors_are_wrapped_without_the_header_text(
     with pytest.raises(ConnectorTransportError) as caught:
         asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
     assert "SECRET" not in str(caught.value) and caught.value.__cause__ is None
+    assert caught.value.__context__ is None
 
     def incomplete(self: Any, request: Any, timeout: float = 0) -> Any:
         raise http.client.IncompleteRead(b"x")
 
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", incomplete)
-    with pytest.raises(ConnectorTransportError):
+    with pytest.raises(ConnectorTransportError) as again:
         asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
+    assert again.value.__cause__ is None and again.value.__context__ is None
 
 
 def test_the_credential_goes_in_an_unredirected_header(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -458,3 +460,47 @@ def test_an_extreme_or_far_future_window_is_refused_before_any_request() -> None
         with pytest.raises(ConnectorResponseError):
             asyncio.run(MetApiMarineConnector(getter).fetch(TIOMAN_ISLAND, start, end, NOW))
         assert getter.calls == []
+
+
+def test_a_credentialed_getter_is_limited_to_the_met_host_and_a_frozen_copy() -> None:
+    auth = ("Authorization", "METToken t")
+    for hosts in ("api.met.gov.my", [], {"evil.example"}, {"api.met.gov.my", "evil.example"}):
+        with pytest.raises((ValueError, TypeError)):
+            UrllibJsonGetter(allowed_hosts=hosts, auth_header=auth)  # type: ignore[arg-type]
+    hosts_list = ["api.met.gov.my"]
+    getter = UrllibJsonGetter(allowed_hosts=hosts_list, auth_header=auth)
+    hosts_list.append("evil.example")
+    with pytest.raises(ConnectorTransportError, match="host not allowed"):
+        asyncio.run(getter.get_json("https://evil.example/x", {}))
+
+
+@pytest.mark.parametrize(("end_offset", "request_made"), [(7, True), (8, False)])
+def test_the_last_day_of_the_window_is_bounded_by_the_forecast_horizon(
+    end_offset: int, request_made: bool
+) -> None:
+    from datetime import timedelta
+
+    # Starts two days out and is short enough on its own; only its LAST day can break the bound.
+    start = datetime(2026, 10, 18, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 10, 16, 0, 0, tzinfo=UTC) + timedelta(days=end_offset, hours=1)
+    getter = _Getter(FIXTURE)
+    with pytest.raises(ConnectorResponseError):  # an allowed window still lacks fixture days
+        asyncio.run(MetApiMarineConnector(getter).fetch(TIOMAN_ISLAND, start, end, NOW))
+    assert bool(getter.calls) is request_made
+
+
+def test_an_error_response_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    body = io.BytesIO(b"{}")
+
+    def refuse(self: Any, request: Any, timeout: float = 0) -> Any:
+        raise urllib.error.HTTPError(request.full_url, 302, "Found", {}, body)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
+    getter = UrllibJsonGetter(
+        allowed_hosts=MET_API_HOSTS, auth_header=("Authorization", "METToken t")
+    )
+    with pytest.raises(ConnectorTransportError, match="HTTP 302"):
+        asyncio.run(getter.get_json("https://api.met.gov.my/v2.1/data", {}))
+    assert body.closed

@@ -61,7 +61,29 @@ _RANGES: dict[str, tuple[DataCategory, str, str]] = {
 _DIRECTION = "FMWD"
 _NUMBER = r"([0-9]{1,3}(?:\.[0-9]{1,2})?)"
 _RANGE = re.compile(rf"{_NUMBER}[ ]?(?:-[ ]?{_NUMBER})?")
-_DIRECTION_CODE = re.compile(r"[A-Z]{1,3}")
+# Compass points and "VRB" (variable). "VRB" is from the recorded response; the compass points are
+# the usual abbreviations and are an assumption until the guide states the convention.
+_DIRECTION_CODES = frozenset(
+    {
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+        "VRB",
+    }
+)
 # Data-sanity ceilings for parsing only. Not safety limits.
 _SANITY_MAX = {"km/h": 300.0, "m": 30.0}
 
@@ -119,7 +141,7 @@ class MetApiMarineConnector:
             raise ConnectorResponseError(
                 "the forecast has no history; the window starts before today"
             )
-        if (first - today).days >= MAX_DAYS:
+        if (last - today).days >= MAX_DAYS:
             raise ConnectorResponseError("the window starts beyond the days the forecast covers")
         params = {
             "datasetid": "FORECAST",
@@ -182,8 +204,8 @@ class MetApiMarineConnector:
                     f"the forecast does not cover the whole window (no {absent[0]} for {day})"
                 )
             direction = bounded_text(slot[_DIRECTION].get("value"), _DIRECTION)
-            if _DIRECTION_CODE.fullmatch(direction) is None:
-                raise ConnectorResponseError("wind direction is not a 1 to 3 letter code")
+            if direction not in _DIRECTION_CODES:
+                raise ConnectorResponseError("wind direction is not a known code")
             parsed: dict[str, tuple[float, float]] = {}
             for datatype, (_, _name, unit) in _RANGES.items():
                 raw = slot[datatype]

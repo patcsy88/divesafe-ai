@@ -89,17 +89,72 @@ def _engine_result(*, may_support_go: bool, with_rules: bool):  # type: ignore[n
     return engine.assess(plan, list(_items()), now)
 
 
-def test_met_daily_items_alone_never_give_go_or_caution_under_the_default_policy() -> None:
-    result = _engine_result(may_support_go=False, with_rules=False)
-    assert result.recommendation.value == "INSUFFICIENT EVIDENCE"
-    assert all(r.outcome.value not in {"GO", "CAUTION"} for r in result.rule_results)
+class _GoRule:
+    """Synthetic: always says GO and cites the MET wind item, as a careless rule might."""
+
+    rule_id = "synthetic.go"
+    citation = "test fixture (synthetic, not a real safety source)"
+    expires_at = datetime(2027, 1, 1, tzinfo=UTC)
+
+    def evaluate(self, plan, evidence):  # type: ignore[no-untyped-def]
+        from divesafe.domain import (
+            DataCategory,
+            Recommendation,
+            RiskFactorKind,
+            RuleResult,
+            ThresholdStatus,
+        )
+
+        cited = tuple(e.id for e in evidence if e.category is DataCategory.WIND)
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=Recommendation.GO,
+            rationale="synthetic",
+            evidence_ids=cited,
+            factor=RiskFactorKind.WIND,
+            threshold_status=ThresholdStatus.VALIDATED,
+        )
+
+
+def _go_result(*, may_support_go: bool):  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    from divesafe.domain import DataCategory, DivePlan, RiskFactorKind
+    from divesafe.risk import EvidencePolicy, RiskRulesEngine
+
+    now = datetime(2026, 10, 16, 1, 0, tzinfo=UTC)
+    plan = DivePlan(
+        site_id=TIOMAN_ISLAND.id,
+        planned_start=datetime(2026, 10, 16, 2, 0, tzinfo=UTC),
+        planned_duration_minutes=60,
+        max_depth_m=18,
+    )
+    policy = EvidencePolicy(
+        frozenset({DataCategory.WIND, DataCategory.WAVES_SWELL}),
+        timedelta(hours=1),
+        degraded_may_support_go=may_support_go,
+    )
+    engine = RiskRulesEngine(
+        [_GoRule()], policy, "synthetic", required_factors=frozenset({RiskFactorKind.WIND})
+    )
+    return engine.assess(plan, list(_items()), now)
+
+
+def test_a_go_resting_on_met_daily_items_is_blocked_by_the_quality_guard_alone() -> None:
+    blocked = _go_result(may_support_go=False)
+    assert blocked.recommendation.value == "INSUFFICIENT EVIDENCE"
+    guard = next(
+        r for r in blocked.rule_results if r.rule_id == "evidence.quality_insufficient_for_go"
+    )
+    assert "wind" in guard.rationale and "waves_swell" in guard.rationale
+    # With the guard switched off by policy the same rule gives GO, so the guard is what stopped it.
+    assert _go_result(may_support_go=True).recommendation.value == "GO"
 
 
 def test_a_signed_wind_limit_cannot_be_evaluated_from_a_met_range() -> None:
     result = _engine_result(may_support_go=True, with_rules=True)
     assert result.recommendation.value == "INSUFFICIENT EVIDENCE"
-    assert all(r.outcome.value not in {"GO", "CAUTION"} for r in result.rule_results)
     assert not any(r.rule_id.startswith("rule.error") for r in result.rule_results)
-    assert all(
-        not r.evidence_ids for r in result.rule_results if r.rule_id == "synthetic.wind_speed"
-    )
+    (wind,) = [r for r in result.rule_results if r.rule_id == "definition.synthetic.wind_speed"]
+    assert wind.outcome.value == "INSUFFICIENT EVIDENCE" and not wind.evidence_ids
+    assert wind.rationale.startswith("No 'wind_speed_10m' evidence overlaps")

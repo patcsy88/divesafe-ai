@@ -85,11 +85,14 @@ class UrllibJsonGetter:
         *,
         auth_header: tuple[str, str] | None = None,
     ) -> None:
-        if auth_header is not None and not frozenset(allowed_hosts).isdisjoint(ALLOWED_HOSTS):
+        if isinstance(allowed_hosts, str):
+            raise TypeError("allowed_hosts must be a collection of host names")
+        hosts = frozenset(allowed_hosts)
+        if auth_header is not None and (not hosts or not hosts <= MET_API_HOSTS):
             raise ValueError("a getter with a credential needs its own host list")
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
-        self._allowed = allowed_hosts
+        self._allowed = hosts
         self._max_bytes = max_bytes
         self._auth_header = auth_header
 
@@ -118,6 +121,7 @@ class UrllibJsonGetter:
             with opener.open(request, timeout=self._timeout) as response:
                 body = read_limited(response, self._max_bytes)
         except urllib.error.HTTPError as exc:
+            exc.close()
             raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ConnectorTransportError(f"request to {_label(url)} failed") from exc

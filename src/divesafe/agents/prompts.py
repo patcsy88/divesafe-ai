@@ -110,8 +110,8 @@ def _payload_item(e: EvidenceItem) -> dict[str, Any]:
 
 def evidence_payload(items: Sequence[EvidenceItem]) -> list[dict[str, Any]]:
     """Evidence as agents read it: canonical, unit-bearing conditions where a typed form exists
-    (so replacing a provider does not change what an agent sees), raw value only for free-text
-    notices, which are untrusted and delimited by the caller."""
+    (so replacing a provider does not change what an agent sees), raw value only where no typed form
+    exists: free-text notices and daily ranges (e.g. MET), all delimited by the caller."""
     return [_payload_item(e) for e in items]
 
 

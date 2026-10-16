@@ -40,7 +40,8 @@ only between independent items (prompt version `2026-10-10.1`).
 - "Open-Meteo and Copernicus agree" can never be presented as confirmation for currents or
   temperature. A direct Copernicus adapter would add history, depth levels and provenance, not an
   independent check on those two values.
-- Source disagreement and corroboration scoring (not built) must use `can_corroborate`. Its
+- Source corroboration scoring (not built) must use `can_corroborate`. Disagreement must tighten
+  whatever the lineage, because unknown independence is no reason to ignore a worse reading. Its
   tolerance per factor is a number that must come from the dive professional, not from code.
 - Replacing a provider no longer changes what agents see, provided the new connector maps to the
   same canonical fields.
