@@ -1,6 +1,6 @@
 # ADR 0020: Tide predictions from TICON-4 tidal constants
 
-Status: PROPOSED (2026-10-17). Nothing is built. The owner said "include tide predictions" on 2026-10-17, which reverses the 2026-10-10 skip (decision 1 below is settled). Decisions 2 and 3 and the open items remain. It needs `risk-reviewer` and `security-reviewer` before any code, because it adds a data source, a dependency and a new evidence category value.
+Status: WITHDRAWN (2026-10-17, owner: "Ignore TICON"). Do not build from this ADR. TICON-4 is not a tide source for this project. The text below is kept only as a record of what was checked; the open items (phase convention, datum, validation) were never closed. The owner's wish to include tide predictions stands, but it needs a different source.
 
 ## Context
 
