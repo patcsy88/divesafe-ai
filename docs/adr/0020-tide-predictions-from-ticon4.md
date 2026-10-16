@@ -25,6 +25,13 @@ tide.is shows tide times for Tioman. It has no API and no terms we could find, s
 4. **A validation source.** No check yet that our predicted times match any independent prediction (JUPEM's tables, an almanac, tide.is read by a person for a spot-check only).
 5. **The prediction method.** See Options.
 
+## Validation source search (2026-10-17)
+
+- **Found:** UHSLC research-quality hourly sea level for Tioman (station 323), via its ERDDAP service (`uhslc.soest.hawaii.edu/erddap/tabledap/global_hourly_rqds`). Time is UTC, level is in millimetres relative to the station datum. The dataset licence text says the data may be used and redistributed free but is not for legal use and may contain inaccuracies. Citation: Caldwell, Merrifield and Thompson (2015), doi:10.7289/V5V40S7W. One public query for 2018 (8,760 rows, 7,291 valid hours) was downloaded for analysis only and is not committed.
+- **Limit of this source:** it is the same gauge TICON-4 was fitted from (gesla source `UHSLC_RQ`, record 1985-2020), so it is not independent of the constants. It can test the unit, the phase sign and the UTC reference. It cannot show how accurate a prediction is at a dive site. An independent check of site accuracy is still missing.
+- **Amplitude unit (supported, not proven):** a plain least-squares fit of eight constituents to the 2018 hours gives amplitudes of about 8.6 to 10.5 times the TICON values in millimetres (M2 621 mm vs 59.33, K1 422 vs 45.92, O1 300 vs 34.24). That is consistent with TICON `amp` being in centimetres. The spread comes from one year against a 36-year fit and from nodal factors that this quick fit ignored.
+- **Phase: not established.** The off-the-shelf harmonic tool I tried (`utide`, in a throwaway environment) returned absurd amplitudes (about 1e10) in this setup, so its phase comparison is discarded. No phase result is claimed. Settling it needs the astronomical argument for each constituent, which is exactly the reviewed-constants work in Options 2 and 3.
+
 ## Options
 
 1. **Do nothing.** `tides` stays unevidenced. Honest, but assessments can never be complete.
