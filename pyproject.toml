@@ -44,6 +44,10 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# The form script holds the form's prose as long string literals.
+"docs/domain-validation/build_form.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

@@ -96,3 +96,19 @@ valuable finding, not a failure.
 | [questionnaire.md](questionnaire.md) | Decisions and per-factor questions, with the data we hold |
 | [rule-template.md](rule-template.md) | The form for one limit |
 | [signoff-checklist.md](signoff-checklist.md) | Completeness and sign-off |
+| [divesafe-domain-validation-form.pdf](divesafe-domain-validation-form.pdf) | All of the above as one fillable PDF: fill it on screen, save it and send it back |
+| [build_form.py](build_form.py) | Builds that PDF from the three files above, so the form cannot drift from them |
+
+## The fillable form
+
+The PDF holds the questionnaire (parts A to C), eight blank rule definitions and the sign-off
+checklist, with text boxes, tick boxes and a drop-down for the risk factor. Nothing is pre-filled
+and it suggests no limits. Fill it in any PDF reader and save it; printing and writing by hand
+also works. The "developer fills this in" boxes on each rule definition are read-only. If you have
+more than eight limits, ask for another copy.
+
+Filled forms name people. Keep them in `returned/`, which git ignores, and never commit them.
+
+To rebuild after editing the markdown files: `python build_form.py` with a Python that has
+`reportlab` installed. It is not a project dependency, and the script stops if the questionnaire
+or checklist change shape, so the form cannot quietly miss a section.
