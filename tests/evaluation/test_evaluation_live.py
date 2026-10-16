@@ -29,6 +29,8 @@ from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "ollama")
+# Read at import, before the per-test environment isolation in tests/conftest.py removes it.
+ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") == "true"
 MODEL = os.environ.get("DIVESAFE_EVAL_MODEL") or os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
 pytestmark = [
     pytest.mark.integration,
@@ -86,7 +88,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
         def make() -> OllamaProvider | OpenAICompatibleProvider:
             return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
 
-    if make().external and os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") != "true":
+    if make().external and not ALLOW_EXTERNAL:
         pytest.skip("a remote server needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
     report = evaluate(make)
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"evaluation_{PROVIDER}.json"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -20,15 +21,20 @@ _KEPT_ENV_PREFIXES = ("DIVESAFE_TEST_DATABASE_URL", "DIVESAFE_EVAL_")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     import os
 
     from divesafe.config import Settings
+    from divesafe.config.settings import get_settings
 
     for name in list(os.environ):
-        if name.startswith("DIVESAFE_") and not name.startswith(_KEPT_ENV_PREFIXES):
+        upper = name.upper()  # settings names are matched case-insensitively
+        if upper.startswith("DIVESAFE_") and not upper.startswith(_KEPT_ENV_PREFIXES):
             monkeypatch.delenv(name)
     monkeypatch.setitem(Settings.model_config, "env_file", None)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture
