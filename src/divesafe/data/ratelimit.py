@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from divesafe.data.errors import ConnectorTransportError
+from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
 from divesafe.data.http import JsonGetter
 
 DEFAULT_MIN_INTERVAL_SECONDS: Mapping[str, float] = {
@@ -119,7 +119,10 @@ class CachingRateLimitedGetter:
         payload = await self._inner.get_json(url, params)
         if len(self._cache) >= MAX_CACHE_ENTRIES:
             self._cache.pop(min(self._cache, key=lambda k: self._cache[k][0]))
-        self._cache[key] = (now, copy.deepcopy(payload))
+        try:
+            self._cache[key] = (now, copy.deepcopy(payload))
+        except RecursionError as exc:
+            raise ConnectorResponseError("the response is nested too deeply to keep") from exc
         return payload
 
     def _reserve_quota(self, host: str, path: str, now: float) -> None:

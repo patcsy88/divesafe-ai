@@ -49,9 +49,9 @@ from divesafe.services import (
     RunAwareRepository,
 )
 
-# Interim and unreviewed: no verified tide source exists and no limit is signed off yet, so
-# assessments are always INSUFFICIENT EVIDENCE. This is the honest state; see
-# docs/data-sources.md. Replace through a reviewed ruleset, not at runtime.
+# Interim and unreviewed: tide predictions are DEGRADED (PHN e-Tide, ADR 0021, off by default) and
+# no limit is signed off yet, so assessments are always INSUFFICIENT EVIDENCE. This is the honest
+# state; see docs/data-sources.md. Replace through a reviewed ruleset, not at runtime.
 INTERIM_REQUIRED_CATEGORIES: frozenset[DataCategory] = frozenset(
     {
         DataCategory.WAVES_SWELL,
@@ -219,15 +219,16 @@ def build_default_state(settings: Settings) -> AppState:
             quotas=(MET_API_QUOTA,),
         )
         connectors.append(MetApiMarineConnector(met_getter))
-    connectors.append(
-        PhnEtideConnector(
-            CachingRateLimitedGetter(
-                UrllibFormPostJsonGetter(),
-                min_interval_seconds={"etide.hydro.gov.my": 0.0},
-                quotas=(PHN_ETIDE_QUOTA,),
+    if settings.phn_etide_enabled:
+        connectors.append(
+            PhnEtideConnector(
+                CachingRateLimitedGetter(
+                    UrllibFormPostJsonGetter(),
+                    min_interval_seconds={"etide.hydro.gov.my": 0.0},
+                    quotas=(PHN_ETIDE_QUOTA,),
+                )
             )
         )
-    )
     if settings.environment == "production" and not settings.trusted_proxy_set():
         logger.warning(
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "

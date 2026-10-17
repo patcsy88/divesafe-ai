@@ -24,7 +24,8 @@ stage (five specialists, three bounded Tree-of-Thought scenarios and a risk prop
 only been exercised with a scripted fake LLM. Tides,
 reviewed rules, real LLM adapters, RAG, durable storage (PostgreSQL) and a web UI are not
 implemented yet. With `DIVESAFE_LLM_PROVIDER=fake` (the default) the agent stage is off.
-Wind is connected (model forecast); no verified tide source exists, so every assessment is
+Wind is connected (model forecast). Tide predictions from PHN e-Tide are available but off by
+default and DEGRADED, and no dive professional has signed a limit, so every assessment is
 `INSUFFICIENT EVIDENCE` by design.
 
 Marine data is Open-Meteo.com (CC BY 4.0, non-commercial use only), with wave models from DWD

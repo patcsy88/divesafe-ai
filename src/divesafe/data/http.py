@@ -30,6 +30,7 @@ PHN_HOSTS: frozenset[str] = frozenset({"etide.hydro.gov.my"})
 PHN_MAX_BYTES = 512 * 1024
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
+MAX_JSON_DEPTH = 32  # a parsing bound for hostile bodies, not a safety limit
 
 
 class JsonGetter(Protocol):
@@ -47,6 +48,12 @@ def check_url(url: str, allowed_hosts: Collection[str]) -> None:
         raise ConnectorTransportError(f"refusing non-https URL for {_label(url)}")
     if parsed.hostname not in allowed_hosts:
         raise ConnectorTransportError(f"host not allowed: {parsed.hostname}")
+    try:
+        port = parsed.port
+    except ValueError:
+        port = -1
+    if port not in (None, 443) or parsed.username is not None or parsed.password is not None:
+        raise ConnectorTransportError(f"refusing a non-standard port or userinfo for {_label(url)}")
 
 
 def read_limited(response: IO[bytes], max_bytes: int) -> bytes:
@@ -94,6 +101,8 @@ class UrllibJsonGetter:
         hosts = frozenset(allowed_hosts)
         if auth_header is not None and (not hosts or not hosts <= MET_API_HOSTS):
             raise ValueError("a getter with a credential needs its own host list")
+        if hosts & PHN_HOSTS:
+            raise ValueError("the PHN host may only be called by the PHN POST getter")
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
         self._allowed = hosts
@@ -149,9 +158,25 @@ def _open_json(
         raise ConnectorTransportError(f"request to {_label(url)} failed")
     # The body is parsed whatever the Content-Type says: PHN sends JSON labelled text/html.
     try:
-        return json.loads(body)
+        parsed = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
         raise ConnectorResponseError(f"{_label(url)} did not return valid JSON") from exc
+    if _depth_exceeds(parsed, MAX_JSON_DEPTH):
+        raise ConnectorResponseError(f"{_label(url)} returned JSON nested too deeply")
+    return parsed
+
+
+def _depth_exceeds(value: Any, limit: int) -> bool:
+    """Iterative, so a hostile body cannot overflow the stack here or in a later deep copy."""
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict | list):
+            if depth > limit:
+                return True
+            children = item.values() if isinstance(item, dict) else item
+            stack.extend((child, depth + 1) for child in children)
+    return False
 
 
 class UrllibFormPostJsonGetter:

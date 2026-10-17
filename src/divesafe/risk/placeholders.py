@@ -33,7 +33,8 @@ _FACTOR_CATEGORIES: dict[RiskFactorKind, frozenset[DataCategory]] = {
     K.SWELL: frozenset({C.WAVES_SWELL}),
     K.SWELL_PERIOD: frozenset({C.WAVES_SWELL}),
     K.CURRENT: frozenset({C.CURRENTS}),
-    K.TIDAL_CURRENT: frozenset({C.TIDES, C.CURRENTS}),
+    # Tides are deliberately absent: a tide height or time is not a current speed (ADR 0021).
+    K.TIDAL_CURRENT: frozenset({C.CURRENTS}),
     K.WEATHER: frozenset({C.WEATHER}),
     K.FORECAST_UNCERTAINTY: _ALL,
     K.SITE_CONSTRAINT: frozenset({C.SITE_INFORMATION, C.LOCAL_GUIDANCE}),

@@ -1,7 +1,9 @@
 # ADR 0021: Tide predictions from the PHN e-Tide endpoint
 
-Status: PROPOSED (2026-10-17). Replaces the withdrawn ADR 0020. Needs `risk-reviewer` and
-`security-reviewer` before it is accepted and before the connector is merged.
+Status: PROPOSED (2026-10-17). Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and
+`risk-reviewer` on 2026-10-17: no blockers; the findings are folded in below. It stays PROPOSED, and
+the connector stays **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED=false`), until the owner puts
+PHN's wording (or a dated record of the permission) on file and accepts this ADR.
 
 ## Context
 
@@ -62,24 +64,48 @@ A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window t
    - `C_status.time` on `current_day` is more than 30 minutes from our clock (this is the only
      runtime check on the inferred +08:00 zone; 30 minutes is a plausibility bound, not a safety
      limit);
-   - the response is not the expected shape, or the body is too large or not JSON.
+   - the high/low list is incomplete: between consecutive listed extremes (and from each day edge
+     to the nearest extreme) the series must run one way, so a dropped high or low is refused (no
+     tolerance; checked on the recorded days);
+   - highs and lows do not alternate across midnight between two fetched days;
+   - the response is not the expected shape, is larger than 512 KiB, is not JSON, or is nested more
+     than 32 levels (a parsing bound; a hostile body can otherwise overflow the stack in the cache's
+     deep copy and abort a run).
 4. **No rule, no limit.** This adds no tide threshold and no rule. `tidal_current` stays
-   unencodable: a tide height or time is not a current speed. With degraded quality it cannot
-   support GO or CAUTION (ADR 0008). The visible outcome is unchanged until a dive professional
-   signs limits.
+   unencodable (it has no metric, and no metric reads the `tides` category; a safety test pins
+   both). The `tidal_current` placeholder no longer cites tide ids. GO stays structurally
+   unreachable: `tidal_current` has no data source, and `tides` is required while only DEGRADED
+   predictions exist. **Turning on `degraded_may_support_go` is a separate risk decision, it is
+   global (it would also admit MET daily ranges and coarse model currents), and it must not be
+   taken for tides.** Making the degraded policy per category is a follow-up to ADR 0008.
 5. **Transport.** The endpoint needs a POST with a form body. A separate getter subclass
    (`UrllibFormPostJsonGetter`) with its own host list `PHN_HOSTS = {"etide.hydro.gov.my"}`,
-   https only, no redirects followed, no cookies kept, same size cap and deadline. The shared
+   https only, standard port and no userinfo, no redirects followed, no cookies kept (so each call
+   starts a new PHN session), a 512 KiB size cap and the usual deadline. The GET getter refuses the
+   PHN host, so the separation holds both ways. The shared
    `ALLOWED_HOSTS` does **not** gain this host, so no other connector can reach it. No credential
    is sent. The site-to-location table is fixed in code (`my-pahang-pulau-tioman` -> `pulau_tioman`).
 6. **Politeness.** PHN publishes no limits. A local budget of 2 calls a minute and 200 a day, and a
    60 second cache, are **our conservative assumptions**, recorded as such, not provider figures.
    The budget is per process.
-7. **Attribution and terms.** Each item names "Pusat Hidrografi Nasional (e-Tide)" and says the
+7. **Attribution and terms.** Each item carries `attribution` "Pusat Hidrografi Nasional (e-Tide)",
+   which the user-facing attributions list shows, and says the
    permission is the owner's report and its terms are not on file. If PHN states wording, it
    replaces this. The data is used non-commercially, like every other source here.
 8. **Datum.** Heights are carried with their stated datum. No depth, clearance or "water over the
    reef" logic is added.
+
+9. **Agents.** The `tide_current` focus text no longer invites slack or flow timing from tide
+   data. Trusted wording outside the untrusted block (specialists that read tides, the three
+   scenarios and the risk proposal) says tide items are not current, slack-water or flow-timing
+   evidence whenever a tide item is present. `PROMPT_VERSION` is `2026-10-17.2`.
+10. **Off by default.** `DIVESAFE_PHN_ETIDE_ENABLED` defaults to false. Enabling it is the owner's
+    decision after the permission wording is on file.
+
+## Owner decisions recorded here
+
+- The one-day fixture is committed on the owner's say-so; PHN's redistribution terms are not on file.
+- The user agent carries no contact address. Adding one is the owner's call.
 
 ## Options not taken
 
@@ -97,7 +123,16 @@ A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window t
 
 - Horizon is today plus two days. A planned dive later has no tide evidence.
 - Astronomical prediction only, with no weather or pressure effects.
-- One harbour point cannot say what the tide does at a reef.
+- One PHN station cannot say what the tide does at a reef. **The response does not name its
+  station**; that it is the `pulau_tioman` station is assumed from our request, and items say so
+  (`requested_location_id`). No check is possible until PHN gives a station identifier.
+- An extreme at a day edge or on a flat stretch is checked against one side or an equal-height
+  stretch only, and its time is PHN's choice within that stretch.
+- Retrieval time may be up to the 60 s cache lifetime older than shown.
+- The call budget is per process and shared by every signed-in user; about 200 runs more than a
+  minute apart use up the 24-hour budget and tides then go missing for everyone (fails closed).
+  Concurrent cache misses are not coalesced.
+- Environment proxy settings are honoured by every connector getter, as before.
 - The time zone is inferred and checked only against our clock on `current_day`.
 - Undocumented endpoint: a layout change makes the category fail, not guess.
 - Tidal streams are not covered and the `tide_current` specialist still has only coarse

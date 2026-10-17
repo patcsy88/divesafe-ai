@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from divesafe.agents.prompts import build_user_message, evidence_payload
+from divesafe.agents.prompts import build_user_message, evidence_payload, tide_note
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import FindingOutput
 from divesafe.domain import DataCategory, DivePlan, EvidenceItem, Finding
@@ -43,7 +43,10 @@ SPECIALISTS: tuple[SpecialistSpec, ...] = (
     SpecialistSpec(
         "tide_current",
         frozenset({C.CURRENTS, C.TIDES}),
-        "currents and tides, including slack or flow timing if the evidence shows it. Model "
+        "currents and tides. Tide items give only the predicted height and time of high and low "
+        "water at one station, not at the dive site. Never infer current speed, direction, slack "
+        "water or flow timing from tide times or heights; mention slack or flow timing only if a "
+        "current item states it, and say that no evidence covers tidal streams at the site. Model "
         "currents are coarse and not site-level.",
     ),
     SpecialistSpec(
@@ -82,7 +85,7 @@ async def run_specialist(
         instructions=(
             f"You are the {spec.name} specialist. Interpret {spec.focus} Report risk factors and "
             "conflicting signals, and cite the evidence ids behind each claim. Do not recommend "
-            "GO, CAUTION or NO-GO."
+            "GO, CAUTION or NO-GO." + tide_note(items)
         ),
         plan=plan,
         allowed_ids=[e.id for e in items],

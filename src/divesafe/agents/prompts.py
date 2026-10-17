@@ -13,9 +13,15 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from divesafe.domain import DivePlan, EvidenceItem, effective_quality, observation_from_evidence
+from divesafe.domain import (
+    DataCategory,
+    DivePlan,
+    EvidenceItem,
+    effective_quality,
+    observation_from_evidence,
+)
 
-PROMPT_VERSION = "2026-10-17.1"
+PROMPT_VERSION = "2026-10-17.2"
 OPEN_TAG = "<untrusted_data>"
 CLOSE_TAG = "</untrusted_data>"
 MAX_STRING = 4000
@@ -121,6 +127,18 @@ def agent_view(items: Sequence[Any]) -> list[dict[str, Any]]:
     return [
         {k: v for k, v in i.model_dump(mode="json").items() if k != "confidence"} for i in items
     ]
+
+
+TIDE_NOTE = (
+    " NOTE: tide items give only the predicted height and time of high and low water at one "
+    "station, not at the dive site. They are not current, slack-water or flow-timing evidence: "
+    "never infer current speed, direction, slack water or flow timing from tide times or heights."
+)
+
+
+def tide_note(items: Sequence[EvidenceItem]) -> str:
+    """Trusted wording, placed outside the untrusted block, when any tide item is present."""
+    return TIDE_NOTE if any(e.category is DataCategory.TIDES for e in items) else ""
 
 
 def missing_note(missing: Sequence[str]) -> str:

@@ -92,6 +92,10 @@ class Settings(BaseSettings):
             raise ValueError("DIVESAFE_MET_API_TOKEN has an unexpected shape")
         return value
 
+    # PHN e-Tide tide predictions (ADR 0021). Off until the ADR is accepted and PHN's wording is on
+    # file: every enabled deployment sends POSTs to an undocumented government endpoint.
+    phn_etide_enabled: bool = False
+
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)
     # Path to a reviewed ruleset file of signed-off limits (docs/domain-validation). Unset = none.
     ruleset_path: Path | None = None

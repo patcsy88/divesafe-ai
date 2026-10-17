@@ -53,13 +53,16 @@ def _plan() -> DivePlan:
 
 
 def test_tide_items_have_no_typed_reading() -> None:
+    assert _items()
     for item in _items():
         assert observation_from_evidence(item) is None
 
 
 def test_tide_items_reach_the_agents_as_a_prediction_that_is_not_a_current() -> None:
-    for payload in evidence_payload(_items()):
-        assert payload.get("conditions") != {}
+    payloads = evidence_payload(_items())
+    assert payloads
+    for payload in payloads:
+        assert "conditions" not in payload and "value" in payload
         assert payload["category"] == "tides" and payload["data_kind"] == "prediction"
         assert payload["is_forecast"] is True and payload["quality"] == "degraded"
         assert payload["upstream_known"] is False
@@ -68,10 +71,12 @@ def test_tide_items_reach_the_agents_as_a_prediction_that_is_not_a_current() -> 
         assert "not the dive site" in value["spatial_scope"]
         assert value["tide"]["unit"] == "m" and value["tide"]["extremes"]
         assert "no current speed" in " ".join(payload["quality_notes"])
-        assert "current_speed" not in json.dumps(value) and "slack" not in value["tide"]
+        assert "current_speed" not in json.dumps(value)
+        assert "slack" not in json.dumps(value).replace(value["not_a_current"], "")
 
 
 def test_no_tide_value_uses_a_current_or_hourly_key() -> None:
+    assert _items()
     for item in _items():
         assert "variables" not in item.value and "units" not in item.value
         assert not any("current" in key and key != "not_a_current" for key in item.value)
@@ -89,7 +94,7 @@ def _result(rules, *, may_support_go: bool = False):  # type: ignore[no-untyped-
     return engine.assess(_plan(), list(_items()), NOW)
 
 
-def test_tide_evidence_alone_never_gives_go_or_caution_under_the_placeholders() -> None:
+def test_regression_tide_evidence_alone_never_gives_go_or_caution_under_the_placeholders() -> None:
     result = _result(list(placeholder_rules()))
     assert result.recommendation not in (Recommendation.GO, Recommendation.CAUTION)
     tidal = [r for r in result.rule_results if r.factor is RiskFactorKind.TIDAL_CURRENT]
@@ -170,3 +175,43 @@ def test_the_default_connector_refuses_a_window_beyond_the_horizon_so_no_item_ex
         asyncio.run(
             PhnEtideConnector(_Getter()).fetch(TIOMAN_ISLAND, far, far + timedelta(hours=2), NOW)
         )
+
+
+def test_a_dive_across_midnight_needs_both_day_items() -> None:
+    """23:30 to 00:30 MYT touches two calendar days; one day item alone must not cover it."""
+    start = datetime(2026, 10, 17, 15, 30, tzinfo=UTC)  # 23:30 MYT
+    plan = DivePlan(
+        site_id=TIOMAN_ISLAND.id, planned_start=start, planned_duration_minutes=60, max_depth_m=18
+    )
+    payload = json.loads(json.dumps(FIXTURE))
+    # SYNTHETIC: the recorded day re-dated to the 18th (not a recording).
+    block = json.loads(json.dumps(FIXTURE["current_day"]))
+    label = "18-Oct-26"
+    block["date"] = "18 October 2026"
+    for row in block["data"]:
+        row["date"] = label
+    for entry in block["MAX_LOW_Tide"]["HL"]:
+        entry["date"] = label
+    payload["prev_day"] = block
+
+    class _Two:
+        async def get_json(self, url: str, params: object) -> object:
+            return payload
+
+    both = asyncio.run(
+        PhnEtideConnector(_Two()).fetch(TIOMAN_ISLAND, start, start + timedelta(hours=1), NOW)
+    ).items
+    assert len(both) == 2
+    policy = EvidencePolicy(frozenset({DataCategory.TIDES}), timedelta(hours=1))
+    engine = RiskRulesEngine(
+        list(placeholder_rules()),
+        policy,
+        "synthetic",
+        required_factors=frozenset({RiskFactorKind.TIDAL_CURRENT}),
+    )
+    one_day = engine.assess(plan, [both[0]], NOW)
+    assert any("does not cover" in r.rationale for r in one_day.rule_results)
+    assert one_day.recommendation is Recommendation.INSUFFICIENT_EVIDENCE
+    two_days = engine.assess(plan, list(both), NOW)
+    assert not any("does not cover" in r.rationale for r in two_days.rule_results)
+    assert two_days.recommendation is Recommendation.INSUFFICIENT_EVIDENCE

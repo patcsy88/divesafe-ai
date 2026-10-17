@@ -16,6 +16,7 @@ from divesafe.agents.prompts import (
     build_user_message,
     evidence_payload,
     missing_note,
+    tide_note,
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import ScenarioOutput
@@ -53,6 +54,7 @@ async def _one(
             "conflicting signals, forecast uncertainty, data freshness and expected trend. "
             "Summarise concisely with evidence ids. Do not decide whether the dive is safe."
             + missing_note(missing)
+            + tide_note(evidence)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

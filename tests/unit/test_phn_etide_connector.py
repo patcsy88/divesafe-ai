@@ -129,13 +129,13 @@ def test_extremes_are_phns_own_list_with_times_at_plus_eight() -> None:
 
 def test_the_series_is_dropped_and_the_value_says_it_is_not_a_current() -> None:
     (item,) = _run().items
-    assert set(item.value) >= {"tide", "not_a_current", "spatial_scope", "source_statement"}
+    assert set(item.value) >= {"tide", "not_a_current", "spatial_scope", "attribution"}
     assert "data" not in item.value and "graph_y_axis" not in item.value
     assert "no current speed" in item.value["not_a_current"]
     assert "not the dive site" in item.value["spatial_scope"]
     notes = " ".join(item.quality_notes)
     assert "no current speed" in notes and "inferred" in notes and "not on file" in notes
-    assert "Pusat Hidrografi Nasional" in item.value["source_statement"]
+    assert "Pusat Hidrografi Nasional" in item.value["attribution"]
 
 
 def test_the_value_is_not_stored_under_a_key_any_rule_or_observation_reads() -> None:
@@ -329,7 +329,46 @@ def test_a_duplicate_extreme_is_refused() -> None:
     _fails(_mut(dup), "time order")
 
 
-@pytest.mark.parametrize("stat", [2, -1, "1", None, True, 1.5])
+def test_a_dropped_high_low_pair_is_refused_as_an_incomplete_list() -> None:
+    """Alternation holds and every kept entry matches, so only the completeness check fires."""
+
+    def drop_a_pair(block: dict[str, Any]) -> None:
+        hl = block["MAX_LOW_Tide"]["HL"]
+        block["MAX_LOW_Tide"]["HL"] = [hl[0], hl[3]]
+
+    _fails(_mut(drop_a_pair), "no high or low is listed")
+
+
+def test_a_dropped_first_or_last_extreme_is_refused_as_an_incomplete_list() -> None:
+    for keep in (slice(1, None), slice(0, -1)):
+
+        def drop(block: dict[str, Any], keep: slice = keep) -> None:
+            block["MAX_LOW_Tide"]["HL"] = block["MAX_LOW_Tide"]["HL"][keep]
+
+        _fails(_mut(drop), "no high or low is listed")
+
+
+def _inverted_day(day: int) -> dict[str, Any]:
+    """SYNTHETIC: the re-dated day turned upside down, so it starts with a low."""
+    block = _redated(day)
+    for row in block["data"]:
+        row["height"] = round(3.0 - row["height"], 2)
+    for entry in block["MAX_LOW_Tide"]["HL"]:
+        entry["height"] = round(3.0 - entry["height"], 2)
+        entry["stat"] = 1 - entry["stat"]
+    return block
+
+
+def test_highs_and_lows_must_alternate_across_midnight() -> None:
+    payload = _payload()
+    payload["prev_day"] = _inverted_day(18)  # the 17th ends on a low; this starts on a low
+    two_days = (TODAY_START, TODAY_START + timedelta(days=1))
+    _fails(payload, "across midnight", start=two_days[0], end=two_days[1])
+    good = _three_days()
+    assert len(_run(good, start=two_days[0], end=two_days[1]).items) == 2
+
+
+@pytest.mark.parametrize("stat", [2, -1, "1", None, True, 1.5, 1.0, 0.0])
 def test_the_high_low_flag_must_be_zero_or_one(stat: object) -> None:
     def odd(block: dict[str, Any]) -> None:
         block["MAX_LOW_Tide"]["HL"][0]["stat"] = stat
@@ -518,6 +557,62 @@ def test_the_get_getter_still_works_through_the_shared_reader(
         UrllibJsonGetter().get_json("https://api.open-meteo.com/v1/x", {"a": "b"})
     ) == {"ok": 1}
     assert seen["method"] == "GET" and seen["data"] is None and seen["url"].endswith("?a=b")
+
+
+def test_deeply_nested_json_is_a_response_error_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _spy_open(monkeypatch, b"[" * 100 + b"]" * 100)
+    with pytest.raises(ConnectorResponseError, match="nested too deeply"):
+        asyncio.run(UrllibFormPostJsonGetter().get_json(ENDPOINT, {}))
+    _spy_open(monkeypatch, b'{"a":' * 100 + b"1" + b"}" * 100)
+    with pytest.raises(ConnectorResponseError, match="nested too deeply"):
+        asyncio.run(UrllibJsonGetter().get_json("https://api.open-meteo.com/v1/x", {}))
+
+
+def test_ordinary_nesting_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _spy_open(monkeypatch, json.dumps(FIXTURE).encode())
+    assert asyncio.run(UrllibFormPostJsonGetter().get_json(ENDPOINT, {})) == FIXTURE
+
+
+def test_a_payload_too_deep_to_copy_becomes_a_response_error_through_the_cache() -> None:
+    deep: Any = []
+    for _ in range(5000):
+        deep = [deep]
+
+    class _Plain:
+        async def get_json(self, url: str, params: Any) -> object:
+            return deep
+
+    getter = CachingRateLimitedGetter(
+        _Plain(), min_interval_seconds={"etide.hydro.gov.my": 0.0}, quotas=(PHN_ETIDE_QUOTA,)
+    )
+    with pytest.raises(ConnectorResponseError, match="nested too deeply"):
+        asyncio.run(getter.get_json(ENDPOINT, {"location": "pulau_tioman"}))
+
+
+def test_a_port_or_userinfo_in_the_url_is_refused() -> None:
+    getter = UrllibFormPostJsonGetter()
+    for url in (
+        "https://etide.hydro.gov.my:444/functions/q_functions.php",
+        "https://user:pw@etide.hydro.gov.my/functions/q_functions.php",
+        "https://etide.hydro.gov.my:notaport/x",
+    ):
+        with pytest.raises(ConnectorTransportError, match="port or userinfo"):
+            asyncio.run(getter.get_json(url, {}))
+
+
+def test_the_get_getter_cannot_be_built_for_the_phn_host() -> None:
+    for hosts in (PHN_HOSTS, PHN_HOSTS | ALLOWED_HOSTS):
+        with pytest.raises(ValueError, match="PHN"):
+            UrllibJsonGetter(allowed_hosts=hosts)
+
+
+def test_the_post_getter_keeps_no_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _spy_open(monkeypatch, b"{}")
+    asyncio.run(UrllibFormPostJsonGetter().get_json(ENDPOINT, {}))
+    assert not any(issubclass(h, urllib.request.HTTPCookieProcessor) for h in seen["handlers"])
+    assert "cookie" not in seen["headers"]
 
 
 # --- budget ----------------------------------------------------------------------------------

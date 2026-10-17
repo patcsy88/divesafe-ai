@@ -11,6 +11,7 @@ from divesafe.agents.prompts import (
     build_user_message,
     evidence_payload,
     missing_note,
+    tide_note,
 )
 from divesafe.agents.runner import call_structured
 from divesafe.agents.schemas import ProposalOutput
@@ -43,7 +44,9 @@ async def propose(
             "uncertainties. "
             f"The deterministic result is {deterministic.value} and is authoritative: you may "
             "agree or be more cautious, never less cautious. Under missing, stale or "
-            "contradictory evidence prefer INSUFFICIENT EVIDENCE." + missing_note(missing)
+            "contradictory evidence prefer INSUFFICIENT EVIDENCE."
+            + missing_note(missing)
+            + tide_note(evidence)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

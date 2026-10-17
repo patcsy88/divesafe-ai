@@ -41,6 +41,7 @@ ENDPOINT = "https://etide.hydro.gov.my/functions/q_functions.php"
 SOURCE = "phn-etide-prediction"
 SOURCE_VERSION = "undocumented"
 PHN_LINEAGE = "phn:etide-tide-prediction"
+ATTRIBUTION = "Pusat Hidrografi Nasional (e-Tide)"
 MALAYSIA_TIME = timezone(timedelta(hours=8), "MYT")
 HORIZON_DAYS = 3  # today and the next two: what the endpoint returned (ADR 0021)
 SLOTS = 144  # 10-minute grid over one day
@@ -151,12 +152,13 @@ def _extremes(block: dict[str, object], heights: list[float], day: date) -> list
     if not isinstance(listed, list) or not 1 <= len(listed) <= MAX_EXTREMES:
         raise ConnectorResponseError("the list of highs and lows is missing or the wrong size")
     out: list[dict[str, object]] = []
+    slots: list[tuple[int, int]] = []
     previous_minute = -1
     previous_stat: int | None = None
     for raw in listed:
         entry = as_dict(raw, "high/low entry")
         stat = entry.get("stat")
-        if isinstance(stat, bool) or stat not in (0, 1):
+        if type(stat) is not int or stat not in (0, 1):
             raise ConnectorResponseError("a high/low entry is neither high nor low")
         if _row_date(entry.get("date")) != day:
             raise ConnectorResponseError("a high/low entry is for a different day")
@@ -174,6 +176,7 @@ def _extremes(block: dict[str, object], heights: list[float], day: date) -> list
         if not math.isclose(heights[slot], height, abs_tol=1e-9) or heights[slot] != extreme:
             raise ConnectorResponseError("a high/low entry does not match the height series")
         previous_minute, previous_stat = minute, stat
+        slots.append((slot, stat))
         moment = datetime.combine(day, time(minute // 60, minute % 60), tzinfo=MALAYSIA_TIME)
         out.append(
             {
@@ -182,7 +185,23 @@ def _extremes(block: dict[str, object], heights: list[float], day: date) -> list
                 "height_m": height,
             }
         )
+    _require_no_unlisted_turn(heights, slots)
     return out
+
+
+def _require_no_unlisted_turn(heights: list[float], slots: list[tuple[int, int]]) -> None:
+    """Between listed extremes the series must run one way, so a dropped high or low is refused
+    instead of passing as a complete day. No tolerance is applied."""
+    edges = [(0, None), *slots, (SLOTS - 1, None)]
+    for (start, start_stat), (end, end_stat) in zip(edges, edges[1:], strict=False):
+        rising = end_stat == 1 if end_stat is not None else start_stat == 0
+        steps = [
+            b - a for a, b in zip(heights[start:end], heights[start + 1 : end + 1], strict=True)
+        ]
+        if not all(s >= 0 for s in steps) if rising else not all(s <= 0 for s in steps):
+            raise ConnectorResponseError(
+                "the series turns where no high or low is listed; the list may be incomplete"
+            )
 
 
 def _check_clock(current: dict[str, object], now: datetime) -> None:
@@ -244,6 +263,7 @@ class PhnEtideConnector:
         _check_clock(as_dict(body.get("current_day"), "current_day"), now)
 
         items: list[EvidenceItem] = []
+        previous_kind: object = None
         for offset in range((last - first).days + 1):
             day = first + timedelta(days=offset)
             name = _BLOCKS[(day - today).days]
@@ -252,6 +272,9 @@ class PhnEtideConnector:
                 raise ConnectorResponseError(f"{name} is not for the day it should be")
             heights = _series(block, day)
             extremes = _extremes(block, heights, day)
+            if previous_kind is not None and extremes[0]["kind"] == previous_kind:
+                raise ConnectorResponseError("highs and lows do not alternate across midnight")
+            previous_kind = extremes[-1]["kind"]
             start = datetime.combine(day, time.min, tzinfo=MALAYSIA_TIME)
             summary = [(e["time"], e["kind"], e["height_m"]) for e in extremes]
             digest = hashlib.sha256(f"{site.id}|{day}|{summary}".encode()).hexdigest()[:16]
@@ -277,7 +300,13 @@ class PhnEtideConnector:
                         "heights are above chart datum (LAT) per a note on the e-Tide page, "
                         "not endpoint documentation",
                         "the +08:00 time zone is inferred and checked only against our clock",
-                        "a prediction for one harbour point, not for the dive site",
+                        "a prediction for one PHN station, not for the dive site",
+                        "the response does not name its station; that it is for "
+                        f"{location} is assumed from the request",
+                        "an extreme at the very start or end of a day, or on a flat stretch, is "
+                        "checked against one side or an equal-height stretch only; its time is "
+                        "PHN's choice within that stretch",
+                        "retrieval time may be up to the cache lifetime (60 s) older than shown",
                         "use is by the owner's report of PHN's permission; its terms are not "
                         "on file",
                     ),
@@ -295,12 +324,15 @@ class PhnEtideConnector:
                     value={
                         "tide": {"datum": _DATUM, "unit": "m", "extremes": extremes},
                         "date": day.isoformat(),
-                        "location_id": location,
+                        "requested_location_id": location,
                         "data_type": "prediction",
-                        "spatial_scope": "PHN station for the named location, not the dive site",
+                        "spatial_scope": (
+                            f"assumed to be PHN's {location} station (from the request; the "
+                            "response does not name a station); not the dive site"
+                        ),
                         "temporal_scope": "one calendar day (+08:00)",
                         "not_a_current": _NOT_A_CURRENT,
-                        "source_statement": "Pusat Hidrografi Nasional (e-Tide)",
+                        "attribution": ATTRIBUTION,
                     },
                 )
             )

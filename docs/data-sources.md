@@ -24,7 +24,7 @@ source is verified and recorded here.
 | `weather`, `wind` | Forecast + observation | Surface conditions, trend |
 | `waves_swell` | Forecast + observation | Entry/exit and surface safety |
 | `currents` | Forecast + observation | Drift and exertion risk |
-| `tides` | Prediction (+ observed level) | Timing, slack windows |
+| `tides` | Prediction (+ observed level) | Timing of high and low water (PHN gives heights and times only, not slack windows) |
 | `sea_temperature` | Forecast + observation | Thermal protection |
 | `marine_warnings` | Official notices | Hard constraints |
 | `historical_observations` | Archive | Prediction, calibration |
@@ -281,10 +281,10 @@ request at data.gov.my/data-request; (2) until answered, nothing is built.
 
 **TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. The owner withdrew this route on 2026-10-17 ("Ignore TICON"); [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) is kept as a record only.
 
-**PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (proposed, not yet reviewed). No tidal-stream data.
+**PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (proposed, not yet reviewed). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); it is reviewed by both reviewers with no blockers, and ADR 0021 stays proposed until the permission wording is on file.
 
-**Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
-credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
+**Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
+credential or licence was pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
 requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
 matters for Tioman, or if JUPEM data becomes available.
 
@@ -299,9 +299,9 @@ matters for Tioman, or if JUPEM data becomes available.
   and tidal-stream conditions at a dive site are not resolved.
 - **Open-Meteo's free tier forbids commercial use.** Fine for a capstone or research; a
   commercial deployment would need a paid plan or a different source.
-- **No verified source of tidal predictions.** `tides` evidence cannot be satisfied from a
-  verified machine-readable source yet, so any required-tides policy will correctly give
-  `INSUFFICIENT EVIDENCE`.
+- **No VALIDATED or documented source of tidal predictions.** The PHN e-Tide connector (off by
+  default) supplies DEGRADED predictions only, so a required-tides policy still gives
+  `INSUFFICIENT EVIDENCE` for GO or CAUTION.
 - data.gov.my text values are in Bahasa Melayu; a connector must map them explicitly and treat
   unmapped values as invalid, not guess.
 
