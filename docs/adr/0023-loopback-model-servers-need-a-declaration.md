@@ -66,50 +66,42 @@ the first test set and were closed with tests; all nine are now caught.
 
 ## Not solved
 
-- **Containers (the intended deployment, 2026-10-18).** DiveSafe AI is to be deployed in Docker
-  (`docker/docker-compose.yml`). Separately, the model server is on the LAN at
-  `http://<lan-host>:8317/v1`. What that server is, and where it sends prompts, is **not
-  known to this ADR**: it may run the model itself or forward to a hosted one. Consequences,
-  checked against the code:
+- **Containers and the intended model host (owner, 2026-10-18).** DiveSafe AI is to be deployed
+  in Docker (`docker/docker-compose.yml`). The model host is `https://wall-e.ch30ng.org`. What
+  that server is, and where it sends prompts, is **not known to this ADR**: it may run the model
+  itself or forward to a hosted one. Consequences, checked against the code:
   - Inside the container, loopback is the container itself, so `localhost` can never reach a
-    model on the host or elsewhere. The LAN address is not loopback, so the provider counts as
-    remote (`external` true): it needs `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, the declaration
+    model elsewhere. A named host is not loopback, so the provider counts as remote (`external`
+    true): it needs `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, the declaration
     `DIVESAFE_LLM_SERVER_IS_LOCAL` is refused, and the egress basis is `remote_external_opt_in`.
-  - **A LAN model that the operator knows forwards nowhere still cannot be declared local.** The
-    declaration is accepted for loopback only, so a self-hosted model on another machine is
-    treated like a hosted one. That is conservative (it can only withhold more), and it will
-    matter for ADR 0022's rule that only `egress_permitted` documents go to an external
-    provider. Whether a "trusted LAN host" declaration should exist is an open owner decision;
-    it is not built.
-  - The host must be listed in `DIVESAFE_LLM_ALLOWED_HOSTS` (`<lan-host>`).
-  - **The OpenAI-compatible adapter refuses plain http to a non-loopback host** ("a remote model
-    server must use https"), so the `http://` URL is refused today. Only the Ollama adapter has
-    a plain-http allow-list (`DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`). Over plain http the prompt and
-    the bearer key would cross the LAN unencrypted.
-  - **Owner choice (2026-10-18): serve https on the model server.** No code change. This was
-    chosen before the address was corrected; the owner has since confirmed the address is `<lan-host>`, and the https choice still needs confirming. The
-    server needs a certificate whose subject alternative names include the IP `<lan-host>`.
-    The adapter verifies the certificate and host name with `ssl.create_default_context()`,
-    which reads `SSL_CERT_FILE`; for a private CA, mount the CA certificate into the API
-    container read-only and set `SSL_CERT_FILE` to it. **Caution:** that file replaces the default
-    trust bundle for the whole process, so if the weather and tide connectors verify through the
-    same default context (not checked) they would stop trusting their public hosts. A bundle that
-    holds the system CAs plus the private CA avoids that; a setting that trusts the extra CA for
-    the model adapter only would be cleaner but is new config (needs an ADR amendment and both
-    reviewers). The Dockerfile base image and CA bundle path have not been read. Settings: `DIVESAFE_LLM_PROVIDER=openai_compatible`,
-    `DIVESAFE_LLM_BASE_URL=https://<lan-host>:8317/v1`,
-    `DIVESAFE_LLM_ALLOWED_HOSTS=<lan-host>`, `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, no
-    `DIVESAFE_LLM_SERVER_IS_LOCAL`. Not yet tried against the real server, and the compose file
-    does not yet mount a certificate. Never disable verification to get past a certificate error.
-  - The container must be able to route to the LAN address; this was not checked.
-  - The peer check applies only to loopback hosts; for a LAN host the connected address is not
-    verified beyond the allow-listed host name.
+  - **A model the operator knows forwards nowhere still cannot be declared local** unless it is
+    on loopback. A self-hosted model on another machine is treated like a hosted one. That is
+    conservative (it can only withhold more), and it will matter for ADR 0022's rule that only
+    `egress_permitted` documents go to an external provider. Whether a "trusted host"
+    declaration should exist is an open owner decision; it is not built.
+  - The host must be listed in `DIVESAFE_LLM_ALLOWED_HOSTS` (`wall-e.ch30ng.org`).
+  - It is https, which the OpenAI-compatible adapter requires for a non-loopback host. The
+    adapter verifies the certificate and host name with `ssl.create_default_context()`, so the
+    server needs a certificate the container's default trust store accepts. Never disable
+    verification to get past a certificate error.
+  - **Settings:** `DIVESAFE_LLM_PROVIDER=openai_compatible`, `DIVESAFE_ALLOW_EXTERNAL_LLM=true`,
+    `DIVESAFE_LLM_ALLOWED_HOSTS=wall-e.ch30ng.org`, no `DIVESAFE_LLM_SERVER_IS_LOCAL`, and
+    `DIVESAFE_LLM_BASE_URL` set to the server's API root. The adapter appends `/chat/completions`
+    to the base URL's path, so whether the root is `https://wall-e.ch30ng.org` or ends in `/v1`
+    is **not yet known**. The model name (`DIVESAFE_LLM_MODEL`) and the API key (environment
+    only) are also needed.
+  - **Not checked:** that the name resolves from inside the container, that the certificate is
+    accepted by the container's trust store, and what is served there. No call has been made.
+  - The peer check applies only to loopback hosts; for a named host the connected address is
+    not verified beyond the allow-listed host name and the certificate.
 - **Port squatting.** "On this machine" is not "run by the operator". On a shared host another
   local user can bind the model port while the server is down and receive prompts and the bearer
   key over http. https with a trusted certificate reduces this; nothing here prevents it.
 - **Tunnels.** An SSH tunnel or `kubectl port-forward` puts a remote model behind a loopback
   address. Declaring it local would be wrong; the start-up message and `.env.example` name this.
-- **Certificate trust** follows the environment (`SSL_CERT_FILE`, `SSL_CERT_DIR`), as before.
+- **Certificate trust** follows the environment (`SSL_CERT_FILE`, `SSL_CERT_DIR`), as before. A
+  private CA would need either a combined bundle or a model-adapter-only setting; neither is built
+  and neither is needed for a publicly trusted certificate.
 - **The fake exemption** assumes the scripted replies are strings or a test-only callable. The
   `fake` setting returns before the check anyway.
 - **Two mutations survive.** (1) Removing the IPv4-mapped conversion in `is_loopback` is
