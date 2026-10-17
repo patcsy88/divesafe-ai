@@ -74,7 +74,7 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
    | Only future-effective or only draft versions | nothing | not in force (note) |
 
    Whatever the case, a site that gets zero items and no issue gets a note (decision 14).
- chunks are ordered by (document id, version, chunk number) in SQL. The
+4. **Order and bound:** chunks are ordered by (document id, version, chunk number) in SQL. The
    bound is decision 12.
 
 ### Item shape and what the engine does with it
