@@ -66,9 +66,24 @@ the first test set and were closed with tests; all nine are now caught.
 
 ## Not solved
 
-- **Containers.** Inside a container, loopback is the container itself. A model on the host or in
-  a sidecar is not on loopback, so it counts as remote and needs the external opt-in; it cannot be
-  declared local.
+- **Containers (the intended deployment, 2026-10-18).** The API runs in Docker
+  (`docker/docker-compose.yml`) and the model host is a separate machine on the LAN at
+  `http://<lan-host>:8317/v1`. Consequences, checked against the code:
+  - Inside the container, loopback is the container itself, so `localhost` can never reach a
+    model on the host or elsewhere. The LAN address is not loopback, so the provider counts as
+    remote (`external` true): it needs `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, the declaration
+    `DIVESAFE_LLM_SERVER_IS_LOCAL` is refused, and the egress basis is `remote_external_opt_in`.
+    That is the true description: the server on port 8317 is the proxy used on 2026-10-17, which
+    forwards prompts to a hosted model.
+  - The host must be listed in `DIVESAFE_LLM_ALLOWED_HOSTS` (`<lan-host>`).
+  - **The OpenAI-compatible adapter refuses plain http to a non-loopback host** ("a remote model
+    server must use https"), so this URL is refused today. Only the Ollama adapter has a
+    plain-http allow-list (`DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`). Either the proxy serves https
+    with a certificate the container trusts (a certificate for an IP address needs an IP
+    subject alternative name), or a decision is needed on a plain-http allow-list for this
+    adapter. Over plain http the prompt and the bearer key cross the LAN unencrypted.
+  - The peer check applies only to loopback hosts; for a LAN host the connected address is not
+    verified beyond the allow-listed host name.
 - **Port squatting.** "On this machine" is not "run by the operator". On a shared host another
   local user can bind the model port while the server is down and receive prompts and the bearer
   key over http. https with a trusted certificate reduces this; nothing here prevents it.
