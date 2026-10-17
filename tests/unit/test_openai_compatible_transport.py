@@ -169,26 +169,29 @@ def test_the_tls_context_verifies_certificates_and_host_names(
     from divesafe.models import openai_compatible as oc
 
     seen: list[ssl.SSLContext] = []
-    real = oc.urllib.request.HTTPSHandler
+    real_build = oc.urllib.request.build_opener
 
-    class _Spy(real):  # type: ignore[valid-type, misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            seen.append(kwargs["context"])
-            super().__init__(*args, **kwargs)
+    def recording(*handlers: Any) -> Any:
+        seen.extend(h._context for h in handlers if hasattr(h, "_context"))
+        return real_build(*handlers)
 
-    monkeypatch.setattr(oc.urllib.request, "HTTPSHandler", _Spy)
-    with pytest.raises(OpenAICompatibleError):
-        asyncio.run(OpenAICompatibleProvider("m", "http://127.0.0.1:1/v1").complete(REQUEST))
-    assert seen and seen[0].verify_mode == ssl.CERT_REQUIRED and seen[0].check_hostname
+    monkeypatch.setattr(oc.urllib.request, "build_opener", recording)
+    for url in ("http://127.0.0.1:1/v1", "https://llm.example.org/v1"):
+        seen.clear()
+        provider = OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"llm.example.org"}))
+        with pytest.raises(OpenAICompatibleError):
+            asyncio.run(provider.complete(REQUEST))
+        assert seen and all(c.verify_mode == ssl.CERT_REQUIRED and c.check_hostname for c in seen)
 
 
+@pytest.mark.safety
 def test_plain_http_is_refused_if_the_connection_does_not_land_on_loopback(
     server: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from divesafe.models import openai_compatible as oc
+    from divesafe.models import loopback as lb
 
     provider = OpenAICompatibleProvider("m", server, api_key=SecretStr(KEY))  # built as loopback
-    monkeypatch.setattr(oc, "is_loopback", lambda host: False)  # but the peer check disagrees
+    monkeypatch.setattr(lb, "is_loopback", lambda host: False)  # but the peer check disagrees
     with pytest.raises(OpenAICompatibleError, match="not on this machine"):
         asyncio.run(provider.complete(REQUEST))
     assert _Handler.seen == []  # nothing, including the key, was sent

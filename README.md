@@ -55,6 +55,10 @@ ruff check . && mypy        # lint and types
 uvicorn divesafe.api.app:create_app --factory --reload
 ```
 
+> **Upgrade note (ADR 0023):** a loopback model server (`ollama`, `openai_compatible`) now needs
+> `DIVESAFE_LLM_SERVER_IS_LOCAL=true` or `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, or the application
+> refuses to start. The default (`fake`) is unaffected.
+
 With Docker (API + PostgreSQL/pgvector):
 
 ```bash

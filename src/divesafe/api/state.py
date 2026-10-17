@@ -30,6 +30,7 @@ from divesafe.data import (
 )
 from divesafe.domain import DataCategory, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
+from divesafe.models.egress import check_egress
 from divesafe.orchestration import (
     RulesetError,
     load_ruleset_bytes,
@@ -176,14 +177,15 @@ def build_provider(settings: Settings) -> LLMProvider | None:
         logger.warning("agent stage is OFF (DIVESAFE_LLM_PROVIDER=fake)")
         return None
     provider = create_provider(settings)
-    if provider.external and not settings.allow_external_llm:
-        raise RuntimeError(
-            "this LLM provider sends evidence and plan data off-machine; "
-            "set DIVESAFE_ALLOW_EXTERNAL_LLM=true to accept that"
-        )
+    basis = check_egress(provider, settings)
     logger.warning(
         "agent stage is ON",
-        extra={"provider": provider.name, "model": provider.model, "external": provider.external},
+        extra={
+            "provider": provider.name,
+            "model": provider.model,
+            "address_is_remote": provider.external,
+            "egress_basis": basis,
+        },
     )
     return provider
 

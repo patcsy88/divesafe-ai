@@ -4,7 +4,8 @@ The reply is streamed, so a proxy with an idle timeout does not cut off a slow a
 
 Never logs a request (it holds the whole prompt). Errors carry no prompt, response or URL
 content. Redirects are refused. A non-loopback server is treated as external, because the prompt
-leaves this machine. Plain http to a remote host is refused unless that exact hostname is in
+leaves this machine. A loopback address does not show the prompt stays here (ADR 0023). Plain
+http to a remote host is refused unless that exact hostname is in
 `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`; the prompt is then unencrypted on the network.
 """
 
@@ -13,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import http.client
-import ipaddress
 import json
+import ssl
 import threading
 import time
 import urllib.error
@@ -26,13 +27,18 @@ from typing import Any
 
 from divesafe.config.settings import Settings
 from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
+from divesafe.models.loopback import (
+    LoopbackHTTPHandler,
+    LoopbackHTTPSHandler,
+    NotOnThisMachineError,
+    is_loopback,
+)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 MAX_RESPONSE_BYTES = 1024 * 1024
 SOCKET_TIMEOUT_SECONDS = 15.0
 MAX_CONCURRENT_CALLS = 4
 _CHUNK = 64 * 1024
-_LOOPBACK_NAMES = frozenset({"localhost"})
 
 Transport = Callable[[str, bytes, float], bytes]
 
@@ -43,15 +49,6 @@ class OllamaError(RuntimeError):
 
 class OllamaTokenLimitError(OllamaError, TokenLimitError):
     """The reply stopped at the output-token limit."""
-
-
-def is_loopback(host: str) -> bool:
-    if host in _LOOPBACK_NAMES:
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -68,11 +65,22 @@ def _post(
     *,
     slots: threading.BoundedSemaphore,
     socket_timeout: float | None = None,
+    loopback: bool,
 ) -> bytes:
     """POST with no proxy (environment proxies would carry the prompt elsewhere), no redirects, a
-    size cap and a total deadline. `timeout` is the whole-call budget in seconds."""
+    size cap and a total deadline. `timeout` is the whole-call budget in seconds. For a loopback
+    host the connected peer is checked before anything is sent (ADR 0023)."""
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    tls = ssl.create_default_context()  # verifies the certificate and the host name
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect,
+        *(
+            [LoopbackHTTPHandler(), LoopbackHTTPSHandler(context=tls)]
+            if loopback
+            else [urllib.request.HTTPSHandler(context=tls)]
+        ),
+    )
     request = urllib.request.Request(  # noqa: S310 (scheme and host checked at construction)
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
@@ -99,6 +107,8 @@ def _post(
                     raise OllamaError("the Ollama response was too large")
     except OllamaError:
         raise
+    except NotOnThisMachineError:
+        raise OllamaError("the model server is not on this machine") from None
     except urllib.error.HTTPError as exc:
         exc.close()
         raise OllamaError("the Ollama server could not be reached or refused the request") from None
@@ -243,6 +253,7 @@ class OllamaProvider:
             _post,
             slots=threading.BoundedSemaphore(max_concurrent_calls),
             socket_timeout=first_byte_timeout_seconds,
+            loopback=loopback,
         )
 
     def _body(self, request: LLMRequest) -> bytes:

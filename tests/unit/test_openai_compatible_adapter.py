@@ -271,8 +271,12 @@ def test_a_remote_server_needs_the_allow_list_and_the_external_opt_in() -> None:
     assert build_provider(opted_in) is not None
 
 
-def test_a_loopback_server_needs_no_opt_in() -> None:
-    assert build_provider(_settings(llm_base_url="http://127.0.0.1:8000/v1")) is not None
+def test_a_loopback_server_needs_a_declaration_or_the_opt_in() -> None:
+    url = "http://127.0.0.1:8000/v1"
+    with pytest.raises(RuntimeError, match="loopback"):
+        build_provider(_settings(llm_base_url=url))
+    assert build_provider(_settings(llm_base_url=url, llm_server_is_local=True)) is not None
+    assert build_provider(_settings(llm_base_url=url, allow_external_llm=True)) is not None
 
 
 @pytest.mark.parametrize(

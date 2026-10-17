@@ -16,6 +16,8 @@ and no new dependency is needed (standard library only, as in ADR 0016).
   prefix such as `/v1`. The model name is required (`DIVESAFE_LLM_MODEL`).
 - **Egress rules.**
   - A loopback host (`localhost`, `127.0.0.0/8`, `::1`) may use http or https and is not external.
+    Amended by ADR 0023: it is still refused at start-up unless `DIVESAFE_LLM_SERVER_IS_LOCAL=true`
+    or `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, and the peer-address check now covers https too.
   - Any other host must use **https** and be listed by exact name in `DIVESAFE_LLM_ALLOWED_HOSTS`
     (no wildcards, IP addresses, all-digit names, schemes or paths). There is no plain-http
     exception for this adapter. A listed host is external and needs

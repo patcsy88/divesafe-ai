@@ -132,7 +132,9 @@ method exists. LLM self-estimates are uncalibrated and never shown as confidence
 - Validate every boundary with Pydantic; bound sizes, depth and counts; https and host allow-lists
   for outbound calls; honour provider limits and licences (non-commercial for Open-Meteo).
 - Hosted LLM providers need explicit opt-in (`DIVESAFE_ALLOW_EXTERNAL_LLM`); send only public
-  evidence and plan fields, never identities or decision text.
+  evidence and plan fields, never identities or decision text. A loopback model server also needs
+  the operator's declaration (`DIVESAFE_LLM_SERVER_IS_LOCAL`, a statement the software cannot
+  check) or that opt-in, because a local proxy or tunnel can forward prompts off the machine (ADR 0023).
 
 ## 13. Agent responsibilities
 

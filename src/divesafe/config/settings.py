@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     llm_base_url: AnyHttpUrl | None = None
     # Hosted providers receive evidence and plan data. Off unless explicitly allowed.
     allow_external_llm: bool = False
+    # The operator's statement that a loopback model server runs the model on this machine and
+    # forwards prompts nowhere (ADR 0023). A loopback address alone proves nothing: a local proxy
+    # can forward everything to a hosted model. Never inferred from the URL, and it cannot be
+    # combined with DIVESAFE_ALLOW_EXTERNAL_LLM or used with a non-loopback server.
+    llm_server_is_local: bool = False
     # Comma-separated exact hostnames of non-loopback Ollama servers that may be used over plain
     # http (ADR 0016). The prompt then crosses the network unencrypted. Empty: https is required.
     ollama_plain_http_hosts: str | None = None
@@ -154,6 +159,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DIVESAFE_RUN_DEADLINE_SECONDS must cover the LLM stage timeout plus the "
                 f"{CONNECTOR_BUDGET_SECONDS:.0f} s connector budget plus {RUN_MARGIN_SECONDS:.0f} s"
+            )
+        # applies in every environment, not only production
+        if self.llm_server_is_local and self.allow_external_llm:
+            raise ValueError(
+                "DIVESAFE_LLM_SERVER_IS_LOCAL and DIVESAFE_ALLOW_EXTERNAL_LLM contradict each "
+                "other; set only one"
             )
         self.llm_allowed_host_set()
         plain_hosts = self.plain_http_host_set()

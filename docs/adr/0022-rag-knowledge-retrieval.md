@@ -293,9 +293,11 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
       available for this domain" when everything was withheld, with tests for all-withheld and
       partly withheld. The record lists withheld items by id in `withheld_knowledge`, never by
       title (decision 14).
-    - The existing external-LLM opt-in is still bypassed by a loopback proxy (`state.py`,
-      AGENTS §12). Because the declaration now exists, **that fix is made in the same change as
-      this feature, or before any real plan data goes through a proxy**, whichever comes first.
+    - The existing external-LLM opt-in was bypassed by a loopback proxy (AGENTS §12). **ADR 0023
+      (proposed) fixes this**: a loopback server needs `DIVESAFE_LLM_SERVER_IS_LOCAL=true` or the
+      external opt-in, the two contradict each other, and the declaration is refused for a remote
+      server. This feature still needs that ADR accepted and built first, and it must also record
+      the declaration in `model_version` and use it in the knowledge egress filter.
 16. **What the record and the user see.** The stored item has two forms. The run form carries the
     text. The record form carries document id, version, chunk and `content_sha256`, which is the
     hash of the stored, NFC chunk text (the decision 13 definition, so it also exists for withheld
@@ -374,7 +376,7 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
   (the named person's consent).
 - Whether the corpus lives in the repository (default: no).
 - Whether reaching the per-run bound should be an issue (proposed) or a note.
-- The name and meaning of the new "model server is local and forwards nowhere" setting.
+- The setting is `DIVESAFE_LLM_SERVER_IS_LOCAL` (ADR 0023); confirm the name and meaning.
 - Whether a withdrawn higher version should hide the lower one (proposed, decision 3).
 
 ## Not solved
@@ -393,7 +395,7 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
 - Hidden text inside a source document the owner converted to plain text.
 - Authenticity of an approval is a process control (decision 11), as is the attestation that ids,
   sections and titles hold no personal names (decision 7).
-- **Release blocker, not built:** the existing external-LLM opt-in is bypassed by a loopback proxy
-  (decision 15). Code cannot enforce "before real plan data goes through a proxy", so this feature
-  does not ship until that fix does.
+- **Release blocker:** this feature does not ship until ADR 0023 (the loopback declaration) is
+  accepted and in place. Its code exists but is not yet reviewed. The declaration remains a
+  statement the software cannot check.
 - The table owner or a superuser can still change the corpus.

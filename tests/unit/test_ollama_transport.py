@@ -131,7 +131,7 @@ def test_too_many_calls_in_flight_are_refused(server: str) -> None:
     slots = threading.BoundedSemaphore(1)
     slots.acquire()
     with pytest.raises(OllamaError, match="in flight"):
-        mod._post(f"{server}/api/chat", b"{}", 0.1, slots=slots)
+        mod._post(f"{server}/api/chat", b"{}", 0.1, slots=slots, loopback=True)
 
 
 def test_the_concurrency_limit_is_small_and_each_provider_has_its_own_slots() -> None:

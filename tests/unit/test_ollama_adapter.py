@@ -154,7 +154,10 @@ def test_a_remote_server_needs_the_external_opt_in() -> None:
         build_provider(settings)
     allowed = settings.model_copy(update={"allow_external_llm": True})
     assert build_provider(allowed) is not None
-    assert build_provider(Settings(llm_provider="ollama", llm_model="m")) is not None
+    with pytest.raises(RuntimeError, match="loopback"):
+        build_provider(Settings(llm_provider="ollama", llm_model="m"))
+    declared = Settings(llm_provider="ollama", llm_model="m", llm_server_is_local=True)
+    assert build_provider(declared) is not None
 
 
 def test_thinking_is_switched_off_by_default() -> None:

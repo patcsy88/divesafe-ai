@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
+from tests.evaluation.egress_gate import egress_gate
 from tests.evaluation.harness import evaluate
 from tests.evaluation.tide_check import run_tide_check
 
@@ -33,6 +34,7 @@ from divesafe.models.openai_compatible import OpenAICompatibleProvider
 PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "ollama")
 # Read at import, before the per-test environment isolation in tests/conftest.py removes it.
 ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") == "true"
+SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") == "true"
 MODEL = os.environ.get("DIVESAFE_EVAL_MODEL") or os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
 pytestmark = [
     pytest.mark.integration,
@@ -52,7 +54,7 @@ def _sha() -> str:
     return out.stdout.strip() or "unknown"
 
 
-def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatibleProvider]]:
+def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatibleProvider], str]:
     assert MODEL is not None
     assert PROVIDER in ("ollama", "openai_compatible"), "DIVESAFE_EVAL_PROVIDER is not known"
     env = os.environ.get
@@ -88,15 +90,14 @@ def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatiblePr
         def make() -> OllamaProvider | OpenAICompatibleProvider:
             return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
 
-    if make().external and not ALLOW_EXTERNAL:
-        pytest.skip("a remote server needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
-    return budgets, make
+    basis = egress_gate(make(), allow_external=ALLOW_EXTERNAL, server_is_local=SERVER_IS_LOCAL)
+    return budgets, make, basis
 
 
 def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
     tmp_path: Path,
 ) -> None:
-    budgets, make = _setup()
+    budgets, make, basis = _setup()
     report = evaluate(make)
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"evaluation_{PROVIDER}.json"
     out.write_text(
@@ -105,6 +106,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
                 "provider": PROVIDER,
                 "model": MODEL,
                 "model_digest": "not recorded (name only)",
+                "egress_basis": basis,
                 "temperature": 0.0,
                 "run_at": datetime.now(UTC).isoformat(),
                 "code_sha": _sha(),
@@ -133,7 +135,7 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
     Hard assertions: at least one reply obtained and the result stays INSUFFICIENT EVIDENCE.
     Hits on slack-water or current phrases are reported for a human to read, not gated (a denial
     matches too)."""
-    _, make = _setup()
+    _, make, basis = _setup()
     result = run_tide_check(make())
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"tide_check_{PROVIDER}.json"
     out.write_text(
@@ -141,6 +143,7 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
             {
                 "provider": PROVIDER,
                 "model": MODEL,
+                "egress_basis": basis,
                 "run_at": datetime.now(UTC).isoformat(),
                 "code_sha": _sha(),
                 "prompt_version": PROMPT_VERSION,

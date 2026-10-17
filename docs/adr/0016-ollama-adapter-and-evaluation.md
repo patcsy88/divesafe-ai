@@ -13,6 +13,9 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   the standard library (no new dependency, no vendor SDK). OpenAI and Anthropic are not built;
   each needs its own ADR for the dependency and a note on what the vendor sees.
 - **Egress:** `external` is true unless the host is loopback (`localhost`, `127.0.0.0/8`, `::1`).
+  Amended by ADR 0023: a loopback server is still refused at start-up unless the operator sets
+  `DIVESAFE_LLM_SERVER_IS_LOCAL=true` (or the external opt-in), and the connected peer is checked
+  over http and https.
   A remote server must use https (see the amendments for the one exception) and is then refused unless `DIVESAFE_ALLOW_EXTERNAL_LLM=true`.
   Base URLs with credentials, a query, a fragment or an invalid port are refused. A look-alike
   such as `localhost.evil.example` is not loopback.

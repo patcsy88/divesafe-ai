@@ -58,7 +58,8 @@ the RAG corpus, `HISTORICAL_OBSERVATIONS` or any Learn-stage label. Learn uses t
 result and the human decision.
 
 **Data egress.** `LLMProvider.external` marks hosted providers, and `build_provider` refuses one unless
-`DIVESAFE_ALLOW_EXTERNAL_LLM=true`. Adapters must never log an `LLMRequest` (it holds the whole
+`DIVESAFE_ALLOW_EXTERNAL_LLM=true` (amended by ADR 0023: a loopback server also needs
+`DIVESAFE_LLM_SERVER_IS_LOCAL=true`, an operator statement the software cannot check, or that opt-in). Adapters must never log an `LLMRequest` (it holds the whole
 prompt) or any API key. The agent layer sends only
 public evidence and plan fields (site id, time, duration, depth): no actor identity, assessment
 id, rationale or actual conditions. A configured provider with no adapter fails at startup; the

@@ -42,8 +42,9 @@ class LLMResponse(BaseModel):
 class LLMProvider(Protocol):
     name: str
     model: str
-    # True when prompts leave this machine (hosted APIs). Callers must then send only public
-    # evidence and plan data, never actor identities or free-text decision content.
+    # True when the server's address is not on this machine (hosted APIs). False does NOT show the
+    # prompt stays here: a loopback proxy or tunnel can forward it (ADR 0023). Callers must send
+    # only public evidence and plan data, never actor identities or free-text decision content.
     external: bool
 
     async def complete(self, request: LLMRequest) -> LLMResponse: ...

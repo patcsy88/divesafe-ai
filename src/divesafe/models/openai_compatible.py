@@ -8,7 +8,8 @@ any odd shape is refused, never repaired. Reasoning text is never used.
 Never logs a request (it holds the whole prompt) and never puts the API key, a URL or a response
 in an error. Redirects are refused and environment proxies are ignored. A loopback server may use
 plain http. Any other host must use https and be listed in `DIVESAFE_LLM_ALLOWED_HOSTS`, and it
-counts as external (the prompt leaves this machine).
+counts as external (the prompt leaves this machine). A loopback address does not show the
+prompt stays here: a proxy or tunnel can forward it (ADR 0023).
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import functools
 import http.client
 import json
 import re
-import socket
 import ssl
 import threading
 import time
@@ -33,13 +33,18 @@ from pydantic import SecretStr
 
 from divesafe.config.settings import Settings
 from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
+from divesafe.models.loopback import (
+    LoopbackHTTPHandler,
+    LoopbackHTTPSHandler,
+    NotOnThisMachineError,
+    is_loopback,
+)
 from divesafe.models.ollama import (
     MAX_RESPONSE_BYTES,
     MAX_STREAM_LINES,
     SOCKET_TIMEOUT_SECONDS,
     check_budgets,
     check_output_tokens,
-    is_loopback,
 )
 
 _CHUNK = 64 * 1024
@@ -55,24 +60,6 @@ class OpenAICompatibleError(RuntimeError):
 
 class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
     """The reply stopped at the output-token limit."""
-
-
-class _LoopbackConnection(http.client.HTTPConnection):
-    """Plain http is allowed only to a loopback server. `localhost` is resolved by the system, so
-    the address actually connected to is checked before anything (prompt, key) is sent."""
-
-    def connect(self) -> None:
-        super().connect()
-        sock = self.sock
-        peer = sock.getpeername()[0] if isinstance(sock, socket.socket) else ""
-        if not is_loopback(str(peer).split("%", 1)[0]):
-            self.close()
-            raise OpenAICompatibleError("the model server is not on this machine")
-
-
-class _LoopbackHTTPHandler(urllib.request.HTTPHandler):
-    def http_open(self, req: urllib.request.Request) -> Any:
-        return self.do_open(_LoopbackConnection, req)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -98,8 +85,11 @@ def _post(
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _NoRedirect,
-        urllib.request.HTTPSHandler(context=tls),
-        *([_LoopbackHTTPHandler()] if loopback else []),
+        *(
+            [LoopbackHTTPHandler(), LoopbackHTTPSHandler(context=tls)]
+            if loopback
+            else [urllib.request.HTTPSHandler(context=tls)]
+        ),
     )
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
     if api_key is not None:
@@ -127,6 +117,8 @@ def _post(
                     raise OpenAICompatibleError("the model response was too large")
     except OpenAICompatibleError:
         raise
+    except NotOnThisMachineError:
+        raise OpenAICompatibleError("the model server is not on this machine") from None
     except urllib.error.HTTPError as exc:
         exc.close()
         raise OpenAICompatibleError(
