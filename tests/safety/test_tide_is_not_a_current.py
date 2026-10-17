@@ -69,7 +69,10 @@ def _assert_prohibition_is_trusted(message: str) -> None:
     assert PROHIBITION not in message[start:end]
 
 
-@pytest.mark.parametrize("name", ["tide_current", "prediction"])
+TIDE_READERS = [s.name for s in SPECIALISTS if DataCategory.TIDES in s.categories]
+
+
+@pytest.mark.parametrize("name", TIDE_READERS)
 def test_every_specialist_that_reads_tides_is_told_a_tide_is_not_a_current(name: str) -> None:
     items = _items()
     assert items
@@ -100,6 +103,9 @@ def test_the_scenario_and_risk_prompts_carry_the_same_prohibition() -> None:
 
 def test_the_prohibition_is_absent_when_there_is_no_tide_item() -> None:
     assert tide_note([]) == ""
+    assert {"tide_current", "prediction"} <= set(TIDE_READERS)
+    other = _items()[0].model_copy(update={"category": DataCategory.CURRENTS})
+    assert tide_note([other]) == ""
     assert tide_note(_items()) != ""
 
 
@@ -143,3 +149,50 @@ def test_the_user_view_credits_phn() -> None:
     )
     assert record.evidence
     assert "Pusat Hidrografi Nasional (e-Tide)" in AssessmentView.of(record).attributions
+
+
+def _redated(day: int, *, invert: bool = False) -> dict:  # type: ignore[type-arg]
+    """SYNTHETIC: the recorded day moved to another date (optionally upside down)."""
+    block = json.loads(json.dumps(FIXTURE["current_day"]))
+    label = f"{day:02d}-Oct-26"
+    block["date"] = f"{day} October 2026"
+    for row in block["data"]:
+        row["date"] = label
+        if invert:
+            row["height"] = round(3.0 - row["height"], 2)
+    for entry in block["MAX_LOW_Tide"]["HL"]:
+        entry["date"] = label
+        if invert:
+            entry["height"] = round(3.0 - entry["height"], 2)
+            entry["stat"] = 1 - entry["stat"]
+    return block
+
+
+def _fetch(payload: object, hours: int = 2, days: int = 0):  # type: ignore[no-untyped-def]
+    class _G:
+        async def get_json(self, url: str, params: object) -> object:
+            return payload
+
+    end = START + timedelta(days=days, hours=hours)
+    return asyncio.run(PhnEtideConnector(_G()).fetch(TIOMAN_ISLAND, START, end, NOW))
+
+
+def test_a_list_missing_a_high_or_low_is_never_passed_as_a_complete_day() -> None:
+    from divesafe.data import ConnectorResponseError
+
+    for keep in ([0, 3], [1, 2, 3], [0, 1, 2]):
+        payload = json.loads(json.dumps(FIXTURE))
+        hl = payload["current_day"]["MAX_LOW_Tide"]["HL"]
+        payload["current_day"]["MAX_LOW_Tide"]["HL"] = [hl[i] for i in keep]
+        with pytest.raises(ConnectorResponseError):
+            _fetch(payload)
+    assert _fetch(FIXTURE).items
+
+
+def test_highs_and_lows_that_do_not_alternate_across_midnight_are_refused() -> None:
+    from divesafe.data import ConnectorResponseError
+
+    payload = json.loads(json.dumps(FIXTURE))
+    payload["prev_day"] = _redated(18, invert=True)
+    with pytest.raises(ConnectorResponseError, match="across midnight"):
+        _fetch(payload, hours=0, days=1)

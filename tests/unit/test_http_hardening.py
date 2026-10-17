@@ -27,6 +27,9 @@ def test_redirect_to_allowed_https_host_is_followed() -> None:
         "https://evil.example/steal",
         "ftp://api.data.gov.my/x",
         "file:///etc/passwd",
+        "https://api.data.gov.my:8443/weather/warning/",
+        "https://user:pw@api.data.gov.my/weather/warning/",
+        "https://api.data.gov.my:notaport/x",
     ],
 )
 def test_redirect_to_plain_http_other_host_or_other_scheme_is_refused(target: str) -> None:
@@ -77,3 +80,21 @@ def test_a_body_that_cannot_be_parsed_is_a_response_error_never_another_exceptio
     monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: _Opener())
     with pytest.raises(ConnectorResponseError):
         asyncio.run(UrllibJsonGetter().get_json("https://api.data.gov.my/weather/forecast/", {}))
+
+
+def test_an_explicit_standard_port_is_still_allowed() -> None:
+    assert _redirect("https://api.data.gov.my:443/weather/warning/") is not None
+
+
+def test_every_recorded_fixture_is_within_the_depth_bound() -> None:
+    """A later change to MAX_JSON_DEPTH must not silently reject real provider responses."""
+    import json
+    from pathlib import Path
+
+    from divesafe.data.http import MAX_JSON_DEPTH, _depth_exceeds
+
+    fixtures = sorted((Path(__file__).parent.parent / "fixtures").glob("*.json"))
+    assert fixtures
+    for path in fixtures:
+        assert not _depth_exceeds(json.loads(path.read_text()), MAX_JSON_DEPTH), path.name
+    assert _depth_exceeds([[[0]]], 2) and not _depth_exceeds([[[0]]], 3)

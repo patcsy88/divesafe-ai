@@ -175,7 +175,7 @@ def _depth_exceeds(value: Any, limit: int) -> bool:
             if depth > limit:
                 return True
             children = item.values() if isinstance(item, dict) else item
-            stack.extend((child, depth + 1) for child in children)
+            stack.extend((c, depth + 1) for c in children if isinstance(c, dict | list))
     return False
 
 

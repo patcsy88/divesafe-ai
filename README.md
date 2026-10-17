@@ -21,8 +21,7 @@ abstraction, config, API skeleton), and connectors for Pulau Tioman, Malaysia (O
 marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
 service, an assessment pipeline, the human decision gate, a FastAPI interface, and an agent
 stage (five specialists, three bounded Tree-of-Thought scenarios and a risk proposal) that has
-only been exercised with a scripted fake LLM. Tides,
-reviewed rules, real LLM adapters, RAG, durable storage (PostgreSQL) and a web UI are not
+only been exercised with a scripted fake LLM. Reviewed rules, real LLM adapters, RAG, durable storage (PostgreSQL) and a web UI are not
 implemented yet. With `DIVESAFE_LLM_PROVIDER=fake` (the default) the agent stage is off.
 Wind is connected (model forecast). Tide predictions from PHN e-Tide are available but off by
 default and DEGRADED, and no dive professional has signed a limit, so every assessment is

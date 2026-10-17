@@ -69,6 +69,9 @@ def test_tide_items_reach_the_agents_as_a_prediction_that_is_not_a_current() -> 
         value = payload["value"]
         assert "no current speed" in value["not_a_current"]
         assert "not the dive site" in value["spatial_scope"]
+        assert "response does not name" in value["spatial_scope"]
+        assert "location_id" not in value and value["requested_location_id"] == "pulau_tioman"
+        assert any("assumed from the request" in n for n in payload["quality_notes"])
         assert value["tide"]["unit"] == "m" and value["tide"]["extremes"]
         assert "no current speed" in " ".join(payload["quality_notes"])
         assert "current_speed" not in json.dumps(value)

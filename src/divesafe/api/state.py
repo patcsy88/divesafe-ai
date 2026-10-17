@@ -220,6 +220,9 @@ def build_default_state(settings: Settings) -> AppState:
         )
         connectors.append(MetApiMarineConnector(met_getter))
     if settings.phn_etide_enabled:
+        logger.warning(
+            "PHN e-Tide tide predictions are ON (DIVESAFE_PHN_ETIDE_ENABLED); ADR 0021 is proposed"
+        )
         connectors.append(
             PhnEtideConnector(
                 CachingRateLimitedGetter(

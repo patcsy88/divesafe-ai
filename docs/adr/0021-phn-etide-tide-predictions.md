@@ -1,7 +1,8 @@
 # ADR 0021: Tide predictions from the PHN e-Tide endpoint
 
 Status: PROPOSED (2026-10-17). Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and
-`risk-reviewer` on 2026-10-17: no blockers; the findings are folded in below. It stays PROPOSED, and
+`risk-reviewer` on 2026-10-17, then re-reviewed against the fixes (commit `3e239e3`): no blockers
+and no Major findings; the minor findings are folded in below. It stays PROPOSED, and
 the connector stays **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED=false`), until the owner puts
 PHN's wording (or a dated record of the permission) on file and accepts this ADR.
 
@@ -37,7 +38,8 @@ go-ahead and saved outside the repository; a one-day trim is committed as
 
 Rate limits; refresh cadence; whether values come from PHN's published tide tables or a model;
 stability (no versioning, a page change could change the layout); the units beyond the page note;
-the terms of the permission; any tidal-stream data (none is in this response).
+the terms of the permission; any tidal-stream data (none is in this response); which station
+the response is for (it names none).
 
 ## Decision (proposed)
 
@@ -66,7 +68,8 @@ A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window t
      limit);
    - the high/low list is incomplete: between consecutive listed extremes (and from each day edge
      to the nearest extreme) the series must run one way, so a dropped high or low is refused (no
-     tolerance; checked on the recorded days);
+     tolerance; run on all three days of the one real response, of which only 17 Oct is committed; the
+     full response has SHA-256 `af1f0eca53c6d7b5cdcc7a66878288cc4b6f04f3846fc35c9273398f6a223bb8`);
    - highs and lows do not alternate across midnight between two fetched days;
    - the response is not the expected shape, is larger than 512 KiB, is not JSON, or is nested more
      than 32 levels (a parsing bound; a hostile body can otherwise overflow the stack in the cache's
@@ -132,6 +135,11 @@ A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window t
 - The call budget is per process and shared by every signed-in user; about 200 runs more than a
   minute apart use up the 24-hour budget and tides then go missing for everyone (fails closed).
   Concurrent cache misses are not coalesced.
+- A constant stretch inside the series passes the completeness check (equal neighbours are
+  allowed, which the recorded plateaus need); a flat-lined or padded series is not detected.
+  No bound is invented here.
+- A real small turn that PHN does not list makes the whole category fail (fail closed; availability,
+  not safety). No tolerance is added.
 - Environment proxy settings are honoured by every connector getter, as before.
 - The time zone is inferred and checked only against our clock on `current_day`.
 - Undocumented endpoint: a layout change makes the category fail, not guess.
@@ -144,4 +152,7 @@ Recorded-fixture parse; each failure above; `observation_from_evidence` is `None
 payload carries the `tide` value and the "not a current" statement; an engine test that tide
 evidence alone never gives GO or CAUTION; the shared getter still refuses the PHN host; the PHN
 getter refuses other hosts, never follows a redirect and sends the form body by POST; mutation
-checks on the clock check, the alternation check and the horizon check.
+checks on the clock check, the alternation check and the horizon check; also the completeness and
+cross-midnight checks, the depth bound, port and userinfo refusal, the tide-is-not-a-current
+wording outside the untrusted block, the PHN attribution in the user view, and the station
+wording (`requested_location_id`).

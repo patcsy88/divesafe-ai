@@ -155,7 +155,7 @@ def test_the_lower_is_worse_direction_mirrors_the_ordering() -> None:
         ({"unit": "ft"}, "unit differs from the data and no conversion is done"),
         ({"unit": "km/h"}, "unit of a different quantity"),
         ({"factor": "wind", "metric": "wave_height"}, "no data source for wind"),
-        ({"factor": "tidal_current", "metric": "ocean_current_velocity"}, "no tide source"),
+        ({"factor": "tidal_current", "metric": "ocean_current_velocity"}, "no tidal-stream source"),
         ({"factor": "weather", "metric": "wave_height"}, "no weather data"),
         ({"factor": "swell", "metric": "wave_height"}, "metric not for this factor"),
         ({"metric": "wave_direction"}, "direction is not a supported metric"),

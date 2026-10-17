@@ -306,7 +306,7 @@ class PhnEtideConnector:
                         "an extreme at the very start or end of a day, or on a flat stretch, is "
                         "checked against one side or an equal-height stretch only; its time is "
                         "PHN's choice within that stretch",
-                        "retrieval time may be up to the cache lifetime (60 s) older than shown",
+                        "retrieval time may be up to the response-cache lifetime older than shown",
                         "use is by the owner's report of PHN's permission; its terms are not "
                         "on file",
                     ),
