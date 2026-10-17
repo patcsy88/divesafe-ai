@@ -24,7 +24,8 @@ No document without provenance is ingested.
 
 ## Architecture
 
-- Store: PostgreSQL + pgvector (one database for relational and vector data).
+- Store: PostgreSQL (one database for relational and search data). The first version uses
+  full-text search with no embeddings (ADR 0022, proposed); pgvector is a later decision.
 - Chunks keep metadata (document, section, site, date) so results can become `EvidenceItem`s
   with `category` of `site_information`, `local_guidance` or `historical_observations`.
 - Retrieval filters by `site_id` and document status before vector similarity.
