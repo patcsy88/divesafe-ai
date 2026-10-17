@@ -17,8 +17,9 @@ conditions need typed, timestamped, validated values the rules engine can check.
 
 ## Corpus
 
-Dive-site characteristics, site-specific hazards, local regulations, diving best practice,
-historical observations (summaries), marine safety guidance, environmental interpretation guidance.
+Dive-site characteristics, site-specific hazards, local regulations, diving best practice, marine
+safety guidance, environmental interpretation guidance. Historical-observation summaries are
+reserved for a future typed history service (ADR 0022 decision 5), not the first corpus.
 Every document needs: `source`, `version/date`, `site_id` (if site-specific), `license/provenance`.
 No document without provenance is ingested.
 
@@ -28,10 +29,11 @@ No document without provenance is ingested.
   approved, in-date chunks for the site with no search and no embeddings (ADR 0022, proposed);
   search and pgvector are later decisions.
 - Chunks keep metadata (document, section, site, date) so results can become `EvidenceItem`s
-  with `category` of `site_information`, `local_guidance` or `historical_observations`.
-- Retrieval filters by `site_id` and document status before vector similarity.
-- The embedding model sits behind an interface like the LLM provider; the model name and
-  version are stored with each chunk, and re-embedding is a documented migration.
+  with `category` of `site_information` or `local_guidance` only (ADR 0022).
+- Retrieval filters by `site_id`, document status, version and review-by date. Version 1 has no
+  similarity ranking.
+- If embeddings are added later, the model sits behind an interface like the LLM provider; the
+  model name and version are stored with each chunk, and re-embedding is a documented migration.
 
 ## Rules
 
