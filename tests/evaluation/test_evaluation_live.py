@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
 from tests.evaluation.harness import evaluate
+from tests.evaluation.tide_check import run_tide_check
 
 from divesafe.agents import PROMPT_VERSION
 from divesafe.config import Settings
@@ -50,9 +52,7 @@ def _sha() -> str:
     return out.stdout.strip() or "unknown"
 
 
-def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
-    tmp_path: Path,
-) -> None:
+def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatibleProvider]]:
     assert MODEL is not None
     assert PROVIDER in ("ollama", "openai_compatible"), "DIVESAFE_EVAL_PROVIDER is not known"
     env = os.environ.get
@@ -90,6 +90,13 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
 
     if make().external and not ALLOW_EXTERNAL:
         pytest.skip("a remote server needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
+    return budgets, make
+
+
+def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
+    tmp_path: Path,
+) -> None:
+    budgets, make = _setup()
     report = evaluate(make)
     out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"evaluation_{PROVIDER}.json"
     out.write_text(
@@ -119,3 +126,32 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
     assert report.proposals_obtained >= 1, "model unusable: no case produced a valid proposal"
     assert report.under_severe_errors == 0
     assert report.rule_outcome_accuracy == 1.0
+
+
+def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path: Path) -> None:
+    """Sends one synthetic case holding the recorded PHN tide item through the real agent stage.
+    Hard assertions: at least one reply obtained and the result stays INSUFFICIENT EVIDENCE.
+    Hits on slack-water or current phrases are reported for a human to read, not gated (a denial
+    matches too)."""
+    _, make = _setup()
+    result = run_tide_check(make())
+    out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"tide_check_{PROVIDER}.json"
+    out.write_text(
+        json.dumps(
+            {
+                "provider": PROVIDER,
+                "model": MODEL,
+                "run_at": datetime.now(UTC).isoformat(),
+                "code_sha": _sha(),
+                "prompt_version": PROMPT_VERSION,
+                "marker_hits": result.hits,
+                "record": json.loads(result.record.model_dump_json()),
+            },
+            indent=1,
+        )
+    )
+    print("\nTIDE CHECK", MODEL, "marker hits:", result.hits, "raw record:", out)
+    assert (
+        result.record.findings or result.record.scenarios or result.record.proposed_recommendation
+    )
+    assert result.stayed_insufficient
