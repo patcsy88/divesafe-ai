@@ -90,8 +90,17 @@ the first test set and were closed with tests; all nine are now caught.
     to the base URL's path, so whether the root is `https://wall-e.ch30ng.org` or ends in `/v1`
     is **not yet known**. The model name (`DIVESAFE_LLM_MODEL`) and the API key (environment
     only) are also needed.
-  - **Not checked:** that the name resolves from inside the container, that the certificate is
-    accepted by the container's trust store, and what is served there. No call has been made.
+  - **One unauthenticated check (owner-approved, 2026-10-18, from the developer machine, not a
+    container):** `GET https://wall-e.ch30ng.org/v1/models` with certificate verification on,
+    no key, no prompt data. Result: TLS verified, HTTP 401 with a JSON body, and response header
+    names consistent with a routing proxy that routes to upstream providers (so it
+    probably forwards prompts, but that is inferred from the headers, not confirmed). The name
+    resolved to a public address, so this host is on the internet, not on the
+    LAN. The 401 shows the path `/v1/models` exists and wants a key; it does not show that
+    `/v1/chat/completions` works, which nothing has called.
+  - **Not checked:** that the name resolves from inside the container, that the container's
+    trust store accepts the certificate, which models the key can use, and whether the server
+    forwards prompts.
   - The peer check applies only to loopback hosts; for a named host the connected address is
     not verified beyond the allow-listed host name and the certificate.
 - **Port squatting.** "On this machine" is not "run by the operator". On a shared host another
