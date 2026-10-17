@@ -25,6 +25,9 @@ ALLOWED_HOSTS: frozenset[str] = frozenset(
 )
 # Kept out of ALLOWED_HOSTS on purpose: only a getter built with a credential may call it.
 MET_API_HOSTS: frozenset[str] = frozenset({"api.met.gov.my"})
+# Also kept out of ALLOWED_HOSTS: only the POST getter below may call it.
+PHN_HOSTS: frozenset[str] = frozenset({"etide.hydro.gov.my"})
+PHN_MAX_BYTES = 512 * 1024
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
 
@@ -118,23 +121,84 @@ class UrllibJsonGetter:
         )
         if self._auth_header is not None:
             request.add_unredirected_header(*self._auth_header)
+        return _open_json(opener, request, url, self._timeout, self._max_bytes)
+
+
+def _open_json(
+    opener: urllib.request.OpenerDirector,
+    request: urllib.request.Request,
+    url: str,
+    timeout: float,
+    max_bytes: int,
+) -> Any:
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = read_limited(response, max_bytes)
+    except urllib.error.HTTPError as exc:
+        with contextlib.suppress(OSError):
+            exc.close()
+        raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
+    except (http.client.HTTPException, ValueError):
+        # The text of these can echo a header value, so it is dropped.
+        echoed = True
+    else:
+        echoed = False
+    if echoed:
+        raise ConnectorTransportError(f"request to {_label(url)} failed")
+    # The body is parsed whatever the Content-Type says: PHN sends JSON labelled text/html.
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
+        raise ConnectorResponseError(f"{_label(url)} did not return valid JSON") from exc
+
+
+class UrllibFormPostJsonGetter:
+    """POSTs `params` as a form and reads JSON, for the PHN e-Tide endpoint only.
+
+    It sends no credential, keeps no cookie (the session cookie PHN sets is ignored), follows no
+    redirect, and may only be built for the PHN host. `params` is the form body, not a query.
+    """
+
+    def __init__(
+        self,
+        timeout_seconds: float = 15.0,
+        deadline_seconds: float = 30.0,
+        allowed_hosts: Collection[str] = PHN_HOSTS,
+        max_bytes: int = PHN_MAX_BYTES,
+    ) -> None:
+        if isinstance(allowed_hosts, str):
+            raise TypeError("allowed_hosts must be a collection of host names")
+        hosts = frozenset(allowed_hosts)
+        if not hosts or not hosts <= PHN_HOSTS:
+            raise ValueError("this getter may only call the PHN e-Tide host")
+        self._timeout = timeout_seconds
+        self._deadline = deadline_seconds
+        self._allowed = hosts
+        self._max_bytes = max_bytes
+
+    async def get_json(self, url: str, params: Mapping[str, str]) -> Any:
+        check_url(url, self._allowed)
         try:
-            with opener.open(request, timeout=self._timeout) as response:
-                body = read_limited(response, self._max_bytes)
-        except urllib.error.HTTPError as exc:
-            with contextlib.suppress(OSError):
-                exc.close()
-            raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
-        except (http.client.HTTPException, ValueError):
-            # The text of these can echo a header value, so it is dropped.
-            echoed = True
-        else:
-            echoed = False
-        if echoed:
-            raise ConnectorTransportError(f"request to {_label(url)} failed")
-        try:
-            return json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
-            raise ConnectorResponseError(f"{_label(url)} did not return valid JSON") from exc
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._post, url, params), timeout=self._deadline
+            )
+        except TimeoutError as exc:
+            raise ConnectorTransportError(f"request to {_label(url)} timed out") from exc
+
+    def _post(self, url: str, params: Mapping[str, str]) -> Any:
+        request = urllib.request.Request(  # noqa: S310 (scheme and host checked above)
+            url,
+            data=urllib.parse.urlencode(params).encode("ascii"),
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                # The e-Tide page's own script sends this; it is what the one recorded call used.
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            method="POST",
+        )
+        opener = urllib.request.build_opener(_NoRedirect())
+        return _open_json(opener, request, url, self._timeout, self._max_bytes)

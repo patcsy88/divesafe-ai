@@ -211,6 +211,15 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   item does not stand in for a time-resolved one (the same hides a hole in a partial hourly
   series; dormant, as connectors reject partial data). Wind is km/h; limits stated in knots need an
   explicit, read-back conversion.
+- **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md)):**
+  `PhnEtideConnector` items are DEGRADED daily predictions (high/low times and heights above chart
+  datum) under `value["tide"]`, for one harbour point and today plus two days only. A tide height
+  or time gives no current speed or slack-water time, so `tidal_current` stays unencodable and the
+  `tides` category now being present does not make a tidal-current limit evaluable. As with MET,
+  the engine counts a +08:00 day as covering the dive window and degraded data cannot support GO or
+  CAUTION (ADR 0008); before `degraded_may_support_go` is ever set, a rule must say that a tide
+  prediction does not stand in for a current. The +08:00 zone is inferred and checked only against
+  our clock; the permission to use the endpoint is the owner's report and is not on file.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   corroboration logic must use `can_corroborate`
   ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an

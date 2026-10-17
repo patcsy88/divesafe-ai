@@ -279,7 +279,9 @@ Free personal viewing in an app is not permission for DiveSafe to fetch or repub
 roziana.ramlee@jupem.gov.my; confirm the right contact on JUPEM's own site first), or files a
 request at data.gov.my/data-request; (2) until answered, nothing is built.
 
-**TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. The owner withdrew this route on 2026-10-17 ("Ignore TICON"); [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) is kept as a record only. Tides remain without a source.
+**TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. The owner withdrew this route on 2026-10-17 ("Ignore TICON"); [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) is kept as a record only.
+
+**PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (proposed, not yet reviewed). No tidal-stream data.
 
 **Decided 2026-10-10 (owner): skip tide height for now.** No tide connector is built and no tide
 credential or licence is pursued. `tides` and `tidal_current` stay unevidenced, so any policy that

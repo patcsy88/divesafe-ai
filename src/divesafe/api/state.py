@@ -14,6 +14,7 @@ from divesafe.config import Settings
 from divesafe.data import (
     MET_API_HOSTS,
     MET_API_QUOTA,
+    PHN_ETIDE_QUOTA,
     SITES,
     CachingRateLimitedGetter,
     Connector,
@@ -23,6 +24,8 @@ from divesafe.data import (
     MetApiMarineConnector,
     OpenMeteoMarineConnector,
     OpenMeteoWindConnector,
+    PhnEtideConnector,
+    UrllibFormPostJsonGetter,
     UrllibJsonGetter,
 )
 from divesafe.domain import DataCategory, RiskFactorKind
@@ -216,6 +219,15 @@ def build_default_state(settings: Settings) -> AppState:
             quotas=(MET_API_QUOTA,),
         )
         connectors.append(MetApiMarineConnector(met_getter))
+    connectors.append(
+        PhnEtideConnector(
+            CachingRateLimitedGetter(
+                UrllibFormPostJsonGetter(),
+                min_interval_seconds={"etide.hydro.gov.my": 0.0},
+                quotas=(PHN_ETIDE_QUOTA,),
+            )
+        )
+    )
     if settings.environment == "production" and not settings.trusted_proxy_set():
         logger.warning(
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "
