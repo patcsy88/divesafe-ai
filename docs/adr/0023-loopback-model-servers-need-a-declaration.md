@@ -87,12 +87,16 @@ the first test set and were closed with tests; all nine are now caught.
     a plain-http allow-list (`DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`). Over plain http the prompt and
     the bearer key would cross the LAN unencrypted.
   - **Owner choice (2026-10-18): serve https on the model server.** No code change. This was
-    chosen before the address was corrected; confirm it still stands for `<lan-host>`. The
+    chosen before the address was corrected; the owner has since confirmed the address is `<lan-host>`, and the https choice still needs confirming. The
     server needs a certificate whose subject alternative names include the IP `<lan-host>`.
     The adapter verifies the certificate and host name with `ssl.create_default_context()`,
     which reads `SSL_CERT_FILE`; for a private CA, mount the CA certificate into the API
-    container read-only and set `SSL_CERT_FILE` to it (that file then replaces the default bundle
-    for the process). Settings: `DIVESAFE_LLM_PROVIDER=openai_compatible`,
+    container read-only and set `SSL_CERT_FILE` to it. **Caution:** that file replaces the default
+    trust bundle for the whole process, so if the weather and tide connectors verify through the
+    same default context (not checked) they would stop trusting their public hosts. A bundle that
+    holds the system CAs plus the private CA avoids that; a setting that trusts the extra CA for
+    the model adapter only would be cleaner but is new config (needs an ADR amendment and both
+    reviewers). The Dockerfile base image and CA bundle path have not been read. Settings: `DIVESAFE_LLM_PROVIDER=openai_compatible`,
     `DIVESAFE_LLM_BASE_URL=https://<lan-host>:8317/v1`,
     `DIVESAFE_LLM_ALLOWED_HOSTS=<lan-host>`, `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, no
     `DIVESAFE_LLM_SERVER_IS_LOCAL`. Not yet tried against the real server, and the compose file
