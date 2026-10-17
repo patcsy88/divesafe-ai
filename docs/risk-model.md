@@ -137,11 +137,12 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   offline test that is explicitly not coverage).
 - Known gap: an expired rule is not run, so a NO-GO it would have returned is lost. Evaluating it
   and keeping only a NO-GO needs the risk owner's decision (ADR 0009).
-- Known gap: no real model has been run. An Ollama adapter and an offline evaluation harness
-  exist (ADR 0016), but the set is seven synthetic scenarios not reviewed by a diving
-  professional, the injection screen is a marker heuristic that misses paraphrase, and no live run
-  has been made. Injection resistance and output reliability of real models are unmeasured, and no
-  real provider should be trusted for even advisory output until a live run has been reviewed.
+- Known gap: real models are barely measured. Small live runs have been made (see
+  evaluation-strategy.md), but the set is seven synthetic scenarios not reviewed by a diving
+  professional, the injection screen is a marker heuristic that misses paraphrase and cannot tell
+  a report of an injection from an echo, and each result is one run on one model. Injection
+  resistance and output reliability of real models remain largely unmeasured, and no real provider
+  should be trusted for even advisory output until the runs have been reviewed.
 
 ### Evidence usability (ADR 0008)
 

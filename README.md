@@ -15,14 +15,17 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 
 ## Status
 
-Foundation, data connectors, assessment pipeline, human gate and API. The repository contains the architecture, engineering rules,
-the safety-critical core (domain types, fail-closed rules engine with reconciliation, LLM provider
-abstraction, config, API skeleton), and connectors for Pulau Tioman, Malaysia (Open-Meteo
-marine model data and MET Malaysia warnings via data.gov.my) with an evidence/provenance
-service, an assessment pipeline, the human decision gate, a FastAPI interface, and an agent
-stage (five specialists, three bounded Tree-of-Thought scenarios and a risk proposal) that has
-only been exercised with a scripted fake LLM. Reviewed rules, real LLM adapters, RAG, durable storage (PostgreSQL) and a web UI are not
-implemented yet. With `DIVESAFE_LLM_PROVIDER=fake` (the default) the agent stage is off.
+The repository contains the architecture, engineering rules, the safety-critical core (domain
+types, fail-closed rules engine with reconciliation, LLM provider abstraction, config), connectors
+for Pulau Tioman, Malaysia (Open-Meteo marine model data, MET Malaysia warnings via data.gov.my and
+the MET API) with an evidence/provenance service, an assessment pipeline, the human decision gate,
+an authenticated FastAPI interface, a PostgreSQL assessment repository with migrations (ADR 0012,
+0015), a web UI (ADR 0017), and an agent stage (five specialists, three bounded Tree-of-Thought
+scenarios and a risk proposal). Two LLM adapters exist: Ollama (ADR 0016) and an OpenAI-compatible
+one (ADR 0018). The agent stage has had only small live runs on synthetic scenarios (see
+[docs/evaluation-strategy.md](docs/evaluation-strategy.md)). Reviewed rules, the `openai` and
+`anthropic` vendor adapters and RAG are not built. With `DIVESAFE_LLM_PROVIDER=fake` (the default)
+the agent stage is off.
 Wind is connected (model forecast). Tide predictions from PHN e-Tide are available but off by
 default and DEGRADED, and no dive professional has signed a limit, so every assessment is
 `INSUFFICIENT EVIDENCE` by design.
