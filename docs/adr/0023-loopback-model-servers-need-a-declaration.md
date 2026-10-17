@@ -82,6 +82,16 @@ the first test set and were closed with tests; all nine are now caught.
     with a certificate the container trusts (a certificate for an IP address needs an IP
     subject alternative name), or a decision is needed on a plain-http allow-list for this
     adapter. Over plain http the prompt and the bearer key cross the LAN unencrypted.
+  - **Owner choice (2026-10-18): serve https on the proxy.** No code change. The proxy needs a
+    certificate whose subject alternative names include the IP `<lan-host>`. The adapter
+    verifies the certificate and host name with `ssl.create_default_context()`, which reads
+    `SSL_CERT_FILE`; for a private CA, mount the CA certificate into the API container read-only
+    and set `SSL_CERT_FILE` to it (that file then replaces the default bundle for the process).
+    Settings: `DIVESAFE_LLM_PROVIDER=openai_compatible`,
+    `DIVESAFE_LLM_BASE_URL=https://<lan-host>:8317/v1`,
+    `DIVESAFE_LLM_ALLOWED_HOSTS=<lan-host>`, `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, no
+    `DIVESAFE_LLM_SERVER_IS_LOCAL`. Not yet tried against the real proxy, and the compose file
+    does not yet mount a certificate. Never disable verification to get past a certificate error.
   - The peer check applies only to loopback hosts; for a LAN host the connected address is not
     verified beyond the allow-listed host name.
 - **Port squatting.** "On this machine" is not "run by the operator". On a shared host another
