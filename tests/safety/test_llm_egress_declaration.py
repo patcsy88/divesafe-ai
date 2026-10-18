@@ -6,6 +6,8 @@ the operator's declaration (or the external opt-in) before any plan or evidence 
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -144,40 +146,71 @@ def test_the_start_up_log_records_the_basis(
     assert record.address_is_remote is True  # type: ignore[attr-defined]
 
 
-def test_only_the_start_up_path_builds_a_real_provider() -> None:
-    """`create_provider` and the adapter constructors do not check egress, so no other runtime
-    code may call them: a new caller must go through `build_provider` or call `check_egress`."""
+_CALLERS = {
+    # name -> the only files that may call or index it
+    "create_provider": {"models/llm.py", "api/state.py"},
+    "OllamaProvider": {"models/ollama.py"},
+    "OpenAICompatibleProvider": {"models/openai_compatible.py"},
+    "_factory": {"models/ollama.py", "models/openai_compatible.py"},
+    "_REGISTRY": {"models/llm.py"},
+}
+
+
+def _uses(name: str, text: str) -> bool:
     import re
+
+    return bool(re.search(rf"(?<![\w.])(?:\w+\.)*{name}\s*[(\[]", text))
+
+
+def test_only_the_start_up_path_builds_a_real_provider() -> None:
+    """`create_provider`, the adapter constructors, their module factories and the registry do not
+    check egress, so no other runtime code may call them: a new caller must go through
+    `build_provider` or call `check_egress`. A text scan: an alias, `getattr` or `partial`
+    passes."""
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / "src" / "divesafe"
-    allowed = {
-        "create_provider": {"models/llm.py", "api/state.py"},
-        "OllamaProvider": {"models/ollama.py"},
-        "OpenAICompatibleProvider": {"models/openai_compatible.py"},
-    }
-    found: dict[str, set[str]] = {name: set() for name in allowed}
+    found: dict[str, set[str]] = {name: set() for name in _CALLERS}
+    seen_where_allowed: dict[str, set[str]] = {name: set() for name in _CALLERS}
     for path in src.rglob("*.py"):
         rel = path.relative_to(src).as_posix()
         text = path.read_text()
-        for name in allowed:
-            if re.search(rf"(?<![\w.])(?:\w+\.)*{name}\(", text) and rel not in allowed[name]:
-                found[name].add(rel)
-    assert found == {name: set() for name in allowed}
-    assert "create_provider(settings)" in (src / "api" / "state.py").read_text()
+        for name, allowed in _CALLERS.items():
+            if _uses(name, text):
+                (seen_where_allowed if rel in allowed else found)[name].add(rel)
+    assert found == {name: set() for name in _CALLERS}
+    # Positive control: the pattern still matches where the use is allowed, so an edit that
+    # stops it matching cannot make this test pass by finding nothing.
+    assert seen_where_allowed == _CALLERS
+
+
+def test_the_caller_scan_pattern_matches_the_ways_a_provider_is_built() -> None:
+    for text in (
+        "create_provider(s)",
+        "models.create_provider (s)",
+        "OllamaProvider('m', 'u')",
+        "ollama._factory(s)",
+        "llm._REGISTRY['ollama'](s)",
+    ):
+        assert any(_uses(name, text) for name in _CALLERS), text
+    assert not _uses("create_provider", "my_create_provider(s)")
 
 
 def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The live module is skipped offline, so its setup is exercised here with the module
     settings patched. Nothing is sent: only the provider object is built."""
+    import os
+
     from tests.evaluation import test_evaluation_live as live
 
+    for name in [n for n in os.environ if n.startswith("DIVESAFE_EVAL_")]:
+        monkeypatch.delenv(name)  # the developer's own evaluation settings must not matter
     monkeypatch.setattr(live, "MODEL", "m")
     monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
     monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
     monkeypatch.setattr(live, "ALLOW_EXTERNAL", "false")
     monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
-    with pytest.raises(pytest.skip.Exception):
+    with pytest.raises(pytest.skip.Exception, match="loopback"):
         live._setup()
 
     def basis() -> str:
@@ -194,3 +227,37 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(live, "SERVER_IS_LOCAL", "true")
     with pytest.raises(ValidationError, match="contradict"):
         live._setup()
+
+
+def test_the_live_tide_check_sends_nothing_without_the_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The recorded PHN item must not reach a model that is not declared local unless the
+    acknowledgement is set (PHN's terms are not on file, ADR 0021). The skip leaves a record."""
+    import json
+    import os
+
+    from tests.evaluation import test_evaluation_live as live
+
+    for name in [n for n in os.environ if n.startswith("DIVESAFE_EVAL_")]:
+        monkeypatch.delenv(name)
+
+    def must_not_be_called(_provider: object) -> None:
+        raise AssertionError("the tide item was sent")
+
+    out = tmp_path
+    monkeypatch.setenv("DIVESAFE_EVAL_OUT", str(out))
+    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
+    monkeypatch.setattr(live, "MODEL", "m")
+    monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
+    monkeypatch.setattr(live, "ALLOW_EXTERNAL", "true")
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
+    monkeypatch.setattr(live, "ACCEPT_PHN_TERMS_OPEN", False)
+    monkeypatch.setattr(live, "run_tide_check", must_not_be_called)
+    with pytest.raises(pytest.skip.Exception, match="PHN"):
+        live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(out)
+    record = json.loads((out / "tide_check_openai_compatible.json").read_text())
+    assert record["status"] == "skipped"
+    assert record["egress_basis"] == "loopback_external_opt_in"
+    assert record["host"] == "127.0.0.1"
+    assert "key" not in json.dumps(record).lower()

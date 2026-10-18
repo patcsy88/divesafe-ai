@@ -9,6 +9,13 @@ from divesafe.models.egress import EgressBasis, check_egress
 from divesafe.models.llm import LLMProvider
 
 
+def tide_check_allowed(basis: EgressBasis, *, phn_terms_acknowledged: bool) -> bool:
+    """The recorded PHN tide item goes to the model in the tide check. PHN's terms are not on file
+    (ADR 0021), so it runs only against a server declared local, or with an explicit
+    acknowledgement. The egress opt-in covers where the prompt goes, not the data licence."""
+    return basis == "declared_local" or phn_terms_acknowledged
+
+
 def egress_gate(
     provider: LLMProvider, *, allow_external: bool | str, server_is_local: bool | str
 ) -> EgressBasis:

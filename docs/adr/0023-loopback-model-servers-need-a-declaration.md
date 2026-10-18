@@ -1,8 +1,9 @@
 # ADR 0023: A loopback model server needs the operator's declaration
 
 Status: PROPOSED (2026-10-18). Needs `security-reviewer` and `risk-reviewer` (it touches config,
-the egress gate and `tests/safety/`). Amends ADR 0007, 0016 and 0018. Closes the existing gap
-recorded in ADR 0022 decision 15.
+the egress gate and `tests/safety/`). Amends ADR 0007, 0016 and 0018. Closes the start-up part of the gap
+recorded in ADR 0022 decision 15; recording the basis in `model_version` and using it in the
+knowledge filter are not done.
 
 ## Context
 
@@ -48,13 +49,24 @@ plan and evidence data left the machine. The address cannot show where the promp
    when it refuses, fails on the contradictory pair, and writes the basis into both output files.
    It reads the two flags through `Settings`, so `1`, `TRUE` and `true` mean what they mean at
    start-up. Its tide check also skips unless the basis is `declared_local` or
-   `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true` is set, because the opt-in covers where the prompt
-   goes, not the licence of the data in it (PHN's terms are not on file, ADR 0021).
-8. **Callers.** `create_provider` and the adapter constructors do **not** check egress. Every
-   runtime caller must go through `build_provider` or call `check_egress` itself and log the
-   basis. A safety test scans `src/` and fails if `create_provider` or an adapter constructor is
-   called from anywhere else (`models/` and `api/state.py` only). The check is a text scan, not a
-   proof: an alias or a dynamic lookup would pass it.
+   `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true` is set (the exact text `true` only), because the
+   opt-in covers where the prompt goes, not the licence of the data in it (PHN's terms are not on
+   file, ADR 0021). The rule is the function `tide_check_allowed` and is tested offline. A skip
+   writes `tide_check_<provider>.json` with `status: skipped`, the reason and the basis; a run
+   writes `status: ran` and whether the acknowledgement was set. Both output files record the
+   host name only (no scheme, port, path or key).
+8. **Callers.** `create_provider`, the adapter constructors, each adapter module's `_factory` and
+   the registry do **not** check egress. Every runtime caller must go through `build_provider` or
+   call `check_egress` itself and log the basis. A safety test scans `src/` and fails if any of
+   them is called or indexed from anywhere else (`models/` and `api/state.py` only), and checks
+   that the pattern still matches where the use is allowed. The check is a text scan, not a
+   proof: an `as` alias, `getattr`, `functools.partial` or a dynamic lookup would pass it. A
+   stronger design would have `check_egress` mark the provider and make each adapter refuse to
+   send without the mark; it is not built.
+9. **`declared_local` is not tied to the peer check.** `check_egress` returns it for any provider
+   whose `external` is false. Today the only two adapters run the loopback peer check, but a
+   future adapter with `external` false and no peer check would also get `declared_local`, which
+   ADR 0022 treats as unfiltered. Each new adapter must do the peer check; nothing enforces it.
 
 ## Consequences
 
@@ -63,6 +75,14 @@ plan and evidence data left the machine. The address cannot show where the promp
   `.env.example` says so. The `fake` provider is unaffected.
 - A proxy such as the one used on 2026-10-17 now needs the operator to say
   `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, which is the true description of it.
+- **Production cannot run without a model server.** Settings refuse `llm_provider=fake` in
+  production. With the planned host, every production assessment sends its plan fields and
+  evidence to a public host that probably forwards them, and also the PHN tide item whenever
+  `DIVESAFE_PHN_ETIDE_ENABLED` is on. An operator who wants no data to leave the machine has no
+  production option today except a model on loopback that they declare local. **Whether
+  production may run with the agent stage off is an owner decision; it is not made here.** The
+  running application gives no start-up warning when PHN data is enabled and the basis is not
+  `declared_local`.
 
 ## Tests
 
@@ -79,16 +99,19 @@ plan and evidence data left the machine. The address cannot show where the promp
 - `tests/unit/test_loopback_peer.py` (peer check over http and https for both adapters, IPv4-mapped
   addresses, Ollama sending nothing when the peer is not loopback, Ollama's TLS context) and the
   TLS-context test in `test_openai_compatible_transport.py`, both marked safety. These use
-  `.invalid` host names, which never resolve, so they cannot make a real call.
-- **Mutation checks.** The first test set was mutation-checked with nine mutations (each gate
-  removed, the peer check removed, the https handler swapped in each adapter, Ollama's loopback
-  flag dropped, the exemption widened to subclasses); two survived and were closed with tests.
-  A later round applied 16 and caught 14; the two survivors were the IPv4-mapped conversion and
-  the evaluation gate call. The last round applied five: the evaluation gate call, a stray
-  `create_provider` caller, a stray adapter constructor, a dropped `address_is_remote`, and a
-  strict flag parser in the evaluation gate. All five are caught. The last one survived at first,
-  because a skip inside the test hides as a skip, and was closed by making the positive cases
-  fail on a skip. One survivor remains, listed below.
+  `.invalid` host names, which are reserved never to resolve (RFC 6761). Some resolvers rewrite
+  failed lookups, so the second safeguard is that no public authority issues a certificate for
+  `.invalid`: certificate verification fails before any request body is sent.
+- **Mutation checks.** Earlier rounds applied 9, then 16, then 5 mutations as the code
+  changed. After the last review every mutation was **re-run on the final code**: 24 in total,
+  23 caught, 1 survivor (listed below). They were: each gate in `check_egress` removed or
+  loosened, the contradiction check, the peer check, the https handler swapped in the loopback
+  module and in each adapter, Ollama's loopback flag, the log fields, `build_provider` skipping
+  `check_egress`, the evaluation gate call, a strict flag parser in the evaluation gate, three
+  mutations of the tide-check licence rule (always allow, ignore the acknowledgement, treat the
+  loopback opt-in as local) plus removing its call, and four stray callers (`create_provider`, an
+  adapter constructor, a module `_factory`, a `_REGISTRY` index). Two earlier survivors were
+  closed by making positive cases fail on a skip, because a skip inside a test hides as a skip.
 
 ## Not solved
 
@@ -156,17 +179,16 @@ plan and evidence data left the machine. The address cannot show where the promp
   and neither is needed for a publicly trusted certificate.
 - **The fake exemption** assumes the scripted replies are strings or a test-only callable. The
   `fake` setting returns before the check anyway.
-- **One mutation survives, and no current Python can catch it.** Removing the IPv4-mapped
-  conversion in `is_loopback` changes nothing on Python 3.14.8 or on 3.11.17 (checked on both on
+- **One mutation survives, and it was not caught on any Python checked.** Removing the
+  IPv4-mapped conversion in `is_loopback` changes nothing on Python 3.14.8 or 3.11.17 (checked on
   2026-10-18 in a throwaway environment: the 63 loopback and egress tests pass with and without
-  the conversion). Both standard libraries already treat `::ffff:127.0.0.1` as loopback inside
-  `IPv6Address.is_loopback`, so the conversion is redundant there. An earlier note said CI's 3.11
-  would catch it; that was wrong for current patch releases. The conversion only matters on an
-  older patch release that lacks the standard-library handling, which was not available to test.
-  Without it a mapped loopback address would be refused, which fails closed, and a mapped
-  non-loopback address is refused by the standard library on every version checked. The
-  parametrised test stays as a guard against the standard library changing. The evaluation gate
-  call, a survivor in the previous round, is now caught offline.
+  it). Both standard libraries already treat `::ffff:127.0.0.1` as loopback inside
+  `IPv6Address.is_loopback`, so the conversion is redundant there. **Python 3.12 (the container
+  image) and 3.13 were not tested.** An earlier note said CI's 3.11 would catch it; that was
+  wrong for the patch release tested. Which patch releases lack the standard-library handling was
+  not checked. Without the conversion a mapped loopback address would be refused, which fails
+  closed, and a mapped non-loopback address is refused on every version checked. The
+  parametrised test stays as a guard against the standard library changing.
 - **No test uses a real loopback TLS server**, so hostname matching and "nothing sent" over https
   are covered only through the patched connection class.
 - **The opt-in covers the egress decision, not the licence of the data sent.** The recorded PHN
@@ -189,5 +211,9 @@ plan and evidence data left the machine. The address cannot show where the promp
 - The peer check sees the first TCP peer only. A loopback server that forwards is still allowed
   if declared.
 - `model_version` does not yet record the declaration (ADR 0022 decision 15).
+- **Git history.** An earlier commit of this ADR (before `c87ae47`) contained the model host's
+  public IP address and the name of its proxy software. They are removed from the tree, not from
+  history. If the repository is or becomes public, either rewrite that history or accept the
+  exposure explicitly.
 - Settings are read once at start-up; changing the variable needs a restart.
 - Hosted vendor adapters (`openai`, `anthropic`) are not built and each needs its own ADR.

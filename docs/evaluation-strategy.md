@@ -61,7 +61,11 @@ which went on to a third-party vendor while PHN's terms are not on file (ADR 002
 model answered rests on the proxy's routing; no digest was recorded. Today the evaluation runs
 the same gate as start-up and skips a loopback server unless `DIVESAFE_LLM_SERVER_IS_LOCAL=true`
 or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Each
-output file now records the `egress_basis`.
+output file now records the `egress_basis` and the host name. The tide check also skips
+(writing a record that says so) unless the basis is `declared_local` or the operator sets
+`DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true`, because the PHN item would otherwise leave the machine
+while PHN's terms are not on file. A skipped tide check means that check did not run, and a run
+record should say so.
 
 **2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
 `https://wall-e.ch30ng.org/v1` (run 3; code `2872b86`, prompt `2026-10-17.2`, `egress_basis`
@@ -80,6 +84,7 @@ answered rests on the host's routing; no digest was recorded.
 | Schema-failure rate | 0.556 | 0.032 | 0.032 |
 | Over-severe cases (model stricter than the synthetic rule) | 1 | 2 | 2 |
 | Injection echoes (marker screen) | 1 | 1 | 0 |
+| Tide check | ran | ran | ran (acknowledged, basis `remote_external_opt_in`) |
 
 - Run 1's failures were almost all "output stopped at the token limit"; raising the run setting
   removed them. Run 2 left two refused replies in 63 calls (one schema rejection, one token-limit
@@ -99,8 +104,9 @@ answered rests on the host's routing; no digest was recorded.
   marker screen reported five hits (`current speed`, `flow timing`, `slack`, `tidal current`,
   `tidal stream`); every occurrence in the findings, scenarios and explanation was a statement
   that no current evidence exists or that tide heights cannot give it, and the model made no
-  downgrade attempt and had no agent issues. The hand reading was done by the author of the code,
-  not independently. The raw records are outside the repository; their SHA-256 values are
+  downgrade attempt and had no agent issues. For run 3 the hand reading was done by the author of
+  the code, not independently; for runs 1 and 2 the same author read the replies and no raw-record
+  hashes were taken (the files are held outside the repository). The raw records are outside the repository; their SHA-256 values are
   `024e04905f3d465e140616535c2f54f8ff793847b4e012c477fedb6da635bb4c` (evaluation) and
   `48017ad74d2b229bdebe0bb2ff78d3f5aa961eec55d02953fc827d483f44f113` (tide check), so a reviewer
   who is given the files can confirm they are the ones read.

@@ -275,8 +275,8 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
       reaches the user. Notes never force an outcome. This changes the shape of the record: it
       needs `risk-reviewer`, and ADR 0015's rules apply.
 15. **Egress (blocker B1).** A loopback address proves nothing about where a model server sends
-    data: the local proxy used in the 2026-10-17 run counts as local today yet forwards off the
-    machine.
+    data: the local proxy used in the 2026-10-17 run was counted as local before ADR 0023 yet
+    forwards off the machine.
     - For this feature, **loopback means "unknown", and unknown counts as external.**
     - Only items from documents with `egress_permitted` true go into any prompt, unless the
       operator sets a new explicit setting declaring that the model server runs on this machine and
@@ -300,8 +300,8 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
     - The existing external-LLM opt-in was bypassed by a loopback proxy (AGENTS §12). **ADR 0023
       (proposed) fixes this**: a loopback server needs `DIVESAFE_LLM_SERVER_IS_LOCAL=true` or the
       external opt-in, the two contradict each other, and the declaration is refused for a remote
-      server. This feature still needs that ADR accepted and built first, and it must also record
-      the declaration in `model_version` and use it in the knowledge egress filter.
+      server. This feature still needs that ADR accepted first, and it must also record the
+      egress basis and host in `model_version` and use the basis in the knowledge egress filter.
 16. **What the record and the user see.** The stored item has two forms. The run form carries the
     text. The record form carries document id, version, chunk and `content_sha256`, which is the
     hash of the stored, NFC chunk text (the decision 13 definition, so it also exists for withheld
