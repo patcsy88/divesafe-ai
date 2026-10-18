@@ -95,9 +95,13 @@ plan and evidence data left the machine. The address cannot show where the promp
     floor (the rules and `reconcile`) does not depend on it. The owner is trading
     confidentiality and data-licence risk against extra caution and explanation, not choosing
     between safe and unsafe output.
-  - **Whether production may run with the agent stage off is an owner decision; it is not made
-    here.** It should be settled before production goes live. This ADR also does not check
-    whether a record made with the stage off tells the human decider so (with the stage off,
+  - **Decided by the owner (2026-10-18): production cannot run with the agent stage off.** That
+    is what Settings already enforce (`llm_provider=fake` is refused in production), and a safety
+    test now pins it. The consequence stands as written above: every production assessment
+    sends its plan fields and evidence to the configured model host. It is a decision to accept
+    that, not a finding that it is free of risk. Development and test may still run with the
+    stage off, so the question below still applies to them. This ADR does not check whether a
+    record made with the stage off tells the human decider so (with the stage off,
     `model_version`, findings and agent issues are simply empty); that should be checked.
   - The running application gives no start-up warning when PHN data is enabled and the basis is
     not `declared_local`. Whether the other sources' terms allow their data to be passed to a
@@ -250,9 +254,12 @@ plan and evidence data left the machine. The address cannot show where the promp
 - The peer check sees the first TCP peer only. A loopback server that forwards is still allowed
   if declared.
 - `model_version` does not yet record the declaration (ADR 0022 decision 15).
-- **Git history.** An earlier commit of this ADR (before `c87ae47`) contained the model host's
-  public IP address and the name of its proxy software. They are removed from the tree, not from
-  history. If the repository is or becomes public, either rewrite that history or accept the
-  exposure explicitly.
+- **Git history.** Earlier local commits of this ADR and of `docs/evaluation-strategy.md`
+  contained the model host's public IP address, a LAN address and the name of its proxy
+  software. On 2026-10-18, before anything was pushed (`origin/main` held none of it), the 11
+  unpushed commits were rewritten to remove them, so every commit hash in that range changed. A
+  bundle of the old commits was kept outside the repository and holds the old text; delete it if
+  that matters. Anything already copied from a pre-rewrite checkout is not covered, and neither is the
+  provider id in the model line of `.opencode/agents/*.md`, which is already in `origin/main`.
 - Settings are read once at start-up; changing the variable needs a restart.
 - Hosted vendor adapters (`openai`, `anthropic`) are not built and each needs its own ADR.

@@ -371,3 +371,22 @@ def test_the_live_tide_check_runs_when_declared_local_or_acknowledged_and_says_s
         "loopback_external_opt_in" if acknowledged else "declared_local"
     )
     assert _PLACEHOLDER_KEY not in written.read_text()
+
+
+@pytest.mark.parametrize("extra", [{}, {"llm_provider": "fake"}])
+def test_production_cannot_run_with_the_agent_stage_off(extra: dict[str, str]) -> None:
+    """Owner decision (ADR 0023, 2026-10-18): production needs a real model server, so the agent
+    stage cannot be off. `fake` is the default provider and is the only one that turns the stage
+    off (`build_provider` returns None for it), so a production start-up that forgets to set a
+    provider must fail, not run without agents. The match pins the cause to the provider: the
+    fake-provider check runs before the API-key check."""
+    with pytest.raises(ValidationError, match="fake LLM provider cannot be used in production"):
+        Settings(environment="production", **extra)  # type: ignore[arg-type]
+
+
+def test_the_fake_provider_still_turns_the_agent_stage_off_outside_production() -> None:
+    """The other side of the same decision: development and test may run without agents, and
+    that is the only way the stage is off. If this stopped being true the production refusal
+    above would no longer be the whole story."""
+    for environment in ("development", "test"):
+        assert build_provider(Settings(environment=environment)) is None  # type: ignore[arg-type]

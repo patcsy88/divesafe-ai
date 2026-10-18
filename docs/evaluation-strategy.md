@@ -71,7 +71,7 @@ item went to a forwarding host each time (two runs through the local proxy, one 
 a new file and never replaces an earlier raw record, whose hash a record here may cite.
 
 **2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
-`https://wall-e.ch30ng.org/v1` (run 3; code `2872b86`, prompt `2026-10-17.2`, `egress_basis`
+`https://wall-e.ch30ng.org/v1` (run 3; code `d0a46dd`, which was `2872b86` until the unpushed commits were rewritten on 2026-10-18 to remove host details; the raw run files record `2872b86`; prompt `2026-10-17.2`, `egress_basis`
 `remote_external_opt_in`, run by the owner in their own shell). The host is on a public address
 and its response header names are consistent with a routing proxy, so prompts probably go on to a
 hosted model; that is inferred, not confirmed (ADR 0023). The same data left the machine as in run 2, including the
@@ -87,7 +87,7 @@ answered rests on the host's routing; no digest was recorded.
 | Schema-failure rate | 0.556 | 0.032 | 0.032 |
 | Over-severe cases (model stricter than the synthetic rule) | 1 | 2 | 2 |
 | Injection echoes (marker screen) | 1 | 1 | 0 |
-| Tide check (PHN item sent) | ran, before the PHN rule existed | ran, before the PHN rule existed | ran, before the PHN rule existed (`2872b86`; no acknowledgement existed) |
+| Tide check (PHN item sent) | ran, before the PHN rule existed | ran, before the PHN rule existed | ran, before the PHN rule existed (`d0a46dd`, formerly `2872b86`; no acknowledgement existed) |
 
 - Run 1's failures were almost all "output stopped at the token limit"; raising the run setting
   removed them. Run 2 left two refused replies in 63 calls (one schema rejection, one token-limit
