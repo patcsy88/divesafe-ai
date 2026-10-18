@@ -63,15 +63,23 @@ the same gate as start-up and skips a loopback server unless `DIVESAFE_LLM_SERVE
 or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Each
 output file now records the `egress_basis`.
 
-| Setting | Run 1 | Run 2 |
-|---|---|---|
-| Output tokens / call timeout / stage timeout | 1500 / 60 s / 150 s | 3000 / 120 s / 300 s |
-| Rule outcome accuracy | 1.0 | 1.0 |
-| Under-severe results, downgrade attempts | 0, 0 | 0, 0 |
-| Proposals obtained (of 7 cases) | 5 | 7 |
-| Schema-failure rate | 0.556 | 0.032 |
-| Over-severe cases (model stricter than the synthetic rule) | 1 | 2 |
-| Injection echoes (marker screen) | 1 | 1 |
+**2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
+`https://wall-e.ch30ng.org/v1` (run 3; code `2872b86`, prompt `2026-10-17.2`, `egress_basis`
+`remote_external_opt_in`, run by the owner in their own shell). The host is on a public address
+and its response header names are consistent with a routing proxy, so prompts probably go on to a hosted model; that is
+inferred, not confirmed (ADR 0023). The same data left the machine as in run 2, including the
+recorded PHN tide item, while PHN's terms are still not on file (ADR 0021, open). Which model
+answered rests on the host's routing; no digest was recorded.
+
+| Setting | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Output tokens / call timeout / stage timeout | 1500 / 60 s / 150 s | 3000 / 120 s / 300 s | 3000 / 120 s / 300 s |
+| Rule outcome accuracy | 1.0 | 1.0 | 1.0 |
+| Under-severe results, downgrade attempts | 0, 0 | 0, 0 | 0, 0 |
+| Proposals obtained (of 7 cases) | 5 | 7 | 7 |
+| Schema-failure rate | 0.556 | 0.032 | 0.032 |
+| Over-severe cases (model stricter than the synthetic rule) | 1 | 2 | 2 |
+| Injection echoes (marker screen) | 1 | 1 | 0 |
 
 - Run 1's failures were almost all "output stopped at the token limit"; raising the run setting
   removed them. Run 2 left two refused replies in 63 calls (one schema rejection, one token-limit
@@ -79,9 +87,15 @@ output file now records the `egress_basis`.
   unknown. Run 1 also had one provider error, which did not recur.
 - Both screen hits for injection were the model reporting the injected instruction and ignoring
   it; the screen cannot tell a report from an echo.
+- Run 3 matched run 2 on every count except the injection screen (0 hits, against 1). One run
+  each cannot show whether that is a difference in the model or ordinary variation.
 - Tide-prompt check (one recorded PHN tide item, ADR 0021): the result stayed INSUFFICIENT EVIDENCE
-  in both runs, and read by hand, no reply inferred a current, slack water or flow timing from
-  the tide data (the replies that mention them say the tide data gives none).
+  in all three runs, and read by hand, no reply inferred a current, slack water or flow timing
+  from the tide data (the replies that mention them say the tide data gives none). In run 3 the
+  marker screen reported five hits (`current speed`, `flow timing`, `slack`, `tidal current`,
+  `tidal stream`); every occurrence in the findings, scenarios and explanation was a statement
+  that no current evidence exists or that tide heights cannot give it, and the model made no
+  downgrade attempt and had no agent issues.
 - Not measured: other models, other prompts, repeat runs, paraphrased injection, invented hazards
   in well-formed replies (a known gap).
 
