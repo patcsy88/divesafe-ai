@@ -190,7 +190,7 @@ def test_a_remote_host_needs_https_and_to_be_allowed() -> None:
         "https://localhost.evil.example/v1",
         "https://llm.example.org.evil.example/v1",
         "https://sub.llm.example.org/v1",
-        "https://192.168.1.1/v1",
+        "https://wall-e.ch30ng.org/v1",
     ],
 )
 def test_look_alike_hosts_are_not_allowed(url: str) -> None:
