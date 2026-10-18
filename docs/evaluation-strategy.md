@@ -50,8 +50,8 @@ evaluations use temperature 0 where supported and store raw outputs.
 ## Live runs recorded
 
 Each is a single run at temperature 0 on synthetic scenarios, not reviewed by a diving
-professional. Raw records are kept outside the repository. They show the pipeline works with that
-model; they do not show a model is safe or reliable.
+professional. Raw records are kept outside the repository. They show the pipeline works with
+whatever model the host served under that name; they do not show a model is safe or reliable.
 
 **2026-10-17, `claude-sonnet-5-5` through the OpenAI-compatible adapter** (a local proxy at
 `localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). That run
@@ -66,8 +66,8 @@ output file now records the `egress_basis`.
 **2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
 `https://wall-e.ch30ng.org/v1` (run 3; code `2872b86`, prompt `2026-10-17.2`, `egress_basis`
 `remote_external_opt_in`, run by the owner in their own shell). The host is on a public address
-and its response header names are consistent with a routing proxy, so prompts probably go on to a hosted model; that is
-inferred, not confirmed (ADR 0023). The same data left the machine as in run 2, including the
+and its response header names are consistent with a routing proxy, so prompts probably go on to a
+hosted model; that is inferred, not confirmed (ADR 0023). The same data left the machine as in run 2, including the
 recorded PHN tide item, while PHN's terms are still not on file (ADR 0021, open). Which model
 answered rests on the host's routing; no digest was recorded.
 
@@ -87,15 +87,23 @@ answered rests on the host's routing; no digest was recorded.
   unknown. Run 1 also had one provider error, which did not recur.
 - Both screen hits for injection were the model reporting the injected instruction and ignoring
   it; the screen cannot tell a report from an echo.
-- Run 3 matched run 2 on every count except the injection screen (0 hits, against 1). One run
-  each cannot show whether that is a difference in the model or ordinary variation.
+- Run 3 matched run 2 on every figure in the table except the injection screen (0 hits, against
+  1). "Matched" means the totals are equal, not that the same cases were involved (the two
+  over-severe cases may differ). One run each cannot show why the screen differs: a difference in
+  the model, ordinary variation, or different routing behind the host (neither run recorded which
+  model answered). The screen cannot tell a report of an injection from an echo, so zero hits may
+  only mean the model did not mention the injected text.
 - Tide-prompt check (one recorded PHN tide item, ADR 0021): the result stayed INSUFFICIENT EVIDENCE
   in all three runs, and read by hand, no reply inferred a current, slack water or flow timing
   from the tide data (the replies that mention them say the tide data gives none). In run 3 the
   marker screen reported five hits (`current speed`, `flow timing`, `slack`, `tidal current`,
   `tidal stream`); every occurrence in the findings, scenarios and explanation was a statement
   that no current evidence exists or that tide heights cannot give it, and the model made no
-  downgrade attempt and had no agent issues.
+  downgrade attempt and had no agent issues. The hand reading was done by the author of the code,
+  not independently. The raw records are outside the repository; their SHA-256 values are
+  `024e04905f3d465e140616535c2f54f8ff793847b4e012c477fedb6da635bb4c` (evaluation) and
+  `48017ad74d2b229bdebe0bb2ff78d3f5aa961eec55d02953fc827d483f44f113` (tide check), so a reviewer
+  who is given the files can confirm they are the ones read.
 - Not measured: other models, other prompts, repeat runs, paraphrased injection, invented hazards
   in well-formed replies (a known gap).
 

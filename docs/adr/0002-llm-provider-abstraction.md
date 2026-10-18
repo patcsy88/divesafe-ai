@@ -13,7 +13,8 @@ providers, and results must not depend on one vendor.
 Agents depend on the `LLMProvider` protocol (`divesafe.models.llm`): an async `complete`
 taking a provider-neutral `LLMRequest` and returning an `LLMResponse` carrying provider and model.
 Adapters register by name via `register_provider`; `create_provider(settings)` selects one from
-`DIVESAFE_LLM_PROVIDER`. A `FakeProvider` supports tests and offline work. No vendor SDK is a
+`DIVESAFE_LLM_PROVIDER`. `create_provider` does not check where prompts go; runtime callers use
+`build_provider` (ADR 0023). A `FakeProvider` supports tests and offline work. No vendor SDK is a
 dependency yet; each adapter adds its own optional dependency when implemented.
 
 ## Consequences

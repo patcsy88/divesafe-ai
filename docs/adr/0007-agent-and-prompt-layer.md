@@ -57,7 +57,7 @@ Clients must render them as plain text (no HTML or markdown), and they must neve
 the RAG corpus, `HISTORICAL_OBSERVATIONS` or any Learn-stage label. Learn uses the deterministic
 result and the human decision.
 
-**Data egress.** `LLMProvider.external` marks hosted providers, and `build_provider` refuses one unless
+**Data egress.** `LLMProvider.external` marks a server whose address is not on this machine, and `build_provider` refuses one unless
 `DIVESAFE_ALLOW_EXTERNAL_LLM=true` (amended by ADR 0023: a loopback server also needs
 `DIVESAFE_LLM_SERVER_IS_LOCAL=true`, an operator statement the software cannot check, or that opt-in). Adapters must never log an `LLMRequest` (it holds the whole
 prompt) or any API key. The agent layer sends only

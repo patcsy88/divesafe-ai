@@ -284,7 +284,11 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
       is false**, and start-up refuses the declaration with a provider whose flag is true (openai,
       anthropic, an allowed remote host, plain-http Ollama on a remote host). It is never inferred
       from the URL, requires a loopback peer check for both `http` and `https`, is logged at
-      start-up and recorded in `model_version`. The `fake` provider sends nothing.
+      start-up and recorded in `model_version`, together with the host. The `fake` provider sends
+      nothing. **Items are sent unfiltered only when the egress basis (ADR 0023) is exactly
+      `declared_local`;** `none` sends nothing, and `loopback_external_opt_in` and
+      `remote_external_opt_in` are filtered. Withholding costs the agent stage context it could
+      use to add caution; the final result still cannot fall below the rules.
     - **The filter is applied once, where the agent stage starts (`run_agent_stage`)**, so every
       specialist, ToT and the risk agent see the same filtered set. Withheld ids are never in
       `ALLOWED_EVIDENCE_IDS` (a test asserts this), the trusted wording says site documents were

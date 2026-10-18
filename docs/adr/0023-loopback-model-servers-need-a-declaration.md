@@ -29,8 +29,9 @@ plan and evidence data left the machine. The address cannot show where the promp
 3. **A remote server** (`external` true) still needs `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, and the
    declaration is **refused** with it: a server that is not on this machine cannot be "local".
    Start-up fails with a fixed message.
-4. **Only the exact `FakeProvider` class is exempt** (it sends nothing). A subclass is not, so a
-   test double cannot carry the exemption into a real provider.
+4. **Only the exact `FakeProvider` class is exempt** (it sends nothing, with the assumption in
+   "Not solved"). A subclass is not, so a test double cannot carry the exemption into a real
+   provider.
 5. **The peer check covers https and Ollama.** Before this change only the OpenAI-compatible
    adapter checked, and only over plain http, that the connected address was loopback. The check
    now lives in `divesafe.models.loopback` and covers http and https for both adapters, closing
@@ -45,6 +46,15 @@ plan and evidence data left the machine. The address cannot show where the promp
    filter must use the basis, not `external`.
 7. **Live evaluation** runs the same `check_egress` (via `tests/evaluation/egress_gate.py`), skips
    when it refuses, fails on the contradictory pair, and writes the basis into both output files.
+   It reads the two flags through `Settings`, so `1`, `TRUE` and `true` mean what they mean at
+   start-up. Its tide check also skips unless the basis is `declared_local` or
+   `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true` is set, because the opt-in covers where the prompt
+   goes, not the licence of the data in it (PHN's terms are not on file, ADR 0021).
+8. **Callers.** `create_provider` and the adapter constructors do **not** check egress. Every
+   runtime caller must go through `build_provider` or call `check_egress` itself and log the
+   basis. A safety test scans `src/` and fails if `create_provider` or an adapter constructor is
+   called from anywhere else (`models/` and `api/state.py` only). The check is a text scan, not a
+   proof: an alias or a dynamic lookup would pass it.
 
 ## Consequences
 
@@ -56,20 +66,48 @@ plan and evidence data left the machine. The address cannot show where the promp
 
 ## Tests
 
-`tests/safety/test_llm_egress_declaration.py` (undeclared loopback refused; declaration or opt-in
-accepted; declaration refused for a remote server; both settings together refused; only the exact
-fake class exempt; real adapters on loopback need it) and `tests/unit/test_loopback_peer.py` (the
-peer check over http and https, Ollama sending nothing when the peer is not loopback). Nine
-mutations were applied (each gate removed, the peer check removed, the https handler swapped in
-each adapter, Ollama's loopback flag dropped, the exemption widened to subclasses). Two survived
-the first test set and were closed with tests; all nine are now caught.
+- `tests/safety/test_llm_egress_declaration.py`: undeclared loopback refused; declaration or
+  opt-in accepted (also through the environment variable, including an empty value); declaration
+  refused for a remote server; both settings together refused; only the exact fake class exempt;
+  real adapters on loopback need it; `build_default_state` goes through the gate; the basis for
+  each case; the start-up log records `egress_basis` and `address_is_remote` for a loopback and a
+  remote case; no source file outside the start-up path calls `create_provider` or an adapter
+  constructor; the live-evaluation setup runs the gate (checked offline by patching the module's
+  settings, since the module itself is skipped without a model).
+- `tests/evaluation/test_egress_gate_offline.py` (safety): the evaluation gate refuses what
+  start-up refuses.
+- `tests/unit/test_loopback_peer.py` (peer check over http and https for both adapters, IPv4-mapped
+  addresses, Ollama sending nothing when the peer is not loopback, Ollama's TLS context) and the
+  TLS-context test in `test_openai_compatible_transport.py`, both marked safety. These use
+  `.invalid` host names, which never resolve, so they cannot make a real call.
+- **Mutation checks.** The first test set was mutation-checked with nine mutations (each gate
+  removed, the peer check removed, the https handler swapped in each adapter, Ollama's loopback
+  flag dropped, the exemption widened to subclasses); two survived and were closed with tests.
+  A later round applied 16 and caught 14; the two survivors were the IPv4-mapped conversion and
+  the evaluation gate call. The last round applied five: the evaluation gate call, a stray
+  `create_provider` caller, a stray adapter constructor, a dropped `address_is_remote`, and a
+  strict flag parser in the evaluation gate. All five are caught. The last one survived at first,
+  because a skip inside the test hides as a skip, and was closed by making the positive cases
+  fail on a skip. One survivor remains, listed below.
 
 ## Not solved
 
+- **`docker/docker-compose.yml` is a development stack, not a deployment target.** It calls
+  itself one. It gives the app container the owner-role `DIVESAFE_ADMIN_DATABASE_URL` (which
+  `.env.example` says is never given to the app), passes the whole `.env` through `env_file`
+  (so the model API key, `POSTGRES_PASSWORD`, the MET token and the API key hashes sit in the
+  container environment, visible in `docker inspect` and `/proc/<pid>/environ`), and has no
+  `sslmode` on the database URL, so `environment=production` refuses to start and a stack built
+  from it runs as `development` without the production checks. **A production deployment needs
+  its own compose file and ADR**: `environment=production`, a least-privilege database role with
+  `sslmode=require`, no admin URL in the app container (run `db_init` as a separate one-off
+  service), and secrets mounted as files or passed one by one, not the whole `.env`. None of that
+  is done.
 - **Containers and the intended model host (owner, 2026-10-18).** DiveSafe AI is to be deployed
-  in Docker (`docker/docker-compose.yml`). The model host is `https://wall-e.ch30ng.org`. What
-  that server is, and where it sends prompts, is **not known to this ADR**: it may run the model
-  itself or forward to a hosted one. Consequences, checked against the code:
+  in Docker. The model host is `https://wall-e.ch30ng.org`. What that server is, and where it
+  sends prompts, is **not known to this ADR**. A model name such as `claude-sonnet-5-5`, whose
+  weights are not distributed, means the host either forwards to that vendor or maps the name to
+  some other model. Consequences, checked against the code:
   - Inside the container, loopback is the container itself, so `localhost` can never reach a
     model elsewhere. A named host is not loopback, so the provider counts as remote (`external`
     true): it needs `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, the declaration
@@ -93,14 +131,19 @@ the first test set and were closed with tests; all nine are now caught.
   - **One unauthenticated check (owner-approved, 2026-10-18, from the developer machine, not a
     container):** `GET https://wall-e.ch30ng.org/v1/models` with certificate verification on,
     no key, no prompt data. Result: TLS verified, HTTP 401 with a JSON body, and response header
-    names consistent with a routing proxy that routes to upstream providers (so it
-    probably forwards prompts, but that is inferred from the headers, not confirmed). The name
-    resolved to a public address, so this host is on the internet, not on the
-    LAN. The 401 shows the path `/v1/models` exists and wants a key; it does not show that
+    names consistent with a routing proxy, so it probably forwards prompts (inferred from the
+    headers, not confirmed). The name resolved to a public address, so this host is on the
+    internet, not on the LAN. The 401 shows the path `/v1/models` exists and wants a key; it does not show that
     `/v1/chat/completions` works, which nothing has called.
   - **Not checked:** that the name resolves from inside the container, that the container's
     trust store accepts the certificate, which models the key can use, and whether the server
-    forwards prompts.
+    forwards prompts. Start-up checks configuration, not whether the server works: if DNS, the
+    trust store or the base path is wrong in the container, start-up succeeds and every
+    assessment records an agent-stage issue while the deterministic result stands.
+  - Environment proxies are ignored by the adapters, so a network that needs an egress proxy
+    makes every model call fail. That fails safe; it is not supported.
+  - The certificate presented on 2026-10-18 expires on 2026-12-20. A lapse makes model calls
+    fail the same way.
   - The peer check applies only to loopback hosts; for a named host the connected address is
     not verified beyond the allow-listed host name and the certificate.
 - **Port squatting.** "On this machine" is not "run by the operator". On a shared host another
@@ -113,14 +156,28 @@ the first test set and were closed with tests; all nine are now caught.
   and neither is needed for a publicly trusted certificate.
 - **The fake exemption** assumes the scripted replies are strings or a test-only callable. The
   `fake` setting returns before the check anyway.
-- **Two mutations survive.** (1) Removing the IPv4-mapped conversion in `is_loopback` is
-  equivalent on Python 3.14, whose `is_loopback` already treats `::ffff:127.0.0.1` as loopback; the
-  conversion matters on older Pythons (CI also runs 3.11) and the parametrised test would catch it
-  there, but that was not run here. (2) Replacing the `egress_gate(...)` call in
-  `test_evaluation_live.py` is not caught offline, because that module is skipped without
-  `DIVESAFE_EVAL_MODEL`. The gate function itself is covered by `test_egress_gate_offline.py`.
+- **One mutation survives.** Removing the IPv4-mapped conversion in `is_loopback` is equivalent
+  on Python 3.14, whose `is_loopback` already treats `::ffff:127.0.0.1` as loopback. The
+  conversion matters on older Pythons (CI also runs 3.11) and the parametrised test should catch
+  it there, but that was not run here (no 3.11 is installed on the development machine). Without
+  the conversion a mapped loopback address is refused, which fails closed. The evaluation gate
+  call, a survivor in the previous round, is now caught offline.
 - **No test uses a real loopback TLS server**, so hostname matching and "nothing sent" over https
   are covered only through the patched connection class.
+- **The opt-in covers the egress decision, not the licence of the data sent.** The recorded PHN
+  tide item has gone to a third-party host in two live runs while PHN's terms are not on file
+  (ADR 0021). The live tide check now skips unless the basis is `declared_local` or an explicit
+  acknowledgement is set; nothing equivalent exists for a running application.
+- **The basis cannot tell hosts apart.** A self-hosted model on another machine and a public
+  forwarding proxy both log `remote_external_opt_in`, so setting the opt-in becomes routine and
+  signals less. It does not name the recipient. `model_version` should record the host too,
+  because one opt-in covers every allow-listed host and model.
+- **The basis is not on the assessment record**, so a reviewer of a past assessment cannot see
+  whether its data left the machine. The model name on a record is the name requested; behind a
+  routing host it does not show which model answered.
+- **Confidentiality only.** An unverified upstream can return anything. Authority design limits
+  this to adding caution or noise, but its explanation prose still reaches the human decider
+  (ADR 0007's plain-text and untrusted-prose rules apply).
 - **The declaration is a statement the software cannot check.** An operator can declare a
   forwarding proxy local. The control is that the choice is explicit, default-off and logged, not
   that it is verified.

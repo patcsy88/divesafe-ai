@@ -25,5 +25,9 @@ htmlcov/
 *.sqlite*
 /data/
 
+# Raw model replies from live evaluation runs (set DIVESAFE_EVAL_OUT outside the repo anyway).
+evaluation_*.json
+tide_check_*.json
+
 # Forms returned by the dive professional: they name people. Keep local, never commit.
 /docs/domain-validation/returned/

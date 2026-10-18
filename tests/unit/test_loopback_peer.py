@@ -171,7 +171,7 @@ def test_ollama_verifies_certificates_for_loopback_and_remote_https(
 
     monkeypatch.setattr(mod.urllib.request, "build_opener", recording)
     request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
-    for url in ("https://127.0.0.1:1", "https://ollama.example.org"):
+    for url in ("https://127.0.0.1:1", "https://ollama.invalid"):
         seen.clear()
         with pytest.raises(OllamaError):
             asyncio.run(OllamaProvider("m", url).complete(request))

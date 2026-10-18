@@ -134,3 +134,63 @@ def test_the_start_up_log_records_the_basis(
         build_provider(_settings(llm_provider="openai", allow_external_llm=True))
     record = next(r for r in caplog.records if r.getMessage() == "agent stage is ON")
     assert record.egress_basis == "loopback_external_opt_in"  # type: ignore[attr-defined]
+    assert record.address_is_remote is False  # type: ignore[attr-defined]
+    caplog.clear()
+    _with_stub(monkeypatch, external=True)
+    with caplog.at_level("WARNING"):
+        build_provider(_settings(llm_provider="openai", allow_external_llm=True))
+    record = next(r for r in caplog.records if r.getMessage() == "agent stage is ON")
+    assert record.egress_basis == "remote_external_opt_in"  # type: ignore[attr-defined]
+    assert record.address_is_remote is True  # type: ignore[attr-defined]
+
+
+def test_only_the_start_up_path_builds_a_real_provider() -> None:
+    """`create_provider` and the adapter constructors do not check egress, so no other runtime
+    code may call them: a new caller must go through `build_provider` or call `check_egress`."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src" / "divesafe"
+    allowed = {
+        "create_provider": {"models/llm.py", "api/state.py"},
+        "OllamaProvider": {"models/ollama.py"},
+        "OpenAICompatibleProvider": {"models/openai_compatible.py"},
+    }
+    found: dict[str, set[str]] = {name: set() for name in allowed}
+    for path in src.rglob("*.py"):
+        rel = path.relative_to(src).as_posix()
+        text = path.read_text()
+        for name in allowed:
+            if re.search(rf"(?<![\w.])(?:\w+\.)*{name}\(", text) and rel not in allowed[name]:
+                found[name].add(rel)
+    assert found == {name: set() for name in allowed}
+    assert "create_provider(settings)" in (src / "api" / "state.py").read_text()
+
+
+def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live module is skipped offline, so its setup is exercised here with the module
+    settings patched. Nothing is sent: only the provider object is built."""
+    from tests.evaluation import test_evaluation_live as live
+
+    monkeypatch.setattr(live, "MODEL", "m")
+    monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
+    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
+    monkeypatch.setattr(live, "ALLOW_EXTERNAL", "false")
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
+    with pytest.raises(pytest.skip.Exception):
+        live._setup()
+
+    def basis() -> str:
+        try:
+            return str(live._setup()[2])
+        except pytest.skip.Exception as exc:  # a skip here would hide a failure as a skip
+            raise AssertionError(f"the gate refused a declared server: {exc}") from None
+
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "TRUE")
+    assert basis() == "declared_local"
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
+    monkeypatch.setattr(live, "ALLOW_EXTERNAL", "1")
+    assert basis() == "loopback_external_opt_in"
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "true")
+    with pytest.raises(ValidationError, match="contradict"):
+        live._setup()

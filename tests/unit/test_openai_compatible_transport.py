@@ -161,6 +161,7 @@ def test_the_first_byte_timeout_comes_from_the_provider(server: str) -> None:
     assert time.monotonic() - started < 3
 
 
+@pytest.mark.safety
 def test_the_tls_context_verifies_certificates_and_host_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,9 +177,9 @@ def test_the_tls_context_verifies_certificates_and_host_names(
         return real_build(*handlers)
 
     monkeypatch.setattr(oc.urllib.request, "build_opener", recording)
-    for url in ("http://127.0.0.1:1/v1", "https://llm.example.org/v1"):
+    for url in ("http://127.0.0.1:1/v1", "https://llm.invalid/v1"):
         seen.clear()
-        provider = OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"llm.example.org"}))
+        provider = OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"llm.invalid"}))
         with pytest.raises(OpenAICompatibleError):
             asyncio.run(provider.complete(REQUEST))
         assert seen and all(c.verify_mode == ssl.CERT_REQUIRED and c.check_hostname for c in seen)

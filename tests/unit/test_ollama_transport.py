@@ -185,19 +185,15 @@ def test_a_bad_port_is_refused_at_construction(url: str) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    [
-        "http://0.0.0.0:11434",
-        "http://2130706433",
-        "http://[::ffff:127.0.0.1]",
-        "http://localhost.:1",
-    ],
+    ["http://0.0.0.0:11434", "http://2130706433", "http://localhost.:1"],
 )
 def test_odd_loopback_spellings_do_not_get_plain_http(url: str) -> None:
-    try:
-        provider = OllamaProvider("m", url)
-    except ValueError:
-        return
-    assert provider.external is False or "localhost" in url
+    with pytest.raises(ValueError):
+        OllamaProvider("m", url)
+
+
+def test_an_ipv4_mapped_loopback_address_is_loopback() -> None:
+    assert OllamaProvider("m", "http://[::ffff:127.0.0.1]:11434").external is False
 
 
 def test_a_deeply_nested_response_is_a_fixed_error() -> None:

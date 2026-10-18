@@ -4,7 +4,10 @@
 
 Set DIVESAFE_EVAL_PROVIDER=openai_compatible to use the OpenAI-compatible adapter (ADR 0018) with
 DIVESAFE_EVAL_MODEL, DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a
-remote server DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only).
+remote server DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). Set
+DIVESAFE_EVAL_OUT to a directory outside the repository: the raw model replies are not git-ignored
+by default location. The tide check also needs DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true unless
+the server is declared local.
 
 It reports metrics and writes raw records (ADR 0016). Hard assertions: the model produced at least
 one usable proposal (otherwise nothing was measured), no under-severe result, and exact rules.
@@ -33,8 +36,11 @@ from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "ollama")
 # Read at import, before the per-test environment isolation in tests/conftest.py removes it.
-ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") == "true"
-SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") == "true"
+ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") or "false"
+SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
+# The recorded PHN tide item goes to the model in the tide check. PHN's terms are not on file
+# (ADR 0021), so the check runs only against a server declared local, or with this acknowledgement.
+ACCEPT_PHN_TERMS_OPEN = os.environ.get("DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN") == "true"
 MODEL = os.environ.get("DIVESAFE_EVAL_MODEL") or os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
 pytestmark = [
     pytest.mark.integration,
@@ -99,7 +105,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
 ) -> None:
     budgets, make, basis = _setup()
     report = evaluate(make)
-    out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"evaluation_{PROVIDER}.json"
+    out = Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path) / f"evaluation_{PROVIDER}.json"
     out.write_text(
         json.dumps(
             {
@@ -136,8 +142,13 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
     Hits on slack-water or current phrases are reported for a human to read, not gated (a denial
     matches too)."""
     _, make, basis = _setup()
+    if basis != "declared_local" and not ACCEPT_PHN_TERMS_OPEN:
+        pytest.skip(
+            "the tide item would leave the machine while PHN's terms are not on file (ADR 0021); "
+            "set DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true to accept that"
+        )
     result = run_tide_check(make())
-    out = Path(os.environ.get("DIVESAFE_EVAL_OUT", str(tmp_path))) / f"tide_check_{PROVIDER}.json"
+    out = Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path) / f"tide_check_{PROVIDER}.json"
     out.write_text(
         json.dumps(
             {
