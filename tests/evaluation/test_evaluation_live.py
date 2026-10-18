@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 import pytest
 from pydantic import SecretStr
-from tests.evaluation.egress_gate import egress_gate, tide_check_allowed
+from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
 from tests.evaluation.harness import evaluate
 from tests.evaluation.tide_check import run_tide_check
 
@@ -117,7 +117,9 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
 ) -> None:
     budgets, make, basis = _setup()
     report = evaluate(make)
-    out = Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path) / f"evaluation_{PROVIDER}.json"
+    out = output_path(
+        Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"evaluation_{PROVIDER}.json"
+    )
     out.write_text(
         json.dumps(
             {
@@ -160,8 +162,8 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
             "the tide item would leave the machine while PHN's terms are not on file (ADR 0021); "
             "set DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true to accept that"
         )
-        skipped = (
-            Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path) / f"tide_check_{PROVIDER}.json"
+        skipped = output_path(
+            Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"tide_check_{PROVIDER}.json"
         )
         skipped.write_text(
             json.dumps(
@@ -180,7 +182,9 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
         )
         pytest.skip(reason)
     result = run_tide_check(make())
-    out = Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path) / f"tide_check_{PROVIDER}.json"
+    out = output_path(
+        Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"tide_check_{PROVIDER}.json"
+    )
     out.write_text(
         json.dumps(
             {

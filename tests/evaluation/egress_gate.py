@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
+
 import pytest
 
 from divesafe.config import Settings
@@ -13,7 +16,19 @@ def tide_check_allowed(basis: EgressBasis, *, phn_terms_acknowledged: bool) -> b
     """The recorded PHN tide item goes to the model in the tide check. PHN's terms are not on file
     (ADR 0021), so it runs only against a server declared local, or with an explicit
     acknowledgement. The egress opt-in covers where the prompt goes, not the data licence."""
+    # "none" (the exact fake class) cannot reach the live module, which builds only real adapters;
+    # it is refused here too, so a basis added later is refused until someone decides otherwise.
     return basis == "declared_local" or phn_terms_acknowledged
+
+
+def output_path(directory: Path, name: str) -> Path:
+    """A path that does not exist yet. A repeat run, or a skipped check, must never replace an
+    earlier raw record, because the record of a run may cite that file's hash."""
+    path = directory / name
+    if not path.exists():
+        return path
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    return directory / f"{path.stem}_{stamp}{path.suffix}"
 
 
 def egress_gate(

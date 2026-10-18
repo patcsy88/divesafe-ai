@@ -57,16 +57,22 @@ plan and evidence data left the machine. The address cannot show where the promp
    host name only (no scheme, port, path or key).
 8. **Callers.** `create_provider`, the adapter constructors, each adapter module's `_factory` and
    the registry do **not** check egress. Every runtime caller must go through `build_provider` or
-   call `check_egress` itself and log the basis. A safety test scans `src/` and fails if any of
-   them is called or indexed from anywhere else (`models/` and `api/state.py` only), and checks
-   that the pattern still matches where the use is allowed. The check is a text scan, not a
-   proof: an `as` alias, `getattr`, `functools.partial` or a dynamic lookup would pass it. A
-   stronger design would have `check_egress` mark the provider and make each adapter refuse to
-   send without the mark; it is not built.
+   call `check_egress` itself and log the basis. A safety test scans each file under
+   `src/divesafe` and fails if any of those names is **mentioned** (called, indexed, passed as a
+   value, iterated) outside the files that define or re-export it (`models/` and `api/state.py`),
+   and checks that the pattern still matches in those files (a definition counts, so this shows
+   the pattern works, not that the files still go through the gate). A mention in a comment also
+   fails it, which is safe. The check is a text scan, not a proof: an `as` alias, `getattr`,
+   `functools.partial`, a second function inside an allowed file, or code outside
+   `src/divesafe` passes it. A stronger design would have `check_egress` mark the provider and
+   make each adapter refuse to send without the mark; it is not built.
 9. **`declared_local` is not tied to the peer check.** `check_egress` returns it for any provider
    whose `external` is false. Today the only two adapters run the loopback peer check, but a
    future adapter with `external` false and no peer check would also get `declared_local`, which
-   ADR 0022 treats as unfiltered. Each new adapter must do the peer check; nothing enforces it.
+   ADR 0022 treats as unfiltered. Each new adapter must do the peer check. A safety test now
+   builds every registered real adapter on loopback and fails unless its opener uses the
+   loopback http and https handlers, so a new adapter fails it until it does the check or the
+   exception is written down here. That test sees the handlers, not that the peer check runs.
 
 ## Consequences
 
@@ -79,10 +85,24 @@ plan and evidence data left the machine. The address cannot show where the promp
   production. With the planned host, every production assessment sends its plan fields and
   evidence to a public host that probably forwards them, and also the PHN tide item whenever
   `DIVESAFE_PHN_ETIDE_ENABLED` is on. An operator who wants no data to leave the machine has no
-  production option today except a model on loopback that they declare local. **Whether
-  production may run with the agent stage off is an owner decision; it is not made here.** The
-  running application gives no start-up warning when PHN data is enabled and the basis is not
-  `declared_local`.
+  production option today except a model on loopback that they declare local, and **inside a
+  container that exception hardly exists**: loopback is the app container itself, so the model
+  would have to run in that same container, or the container would need host networking (which
+  brings back the port-squatting exposure below and drops network isolation). A model in a
+  sibling container is a named host and gets `remote_external_opt_in`. Until the owner decides,
+  "production sends" is the decision actually in effect.
+  - **What the decision is about.** The agent stage can only tighten a result, so the safety
+    floor (the rules and `reconcile`) does not depend on it. The owner is trading
+    confidentiality and data-licence risk against extra caution and explanation, not choosing
+    between safe and unsafe output.
+  - **Whether production may run with the agent stage off is an owner decision; it is not made
+    here.** It should be settled before production goes live. This ADR also does not check
+    whether a record made with the stage off tells the human decider so (with the stage off,
+    `model_version`, findings and agent issues are simply empty); that should be checked.
+  - The running application gives no start-up warning when PHN data is enabled and the basis is
+    not `declared_local`. Whether the other sources' terms allow their data to be passed to a
+    third-party model host is not stated here and was not checked.
+  - The start-up log does not name the host, so the logs cannot tell hosts apart either.
 
 ## Tests
 
@@ -91,27 +111,45 @@ plan and evidence data left the machine. The address cannot show where the promp
   refused for a remote server; both settings together refused; only the exact fake class exempt;
   real adapters on loopback need it; `build_default_state` goes through the gate; the basis for
   each case; the start-up log records `egress_basis` and `address_is_remote` for a loopback and a
-  remote case; no source file outside the start-up path calls `create_provider` or an adapter
-  constructor; the live-evaluation setup runs the gate (checked offline by patching the module's
-  settings, since the module itself is skipped without a model).
+  remote case; no source file outside the start-up path mentions `create_provider`, an adapter
+  constructor, a module `_factory` or the registry, and the pattern is tested on its own; every
+  registered real adapter uses the loopback handlers; the live-evaluation setup runs the gate
+  (checked offline by patching the module's settings, since the module itself is skipped without
+  a model); the live tide check sends nothing without the acknowledgement and leaves a skip
+  record without replacing an earlier file; it runs, and records `status: ran` and the
+  acknowledgement, when declared local or acknowledged; a placeholder key never appears in either
+  record. The live module's `git rev-parse` call is patched out, so these tests start no
+  subprocess.
 - `tests/evaluation/test_egress_gate_offline.py` (safety): the evaluation gate refuses what
-  start-up refuses.
+  start-up refuses, with skips matched on their reason; the tide-check rule for all eight
+  combinations; an output path never replaces an existing file.
 - `tests/unit/test_loopback_peer.py` (peer check over http and https for both adapters, IPv4-mapped
   addresses, Ollama sending nothing when the peer is not loopback, Ollama's TLS context) and the
   TLS-context test in `test_openai_compatible_transport.py`, both marked safety. These use
   `.invalid` host names, which are reserved never to resolve (RFC 6761). Some resolvers rewrite
   failed lookups, so the second safeguard is that no public authority issues a certificate for
   `.invalid`: certificate verification fails before any request body is sent.
-- **Mutation checks.** Earlier rounds applied 9, then 16, then 5 mutations as the code
-  changed. After the last review every mutation was **re-run on the final code**: 24 in total,
-  23 caught, 1 survivor (listed below). They were: each gate in `check_egress` removed or
-  loosened, the contradiction check, the peer check, the https handler swapped in the loopback
-  module and in each adapter, Ollama's loopback flag, the log fields, `build_provider` skipping
-  `check_egress`, the evaluation gate call, a strict flag parser in the evaluation gate, three
-  mutations of the tide-check licence rule (always allow, ignore the acknowledgement, treat the
-  loopback opt-in as local) plus removing its call, and four stray callers (`create_provider`, an
-  adapter constructor, a module `_factory`, a `_REGISTRY` index). Two earlier survivors were
-  closed by making positive cases fail on a skip, because a skip inside a test hides as a skip.
+- **Mutation checks.** Earlier rounds applied 9, then 16, then 5 mutations as the code changed.
+  After the last review all of them were **re-run on the final code, with more added**: 34 in
+  total, **33 caught, 1 survivor** (listed under "Not solved"). The 27 numbered ones, each applied
+  alone and run against the egress, loopback, adapter and agent safety tests:
+  1. the loopback gate in `check_egress` removed; 2. the declaration allowed for a remote server;
+  3. the fake exemption widened to subclasses; 4. the remote opt-in removed; 5. the
+  both-flags contradiction removed; 6. the peer check removed; 7. the https handler in the loopback
+  module swapped for the stock one; 8. Ollama's loopback flag dropped; 9. the OpenAI-compatible
+  https handler swapped; 10. Ollama's https handler swapped; 11. `address_is_remote` dropped from
+  the log; 12. `egress_basis` dropped from the log; 13. `build_provider` skipping `check_egress`;
+  14. the evaluation gate call replaced; 15. a strict flag parser in the evaluation gate;
+  16. the tide rule always allowing; 17. the tide rule ignoring the acknowledgement; 18. the tide
+  rule treating the loopback opt-in as local; 19. the tide check skipping the rule;
+  20. the OpenAI-compatible http handler swapped; 21. Ollama's http handler swapped; 22. the
+  output path overwriting an existing file; 23. the run record dropping the acknowledgement;
+  24. the run record dropping its status; 25. the skip record host being the whole URL; 26. Ollama
+  using no loopback handlers at all; 27. the IPv4-mapped conversion removed (the survivor). Seven
+  more put a stray file under `src/` that uses `create_provider` (called, and passed as a value),
+  an adapter constructor, a module `_factory`, and the registry (indexed, `.get`, iterated).
+  Two earlier survivors were closed by making positive cases fail on a skip (a skip inside a test
+  hides as a skip) and by the offline setup test for the evaluation gate.
 
 ## Not solved
 
@@ -192,8 +230,9 @@ plan and evidence data left the machine. The address cannot show where the promp
 - **No test uses a real loopback TLS server**, so hostname matching and "nothing sent" over https
   are covered only through the patched connection class.
 - **The opt-in covers the egress decision, not the licence of the data sent.** The recorded PHN
-  tide item has gone to a third-party host in two live runs while PHN's terms are not on file
-  (ADR 0021). The live tide check now skips unless the basis is `declared_local` or an explicit
+  tide item went to a forwarding host in all three recorded live runs (two through the local
+  proxy, one through `wall-e.ch30ng.org`), all before this rule existed, while PHN's terms are
+  not on file (ADR 0021). Sharing a "ran" tide-check record also redistributes that item. The live tide check now skips unless the basis is `declared_local` or an explicit
   acknowledgement is set; nothing equivalent exists for a running application.
 - **The basis cannot tell hosts apart.** A self-hosted model on another machine and a public
   forwarding proxy both log `remote_external_opt_in`, so setting the opt-in becomes routine and

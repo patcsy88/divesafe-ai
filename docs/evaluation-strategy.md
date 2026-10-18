@@ -53,9 +53,9 @@ Each is a single run at temperature 0 on synthetic scenarios, not reviewed by a 
 professional. Raw records are kept outside the repository. They show the pipeline works with
 whatever model the host served under that name; they do not show a model is safe or reliable.
 
-**2026-10-17, `claude-sonnet-5-5` through the OpenAI-compatible adapter** (a local proxy at
-`localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). That run
-predates ADR 0023: the proxy was treated as local and no opt-in was required. What left the
+**2026-10-17, runs 1 and 2, `claude-sonnet-5-5` through the OpenAI-compatible adapter** (a local
+proxy at `localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). Those runs
+predate ADR 0023: the proxy was treated as local and no opt-in was required. What left the
 machine was the synthetic scenarios plus recorded fixtures, including the recorded PHN tide item,
 which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, open). Which
 model answered rests on the proxy's routing; no digest was recorded. Today the evaluation runs
@@ -65,7 +65,10 @@ output file now records the `egress_basis` and the host name. The tide check als
 (writing a record that says so) unless the basis is `declared_local` or the operator sets
 `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true`, because the PHN item would otherwise leave the machine
 while PHN's terms are not on file. A skipped tide check means that check did not run, and a run
-record should say so.
+record should say so. In the table below, "ran" for all three runs predates that rule: the PHN
+item went to a forwarding host each time (two runs through the local proxy, one through
+`wall-e.ch30ng.org`) with no acknowledgement in place. A repeat run or a skipped check now writes
+a new file and never replaces an earlier raw record, whose hash a record here may cite.
 
 **2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
 `https://wall-e.ch30ng.org/v1` (run 3; code `2872b86`, prompt `2026-10-17.2`, `egress_basis`
@@ -84,7 +87,7 @@ answered rests on the host's routing; no digest was recorded.
 | Schema-failure rate | 0.556 | 0.032 | 0.032 |
 | Over-severe cases (model stricter than the synthetic rule) | 1 | 2 | 2 |
 | Injection echoes (marker screen) | 1 | 1 | 0 |
-| Tide check | ran | ran | ran (acknowledged, basis `remote_external_opt_in`) |
+| Tide check (PHN item sent) | ran, before the PHN rule existed | ran, before the PHN rule existed | ran, before the PHN rule existed (`2872b86`; no acknowledgement existed) |
 
 - Run 1's failures were almost all "output stopped at the token limit"; raising the run setting
   removed them. Run 2 left two refused replies in 63 calls (one schema rejection, one token-limit

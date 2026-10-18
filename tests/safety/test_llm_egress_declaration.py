@@ -147,8 +147,8 @@ def test_the_start_up_log_records_the_basis(
 
 
 _CALLERS = {
-    # name -> the only files that may call or index it
-    "create_provider": {"models/llm.py", "api/state.py"},
+    # name -> the only files that may mention it at all (call, index, pass as a value, iterate)
+    "create_provider": {"models/llm.py", "models/__init__.py", "api/state.py"},
     "OllamaProvider": {"models/ollama.py"},
     "OpenAICompatibleProvider": {"models/openai_compatible.py"},
     "_factory": {"models/ollama.py", "models/openai_compatible.py"},
@@ -156,17 +156,18 @@ _CALLERS = {
 }
 
 
-def _uses(name: str, text: str) -> bool:
+def _mentions(name: str, text: str) -> bool:
     import re
 
-    return bool(re.search(rf"(?<![\w.])(?:\w+\.)*{name}\s*[(\[]", text))
+    return bool(re.search(rf"(?<!\w){name}(?!\w)", text))
 
 
 def test_only_the_start_up_path_builds_a_real_provider() -> None:
     """`create_provider`, the adapter constructors, their module factories and the registry do not
-    check egress, so no other runtime code may call them: a new caller must go through
-    `build_provider` or call `check_egress`. A text scan: an alias, `getattr` or `partial`
-    passes."""
+    check egress, so no other runtime code may mention them: a new caller must go through
+    `build_provider` or call `check_egress`. A text scan per file under `src/divesafe`: a mention in
+    a comment fails it too (safe), and an `as` alias, `getattr`, `functools.partial`, a second
+    function in an allowed file, or code outside `src/divesafe` passes."""
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / "src" / "divesafe"
@@ -176,24 +177,74 @@ def test_only_the_start_up_path_builds_a_real_provider() -> None:
         rel = path.relative_to(src).as_posix()
         text = path.read_text()
         for name, allowed in _CALLERS.items():
-            if _uses(name, text):
+            if _mentions(name, text):
                 (seen_where_allowed if rel in allowed else found)[name].add(rel)
     assert found == {name: set() for name in _CALLERS}
-    # Positive control: the pattern still matches where the use is allowed, so an edit that
-    # stops it matching cannot make this test pass by finding nothing.
+    # Positive control: the pattern still matches in the allowed files (a definition counts), so
+    # an edit that stops it matching cannot make this test pass by finding nothing.
     assert seen_where_allowed == _CALLERS
 
 
-def test_the_caller_scan_pattern_matches_the_ways_a_provider_is_built() -> None:
+def test_the_caller_scan_pattern_matches_the_ways_a_provider_is_reached() -> None:
     for text in (
         "create_provider(s)",
         "models.create_provider (s)",
         "OllamaProvider('m', 'u')",
         "ollama._factory(s)",
         "llm._REGISTRY['ollama'](s)",
+        "llm._REGISTRY.get('ollama')(s)",
+        "for f in llm._REGISTRY.values(): f(s)",
+        "loop.run_in_executor(None, create_provider, s)",
+        "list(map(OllamaProvider, xs))",
+        "from divesafe.models import create_provider as cp",
     ):
-        assert any(_uses(name, text) for name in _CALLERS), text
-    assert not _uses("create_provider", "my_create_provider(s)")
+        assert any(_mentions(name, text) for name in _CALLERS), text
+    assert not _mentions("create_provider", "my_create_provider(s)")
+    assert not _mentions("create_provider", "create_provider_x(s)")
+
+
+def test_every_registered_real_adapter_runs_the_loopback_peer_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`declared_local` is returned for any provider whose address is on this machine, and ADR 0022
+    treats it as unfiltered, so each real adapter must verify the connected peer. A new adapter
+    fails here until it does (or the exception is written down in ADR 0023)."""
+    import divesafe.models.ollama  # noqa: F401  (registers the adapter)
+    import divesafe.models.openai_compatible  # noqa: F401
+    from divesafe.models.loopback import LoopbackHTTPHandler, LoopbackHTTPSHandler
+
+    real = {name: factory for name, factory in llm_module._REGISTRY.items() if name != "fake"}
+    assert {"ollama", "openai_compatible"} <= set(real)
+    seen: dict[str, list[type]] = {}
+    for name, factory in real.items():
+        handlers: list[type] = []
+        monkeypatch.setattr(
+            "urllib.request.build_opener",
+            lambda *hs, _h=handlers: (_h.extend(type(h) for h in hs), _Opener())[1],
+        )
+        provider = factory(
+            _settings(
+                llm_provider=name,
+                llm_model="m",
+                llm_base_url="http://127.0.0.1:1" if name == "ollama" else LOOPBACK_URL,
+                llm_server_is_local=True,
+            )
+        )
+        import asyncio
+
+        from divesafe.models import ChatMessage, LLMRequest
+
+        request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
+        with pytest.raises(Exception):  # noqa: B017, PT011  (the opener is a stub that fails)
+            asyncio.run(provider.complete(request))
+        seen[name] = handlers
+    for name, handlers in seen.items():
+        assert LoopbackHTTPHandler in handlers and LoopbackHTTPSHandler in handlers, name
+
+
+class _Opener:
+    def open(self, *args: object, **kwargs: object) -> object:
+        raise OSError("stub opener: nothing is sent")
 
 
 def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,35 +280,94 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
         live._setup()
 
 
-def test_the_live_tide_check_sends_nothing_without_the_acknowledgement(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The recorded PHN item must not reach a model that is not declared local unless the
-    acknowledgement is set (PHN's terms are not on file, ADR 0021). The skip leaves a record."""
-    import json
+_PLACEHOLDER_KEY = "placeholder-not-a-real-key-7f3a9c"
+
+
+def _live_tide_setup(
+    monkeypatch: pytest.MonkeyPatch, out: Path, *, basis_flags: tuple[str, str], acknowledged: bool
+) -> object:
     import os
 
     from tests.evaluation import test_evaluation_live as live
 
     for name in [n for n in os.environ if n.startswith("DIVESAFE_EVAL_")]:
         monkeypatch.delenv(name)
+    monkeypatch.setenv("DIVESAFE_EVAL_OUT", str(out))
+    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
+    monkeypatch.setenv("DIVESAFE_EVAL_API_KEY", _PLACEHOLDER_KEY)
+    monkeypatch.setattr(live, "MODEL", "m")
+    monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
+    monkeypatch.setattr(live, "ALLOW_EXTERNAL", basis_flags[0])
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", basis_flags[1])
+    monkeypatch.setattr(live, "ACCEPT_PHN_TERMS_OPEN", acknowledged)
+    monkeypatch.setattr(live, "_sha", lambda: "test-sha")  # no subprocess in a safety test
+    return live
+
+
+def test_the_live_tide_check_sends_nothing_without_the_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The recorded PHN item must not reach a model that is not declared local unless the
+    acknowledgement is set (PHN's terms are not on file, ADR 0021). The skip leaves a record, and
+    it never replaces an earlier record."""
+    import json
+
+    live = _live_tide_setup(
+        monkeypatch, tmp_path, basis_flags=("true", "false"), acknowledged=False
+    )
 
     def must_not_be_called(_provider: object) -> None:
         raise AssertionError("the tide item was sent")
 
-    out = tmp_path
-    monkeypatch.setenv("DIVESAFE_EVAL_OUT", str(out))
-    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
-    monkeypatch.setattr(live, "MODEL", "m")
-    monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
-    monkeypatch.setattr(live, "ALLOW_EXTERNAL", "true")
-    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
-    monkeypatch.setattr(live, "ACCEPT_PHN_TERMS_OPEN", False)
-    monkeypatch.setattr(live, "run_tide_check", must_not_be_called)
+    monkeypatch.setattr(live, "run_tide_check", must_not_be_called)  # type: ignore[attr-defined]
+    earlier = tmp_path / "tide_check_openai_compatible.json"
+    earlier.write_text("an earlier raw record")
+    test = live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current  # type: ignore[attr-defined]
     with pytest.raises(pytest.skip.Exception, match="PHN"):
-        live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(out)
-    record = json.loads((out / "tide_check_openai_compatible.json").read_text())
+        test(tmp_path)
+    assert earlier.read_text() == "an earlier raw record"
+    (skip_file,) = [p for p in tmp_path.glob("tide_check_openai_compatible_*.json")]
+    record = json.loads(skip_file.read_text())
     assert record["status"] == "skipped"
     assert record["egress_basis"] == "loopback_external_opt_in"
     assert record["host"] == "127.0.0.1"
-    assert "key" not in json.dumps(record).lower()
+    assert _PLACEHOLDER_KEY not in skip_file.read_text()
+
+
+@pytest.mark.parametrize(
+    ("flags", "acknowledged"),
+    [(("false", "true"), False), (("true", "false"), True)],
+)
+def test_the_live_tide_check_runs_when_declared_local_or_acknowledged_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    flags: tuple[str, str],
+    acknowledged: bool,
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    live = _live_tide_setup(monkeypatch, tmp_path, basis_flags=flags, acknowledged=acknowledged)
+    sent: list[object] = []
+
+    def stub(provider: object) -> SimpleNamespace:
+        sent.append(provider)  # the provider object only; nothing is sent by this stub
+        record = SimpleNamespace(
+            findings=("f",),
+            scenarios=(),
+            proposed_recommendation=None,
+            model_dump_json=lambda: "{}",
+        )
+        return SimpleNamespace(hits=[], record=record, stayed_insufficient=True)
+
+    monkeypatch.setattr(live, "run_tide_check", stub)  # type: ignore[attr-defined]
+    live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path)  # type: ignore[attr-defined]
+    assert len(sent) == 1
+    (written,) = list(tmp_path.glob("tide_check_openai_compatible*.json"))
+    record = json.loads(written.read_text())
+    assert record["status"] == "ran"
+    assert record["phn_terms_acknowledged"] is acknowledged
+    assert record["egress_basis"] == (
+        "loopback_external_opt_in" if acknowledged else "declared_local"
+    )
+    assert _PLACEHOLDER_KEY not in written.read_text()

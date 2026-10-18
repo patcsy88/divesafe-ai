@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
-from tests.evaluation.egress_gate import egress_gate, tide_check_allowed
+from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
 
 from divesafe.models.egress import EgressBasis
 from divesafe.models.ollama import OllamaProvider
@@ -66,6 +68,7 @@ def test_both_flags_together_fail_instead_of_skipping() -> None:
         ("loopback_external_opt_in", False, False),
         ("remote_external_opt_in", False, False),
         ("none", False, False),
+        ("none", True, True),
         ("loopback_external_opt_in", True, True),
         ("remote_external_opt_in", True, True),
     ],
@@ -74,3 +77,13 @@ def test_the_tide_check_sends_the_phn_item_only_to_a_local_server_or_when_acknow
     basis: EgressBasis, acknowledged: bool, allowed: bool
 ) -> None:
     assert tide_check_allowed(basis, phn_terms_acknowledged=acknowledged) is allowed
+
+
+def test_an_output_path_never_replaces_an_existing_record(tmp_path: Path) -> None:
+    first = output_path(tmp_path, "tide_check_x.json")
+    assert first == tmp_path / "tide_check_x.json"
+    first.write_text("earlier record")
+    second = output_path(tmp_path, "tide_check_x.json")
+    assert second != first and not second.exists()
+    assert second.name.startswith("tide_check_x_") and second.suffix == ".json"
+    assert first.read_text() == "earlier record"
