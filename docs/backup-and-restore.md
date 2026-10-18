@@ -107,6 +107,22 @@ keep it off shared places, and encrypt it before it leaves the machine. Encrypti
 copy and retention are yours; the scripts do none of them. A backup that lives only on the host
 that holds the volume does not survive losing the host.
 
+**Frequency (owner decision, 2026-10-19): a backup every day.** That is the most history the
+owner accepts losing: after a restore, every assessment and human decision made since the last
+good backup is gone, up to about a day of them (more if a daily run fails and nobody notices).
+**Nothing runs `backup.sh` on a timetable yet.** The scripts do not schedule themselves, and no
+cron entry, timer or monitor is part of this repository, because the host, the account that may use
+the Docker engine, and the place the archives go are the operator's. When you schedule it:
+- Run it as the person who already operates the stack, with a directory that passes the script's
+  checks, and keep the exit status. `backup.sh` exits non-zero and writes no archive when anything
+  is off (a refused check, a database that kept changing, a scratch mismatch). A scheduler that
+  discards the status turns a failing backup into a silent one, so alert on a non-zero exit **and**
+  on the newest archive being older than a day and a half.
+- A backup that fails is not retried by the script; the next day's run is the retry. Look at a
+  failure the same day, because a second miss means two days of decisions at risk.
+- Retention, encryption and the off-machine copy are still open (see Not done). Daily archives
+  fill the disk over time, and each one holds named decisions.
+
 ## Restore
 
 A restore goes into a **new, empty** database. For an archive made by `backup.sh` it does not write
@@ -267,7 +283,8 @@ compared.
 
 ## Not done
 
-- A schedule, retention period, off-machine copy and encryption (owner and operator decisions).
+- A schedule that actually runs the daily backup (the frequency is decided: daily), a failure
+  alert, a retention period, an off-machine copy and encryption (operator decisions).
 - A run on Linux, a run against real data, a restore of an archive from another host, and a run
   with actual conditions or pending runs in the data.
 - A restore drill on a timetable. Run one before relying on this, and again after any change to
