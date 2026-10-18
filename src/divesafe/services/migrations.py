@@ -8,8 +8,9 @@ already run is detected and refused. There is no downgrade.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 import psycopg
@@ -43,6 +44,14 @@ FORBIDDEN_IN_LATER_MIGRATIONS = (
     "drop function",
     "disable row level",
     "session_replication_role",
+    "enable trigger",
+    "enable replica",
+    "enable always",
+)
+# The only later migrations that may name the guard, by version and checksum (ADR 0015). Editing
+# one brings the word scan back, so its text cannot change without a new reviewed entry here.
+REVIEWED_GUARD_MIGRATIONS: Mapping[int, str] = MappingProxyType(
+    {3: "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b306297"}
 )
 _LOCK_KEY = 7_281_903_114
 
@@ -171,6 +180,13 @@ CREATE TABLE IF NOT EXISTS public.run_failure_counts (
 """
 
 
+_V3 = """
+ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard;
+ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_insert_guard;
+ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_no_truncate_guard;
+"""
+
+
 class MigrationError(RuntimeError):
     """The migration history and the code disagree, or a migration list is malformed. Messages
     never contain connection details."""
@@ -190,6 +206,7 @@ class Migration:
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "assessments table and guard triggers", _V1),
     Migration(2, "pending runs and failure counts", _V2),
+    Migration(3, "guard triggers fire in every replication role", _V3),
 )
 
 Applied = tuple[int, str, str]  # version, name, checksum
@@ -221,7 +238,9 @@ def plan(applied: Sequence[Applied], known: Sequence[Migration] = MIGRATIONS) ->
 def guarded(known: Sequence[Migration]) -> None:
     """Refuse a migration list in which a later migration mentions the audit guard."""
     for m in known[1:]:
-        lowered = m.sql.lower()
+        if REVIEWED_GUARD_MIGRATIONS.get(m.version) == m.checksum:
+            continue
+        lowered = " ".join(m.sql.lower().split())
         for word in FORBIDDEN_IN_LATER_MIGRATIONS:
             if word in lowered:
                 raise MigrationError(f"migration {m.version} touches the audit guard")
@@ -260,7 +279,7 @@ def migrate(
                 r[0]
                 for r in conn.execute(
                     "SELECT tgname FROM pg_trigger "
-                    "WHERE tgrelid = 'public.assessments'::regclass AND tgenabled = 'O'"
+                    "WHERE tgrelid = 'public.assessments'::regclass AND tgenabled = 'A'"
                 )
             }
             if not set(GUARD_TRIGGERS) <= enabled:

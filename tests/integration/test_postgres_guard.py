@@ -11,6 +11,7 @@ import pytest
 from tests.unit.test_repository_contract import _decided, _postgres, _record
 
 from divesafe.services import PostgresAssessmentRepository
+from divesafe.services.postgres import GUARD_TRIGGERS
 
 DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
 pytestmark = [
@@ -375,7 +376,7 @@ def test_a_stored_row_that_fails_validation_raises_integrity_error_without_its_c
     broken = {**_base(), "explanation": {"secret rationale": "do not log"}}
     _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
     _set_record(broken)
-    _sql("ALTER TABLE assessments ENABLE TRIGGER assessments_append_only_guard")
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
     with pytest.raises(RepositoryIntegrityError) as caught:
         stored.get("r1")
     assert "secret rationale" not in _printed(caught.value)
@@ -452,7 +453,7 @@ def test_startup_verification_reports_a_missing_disabled_or_overpowered_setup(
         problems = owner.verify(least_privilege=False)
         assert any("assessments_no_truncate_guard" in p for p in problems)
     finally:
-        _sql("ALTER TABLE assessments ENABLE TRIGGER assessments_no_truncate_guard")
+        _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_no_truncate_guard")
     _sql("DROP TABLE assessments")
     assert any("does not exist" in p for p in owner.verify(least_privilege=False))
     _sql("DROP TABLE schema_migrations")  # a fresh database has no history either
@@ -926,6 +927,7 @@ def test_verification_flags_a_guard_trigger_that_calls_another_function() -> Non
         "CREATE TRIGGER assessments_insert_guard BEFORE INSERT ON public.assessments "
         "FOR EACH ROW EXECUTE FUNCTION public.not_a_guard()"
     )
+    _sql("ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_insert_guard")
     try:
         problems = repo.verify(least_privilege=False)
         assert any("does not call assessments_insert_guard" in p for p in problems)
@@ -935,6 +937,7 @@ def test_verification_flags_a_guard_trigger_that_calls_another_function() -> Non
             "CREATE TRIGGER assessments_insert_guard BEFORE INSERT ON public.assessments "
             "FOR EACH ROW EXECUTE FUNCTION public.assessments_insert_guard()"
         )
+        _sql("ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_insert_guard")
         _sql("DROP FUNCTION public.not_a_guard()")
     assert repo.verify(least_privilege=False) == []
 
@@ -968,3 +971,178 @@ def test_a_complete_and_a_late_run_are_decided_by_the_database_clock() -> None:
     _sql("UPDATE pending_runs SET lease_expires_at = now() - interval '1 second'")
     assert repo.complete(_completed(), token) is False
     assert repo.get("r1") is None
+
+
+# --- ENABLE ALWAYS and the owner check (migration 3) -----------------------------------------
+
+
+@pytest.mark.parametrize("trigger", GUARD_TRIGGERS)
+def test_the_migrated_guard_triggers_are_enable_always(trigger: str) -> None:
+    _postgres()
+    with psycopg.connect(DSN) as conn:  # type: ignore[arg-type]
+        state = conn.execute(
+            "SELECT tgenabled FROM pg_trigger "
+            "WHERE tgrelid = 'public.assessments'::regclass AND tgname = %s",
+            (trigger,),
+        ).fetchone()
+    assert state == ("A",)
+
+
+@pytest.mark.parametrize("trigger", GUARD_TRIGGERS)
+def test_verification_flags_a_guard_trigger_that_is_only_enabled_not_always(trigger: str) -> None:
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    _sql(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
+    try:
+        problems = repo.verify(least_privilege=False)
+        assert any(trigger in p and "ENABLE ALWAYS" in p for p in problems)
+    finally:
+        _sql(f"ALTER TABLE assessments ENABLE ALWAYS TRIGGER {trigger}")
+    assert repo.verify(least_privilege=False) == []
+
+
+@pytest.mark.parametrize("trigger", GUARD_TRIGGERS)
+def test_verification_flags_a_guard_trigger_that_fires_only_in_replica_mode(trigger: str) -> None:
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    _sql(f"ALTER TABLE assessments ENABLE REPLICA TRIGGER {trigger}")
+    try:
+        assert any(trigger in p for p in repo.verify(least_privilege=False))
+    finally:
+        _sql(f"ALTER TABLE assessments ENABLE ALWAYS TRIGGER {trigger}")
+    assert repo.verify(least_privilege=False) == []
+
+
+def test_the_guard_still_fires_when_the_session_is_in_replica_mode(
+    stored: PostgresAssessmentRepository,
+) -> None:
+    """The point of migration 3: a session that sets session_replication_role = replica (a
+    superuser, or a role with the right to) no longer switches the guard off."""
+    assert DSN is not None
+    for statement in (
+        "DELETE FROM assessments WHERE id = 'r1'",
+        "UPDATE assessments SET record = jsonb_set(record, '{final_recommendation}', '\"GO\"')",
+        "TRUNCATE assessments",
+    ):
+        with psycopg.connect(DSN) as conn:
+            conn.execute("SET session_replication_role = replica")
+            with pytest.raises(psycopg.errors.RaiseException):
+                conn.execute(statement)  # type: ignore[call-overload]
+    assert stored.get("r1") == _record()
+
+
+def test_an_insert_that_breaks_the_insert_guard_is_refused_in_replica_mode() -> None:
+    _postgres()
+    assert DSN is not None
+    decided = json.loads(_decided(_record(), "alice").model_dump_json())
+    with psycopg.connect(DSN) as conn:
+        conn.execute("SET session_replication_role = replica")
+        with pytest.raises(psycopg.errors.RaiseException):
+            conn.execute(
+                "INSERT INTO assessments (id, record) VALUES ('r1', %s::jsonb)",
+                (json.dumps(decided),),
+            )
+
+
+def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> None:
+    """A database at version 2 (triggers 'O') is brought to 'A' by db_init, and not before."""
+    from divesafe.services.migrations import MIGRATIONS, migrate
+
+    _postgres()
+    try:
+        _sql("DELETE FROM schema_migrations WHERE version = 3")
+        for trigger in GUARD_TRIGGERS:
+            _sql(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
+        repo = PostgresAssessmentRepository(DSN)  # type: ignore[arg-type]
+        problems = repo.verify(least_privilege=False)
+        assert any("schema version 2" in p for p in problems)
+        assert all(any(t in p for p in problems) for t in GUARD_TRIGGERS)
+        assert migrate(DSN) == [3]  # type: ignore[arg-type]
+        assert repo.verify(least_privilege=False) == []
+    finally:
+        _postgres()
+    assert MIGRATIONS[2].version == 3
+
+
+def test_a_migration_that_leaves_a_guard_trigger_not_always_is_rolled_back() -> None:
+    import divesafe.services.migrations as mod
+    from divesafe.services.migrations import MIGRATIONS, Migration, MigrationError, migrate
+
+    _postgres()
+    sneaky = Migration(
+        len(MIGRATIONS) + 1,
+        "sneaky",
+        "ALTER TABLE public.assessments ENABLE TRIGGER assessments_insert_guard",
+    )
+    original = mod.guarded
+    mod.guarded = lambda known: None  # type: ignore[assignment]
+    try:
+        with pytest.raises(MigrationError, match="not intact"):
+            migrate(DSN, (*MIGRATIONS, sneaky))  # type: ignore[arg-type]
+    finally:
+        mod.guarded = original
+    assert PostgresAssessmentRepository(DSN).verify(least_privilege=False) == []  # type: ignore[arg-type]
+
+
+def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_superuser(
+    app_role_dsn: str,
+) -> None:
+    assert DSN is not None
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("DROP ROLE IF EXISTS divesafe_plain_owner_test")
+    _sql("CREATE ROLE divesafe_plain_owner_test NOLOGIN")
+    _sql("ALTER TABLE assessments OWNER TO divesafe_plain_owner_test")
+    try:
+        assert app.verify(least_privilege=True, owner_not_superuser=True) == []
+        _sql("ALTER ROLE divesafe_plain_owner_test SUPERUSER")
+        problems = app.verify(least_privilege=True, owner_not_superuser=True)
+        assert any("owns the assessments table is a superuser" in p for p in problems)
+        assert not any("superuser" in p for p in app.verify(least_privilege=True))
+        _sql("ALTER ROLE divesafe_plain_owner_test NOSUPERUSER")
+    finally:
+        _sql("ALTER TABLE assessments OWNER TO CURRENT_USER")
+        _sql("DROP ROLE divesafe_plain_owner_test")
+
+
+def test_the_owner_superuser_check_counts_membership_in_a_superuser_role(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("DROP ROLE IF EXISTS divesafe_super_group_test")
+    _sql("DROP ROLE IF EXISTS divesafe_member_owner_test")
+    _sql("CREATE ROLE divesafe_super_group_test NOLOGIN SUPERUSER")
+    _sql("CREATE ROLE divesafe_member_owner_test NOLOGIN")
+    _sql("GRANT divesafe_super_group_test TO divesafe_member_owner_test")
+    _sql("ALTER TABLE assessments OWNER TO divesafe_member_owner_test")
+    try:
+        problems = app.verify(least_privilege=False, owner_not_superuser=True)
+        assert any("superuser or a member of one" in p for p in problems)
+    finally:
+        _sql("ALTER TABLE assessments OWNER TO CURRENT_USER")
+        _sql("DROP ROLE divesafe_member_owner_test")
+        _sql("DROP ROLE divesafe_super_group_test")
+
+
+def test_the_owner_superuser_check_is_off_by_default_and_refuses_a_superuser_owner() -> None:
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    assert repo.verify(least_privilege=False, owner_not_superuser=False) == []
+    assert any(
+        "superuser" in p for p in repo.verify(least_privilege=False, owner_not_superuser=True)
+    ), "the test database owner is a superuser, so the production check must refuse it"
+
+
+def test_a_search_path_setting_cannot_let_a_look_alike_view_hide_a_superuser_owner(
+    app_role_dsn: str,
+) -> None:
+    """verify() pins its own search path, so a view in `public` named like a catalog cannot
+    stand in for it. The test database owner is a superuser, which the check must report."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("CREATE VIEW public.pg_roles AS SELECT * FROM pg_catalog.pg_roles WHERE false")
+    _sql("ALTER ROLE divesafe_app_test SET search_path = public, pg_catalog")
+    try:
+        problems = app.verify(least_privilege=True, owner_not_superuser=True)
+        assert any("owns the assessments table is a superuser" in p for p in problems)
+    finally:
+        _sql("ALTER ROLE divesafe_app_test RESET search_path")
+        _sql("DROP VIEW public.pg_roles")

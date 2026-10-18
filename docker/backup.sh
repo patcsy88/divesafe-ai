@@ -89,7 +89,7 @@ while :; do
 done
 
 if ! shape_ok "$before"; then
-  echo "a guard trigger is missing or disabled, a table is not a table, or the database has a policy, a default privilege, a stored setting, a rule, another schema or an owner with too many rights; not kept" >&2
+  echo "a guard trigger is missing, disabled or not ENABLE ALWAYS (a database made before migration 3 needs db-init first), a table is not a table, or the database has a policy, a default privilege, a stored setting, a rule, another schema or an owner with too many rights; not kept" >&2
   exit 1
 fi
 scratch="$(read_scratch "$base.dump.part")" || scratch=""

@@ -201,7 +201,8 @@ def build_repository(settings: Settings) -> RunAwareRepository:
     if settings.database_url is None:
         return InMemoryAssessmentRepository()
     repository = PostgresAssessmentRepository(settings.database_url.get_secret_value())
-    problems = repository.verify(least_privilege=settings.environment == "production")
+    production = settings.environment == "production"
+    problems = repository.verify(least_privilege=production, owner_not_superuser=production)
     if problems:
         raise RuntimeError("unsafe database setup: " + "; ".join(problems))
     return repository

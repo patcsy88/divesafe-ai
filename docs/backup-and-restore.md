@@ -40,6 +40,10 @@ the person who already operates the stack. The API may stay up. Two cautions:
 
 - A backup taken to **move or upgrade** the database must be taken after you stop the API, or
   decisions made during it are lost.
+- **Upgrading across migration 3** (guard triggers become `ENABLE ALWAYS`): run `db-init` before
+  taking a backup with these scripts, or back up with the old scripts before you pull. These
+  scripts refuse a database or an archive whose triggers are plain `ENABLE`. To restore an old
+  archive, use the scripts of commit `433b569`, then run `db-init`.
 - The scratch check needs free memory on the host (the archive is held in memory in its own
   container). The scratch area is 2 GB, and the fact query builds one string of all assessments,
   which PostgreSQL limits to 1 GB. Both fail closed, but the message ("does NOT match … or could
@@ -75,7 +79,7 @@ the person who already operates the stack. The API may stay up. Two cautions:
   assessment (id, creation time in UTC in a fixed format, full record including the human decision
   and actual conditions, in `C` collation order); the number of pending runs and of failure
   counters (counts, not values); the applied migrations with their checksums; the names of the
-  enabled guard triggers; a hash of the definitions of the guard functions and triggers; the four
+  guard triggers that are `ENABLE ALWAYS` (an archive made before migration 3, whose triggers are plain `ENABLE`, is refused); a hash of the definitions of the guard functions and triggers; the four
   tables and that each is an ordinary table; the installed extensions; the number of settings
   stored for the database; a hash of the names of the relations and functions in `public` (only
   those two kinds); and `hardening`, a count that must be 0: schemas other than `public`, row-level-security policies, tables
@@ -84,7 +88,7 @@ the person who already operates the stack. The API may stay up. Two cautions:
   volume this stack created; a volume from the first version of the stack has a superuser owner and
   is refused). The queries run with `row_security = off`, so a policy makes them fail instead of
   hiding rows. All thirteen must be present on both sides: a query that fails the same way on both
-  cannot pass as "equal". The backup stops if the three guard triggers are not all enabled, if a
+  cannot pass as "equal". The backup stops if the three guard triggers are not all ENABLE ALWAYS, if a
   table is not an ordinary table, or if any setting or `hardening` count is not zero.
 - **Before it keeps the archive** it loads it into the throwaway container and requires the same
   facts there. If not, nothing is kept. That check catches accidents. It cannot stop an archive

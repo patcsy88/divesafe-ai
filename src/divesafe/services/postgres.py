@@ -188,15 +188,20 @@ class PostgresAssessmentRepository:
     def _connect(self) -> psycopg.Connection[Any]:
         return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
 
-    def verify(self, *, least_privilege: bool) -> list[str]:
+    def verify(self, *, least_privilege: bool, owner_not_superuser: bool = False) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
-        With `least_privilege`, also report an application role that owns the table, the public
+        With `owner_not_superuser`, also report a table owner that is a superuser (a policy
+        choice: it refuses any deployment whose owner role is one). With `least_privilege`, also
+        report an application role that owns the table, the public
         schema or the database, is (or can become) a superuser, can create objects in the public
         schema or schemas in the database (a schema owner can drop the table without firing any
-        trigger), can stop the guard triggers firing, can create roles, or can delete, truncate or
-        alter triggers."""
+        trigger), may set the replica mode, can create roles, or can delete, truncate or create
+        triggers."""
         problems: list[str] = []
         with _storage_errors(), self._connect() as conn:
+            # A role or database setting of search_path must not let an object in another schema
+            # stand in for a built-in function or catalog; every table below is named in `public`.
+            conn.execute("SET search_path = pg_catalog, pg_temp")
             if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
                 return ["the assessments table does not exist (run db_init as the owner role)"]
             try:
@@ -218,12 +223,12 @@ class PostgresAssessmentRepository:
                     "SELECT t.tgname, p.proname FROM pg_trigger t "
                     "JOIN pg_proc p ON p.oid = t.tgfoid "
                     "JOIN pg_namespace n ON n.oid = p.pronamespace "
-                    "WHERE t.tgrelid = 'public.assessments'::regclass AND t.tgenabled = 'O' "
+                    "WHERE t.tgrelid = 'public.assessments'::regclass AND t.tgenabled = 'A' "
                     "AND n.nspname = 'public'"
                 )
             }
             problems += [
-                f"guard trigger '{t}' is missing or disabled"
+                f"guard trigger '{t}' is missing, disabled or not ENABLE ALWAYS"
                 for t in GUARD_TRIGGERS
                 if t not in calls
             ]
@@ -232,14 +237,27 @@ class PostgresAssessmentRepository:
                 for t in GUARD_TRIGGERS
                 if t in calls and calls[t] != GUARD_FUNCTIONS[t]
             ]
-            # In replica mode ordinary triggers do not fire, so the guard would be inert. A role,
-            # database or server setting can put every session there; a privilege check does not
-            # see that.
+            # In replica mode ordinary triggers and constraints do not fire. The guard triggers
+            # are ENABLE ALWAYS (migration 3) and fire anyway, so this is defence in depth, and it
+            # stays refused. A role, database or server setting can put every session there; a
+            # privilege check does not see that.
             mode = conn.execute("SELECT current_setting('session_replication_role')").fetchone()
             if mode is not None and mode[0] == "replica":
                 problems.append(
-                    "session_replication_role is 'replica': the guard triggers do not fire"
+                    "session_replication_role is 'replica': ordinary triggers and constraints "
+                    "do not fire in that mode"
                 )
+            if owner_not_superuser:
+                owner = conn.execute(
+                    "SELECT COALESCE((SELECT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper "
+                    "AND pg_has_role(c.relowner, r.oid, 'MEMBER')) "
+                    "FROM pg_class c WHERE c.oid = to_regclass('public.assessments')), true)"
+                ).fetchone()
+                if owner is None or owner[0] is not False:
+                    problems.append(
+                        "the role that owns the assessments table is a superuser or a member of "
+                        "one, or its owner could not be read"
+                    )
             if least_privilege:
                 problems += self._privilege_problems(conn)
         return problems
@@ -298,7 +316,7 @@ class PostgresAssessmentRepository:
             ),
             (can("public.assessments", "DELETE"), "can DELETE"),
             (can("public.assessments", "TRUNCATE"), "can TRUNCATE"),
-            (can("public.assessments", "TRIGGER"), "can alter triggers"),
+            (can("public.assessments", "TRIGGER"), "can create triggers"),
             (
                 can("public.schema_migrations", "INSERT, UPDATE, DELETE, TRUNCATE"),
                 "can write the migration history",
@@ -306,7 +324,7 @@ class PostgresAssessmentRepository:
             (owns("public.pending_runs"), "owns the pending runs table"),
             (
                 can("public.pending_runs", "TRUNCATE, TRIGGER"),
-                "can TRUNCATE or alter triggers on the pending runs table",
+                "can TRUNCATE or create triggers on the pending runs table",
             ),
             (can("public.run_failure_counts", "DELETE, TRUNCATE"), "can delete the failure counts"),
             (owns("public.run_failure_counts"), "owns the failure counts table"),
@@ -320,12 +338,13 @@ class PostgresAssessmentRepository:
         all_checks = list(checks)
         version = conn.execute("SELECT current_setting('server_version_num')::int").fetchone()
         if version is not None and version[0] >= _PARAMETER_PRIVILEGES_FROM:
-            # With this right the role could set session_replication_role = replica, which stops
-            # the guard triggers from firing while it holds UPDATE on the records.
+            # With this right the role could set session_replication_role = replica, which skips
+            # ordinary triggers and constraints (the guard triggers are ENABLE ALWAYS, so they
+            # still fire; the right stays refused as defence in depth).
             all_checks.append(
                 (
                     "COALESCE(has_parameter_privilege('session_replication_role', 'SET'), false)",
-                    "may set session_replication_role (it could stop the guard triggers firing)",
+                    "may set session_replication_role (replica mode skips ordinary triggers)",
                 )
             )
         row = conn.execute("SELECT " + ", ".join(sql for sql, _ in all_checks)).fetchone()

@@ -33,8 +33,14 @@ A small in-house runner, `divesafe.services.migrations`, with no new dependency.
   `DROP TRIGGER`, `ALTER FUNCTION`, `DROP FUNCTION`, `DISABLE ROW LEVEL` or
   `session_replication_role` (`FORBIDDEN_IN_LATER_MIGRATIONS`). This is a word scan, not a SQL
   parser; it stops accidents and obvious attacks, and review is still the control.
-- After migrating, and before commit, the runner checks the three guard triggers are enabled and
-  rolls back if not.
+- **One reviewed exception: migration 3.** It sets the three guard triggers to `ENABLE ALWAYS`
+  (so they fire in every `session_replication_role`, including `replica`), and so it has to name
+  them. `REVIEWED_GUARD_MIGRATIONS` skips the word scan for a migration only when both its version
+  and its SHA-256 match (3 and the pinned checksum). Any edit to its text, or the same text under
+  another version, is scanned again. Its text is also pinned statement by statement in
+  `tests/safety/test_migration_guard.py`.
+- After migrating, and before commit, the runner checks the three guard triggers are `ENABLE
+  ALWAYS` (`tgenabled = 'A'`) and rolls back if not. `verify()` checks the same.
 - `migrate` refuses to run as the application role and sets a lock timeout.
 - `install_schema` grants the application role `SELECT` on `schema_migrations` and revokes every
   write privilege. Start-up in production reports a role that can write the history.
@@ -52,19 +58,20 @@ A small in-house runner, `divesafe.services.migrations`, with no new dependency.
 
 - A migration that rewrites stored records trips the append-only triggers. Such a change needs a
   separate design and risk-reviewer sign-off; do not disable the triggers.
-- Start-up checks that the triggers exist and are enabled, but not their function bodies. A
+- Start-up checks that the triggers exist and are ENABLE ALWAYS, but not their function bodies. A
   function swap is blocked by the word scan and review only.
 - A pre-existing `assessments` table of a different shape is recorded as migration 1 without a
   shape check.
 - Verification runs at start-up only, so later tampering with the history is noticed at the next
   restart. A database ahead of the code makes older replicas refuse to restart after a rollout.
 - PostgreSQL 15 or later is assumed (the `public` schema no longer lets everyone create tables).
-- Changes to `migrations.py` should need `risk-reviewer` sign-off (a CODEOWNERS rule is not set up).
+- Changes to `migrations.py` should need `risk-reviewer` sign-off (`.github/CODEOWNERS` lists it, which only asks a human reviewer).
 - Migrations run as the owner role, which is trusted; the trigger does not stop the owner or a
   superuser (ADR 0012).
 - No dry run, no downgrade, and no check that the SQL is safe to run on a large table.
 - A migration that runs long holds locks; plan a window for those.
 - The migration list and the checksum live in the same code, so someone who can change both can
   rewrite history; the pinned test and review are the control.
-- The runner is not tested against several PostgreSQL versions (only 16).
+- The runner is not tested against several PostgreSQL versions: CI uses 16; migration 3 and the
+  `ENABLE ALWAYS` checks have so far run only on a local PostgreSQL 17 (ADR 0024).
 - CI must set `DIVESAFE_TEST_DATABASE_URL`, or the PostgreSQL tests skip.

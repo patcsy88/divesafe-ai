@@ -20,7 +20,7 @@
 - **Roles.** Schema and triggers are installed by `python -m divesafe.services.db_init` with an
   owner DSN (`DIVESAFE_ADMIN_DATABASE_URL`), which also grants the application role only SELECT,
   INSERT, UPDATE. The running app never creates or changes DDL: at start-up it verifies the table
-  and all guard triggers exist and are enabled, and in production also that its role does not own
+  and all guard triggers exist and are ENABLE ALWAYS (ADR 0015, migration 3), and in production also that its role does not own
   the table, is not a superuser and cannot DELETE, TRUNCATE or alter triggers. Otherwise it
   refuses to start.
 - **Connections.** Connect, statement and lock timeouts. Production refuses a DSN whose `sslmode`

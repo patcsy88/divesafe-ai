@@ -450,23 +450,55 @@ The status stays PROPOSED until all of these are done.
   made by the first version of this stack would keep a superuser `divesafe_owner`, reachable over
   the network by `pg_hba.conf`; nothing reports it (`verify()` runs as the app role, and
   `migrate` does not refuse a superuser, because the development stack uses one). The first
-  version was only ever run on throwaway volumes. Recreate the volume or check `rolsuper`.
-  A check that the *owner* role is not a superuser is not built. It would be one column in the
-  production-only part of `verify()` (the app role can read the catalogs), and it would not touch
-  the development stack. It is left out because it is a policy choice for the owner: it would
-  refuse any production deployment, Docker or not, whose owner role is a superuser.
-- **The guard triggers are checked for existence, state and function name only.** `verify()` does
-  not compare their timing or function bodies, and does not report another trigger or rule on
-  `assessments`. A later migration (reviewed, owner-run) could add a BEFORE trigger that runs
+  version was only ever run on throwaway volumes. The owner check below now reports it at
+  start-up in production; recreate the volume.
+- **Owner-superuser check (built, owner's choice, 2026-10-19).** In production `verify()` also
+  reports a table owner that is a superuser or a member of one (`owner_not_superuser`, off by
+  default so the development stack, whose owner is a superuser, is unaffected). It checks the
+  owner of `public.assessments` only, at start-up only, and only on the PostgreSQL path: not the
+  role behind `DIVESAFE_ADMIN_DATABASE_URL`, not the owners of the guard functions or other
+  tables, and not an owner in `pg_execute_server_program` or `pg_write_server_files`. A
+  production deployment whose `assessments` owner is a superuser is refused, Docker or not.
+  Tested against test roles on PostgreSQL 17, not on the real image. `verify()` also pins
+  `search_path = pg_catalog, pg_temp`, so a view in `public` cannot stand in for a catalog.
+  Mutation check, first round: 19 mutants, 18 caught. The survivor ("a missing table passes")
+  cannot be killed by a deterministic test: `verify()` returns early when the table does not
+  exist, so the branch runs only if the table is dropped between two statements. After the
+  review the query always returns a row and a missing table reads as a problem; the same
+  mutation (that default flipped to "ok") survived again in round two for the same reason, so
+  that line is reasoned, not tested. Round two (10 mutants on the review fixes): 7 caught and 3
+  survived: that one, a redundant scan word (`trigger all`, now removed) and a real test gap
+  (`ENABLE TRIGGER` on a non-guard trigger), which now has a test.
+- **The guard triggers are `ENABLE ALWAYS` (migration 3, built 2026-10-19).** They fire in every
+  `session_replication_role`, so a session, role, database or server setting of `replica` no
+  longer switches them off (a superuser can still `DISABLE TRIGGER`; `verify()` reports a trigger
+  that is not `ENABLE ALWAYS`). Migration 3 is the one reviewed exception to the word scan (ADR
+  0015). Tested on PostgreSQL 17 only; not yet run on `pgvector/pgvector:pg16`.
+  **A backup made before migration 3 cannot be restored by the scripts**: its triggers are plain
+  `ENABLE`, and `backup-common.sh` now requires state `A`, so the check refuses it, with a
+  message that says "does NOT match" and so reads like damage. Recovery: restore it with the
+  scripts of commit `433b569` (the first with backup scripts), then run `db-init`, which applies
+  migration 3. Order for an upgrade: run `db-init` before taking a backup with the new scripts,
+  or back up with the old scripts before pulling. `backup.sh` on a version-2 database refuses
+  with a message that names migration 3. No such production backup exists (the procedure has
+  only been run on throwaway data).
+  **The condition 3 hand runs predate migration 3**, so no backup, scratch load, restore,
+  `--check` and `db-init` sequence has run with state `A` on `pgvector/pgvector:pg16`; repeat it
+  before this ADR is accepted. A trigger set back to plain `ENABLE` by hand makes every `db-init`
+  fail with "not intact" and no migration repairs it: run
+  `ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER <name>` as the owner. `ENABLE ALWAYS`
+  triggers also fire when a logical-replication subscriber applies changes (no replication is
+  used here). `verify()` still
+  does not compare trigger timing or function bodies, and does not report another trigger or rule
+  on `assessments`. A later migration (reviewed, owner-run) could add a BEFORE trigger that runs
   after the guard; the API reads each row back and rolls back on a mismatch, so it fails closed on
-  that path. Making the triggers `ENABLE ALWAYS` would close the replica-mode class for good; it
-  needs a reviewed migration, changes the `tgenabled` checks, and must also change the word scan
-  in `migrations.py` that refuses any later statement naming a guard trigger. It is not done.
+  that path.
 - **A setting changed after start-up is not seen.** `verify()` runs once, but every operation
   opens a new connection, so a superuser's `ALTER ROLE ... SET session_replication_role = replica`
-  (or a reload after `ALTER SYSTEM`) takes effect at once and unseen. Write-once is still enforced
-  in code, so only the database backstop is lost. Re-reading the setting inside the write
-  transaction would close it; not built.
+  (or a reload after `ALTER SYSTEM`) takes effect at once and unseen. Since migration 3 that
+  setting no longer stops the guard triggers; what remains unseen after start-up is a
+  superuser's `DISABLE TRIGGER`, a grant or another setting changed later. Write-once is still
+  enforced in code. Re-checking inside the write transaction would close it; not built.
 - **`make-secrets.sh` is scanned only for a pipe into `write_new`.** A pipe through `tee` on that
   line is not detected.
 - **A failed first start leaves a half-set-up volume** (recalled, not checked). If the role script

@@ -87,7 +87,7 @@ SELECT 'migrations=' || COALESCE(string_agg(version::text || ':' || checksum, ',
     'none') FROM public.schema_migrations;
 SELECT 'guards=' || COALESCE(string_agg(tgname::text, ',' ORDER BY tgname::text COLLATE "C"), 'none')
   FROM pg_trigger
-  WHERE tgrelid = 'public.assessments'::regclass AND NOT tgisinternal AND tgenabled = 'O';
+  WHERE tgrelid = 'public.assessments'::regclass AND NOT tgisinternal AND tgenabled = 'A';
 SELECT 'guard_defs=' || COALESCE(md5(string_agg(d.def, E'\n' ORDER BY d.name COLLATE "C")), 'none') FROM (
   SELECT p.proname::text AS name, pg_get_functiondef(p.oid) AS def FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -159,7 +159,7 @@ facts_complete() {
   [ "$keys" = "$fact_keys" ]
 }
 
-# shape_ok <facts>: the three guard triggers, by name, all enabled; the four tables are ordinary
+# shape_ok <facts>: the three guard triggers, by name, all ENABLE ALWAYS; the four tables are ordinary
 # tables; no setting is stored for the database; and `hardening` is 0: no row-level-security policy,
 # no default privilege, no stored role setting, no rule on a table in `public`, no schema other than
 # `public`, and the owner is not a superuser (each could change what a later session sees or may do).
