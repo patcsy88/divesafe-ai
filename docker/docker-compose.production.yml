@@ -1,0 +1,185 @@
+# Production stack for the API (ADR 0024, PROPOSED). The development stack is docker-compose.yml.
+# Started on a developer machine with throwaway secrets, not exercised through an assessment: do
+# not treat this as a tested deployment (see "Conditions before acceptance" in the ADR).
+#
+#   docker/make-secrets.sh docker/secrets                  # database secrets; see the ADR for the rest
+#   cp docker/production.env.example docker/production.env  # then fill in the blanks
+#   docker compose -f docker/docker-compose.production.yml --env-file docker/production.env up --build
+#
+# What is NOT here: TLS in front of the API (put your own reverse proxy in front of 127.0.0.1:8000),
+# the web UI, backups, and a signed ruleset. No secret is in this file or passed through the
+# environment: each one is mounted as a file into only the service that needs it.
+name: divesafe-prod
+
+services:
+  # One-off: a self-signed certificate for the database, created in a volume the first time (and
+  # again when it has under 30 days left). Nothing is stored in the repository.
+  db-tls:
+    image: pgvector/pgvector:pg16
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        cd /tls
+        if [ ! -s server.crt ] || ! openssl x509 -in server.crt -noout -checkend 2592000; then
+          openssl req -x509 -newkey rsa:3072 -nodes -days 365 -subj "/CN=db" \
+            -addext "subjectAltName=DNS:db" -keyout server.key -out server.crt
+        fi
+        chown 999:999 server.key server.crt
+        chmod 0600 server.key
+        chmod 0644 server.crt
+    volumes:
+      - db-tls:/tls
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      # The image makes this role a superuser. It is reachable through the local socket only.
+      POSTGRES_USER: divesafe_bootstrap
+      POSTGRES_DB: divesafe
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_bootstrap_password
+    # Only TLS connections from two named roles are accepted (db/pg_hba.conf). Those roles are
+    # created on the first start of an empty volume by db/10-create-app-role.sh.
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/tls/server.crt
+      - -c
+      - ssl_key_file=/tls/server.key
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+    secrets:
+      - db_bootstrap_password
+      - db_owner_password
+      - db_app_password
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - db-tls:/tls:ro
+      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./db/10-create-app-role.sh:/docker-entrypoint-initdb.d/10-create-app-role.sh:ro
+    networks: [data]
+    depends_on:
+      db-tls:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U divesafe_bootstrap -d divesafe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+
+  # One-off: installs or upgrades the schema as the owner role (not a superuser) and grants the API
+  # role SELECT/INSERT/UPDATE, and DELETE on pending_runs only (ADR 0012, 0015). It is the only service that sees the owner DSN.
+  db-init:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: divesafe-api:local
+    restart: "no"
+    command: ["python", "-m", "divesafe.services.db_init"]
+    environment:
+      DIVESAFE_SECRETS_DIR: /run/secrets
+      DIVESAFE_APP_DB_ROLE: divesafe_app
+    secrets:
+      - source: admin_database_url
+        target: divesafe_admin_database_url
+    networks: [data]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: divesafe-api:local
+    restart: unless-stopped
+    environment:
+      DIVESAFE_ENVIRONMENT: production
+      DIVESAFE_LOG_LEVEL: INFO
+      DIVESAFE_SECRETS_DIR: /run/secrets
+      # The agent stage cannot be off in production (ADR 0023). Every assessment sends its plan
+      # fields, evidence, rule results and findings to this host, so the external opt-in is stated here, on purpose.
+      DIVESAFE_LLM_PROVIDER: openai_compatible
+      DIVESAFE_ALLOW_EXTERNAL_LLM: "true"
+      DIVESAFE_LLM_BASE_URL: ${DIVESAFE_LLM_BASE_URL:?set DIVESAFE_LLM_BASE_URL in docker/production.env}
+      DIVESAFE_LLM_ALLOWED_HOSTS: ${DIVESAFE_LLM_ALLOWED_HOSTS:?set DIVESAFE_LLM_ALLOWED_HOSTS in docker/production.env}
+      DIVESAFE_LLM_MODEL: ${DIVESAFE_LLM_MODEL:?set DIVESAFE_LLM_MODEL in docker/production.env}
+      # No built-in default: without it no assessment can be created (HTTP 503).
+      DIVESAFE_EVIDENCE_MAX_AGE_MINUTES: ${DIVESAFE_EVIDENCE_MAX_AGE_MINUTES:?set DIVESAFE_EVIDENCE_MAX_AGE_MINUTES in docker/production.env}
+      # Owner decision 2026-10-18: 180 minutes. Overriding the default needs a recorded reason.
+      DIVESAFE_DECISION_MAX_AGE_MINUTES: ${DIVESAFE_DECISION_MAX_AGE_MINUTES:-180}
+      DIVESAFE_TRUSTED_PROXIES: ${DIVESAFE_TRUSTED_PROXIES:-}
+    secrets:
+      - source: database_url
+        target: divesafe_database_url
+      - source: llm_api_key
+        target: divesafe_llm_api_key
+      - source: api_key_hashes
+        target: divesafe_api_key_hashes
+      - source: met_api_token
+        target: divesafe_met_api_token
+    networks: [data, egress]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    mem_limit: 1g
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  # No route out: the database and the one-off schema job live here.
+  data:
+    internal: true
+  # Outbound access for the API only (the model host and the data sources).
+  egress: {}
+
+volumes:
+  db-data:
+  db-tls:
+
+secrets:
+  db_bootstrap_password:
+    file: ./secrets/db_bootstrap_password
+  db_owner_password:
+    file: ./secrets/db_owner_password
+  db_app_password:
+    file: ./secrets/db_app_password
+  admin_database_url:
+    file: ./secrets/divesafe_admin_database_url
+  database_url:
+    file: ./secrets/divesafe_database_url
+  llm_api_key:
+    file: ./secrets/divesafe_llm_api_key
+  api_key_hashes:
+    file: ./secrets/divesafe_api_key_hashes
+  met_api_token:
+    file: ./secrets/divesafe_met_api_token

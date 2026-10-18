@@ -103,10 +103,9 @@ plan and evidence data left the machine. The address cannot show where the promp
     stage off, so the question below still applies to them. This ADR does not check whether a
     record made with the stage off tells the human decider so (with the stage off,
     `model_version`, findings and agent issues are simply empty); that should be checked.
-  - The running application gives no start-up warning when PHN data is enabled and the basis is
-    not `declared_local`. Whether the other sources' terms allow their data to be passed to a
-    third-party model host is not stated here and was not checked.
-  - The start-up log does not name the host, so the logs cannot tell hosts apart either.
+  - Whether the other sources' terms allow their data to be passed to a third-party model host is
+    not stated here and was not checked. (ADR 0024 adds a start-up warning when PHN data is
+    enabled and the basis is not `declared_local`, and the start-up log now names the host.)
 
 ## Tests
 
@@ -166,8 +165,10 @@ plan and evidence data left the machine. The address cannot show where the promp
   from it runs as `development` without the production checks. **A production deployment needs
   its own compose file and ADR**: `environment=production`, a least-privilege database role with
   `sslmode=require`, no admin URL in the app container (run `db_init` as a separate one-off
-  service), and secrets mounted as files or passed one by one, not the whole `.env`. None of that
-  is done.
+  service), and secrets mounted as files or passed one by one, not the whole `.env`. ADR 0024
+  (proposed) describes this; its start-up warning for PHN data with a non-local basis and the
+  host name in the start-up log close two items listed above as missing. It has been
+  started on a developer machine, with throwaway secrets (no assessment was run).
 - **Containers and the intended model host (owner, 2026-10-18).** DiveSafe AI is to be deployed
   in Docker. The model host is `https://wall-e.ch30ng.org`. What that server is, and where it
   sends prompts, is **not known to this ADR**. A model name such as `claude-sonnet-5-5`, whose

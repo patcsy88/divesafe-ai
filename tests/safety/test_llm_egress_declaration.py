@@ -146,6 +146,49 @@ def test_the_start_up_log_records_the_basis(
     assert record.address_is_remote is True  # type: ignore[attr-defined]
 
 
+def test_the_start_up_log_names_the_model_host_and_nothing_else_of_the_url(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The host tells two servers apart in the logs. The path, port, credentials and query of the
+    URL are not logged."""
+    _with_stub(monkeypatch, external=True)
+    url = "https://user:pw-in-url-31@wall-e.ch30ng.org:8443/v1/secret-path?token=q-9"
+    with caplog.at_level("WARNING"):
+        build_provider(_settings(llm_provider="openai", allow_external_llm=True, llm_base_url=url))
+    record = next(r for r in caplog.records if r.getMessage() == "agent stage is ON")
+    assert record.model_host == "wall-e.ch30ng.org"  # type: ignore[attr-defined]
+    logged = repr(vars(record))
+    for text in ("pw-in-url-31", "secret-path", "token=q-9", "8443"):
+        assert text not in logged
+
+
+@pytest.mark.parametrize(
+    ("flags", "external", "warned"),
+    [
+        ({"allow_external_llm": True}, False, True),
+        ({"allow_external_llm": True}, True, True),
+        ({"llm_server_is_local": True}, False, False),
+    ],
+)
+def test_phn_data_with_a_model_server_not_declared_local_is_warned_about_at_start_up(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    flags: dict[str, bool],
+    external: bool,
+    warned: bool,
+) -> None:
+    """The PHN tide item goes to the model with every assessment (ADR 0021 is still proposed)."""
+    _with_stub(monkeypatch, external=external)
+    with caplog.at_level("WARNING"):
+        build_provider(_settings(llm_provider="openai", phn_etide_enabled=True, **flags))
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("PHN e-Tide data is ON" in m for m in messages) is warned
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        build_provider(_settings(llm_provider="openai", phn_etide_enabled=False, **flags))
+    assert not any("PHN e-Tide data is ON" in r.getMessage() for r in caplog.records)
+
+
 _CALLERS = {
     # name -> the only files that may mention it at all (call, index, pass as a value, iterate)
     "create_provider": {"models/llm.py", "models/__init__.py", "api/state.py"},

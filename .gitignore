@@ -31,3 +31,7 @@ tide_check_*.json
 
 # Forms returned by the dive professional: they name people. Keep local, never commit.
 /docs/domain-validation/returned/
+
+# Production deployment (ADR 0024): generated secrets and the filled-in settings stay local.
+/docker/secrets/
+/docker/production.env

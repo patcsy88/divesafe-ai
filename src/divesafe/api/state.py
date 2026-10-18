@@ -183,10 +183,17 @@ def build_provider(settings: Settings) -> LLMProvider | None:
         extra={
             "provider": provider.name,
             "model": provider.model,
+            "model_host": settings.llm_base_url.host if settings.llm_base_url else None,
             "address_is_remote": provider.external,
             "egress_basis": basis,
         },
     )
+    if settings.phn_etide_enabled and basis != "declared_local":
+        logger.warning(
+            "PHN e-Tide data is ON and the model server is not declared local: the PHN tide item "
+            "is sent to it with every assessment, and PHN's terms are not on file (ADR 0021)",
+            extra={"egress_basis": basis},
+        )
     return provider
 
 
@@ -201,6 +208,11 @@ def build_repository(settings: Settings) -> RunAwareRepository:
 
 
 def build_default_state(settings: Settings) -> AppState:
+    if settings.environment == "production" and settings.admin_database_url is not None:
+        raise RuntimeError(
+            "refusing to start in production with the owner-role database URL "
+            "(DIVESAFE_ADMIN_DATABASE_URL); it belongs to db_init only"
+        )
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     connectors: list[Connector] = [
         OpenMeteoMarineConnector(getter),

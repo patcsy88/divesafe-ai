@@ -175,6 +175,10 @@ def _storage_errors() -> Iterator[None]:
         raise RepositoryIntegrityError("a stored record failed validation") from None
 
 
+# has_parameter_privilege() exists from PostgreSQL 15.
+_PARAMETER_PRIVILEGES_FROM = 150000
+
+
 class PostgresAssessmentRepository:
     """One short-lived connection per operation, with connect, statement and lock timeouts."""
 
@@ -186,8 +190,11 @@ class PostgresAssessmentRepository:
 
     def verify(self, *, least_privilege: bool) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
-        With `least_privilege`, also report an application role that owns the table, is a
-        superuser, or can delete, truncate or alter triggers."""
+        With `least_privilege`, also report an application role that owns the table, the public
+        schema or the database, is (or can become) a superuser, can create objects in the public
+        schema or schemas in the database (a schema owner can drop the table without firing any
+        trigger), can stop the guard triggers firing, can create roles, or can delete, truncate or
+        alter triggers."""
         problems: list[str] = []
         with _storage_errors(), self._connect() as conn:
             if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
@@ -225,6 +232,14 @@ class PostgresAssessmentRepository:
                 for t in GUARD_TRIGGERS
                 if t in calls and calls[t] != GUARD_FUNCTIONS[t]
             ]
+            # In replica mode ordinary triggers do not fire, so the guard would be inert. A role,
+            # database or server setting can put every session there; a privilege check does not
+            # see that.
+            mode = conn.execute("SELECT current_setting('session_replication_role')").fetchone()
+            if mode is not None and mode[0] == "replica":
+                problems.append(
+                    "session_replication_role is 'replica': the guard triggers do not fire"
+                )
             if least_privilege:
                 problems += self._privilege_problems(conn)
         return problems
@@ -248,8 +263,38 @@ class PostgresAssessmentRepository:
         checks = (
             (owns("public.assessments"), "owns the table"),
             (
-                "COALESCE((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)",
-                "is a superuser",
+                "COALESCE((SELECT pg_has_role(current_user, nspowner, 'MEMBER') FROM pg_namespace "
+                "WHERE nspname = 'public'), false)",
+                "owns the public schema",
+            ),
+            (
+                "COALESCE((SELECT pg_has_role(current_user, datdba, 'MEMBER') FROM pg_database "
+                "WHERE datname = current_database()), false)",
+                "owns the database",
+            ),
+            (
+                "COALESCE(has_schema_privilege('public', 'CREATE'), false)",
+                "can create objects in the public schema",
+            ),
+            (
+                "COALESCE(has_database_privilege(current_database(), 'CREATE'), false)",
+                "can create schemas in the database",
+            ),
+            (
+                "EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper "
+                "AND pg_has_role(current_user, r.oid, 'MEMBER'))",
+                "is a superuser or a member of one (it could SET ROLE to it)",
+            ),
+            (
+                "EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname IN "
+                "('pg_execute_server_program', 'pg_write_server_files', 'pg_read_server_files') "
+                "AND pg_has_role(current_user, r.oid, 'MEMBER'))",
+                "is a member of a role that can run programs or read or write files on the server",
+            ),
+            (
+                "EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolcreaterole "
+                "AND pg_has_role(current_user, r.oid, 'MEMBER'))",
+                "can create roles, or is a member of a role that can (it could grant others)",
             ),
             (can("public.assessments", "DELETE"), "can DELETE"),
             (can("public.assessments", "TRUNCATE"), "can TRUNCATE"),
@@ -272,11 +317,22 @@ class PostgresAssessmentRepository:
                 "owns a guard function",
             ),
         )
-        row = conn.execute("SELECT " + ", ".join(sql for sql, _ in checks)).fetchone()
+        all_checks = list(checks)
+        version = conn.execute("SELECT current_setting('server_version_num')::int").fetchone()
+        if version is not None and version[0] >= _PARAMETER_PRIVILEGES_FROM:
+            # With this right the role could set session_replication_role = replica, which stops
+            # the guard triggers from firing while it holds UPDATE on the records.
+            all_checks.append(
+                (
+                    "COALESCE(has_parameter_privilege('session_replication_role', 'SET'), false)",
+                    "may set session_replication_role (it could stop the guard triggers firing)",
+                )
+            )
+        row = conn.execute("SELECT " + ", ".join(sql for sql, _ in all_checks)).fetchone()
         assert row is not None
         return [
             f"the application role {name}"
-            for (_, name), flag in zip(checks, row, strict=True)
+            for (_, name), flag in zip(all_checks, row, strict=True)
             if flag
         ]
 

@@ -203,6 +203,38 @@ def _host_set(value: str | None, name: str) -> frozenset[str]:
     return frozenset(parts)
 
 
+class _SecretsLocation(BaseSettings):
+    """Where secret files live. Read from the process environment only, never from .env."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="DIVESAFE_", extra="ignore", env_ignore_empty=True, env_file=None
+    )
+
+    secrets_dir: Path | None = None
+
+
+def load_settings() -> Settings:
+    """Settings from the environment and, when DIVESAFE_SECRETS_DIR is set, from the secret files
+    in that directory (ADR 0024). Unset: exactly `Settings()`."""
+    import os
+
+    from divesafe.config.secret_files import SecretFileError, read_secret_files
+
+    location = _SecretsLocation().secrets_dir
+    if location is None:
+        return Settings()
+    configured = Settings.model_config.get("env_file")
+    names = [configured] if isinstance(configured, str | Path) else list(configured or ())
+    present = [str(n) for n in names if Path(n).expanduser().is_file()]
+    if present:
+        raise SecretFileError(
+            f"{', '.join(present)} exists and DIVESAFE_SECRETS_DIR is set: a settings file would "
+            "be ignored or lose to a secret file. Remove it and use environment variables"
+        )
+    # _env_file=None as well: a file created after the check above must not be read either.
+    return Settings(_env_file=None, **read_secret_files(location, os.environ))  # type: ignore[arg-type]
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return load_settings()

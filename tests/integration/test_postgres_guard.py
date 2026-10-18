@@ -719,6 +719,145 @@ def test_verification_flags_an_application_role_that_owns_the_failure_counts(
     assert app.verify(least_privilege=True) == []
 
 
+def test_verification_flags_an_application_role_that_can_create_objects_in_public(
+    app_role_dsn: str,
+) -> None:
+    """A schema owner or a role with CREATE can drop the table; no trigger fires for that."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("GRANT CREATE ON SCHEMA public TO divesafe_app_test")
+    try:
+        assert any(
+            "create objects in the public schema" in p for p in app.verify(least_privilege=True)
+        )
+    finally:
+        _sql("REVOKE CREATE ON SCHEMA public FROM divesafe_app_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_that_owns_the_database_or_the_schema(
+    app_role_dsn: str,
+) -> None:
+    assert DSN is not None
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    name = psycopg.conninfo.conninfo_to_dict(DSN)["dbname"]
+    _sql("ALTER SCHEMA public OWNER TO divesafe_app_test")
+    try:
+        assert any("owns the public schema" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("ALTER SCHEMA public OWNER TO pg_database_owner")
+    _sql(f'ALTER DATABASE "{name}" OWNER TO divesafe_app_test')
+    try:
+        assert any("owns the database" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f'ALTER DATABASE "{name}" OWNER TO CURRENT_USER')
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_that_is_a_member_of_a_superuser_role(
+    app_role_dsn: str,
+) -> None:
+    """The superuser attribute is not inherited, but a member can SET ROLE to the superuser."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("DROP ROLE IF EXISTS divesafe_super_group_test")
+    _sql("CREATE ROLE divesafe_super_group_test NOLOGIN SUPERUSER")
+    _sql("GRANT divesafe_super_group_test TO divesafe_app_test")
+    try:
+        assert any("superuser or a member of one" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("REVOKE divesafe_super_group_test FROM divesafe_app_test")
+        _sql("DROP ROLE divesafe_super_group_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_in_a_server_file_or_program_role(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    for role in ("pg_write_server_files", "pg_execute_server_program", "pg_read_server_files"):
+        _sql(f"GRANT {role} TO divesafe_app_test")
+        try:
+            assert any("read or write files" in p for p in app.verify(least_privilege=True))
+        finally:
+            _sql(f"REVOKE {role} FROM divesafe_app_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_in_a_role_that_can_create_roles(
+    app_role_dsn: str,
+) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("DROP ROLE IF EXISTS divesafe_creator_group_test")
+    _sql("CREATE ROLE divesafe_creator_group_test NOLOGIN CREATEROLE")
+    _sql("GRANT divesafe_creator_group_test TO divesafe_app_test")
+    try:
+        assert any("can create roles" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("REVOKE divesafe_creator_group_test FROM divesafe_app_test")
+        _sql("DROP ROLE divesafe_creator_group_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_that_can_create_roles(app_role_dsn: str) -> None:
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql("ALTER ROLE divesafe_app_test CREATEROLE")
+    try:
+        assert any("can create roles" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("ALTER ROLE divesafe_app_test NOCREATEROLE")
+    assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize("scope", ["role", "database"])
+def test_verification_flags_replica_mode_set_on_the_role_or_the_database(
+    app_role_dsn: str, scope: str
+) -> None:
+    """The setting itself, not only the right to change it, switches the guard triggers off.
+    It is reported even without the least-privilege check."""
+    assert DSN is not None
+    app = PostgresAssessmentRepository(app_role_dsn)
+    name = psycopg.conninfo.conninfo_to_dict(DSN)["dbname"]
+    target = "ROLE divesafe_app_test" if scope == "role" else f'DATABASE "{name}"'
+    _sql(f"ALTER {target} SET session_replication_role = replica")
+    try:
+        assert any("session_replication_role" in p for p in app.verify(least_privilege=False))
+        assert any("session_replication_role" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"ALTER {target} RESET session_replication_role")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_an_application_role_that_can_create_schemas(app_role_dsn: str) -> None:
+    assert DSN is not None
+    app = PostgresAssessmentRepository(app_role_dsn)
+    name = psycopg.conninfo.conninfo_to_dict(DSN)["dbname"]
+    _sql(f'GRANT CREATE ON DATABASE "{name}" TO divesafe_app_test')
+    try:
+        assert any("create schemas in the database" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f'REVOKE CREATE ON DATABASE "{name}" FROM divesafe_app_test')
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_a_role_that_may_set_session_replication_role(
+    app_role_dsn: str,
+) -> None:
+    """With replica mode the ordinary guard triggers do not fire (PostgreSQL 15 and later)."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    with psycopg.connect(DSN or "") as conn:
+        version = conn.execute("SELECT current_setting('server_version_num')::int").fetchone()
+    if version is None or version[0] < 150000:
+        pytest.skip("GRANT SET ON PARAMETER needs PostgreSQL 15")
+    _sql("GRANT SET ON PARAMETER session_replication_role TO divesafe_app_test")
+    try:
+        assert any("session_replication_role" in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql("REVOKE SET ON PARAMETER session_replication_role FROM divesafe_app_test")
+    assert app.verify(least_privilege=True) == []
+
+
 @pytest.mark.parametrize(
     ("table", "problem"),
     [
