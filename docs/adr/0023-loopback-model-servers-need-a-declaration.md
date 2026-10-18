@@ -156,11 +156,16 @@ plan and evidence data left the machine. The address cannot show where the promp
   and neither is needed for a publicly trusted certificate.
 - **The fake exemption** assumes the scripted replies are strings or a test-only callable. The
   `fake` setting returns before the check anyway.
-- **One mutation survives.** Removing the IPv4-mapped conversion in `is_loopback` is equivalent
-  on Python 3.14, whose `is_loopback` already treats `::ffff:127.0.0.1` as loopback. The
-  conversion matters on older Pythons (CI also runs 3.11) and the parametrised test should catch
-  it there, but that was not run here (no 3.11 is installed on the development machine). Without
-  the conversion a mapped loopback address is refused, which fails closed. The evaluation gate
+- **One mutation survives, and no current Python can catch it.** Removing the IPv4-mapped
+  conversion in `is_loopback` changes nothing on Python 3.14.8 or on 3.11.17 (checked on both on
+  2026-10-18 in a throwaway environment: the 63 loopback and egress tests pass with and without
+  the conversion). Both standard libraries already treat `::ffff:127.0.0.1` as loopback inside
+  `IPv6Address.is_loopback`, so the conversion is redundant there. An earlier note said CI's 3.11
+  would catch it; that was wrong for current patch releases. The conversion only matters on an
+  older patch release that lacks the standard-library handling, which was not available to test.
+  Without it a mapped loopback address would be refused, which fails closed, and a mapped
+  non-loopback address is refused by the standard library on every version checked. The
+  parametrised test stays as a guard against the standard library changing. The evaluation gate
   call, a survivor in the previous round, is now caught offline.
 - **No test uses a real loopback TLS server**, so hostname matching and "nothing sent" over https
   are covered only through the patched connection class.
