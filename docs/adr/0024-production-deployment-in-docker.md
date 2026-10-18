@@ -473,7 +473,9 @@ The status stays PROPOSED until all of these are done.
   `session_replication_role`, so a session, role, database or server setting of `replica` no
   longer switches them off (a superuser can still `DISABLE TRIGGER`; `verify()` reports a trigger
   that is not `ENABLE ALWAYS`). Migration 3 is the one reviewed exception to the word scan (ADR
-  0015). Tested on PostgreSQL 17 only; not yet run on `pgvector/pgvector:pg16`.
+  0015). Unit and integration tests ran on PostgreSQL 17; a hand run on the real stack
+  (`pgvector/pgvector:pg16`, server 16.15, synthetic rows, a rebuilt `divesafe-api:local`) is
+  recorded below.
   **A backup made before migration 3 cannot be restored by the scripts**: its triggers are plain
   `ENABLE`, and `backup-common.sh` now requires state `A`, so the check refuses it, with a
   message that says "does NOT match" and so reads like damage. Recovery: restore it with the
@@ -482,9 +484,22 @@ The status stays PROPOSED until all of these are done.
   or back up with the old scripts before pulling. `backup.sh` on a version-2 database refuses
   with a message that names migration 3. No such production backup exists (the procedure has
   only been run on throwaway data).
-  **The condition 3 hand runs predate migration 3**, so no backup, scratch load, restore,
-  `--check` and `db-init` sequence has run with state `A` on `pgvector/pgvector:pg16`; repeat it
-  before this ADR is accepted. A trigger set back to plain `ENABLE` by hand makes every `db-init`
+  **The earlier condition 3 hand runs predate migration 3.** The sequence was repeated on the
+  real stack (macOS host, `pgvector/pgvector:pg16`, synthetic rows, 2026-10-19) and gave:
+  `db-init` applied migrations 1 to 3 on a fresh volume and all three triggers read `A`; the API
+  started healthy with the production `verify()` including the owner check; as the
+  `divesafe_bootstrap` superuser in replica mode, `DELETE`, `UPDATE` and `TRUNCATE` on
+  `assessments` were each refused by the guard functions; as a control, with one trigger set to
+  plain `ENABLE`, a replica-mode `UPDATE` went through (so the test can tell the states apart; the
+  row was on a throwaway volume); `divesafe_owner` cannot set `session_replication_role` at all
+  (permission denied); the backup wrote a manifest with three guard triggers, migration 3's
+  checksum and `hardening=0`; with one trigger set to plain `ENABLE` the backup was refused and
+  wrote no file, and `verify()` as the API reported the same trigger; a backup was restored into
+  a new volume, the triggers read `A`, `db-init` reported the schema up to date, `--check`
+  matched, and the API started again. **Not shown:** a Linux host, a restore of a pre-migration-3
+  archive (the refusal path was reasoned from the script, not run), real data, decided rows with
+  actual conditions, `pending_runs` rows, condition 1 (an assessment through the API with real
+  secrets) and the model host. A trigger set back to plain `ENABLE` by hand makes every `db-init`
   fail with "not intact" and no migration repairs it: run
   `ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER <name>` as the owner. `ENABLE ALWAYS`
   triggers also fire when a logical-replication subscriber applies changes (no replication is

@@ -73,5 +73,6 @@ A small in-house runner, `divesafe.services.migrations`, with no new dependency.
 - The migration list and the checksum live in the same code, so someone who can change both can
   rewrite history; the pinned test and review are the control.
 - The runner is not tested against several PostgreSQL versions: CI uses 16; migration 3 and the
-  `ENABLE ALWAYS` checks have so far run only on a local PostgreSQL 17 (ADR 0024).
+  `ENABLE ALWAYS` checks ran on a local PostgreSQL 17 and once by hand on the production
+  stack's PostgreSQL 16.15 (ADR 0024).
 - CI must set `DIVESAFE_TEST_DATABASE_URL`, or the PostgreSQL tests skip.
