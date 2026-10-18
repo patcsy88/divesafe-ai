@@ -374,9 +374,11 @@ The status stays PROPOSED until all of these are done.
    exercised a trusted extension, `ALTER DATABASE ... SET`, or a hostile archive made outside the
    database. The reconcile steps in the document come from reading the code, not from a run, and the
    list of unknown runs was empty, so its listing has run only against a fake `docker`. **Not done:** a run on Linux, with real data, with actual conditions or pending
-   runs in the data, or with an archive from another host; a schedule, retention, encryption and
-   an off-machine copy (the scripts do none of these); the owner's choice of how much decision
-   history may be lost between backups; a check of objects other than the guard in a restored
+   runs in the data, or with an archive from another host; a schedule that runs the backup, a
+   failure alert, retention, encryption and an off-machine copy (the scripts do none of these).
+   The owner decided on 2026-10-19 that the backup is **daily**, so up to about a day of
+   assessments and decisions may be lost on a restore, and more if a run fails unnoticed;
+   nothing in the repository runs it yet; a check of objects other than the guard in a restored
    database. After a restore, assessments and decisions made since the backup are gone and the
    document says how to reconcile them; the scripts cannot.
 4. A value for `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` is recorded with its reason before any ruleset
