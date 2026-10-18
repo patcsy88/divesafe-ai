@@ -185,6 +185,26 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
   not cover every way a file could be written: `make-secrets.sh` is checked for a pipe into
   `write_new`, so a pipe through `tee` on that line is not detected. The Dockerfile is scanned
   only for its `USER` and `useradd` lines.
+- `tests/safety/test_backup_scripts.py` (59), in three layers. (1) Every non-comment line of
+  `backup.sh`, `restore.sh` and `backup-common.sh` is compared with a reviewed copy in
+  `tests/safety/golden_backup/`, so any edit fails until someone reads the diff and updates the
+  copy: this is a change detector, not a proof that a change is wrong. (2) Scans that name the
+  intent: no password on a command line, each password read once inside the database container;
+  no `--clean`, `--create`, trigger switch-off, `TRUNCATE`, `DROP`, `ALTER` or `CREATE` of
+  functions, triggers or roles; no script uses the database superuser (the dump, the fact queries
+  and the real load all run as `divesafe_owner`); the fact queries pin the search path and cast
+  names to text; the archive is never loaded by the production superuser and the real load is
+  the one `pg_restore` as `divesafe_owner`; the scratch container has no network, no secrets, no
+  mount and no TCP listener; its image is the one in the compose file; every refusal comes
+  before the load; archives, `.part` files and manifests are git- and Docker-ignored. (3) The
+  real scripts run against a fake `docker` on `PATH`: the backup keeps nothing when the scratch
+  facts differ, a guard trigger is missing, the facts cannot be read, the directory is open or
+  inside the repository, the lock is held or the database keeps changing; the restore refuses and
+  never reaches `pg_restore` for a running API, a used database, a changed archive, a missing or
+  wrong-format manifest, a manifest without the guards or a scratch result that differs, and
+  reports a mismatch after the load. The fake cannot run SQL, so the content of the facts, the
+  scratch server and the real restore are covered only by the scans and by the hand run
+  (condition 3).
 - `tests/safety/test_llm_egress_declaration.py`: the host in the log and nothing else of the URL;
   the PHN warning for a loopback server, a remote server and a declared-local one.
 - `tests/integration/test_postgres_guard.py` (needs Postgres, so not part of
@@ -208,7 +228,7 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
   and the role-only `CREATEROLE` check. The `CREATEROLE`-through-membership form was added after that
   run and has not run against the real stack (the real role has no memberships). The failure
   cases are tested only against a test role on PostgreSQL 17, not on the real image.
-- **Mutation checks: 133 in seven rounds.** Round 1 (35: the loader, the host log, the PHN warning and
+- **Mutation checks: 133 in seven rounds, then 43, 32, 20 and 7 on the backup scripts (below).** Round 1 (35: the loader, the host log, the PHN warning and
   the compose files): all caught. After the reviews, round 2 (34: the review fixes, new compose
   and role-script edits): 32 caught and 2 survived, because the first versions of the tests
   never switched `.env` reading back on and never checked that the owner-URL refusal is limited to
@@ -228,6 +248,51 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
   stage, `usermod`, another Dockerfile or a `target` in the compose file, an indented `!` line in
   `.dockerignore`): all caught. The PostgreSQL 14 branch of the version gate cannot run on 16
   or 17; only an inverted gate was mutated.
+- **Mutation checks on the backup scripts (after both reviewers' first round):** 38 edits to the three
+  scripts and the two ignore files, then 5 more: all caught by the full test file. The first
+  version of the test had let 3 survive (a commented-out test restore, a dump written straight to
+  its final name, a bad pattern). With the line-by-line comparison switched off, 7 of the 38 survived
+  (`service=apix`, restoring from the original file instead of the private copy, `set +e`,
+  skipping the stable-facts check, dropping the `guard_defs` fact, dropping the `C` collation, and
+  counting guard triggers instead of naming them). The fake-docker and scan tests were then
+  extended and the 7 are caught without the comparison too, but the last three are caught by text
+  scans of the SQL, not by running it.
+- **Second round on the backup scripts.** Both reviewers' second round found that the fact
+  queries ran as the database superuser: a view or an aggregate that the owner or an archive puts
+  in `public` then runs with superuser rights, so "the superuser only reads" was wrong. The
+  scripts now use no superuser. A hand run planted such an aggregate as the owner: the backup did
+  not fire it, and the same query run unpinned as the superuser did (the control), so the attack
+  was real. 32 edits to the new logic were then mutation-checked: all caught by the full test file.
+  With the line-by-line comparison off, 6 survived: a `name` column not cast to text, a wider
+  scratch tmpfs, a failed live read and a failed scratch read that had already printed every
+  fact, an ACL case that was not refused, and `before="x"`. Tests were added and the first five
+  are caught without the comparison too. `before="x"` is an equivalent mutant: the second read
+  would have to equal it, so it is caught only by the comparison and changes no behaviour. My
+  first version of the new failure test was red on the unmodified scripts (a `&& exit` that
+  returned non-zero), so its first "caught" results were void; they were rerun after the fix.
+- **Third round on the backup scripts (both reviewers, no blockers).** Fixes: the check for a second
+  database now counts every container labelled as a compose `db` service (the image filter could miss
+  an old container); a `hardening` fact that must be 0 (policies, row security switched on,
+  default privileges, stored role settings, rules, a superuser owner) and `row_security = off` for the
+  fact queries; the ACL check counts `ls -lde` entries; the restore prints the time of the latest
+  assessment and keeps the unknown-runs list in a stripped, pinned report; the reconcile steps in
+  the document no longer rely on `created_utc`. 20 edits were mutation-checked: all caught by the
+  full file. My first run of them was void (the suite was red on the unmodified scripts: my new
+  message contained a word the scan forbids) and was repeated. Without the line comparison 2
+  survived (`pg_db_role_setting` dropped from `hardening`, the latest-assessment line); tests were
+  added, and both are caught without the comparison too.
+- **Fourth round on the backup scripts (both reviewers: no blockers, no new Majors).** Small fixes:
+  `hardening` also counts schemas other than `public`; the macOS directory check requires
+  `ls -lde` to succeed and print one line; the restore report is filtered under `LC_ALL=C`; the
+  reconcile step names every decider-role key, the limit being raised later, and the host clock;
+  "never writes over data" is qualified to archives made by `backup.sh`. 7 edits were
+  mutation-checked: all caught by the full file; 1 survived without the line comparison (the
+  `pg_` exclusion of the schema term), and a test now catches it. A hand run showed a schema
+  planted by the owner refused with nothing written, a directory with an ACL refused, a directory
+  with only an extended attribute accepted, and a restore into a new volume. Linux, where only the
+  `+` in `ls -l` is checked, was not run. Not done from the reviews: the test rename, a pinned
+  guard hash, naming the role that saw update/delete/truncate refused, and checking the owner role
+  before the load on restore (it is checked after, and the script then says not to start the API).
 - **Run for real, on the developer machine, with the local pgvector image:** `db` and `db-tls`
   start and the database becomes healthy. Against a throwaway set of secrets, from a container on
   the `data` network: a plaintext connection is refused for both network roles; the bootstrap
@@ -278,8 +343,42 @@ The status stays PROPOSED until all of these are done.
    stack cannot run without a limit. Outside this file, an unset variable still means no limit
    with a start-up warning; the application does not refuse that in production. Nothing records
    why 180 was chosen beyond the owner's decision.
-3. A backup and restore procedure exists. `db-data` holds the only copy of the append-only record
-   of human decisions.
+3. **Partly done:** a backup and restore procedure exists (`docs/backup-and-restore.md`,
+   `docker/backup.sh`, `docker/restore.sh`). `db-data` holds the only copy of the append-only record
+   of human decisions. Run by hand on a developer machine (Docker Desktop, macOS) with synthetic
+   rows (3 assessments, 2 decided, one an override, a microsecond timestamp, non-ASCII text):
+   the backup read its facts from the live database and the archive, loaded in a throwaway
+   container, reproduced them; `--check` matched while the API was up; a restore into a new empty
+   volume, as `divesafe_owner`, matched the manifest; the API then started on it ("schema is up to
+   date", `storage: durable`); update, delete and truncate on `assessments` were refused; the app
+   role's grants were as before; a second backup had the same digest. The refusals were seen for a
+   running API, a used database, a changed archive, a wrong directory mode, a held lock, and for a
+   manifest whose `digest`, `guard_defs` or `assessments` line was altered (on an empty database,
+   which stayed empty). Hostile objects were planted as the owner (not as the superuser) and the marker file was
+   checked in the database container: a function in a CHECK constraint, an aggregate and a view over a
+   function, each of which runs a shell command only for a superuser session. None fired during the
+   backup or the restore, and each object was restored. **That shows only that no superuser session
+   was used.** It does not show that the pinned search path works, because those objects act only for a
+   superuser. A further probe did: an always-on `string_agg(name, text)` returning a fixed string was
+   planted in `public` as the owner; run unpinned with uncast names it returned the fixed string
+   (the control), and the backup still read the true trigger names and its scratch restore matched.
+   Pinning and casting were not separated in that run; the mutation rounds do that. Two earlier
+   probe runs were invalid and were repeated (the first planted the row as the superuser; one "two
+   databases" test used a container without the compose label and so tested nothing). A third round
+   of hand runs showed the refusals for a directory with both an extended attribute and an ACL, for
+   a default privilege and for a row-level-security policy planted on the live database (nothing
+   was written), a restore into a new volume that printed the time of the latest assessment, and the
+   refusal of a second restore. The
+   scratch container is removed when it ends, so what happened inside it was not seen. The refusal
+   for two running databases was seen once the second container carried the label. Nothing here
+   exercised a trusted extension, `ALTER DATABASE ... SET`, or a hostile archive made outside the
+   database. The reconcile steps in the document come from reading the code, not from a run, and the
+   list of unknown runs was empty, so its listing has run only against a fake `docker`. **Not done:** a run on Linux, with real data, with actual conditions or pending
+   runs in the data, or with an archive from another host; a schedule, retention, encryption and
+   an off-machine copy (the scripts do none of these); the owner's choice of how much decision
+   history may be lost between backups; a check of objects other than the guard in a restored
+   database. After a restore, assessments and decisions made since the backup are gone and the
+   document says how to reconcile them; the scripts cannot.
 4. A value for `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` is recorded with its reason before any ruleset
    is mounted. The setting accepts any positive integer. With no ruleset it changes nothing (every
    assessment is INSUFFICIENT EVIDENCE); once signed limits exist, it decides whether old evidence
@@ -306,11 +405,47 @@ The status stays PROPOSED until all of these are done.
   the proxy share one bucket, so one client's failures can lock out the others. Neither is solved
   here; a proxy on a fixed address of its own network would fix it. The start-up warning checks
   only that the list is empty.
-- **No web UI, log shipping or monitoring.** (Backups are a condition above.)
+- **No web UI, log shipping or monitoring.** Backups are condition 3. Nothing checks that a recent
+  backup exists, and the manifest sits next to its archive, so it detects damage, not tampering.
+  A decision made after the last backup is lost and that assessment is `PENDING_HUMAN` again; an
+  assessment created after it does not exist; whoever acted on either must be told, and a dive
+  that has already happened must not be decided again on the restored record
+  (`docs/backup-and-restore.md`).
+- **The restore loads an archive without the insert guard and without an authenticated actor.**
+  Triggers are created after the data, which is the only way decided rows can load. The load runs
+  as `divesafe_owner` (not a superuser), after a trial in a container with no network or secrets,
+  and the manifest check catches damage. None of that makes a forged archive with a recomputed
+  manifest detectable, and code planted in the schema (functions, constraints, triggers other than
+  the guard) is restored and runs later. Only restore archives you made and kept safe.
+- **The backup scratch check shares the host's kernel and memory.** It holds a full copy in memory
+  in its own container (limited to 4 GB, 2 CPUs and a 2 GB scratch area); a host short of memory
+  or disk can fail the backup or hurt the database. The 2 GB area and PostgreSQL's 1 GB limit on
+  the digest string will make backups fail as the data grows, with a message that reads like
+  damage. A hard kill can leave the scratch container, a `.part` file, the lock or the restore's
+  private copy of the archive behind.
+- **The scratch result cannot prove an archive honest.** Archive code runs there as that
+  server's superuser and can make it print what it likes; the check catches accidents only.
+- **The owner can still reach superuser-run code through trusted extensions** (their install
+  scripts run with superuser rights; the image tag floats) and can change database settings.
+  The manifest lists the extensions, the number of database settings (which must be zero) and a
+  hash of every name in `public`, but nothing judges whether they are expected.
+- **The guard functions are compared for sameness, not correctness.** The owner owns them; one
+  replaced before the backup is preserved faithfully. A hash pinned from migration 1 is not built,
+  and the definitions' text may differ across PostgreSQL major versions (then the trial refuses).
+- **`pending_runs` and failure counters are compared by row count only.**
+- **An archive loaded as the owner can still change the cluster.** `ALTER ROLE ... PASSWORD` on its
+  own role needs no privilege; a stored role setting is counted (`hardening`) but a changed password
+  is noticed only when the next connection fails. The guard definitions are not pinned to migration
+  1: `db-init` does not re-apply it and `verify()` checks names, so a guard replaced before a backup
+  survives a restore. The `ls` marker precedence on macOS was seen once; a directory swapped after
+  the check is not detected.
+- **The reconcile list needs the API log**, which compose keeps only for the current container.
 - **A signed ruleset is not mounted**: `DIVESAFE_RULESET_PATH` is unset, so every assessment is
   INSUFFICIENT EVIDENCE until a dive professional's limits are signed and mounted.
 - **The app role's password is set once.** Changing a password secret later does not change the
-  role; run `ALTER ROLE` as the owner. The roles are created only on an empty volume.
+  role. The owner has no CREATEROLE and cannot change the app role's password, so this needs the
+  superuser (`divesafe_bootstrap`, inside the `db` container): use `psql -X` with only that
+  statement. The roles are created only on an empty volume.
 - **An old volume keeps its old roles.** The role script runs only on an empty volume. A volume
   made by the first version of this stack would keep a superuser `divesafe_owner`, reachable over
   the network by `pg_hba.conf`; nothing reports it (`verify()` runs as the app role, and
@@ -340,8 +475,8 @@ The status stays PROPOSED until all of these are done.
 - **`verify()` is not the guard.** It is a start-up check; the guard is the triggers and the
   grants.
 - **Upgrading PostgreSQL.** The image is pinned to major version 16. A volume is not compatible
-  across major versions; moving to another major version needs a dump and restore, which is part
-  of the missing backup procedure.
+  across major versions; moving to another major version needs a dump and restore
+  (`docs/backup-and-restore.md`; a restore into a newer major version has not been run).
 - **Port binding on older engines.** A port published to `127.0.0.1` was reachable from the local
   network on some older Docker Engine versions (recalled, not checked). State a minimum version
   once one is chosen.

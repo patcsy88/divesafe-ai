@@ -7,7 +7,8 @@
 #   docker compose -f docker/docker-compose.production.yml --env-file docker/production.env up --build
 #
 # What is NOT here: TLS in front of the API (put your own reverse proxy in front of 127.0.0.1:8000),
-# the web UI, backups, and a signed ruleset. No secret is in this file or passed through the
+# the web UI, a backup schedule (docker/backup.sh and restore.sh exist: docs/backup-and-restore.md),
+# and a signed ruleset. No secret is in this file or passed through the
 # environment: each one is mounted as a file into only the service that needs it.
 name: divesafe-prod
 

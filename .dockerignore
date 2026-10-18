@@ -13,3 +13,8 @@ docker/secrets
 docker/production.env
 **/*.pem
 **/*.key
+
+**/*.dump
+**/*.dump.part
+**/divesafe-*.manifest
+**/*.manifest.part

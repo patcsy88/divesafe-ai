@@ -35,3 +35,10 @@ tide_check_*.json
 # Production deployment (ADR 0024): generated secrets and the filled-in settings stay local.
 /docker/secrets/
 /docker/production.env
+
+# Database backups (docs/backup-and-restore.md): they hold named human decisions.
+*.dump
+*.dump.part
+divesafe-*.manifest
+*.manifest.part
+.backup.lock
