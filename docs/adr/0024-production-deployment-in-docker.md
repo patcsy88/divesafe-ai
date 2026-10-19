@@ -18,10 +18,12 @@
   The text after round 6 has not been seen by either reviewer.
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
   compose file and ADR" gap recorded in ADR 0023.
-- **Started, not exercised, on the developer machine** (2026-10-18, four runs and a restart,
-  throwaway secrets, a placeholder model key; no assessment was created and the model host was
-  never contacted). That shows the services start and the checks pass; it is not a tested
-  deployment: see "Run for real", "Not solved" and "Conditions before acceptance".
+- **Started on the developer machine** (2026-10-18, four runs and a restart, throwaway secrets, a
+  placeholder model key; no assessment was created and the model host was never contacted), and
+  **one assessment was created and decided on the owner's host with real secrets on 2026-10-19**
+  (partly seen: see condition 1). That shows the services start, the checks pass and one
+  assessment can go through; it is not a tested deployment: see "Run for real", "Not solved" and
+  "Conditions before acceptance".
 
 ## Context
 
@@ -150,7 +152,8 @@ results and the specialist findings** (the prompt layer's payload) to
 
 ## How to run it
 
-Started on a developer machine, not exercised through an assessment (see "Run for real").
+Started on a developer machine; one assessment went through on the owner's host (see condition 1
+and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-host.md`.
 
 ```
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
@@ -166,7 +169,11 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
 - `tests/safety/test_secret_files.py` (44): every secret-file rule above, the exact allow-list, the
   `.env` refusal (and that `.env` still works without a secrets directory), a dangling link, a named pipe, the line separators, production TLS on a
   file-supplied URL, `db_init` reading its file, and the owner-URL refusal in production only.
-- `tests/safety/test_production_compose.py` (34): a text scan of the compose file and the files it
+- `tests/safety/test_production_compose.py` (37; the secret-name scan exempts exactly one key,
+  `DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, on the `api` service with a 3 or 4 digit default, because its
+  name contains TOKEN but it is a model output budget; a separate test feeds the scan ten made-up
+  bad environments and requires each to fail; the token and time budgets are pinned together):
+  a text scan of the compose file and the files it
   mounts, with comments stripped first. It fails on YAML anchors, merges, `extends`, `include`,
   `privileged`, `pid` and host networking, and then pins: no `env_file`; no secret-named
   environment value; the API never given the owner URL, and only `db-init` holding it; the exact
@@ -337,6 +344,29 @@ The status stays PROPOSED until all of these are done.
    seen as `PENDING_HUMAN`, and decided through the API (write-once); then a restart with that
    data in the volume. What has been done: images built, the stack started four times, a restart
    on the same volume, and 401 without credentials (see "Run for real").
+   **First real run (owner, macOS host, 2026-10-19, `docs/first-run-on-the-real-host.md`), seen
+   from the final record the owner pasted:** one assessment for `my-pahang-pulau-tioman` was
+   created, the model host answered (a risk proposal and four token-limit stops are on the record;
+   `model_version` names the **configured** model `claude-sonnet-5-5`, and which model actually
+   answered depends on the host's routing and is not recorded), the recommendation was
+   `INSUFFICIENT EVIDENCE` (no tide evidence; every limit TBD; the explanation agreed and tightened
+   nothing), and the owner's decision `NO-GO` was recorded (`is_override` true, status `DECIDED`,
+   not a less severe override). Open-Meteo marine and wind and the two data.gov.my sources
+   returned; MET was not used (empty token file). **Not done or not seen:** the agent stage lost
+   four calls to the token limit (`specialist:weather` and the three scenarios), with the
+   compose file passing no `DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, so the 1500 default applied: the
+   compose file now defaults it to 3000 together with a 120 s call and a 300 s stage timeout (the
+   three values the live evaluation runs used; the run deadline derived from them is 360 s), and
+   **those settings have not been run on the stack** (the run must be repeated to see whether the
+   calls then complete, or fail on time instead; no call durations were recorded). A budget of
+   3000 can still stop a call at the limit (one did in evaluation run 2), and the 1 MiB response
+   limit counts the raw stream, so a long reply is refused, never trimmed. `model_version` does
+   not record the token budget, so a record made at 1500 cannot be told from one made at 3000. The paste did not show `/health`, the 401, the 409 on a second decision, or the
+   record after either restart, so those are unconfirmed; the `PENDING_HUMAN` state was not seen
+   (only `DECIDED`). `model_version` does not record the host or the egress basis. An earlier
+   attempt the same day was abandoned and its secrets deleted; no stack, volume or assessment
+   existed afterwards, and whether it sent anything to the model host is not known (its
+   model-host key file was missing).
 2. ~~The owner chooses `DIVESAFE_DECISION_MAX_AGE_MINUTES`.~~ Done: 180 minutes (owner,
    2026-10-18), the compose default, pinned by a test. In this compose file an empty or unset
    variable becomes 180 (`:-`), and `0` or a negative number is refused by the settings, so this
@@ -531,7 +561,8 @@ The status stays PROPOSED until all of these are done.
   once one is chosen.
 - **Base images float.** `python:3.12-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
-- **Not run:** an assessment through the API (needs credentials and the model host), the 30-day certificate
+- **Not run:** a complete first run (one assessment went through; see condition 1 for what was and
+  was not seen), the 30-day certificate
   renewal, and the stack on Linux (the run was on Docker Desktop for macOS, where file ownership
   and port publishing differ). On Linux the host reaches the published port through the bridge
   gateway too; what the API sees as the peer there was not observed.

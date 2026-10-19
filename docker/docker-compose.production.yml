@@ -1,6 +1,6 @@
 # Production stack for the API (ADR 0024, PROPOSED). The development stack is docker-compose.yml.
-# Started on a developer machine with throwaway secrets, not exercised through an assessment: do
-# not treat this as a tested deployment (see "Conditions before acceptance" in the ADR).
+# Started on a developer machine with throwaway secrets, and one assessment went through on the
+# owner's host: do not treat this as a tested deployment (see "Conditions before acceptance" in the ADR).
 #
 #   docker/make-secrets.sh docker/secrets                  # database secrets; see the ADR for the rest
 #   cp docker/production.env.example docker/production.env  # then fill in the blanks
@@ -119,6 +119,11 @@ services:
       DIVESAFE_LLM_BASE_URL: ${DIVESAFE_LLM_BASE_URL:?set DIVESAFE_LLM_BASE_URL in docker/production.env}
       DIVESAFE_LLM_ALLOWED_HOSTS: ${DIVESAFE_LLM_ALLOWED_HOSTS:?set DIVESAFE_LLM_ALLOWED_HOSTS in docker/production.env}
       DIVESAFE_LLM_MODEL: ${DIVESAFE_LLM_MODEL:?set DIVESAFE_LLM_MODEL in docker/production.env}
+      # The first real run at the 1500 default lost four agent calls to the token limit (ADR 0024).
+      # The live evaluation runs used these three values together (docs/evaluation-strategy.md).
+      DIVESAFE_LLM_MAX_OUTPUT_TOKENS: ${DIVESAFE_LLM_MAX_OUTPUT_TOKENS:-3000}
+      DIVESAFE_LLM_CALL_TIMEOUT_SECONDS: ${DIVESAFE_LLM_CALL_TIMEOUT_SECONDS:-120}
+      DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS: ${DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS:-300}
       # No built-in default: without it no assessment can be created (HTTP 503).
       DIVESAFE_EVIDENCE_MAX_AGE_MINUTES: ${DIVESAFE_EVIDENCE_MAX_AGE_MINUTES:?set DIVESAFE_EVIDENCE_MAX_AGE_MINUTES in docker/production.env}
       # Owner decision 2026-10-18: 180 minutes. Overriding the default needs a recorded reason.

@@ -2,8 +2,9 @@
 
 Purpose: show, once, on the real host with the real secrets, that an assessment created through
 the API reaches the model host, is stored as `PENDING_HUMAN`, can be decided once (write-once), and
-survives a restart. **This is a procedure to run by hand. Nobody has run it yet**, so ADR 0024 stays
-PROPOSED until you record the result there.
+survives a restart. **This is a procedure to run by hand.** It was run once on 2026-10-19 and only
+part of the result was seen (ADR 0024, condition 1), so ADR 0024 stays PROPOSED. A repeat should
+capture each step's output, the time each model call takes, and the record after each restart.
 
 This is decision support. A successful run shows the plumbing works; it says nothing about dive
 safety. With no signed ruleset the result cannot be `GO`, and that is expected.

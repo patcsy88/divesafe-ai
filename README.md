@@ -66,7 +66,7 @@ docker compose -f docker/docker-compose.yml --env-file .env up --build
 ```
 
 That is a development stack only. A production stack for the API is described in
-[ADR 0024](docs/adr/0024-production-deployment-in-docker.md) (proposed; started on a developer machine, not exercised through an assessment). Backing up and
+[ADR 0024](docs/adr/0024-production-deployment-in-docker.md) (proposed; one assessment went through on the owner's host, not a tested deployment). Backing up and
 restoring its database: [docs/backup-and-restore.md](docs/backup-and-restore.md).
 
 > **macOS note:** if `import divesafe` stops working in the venv, macOS may have flagged the

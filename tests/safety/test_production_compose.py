@@ -13,6 +13,7 @@ pytestmark = pytest.mark.safety
 
 COMPOSE = Path(__file__).resolve().parents[2] / "docker" / "docker-compose.production.yml"
 SECRET_WORDS = ("PASSWORD", "API_KEY", "TOKEN", "KEY_HASHES", "DATABASE_URL")
+TOKEN_BUDGET_KEY = "DIVESAFE_LLM_MAX_OUTPUT_TOKENS"
 
 
 def _blocks(text: str, top: str) -> dict[str, list[str]]:
@@ -82,14 +83,48 @@ def test_no_service_takes_the_whole_env_file(text: str) -> None:
     assert not re.search(r"^\s*env_file:", text, re.MULTILINE)
 
 
+def _secret_name_problems(environments: dict[str, dict[str, str]]) -> list[tuple[str, str]]:
+    """Settings named like a secret that are not a file path under /run/secrets. One exact name,
+    on the api service only, is let through: "TOKEN" in DIVESAFE_LLM_MAX_OUTPUT_TOKENS means model
+    output tokens, and only a plain 3 or 4 digit default is accepted for it."""
+    problems: list[tuple[str, str]] = []
+    pattern = rf"\$\{{{TOKEN_BUDGET_KEY}:-[0-9]{{3,4}}\}}"
+    for name, environment in environments.items():
+        for key, value in environment.items():
+            if key == TOKEN_BUDGET_KEY:
+                if name != "api" or not re.fullmatch(pattern, value):
+                    problems.append((name, key))
+            elif any(word in key.upper() for word in SECRET_WORDS) and not (
+                key.endswith("_FILE") and value.startswith("/run/secrets/")
+            ):
+                problems.append((name, key))
+    return problems
+
+
 def test_no_secret_value_is_in_any_environment(services: dict[str, list[str]]) -> None:
     """A setting named like a secret may only point at a file or be a required variable that the
     operator's own settings file fills in (never a literal value)."""
-    for name, block in services.items():
-        for key, value in _environment(block).items():
-            if any(word in key.upper() for word in SECRET_WORDS):
-                assert key.endswith("_FILE"), (name, key)
-                assert value.startswith("/run/secrets/"), (name, key)
+    assert _secret_name_problems({n: _environment(b) for n, b in services.items()}) == []
+
+
+def test_the_secret_name_check_rejects_each_way_round_the_one_exception() -> None:
+    """The check itself must fail for each of these, so loosening the exception is noticed."""
+    good = f"${{{TOKEN_BUDGET_KEY}:-3000}}"
+    assert _secret_name_problems({"api": {TOKEN_BUDGET_KEY: good}}) == []
+    bad = {
+        "a literal value": {"api": {TOKEN_BUDGET_KEY: "sk-literal"}},
+        "no default": {"api": {TOKEN_BUDGET_KEY: f"${{{TOKEN_BUDGET_KEY}}}"}},
+        "a non-numeric default": {"api": {TOKEN_BUDGET_KEY: f"${{{TOKEN_BUDGET_KEY}:-abc}}"}},
+        "a default with a suffix": {"api": {TOKEN_BUDGET_KEY: good + "x"}},
+        "a different variable inside": {"api": {TOKEN_BUDGET_KEY: "${DIVESAFE_LLM_API_KEY:-3000}"}},
+        "a quoted value": {"api": {TOKEN_BUDGET_KEY: '"' + good + '"'}},
+        "the key on db-init": {"db-init": {TOKEN_BUDGET_KEY: good}},
+        "a second TOKEN-named literal": {"api": {"DIVESAFE_OTHER_TOKEN": "abc123"}},
+        "a near-name literal": {"api": {TOKEN_BUDGET_KEY + "_X": "abc123"}},
+        "a credential named like the secret files": {"api": {"DIVESAFE_MET_API_TOKEN": "abc"}},
+    }
+    for label, environments in bad.items():
+        assert _secret_name_problems(environments), label
 
 
 def test_the_api_never_sees_the_owner_credentials(services: dict[str, list[str]]) -> None:
@@ -276,10 +311,43 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_LLM_BASE_URL",
         "DIVESAFE_LLM_ALLOWED_HOSTS",
         "DIVESAFE_LLM_MODEL",
+        "DIVESAFE_LLM_MAX_OUTPUT_TOKENS",
+        "DIVESAFE_LLM_CALL_TIMEOUT_SECONDS",
+        "DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS",
         "DIVESAFE_EVIDENCE_MAX_AGE_MINUTES",
         "DIVESAFE_DECISION_MAX_AGE_MINUTES",
         "DIVESAFE_TRUSTED_PROXIES",
     }
+
+
+def test_the_output_token_budget_defaults_to_the_value_the_live_runs_used(
+    services: dict[str, list[str]],
+) -> None:
+    """The 1500 default lost four agent calls in the first real run. The value is a budget for
+    one model call, not a safety limit; the schema ceiling and the refusal of long replies stay."""
+    value = _environment(services["api"])["DIVESAFE_LLM_MAX_OUTPUT_TOKENS"]
+    assert value == "${DIVESAFE_LLM_MAX_OUTPUT_TOKENS:-3000}"
+    example = (COMPOSE.parent / "production.env.example").read_text()
+    assert "DIVESAFE_LLM_MAX_OUTPUT_TOKENS=3000" in example.splitlines()
+
+
+def test_the_model_time_budgets_travel_with_the_token_budget(
+    services: dict[str, list[str]],
+) -> None:
+    """The live evaluation runs that used 3000 tokens also used a 120 s call and a 300 s stage.
+    At the code defaults (60 s and 150 s) a longer reply could time out instead of finishing."""
+    environment = _environment(services["api"])
+    assert (
+        environment["DIVESAFE_LLM_CALL_TIMEOUT_SECONDS"]
+        == "${DIVESAFE_LLM_CALL_TIMEOUT_SECONDS:-120}"
+    )
+    assert (
+        environment["DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS"]
+        == "${DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS:-300}"
+    )
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert "DIVESAFE_LLM_CALL_TIMEOUT_SECONDS=120" in lines
+    assert "DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS=300" in lines
 
 
 def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> None:
