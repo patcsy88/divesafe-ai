@@ -213,6 +213,49 @@ call made.
   currents and sea-surface temperature as the Copernicus physics product; a domain reviewer has
   not confirmed it. Warnings name `met-malaysia:warnings` but are **not** claimed complete.
 
+### Open-Meteo marine: what its source code shows (read 2026-10-19)
+
+Read from the public repository `open-meteo/open-meteo` (AGPLv3; we call the public API and copy
+no code): `Sources/App/MfWave/MfWaveDomain.swift`, `MfWaveVariable.swift` and
+`Sources/App/Controllers/ForecastapiController.swift`, on `main` on that date. No API call was made
+and nothing was run. This is a reading of code, not a test of the service, and the code can change.
+
+- **Default model set.** The marine endpoint's default is `marine_best_match`, a merge of
+  `mfcurrents` and `mfsst` (Météo-France domains), `ewam` (DWD) and `mfwave` (Météo-France). A fifth
+  source, ECMWF `wam025`, is added only when the newest `mfwave` run is more than 26 hours old, so
+  the wave source can change between requests. The response does not say which model supplied a
+  value unless one model is requested by name. **Not read:** `DomainReaderMapping`, which decides
+  which source wins per variable.
+- **Grid.** The Météo-France products share one global 1/12 degree grid (about 9 km). One cell is
+  far larger than Tioman's coast, reefs and channels, so values are regional, not site conditions,
+  and headland currents are not resolved.
+- **Cell choice.** For marine requests the default `cell_selection` is `sea`, so a coastal point
+  uses a nearby sea cell. How far that cell is from the island at our reference point is not known.
+- **Time resolution and lag.** `mfwave` has a 3-hour step, run every 12 hours, with a code comment
+  of about 11 hours between model start and availability. `mfcurrents` is hourly and `mfsst` 6-hourly,
+  both refreshed daily. Hourly values come from interpolation (linear for heights, Hermite for
+  periods and currents), so an hourly wave series is not hourly model output. Freshness should be
+  judged from the model run, not the request time.
+- **Stored precision.** Heights 0.02 m, periods 0.05 s, currents 0.05 m/s (about 0.1 knots).
+  This is storage resolution, not accuracy.
+- **Sea level.** `sea_level_height_msl` and `invert_barometer_height` come with the `mfcurrents`
+  product. Nothing in the code shows a chart-datum reference or whether tides are included, so they
+  stay out of tides (see "Open-Meteo `sea_level_height_msl`" below) and `tidal_current` stays
+  unencodable.
+- **Lineage is not reconciled.** The docs table (above) names Copernicus for currents and sea
+  temperature, while the code names Météo-France domains. Both may be true if the domains are built
+  from a Copernicus product, but the code does not say so and this was not checked. Do not record
+  either as confirmed.
+- **Attribution wording.** The string in `open_meteo_marine.py` says "with wave models from DWD and
+  others" on every marine item, including sea temperature and current items whose domains are not
+  wave models. The code was **not** changed; the wording is a candidate fix that needs the
+  connector's tests and a security review.
+- **Not read:** whether bias correction applies to marine output (the request has a
+  `disable_bias_correction` flag), and which model our connector's responses actually came from.
+  A dated MET versus Open-Meteo disagreement on waves and wind (2026-10-18, below MET's daily
+  ranges) may partly reflect this blend or the 9 km grid; that is not established, and neither
+  source is an observation.
+
 ### Tide source research (2026-10-09; nothing connected)
 
 Read from each provider's own pages. **No connector exists and none should be built until the
