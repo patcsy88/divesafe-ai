@@ -180,8 +180,9 @@ plan and evidence data left the machine. The address cannot show where the promp
     `DIVESAFE_LLM_SERVER_IS_LOCAL` is refused, and the egress basis is `remote_external_opt_in`.
   - **A model the operator knows forwards nowhere still cannot be declared local** unless it is
     on loopback. A self-hosted model on another machine is treated like a hosted one. That is
-    conservative (it can only withhold more), and it will matter for ADR 0022's rule that only
-    `egress_permitted` documents go to an external provider. Whether a "trusted host"
+    conservative (it can only withhold more), and it will matter for ADR 0022's rule (decision 15) that
+    corpus text reaches a model only when the basis is exactly `declared_local`, so a self-hosted
+    model on another machine gets no knowledge items. Whether a "trusted host"
     declaration should exist is an open owner decision; it is not built.
   - The host must be listed in `DIVESAFE_LLM_ALLOWED_HOSTS` (`wall-e.ch30ng.org`).
   - It is https, which the OpenAI-compatible adapter requires for a non-loopback host. The

@@ -43,7 +43,7 @@ stability (no versioning, a page change could change the layout); the units beyo
 the terms of the permission; any tidal-stream data (none is in this response); which station
 the response is for (it names none).
 
-## Decision (proposed)
+## Decision (accepted by the owner, 2026-10-20)
 
 A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window touches.
 
