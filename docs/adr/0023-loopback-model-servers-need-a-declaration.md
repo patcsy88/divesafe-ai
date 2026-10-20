@@ -1,9 +1,12 @@
 # ADR 0023: A loopback model server needs the operator's declaration
 
 Status: ACCEPTED by the owner (2026-10-20); originally PROPOSED (2026-10-18). Needed `security-reviewer` and `risk-reviewer` (it touches config,
-the egress gate and `tests/safety/`). Amends ADR 0007, 0016 and 0018. Closes the start-up part of the gap
-recorded in ADR 0022 decision 15; recording the basis in `model_version` and using it in the
-knowledge filter are not done.
+the egress gate and `tests/safety/`). This line records only that those reviews were needed and
+that the owner accepted it on 2026-10-20; the build reviews are in the conversation record and the
+commit messages, not in a history section. Amends ADR 0007, 0016 and 0018. Closes the start-up part
+of the gap recorded in ADR 0022 decision 15. **ADR 0022 requires typed record fields `egress_basis`
+and `model_host` (not a string in `model_version`); they are not yet built**, and using the basis
+in the knowledge filter is not done either.
 
 ## Context
 
@@ -42,9 +45,10 @@ plan and evidence data left the machine. The address cannot show where the promp
    IPv4 address they map. It proves the TCP peer is on this
    machine. It does not prove where that peer forwards the prompt; the declaration does that.
 6. **The basis is logged** at start-up (`egress_basis`, with `address_is_remote`), so a forwarding
-   proxy let through by the opt-in is not logged as local. Recording it in `model_version` and
-   using it in the ADR 0022 knowledge filter belong with ADR 0022 and are not done here; that
-   filter must use the basis, not `external`.
+   proxy let through by the opt-in is not logged as local. Recording it on the assessment record
+   (as the typed fields `egress_basis` and `model_host` that ADR 0022 decision 15 requires, not
+   inside `model_version`) and using it in the ADR 0022 knowledge filter belong with ADR 0022 and
+   are not built; that filter must use the basis, not `external`.
 7. **Live evaluation** runs the same `check_egress` (via `tests/evaluation/egress_gate.py`), skips
    when it refuses, fails on the contradictory pair, and writes the basis into both output files.
    It reads the two flags through `Settings`, so `1`, `TRUE` and `true` mean what they mean at
@@ -242,10 +246,12 @@ plan and evidence data left the machine. The address cannot show where the promp
   acknowledgement is set; nothing equivalent exists for a running application.
 - **The basis cannot tell hosts apart.** A self-hosted model on another machine and a public
   forwarding proxy both log `remote_external_opt_in`, so setting the opt-in becomes routine and
-  signals less. It does not name the recipient. `model_version` should record the host too,
-  because one opt-in covers every allow-listed host and model.
-- **The basis is not on the assessment record**, so a reviewer of a past assessment cannot see
-  whether its data left the machine. The model name on a record is the name requested; behind a
+  signals less. It does not name the recipient. The record should carry the host too (the typed
+  field `model_host`, ADR 0022 decision 15; not built), because one opt-in covers every
+  allow-listed host and model.
+- **The basis is not on the assessment record** (the typed `egress_basis` field required by ADR
+  0022 is not built), so a reviewer of a past assessment cannot see whether its data left the
+  machine. The model name on a record is the name requested; behind a
   routing host it does not show which model answered.
 - **Confidentiality only.** An unverified upstream can return anything. Authority design limits
   this to adding caution or noise, but its explanation prose still reaches the human decider
@@ -255,7 +261,8 @@ plan and evidence data left the machine. The address cannot show where the promp
   that it is verified.
 - The peer check sees the first TCP peer only. A loopback server that forwards is still allowed
   if declared.
-- `model_version` does not yet record the declaration (ADR 0022 decision 15).
+- The record does not yet carry the declaration: ADR 0022 decision 15 requires the typed fields
+  `egress_basis` and `model_host`, which are not built (the basis is not put in `model_version`).
 - **Git history.** Earlier local commits of this ADR and of `docs/evaluation-strategy.md`
   contained the model host's public IP address, a LAN address and the name of its proxy
   software. On 2026-10-18, before anything was pushed (`origin/main` held none of it), the 11
