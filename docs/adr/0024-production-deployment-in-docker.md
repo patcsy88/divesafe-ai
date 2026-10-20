@@ -339,7 +339,7 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
 
 The status stays PROPOSED until all of these are done.
 
-1. **Mostly done (repeat run below); still open: a Linux host, the 401 line and per-call
+1. **Mostly done (repeat run below); still open: a Linux host and per-call
    durations.** Needed: an assessment created through the
    API on this stack's roles (reaching the model host, with the real secrets on the real host),
    seen as `PENDING_HUMAN`, and decided through the API (write-once); then a restart with that
@@ -363,14 +363,14 @@ The status stays PROPOSED until all of these are done.
    limit counts the raw stream, so a long reply is refused, never trimmed. `model_version` does
    not record the token budget, so a record made at 1500 cannot be told from one made at 3000.
    That first paste did not show `/health`, the 401, the 409 or the record after a restart; the
-   repeat run covers all but the 401. `model_version` does not record the host or the egress
+   repeat run covers all of them. `model_version` does not record the host or the egress
    basis. An earlier
    attempt the same day was abandoned and its secrets deleted; no stack, volume or assessment
    existed afterwards, and whether it sent anything to the model host is not known (its
    model-host key file was missing).
    **Repeat run (owner, macOS arm64, Docker Compose, 2026-10-20, empty volume, compose budgets
    3000/120/300), seen from the output the owner pasted:** `/health` returned
-   `{"status":"ok","version":"0.1.0","storage":"durable"}`. The create returned 202 with a
+   `{"status":"ok","version":"0.1.0","storage":"durable"}`; `/v1/sites` without credentials returned 401. The create returned 202 with a
    `Location` header and status `RUNNING`; two polls were `RUNNING`; the finished record was
    there about 46 s after the POST (inside the 360 s deadline), `PENDING_HUMAN`, with
    `agent_issues: []`, so none of the four calls hit the token limit this time. Recommendation
@@ -381,7 +381,7 @@ The status stays PROPOSED until all of these are done.
    `NO-GO` (actor `first-run`) was recorded, `DECIDED`, `is_override` true, not a less severe
    override; a second, different decision (`CAUTION`) returned 409. After `restart api` and after
    `down` (no `-v`) then `up -d --wait api` (db healthy at 8.0 s, api at 12.9 s) the record was
-   identical and `DECIDED`. **Not seen:** the 401 line, individual call durations, a Linux host,
+   identical and `DECIDED`. **Not seen:** individual call durations, a Linux host,
    and any other data set; this is one record from one host.
 2. ~~The owner chooses `DIVESAFE_DECISION_MAX_AGE_MINUTES`.~~ Done: 180 minutes (owner,
    2026-10-18), the compose default, pinned by a test. In this compose file an empty or unset
