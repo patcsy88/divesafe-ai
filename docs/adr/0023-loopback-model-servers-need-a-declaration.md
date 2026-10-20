@@ -3,7 +3,9 @@
 Status: ACCEPTED by the owner (2026-10-20); originally PROPOSED (2026-10-18). Needed `security-reviewer` and `risk-reviewer` (it touches config,
 the egress gate and `tests/safety/`). This line records only that those reviews were needed and
 that the owner accepted it on 2026-10-20; the build reviews are in the conversation record and the
-commit messages, not in a history section. Amends ADR 0007, 0016 and 0018. Closes the start-up part
+commit messages, not in a history section. **Text amended 2026-10-20/21 after acceptance to match
+ADR 0022 (typed record fields, the `no_agent_stage` value); acceptance of the decision itself is
+unchanged; not re-accepted.** Amends ADR 0007, 0016 and 0018. Closes the start-up part
 of the gap recorded in ADR 0022 decision 15. **ADR 0022 requires typed record fields `egress_basis`
 and `model_host` (not a string in `model_version`); they are not yet built**, and using the basis
 in the knowledge filter is not done either.
@@ -25,7 +27,9 @@ plan and evidence data left the machine. The address cannot show where the promp
 
    Both default to false, so the default is refusal. `build_provider` calls
    `divesafe.models.egress.check_egress`, which returns the **egress basis** (`none` for the
-   exact fake class, `declared_local`, `loopback_external_opt_in`, `remote_external_opt_in`).
+   exact fake class, `declared_local`, `loopback_external_opt_in`, `remote_external_opt_in`; ADR 0022
+   decision 15 adds the record-only value `no_agent_stage` for `llm_provider=fake`, where
+   `build_provider` returns no provider and `check_egress` is never called).
    `provider.external` now means only "the address is not on this machine"; it does not show where
    the prompt goes.
 2. **The declaration is never inferred** from the URL or the provider, and the two settings

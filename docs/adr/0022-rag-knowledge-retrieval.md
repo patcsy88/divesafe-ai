@@ -1,12 +1,15 @@
 # ADR 0022: Contextual knowledge retrieval (RAG), curated and unranked in version 1
 
-Status: PROPOSED (2026-10-17, revised a fifth time on 2026-10-21 after the re-check; needs a quick
-diff check by both `risk-reviewer` and `security-reviewer`). The fourth revision (2026-10-20)
-changed the domain record, the prompt path, the loader and the egress path; this one adds the time
-zone rule, the trigger and lock design, the record values for the no-provider case, and the full
-test list. The owner's acceptance is still needed before any code is written. The owner has not
-accepted it. Narrows ADR 0003 (which named pgvector): ADR 0003's boundaries stand, its mechanism
-does not apply to version 1.
+Status: PROPOSED (2026-10-17, revised a sixth time on 2026-10-21 after the diff check; needs a
+quick diff check by both `risk-reviewer` and `security-reviewer`). The fourth revision (2026-10-20)
+changed the domain record, the prompt path, the loader and the egress path; the fifth added the
+time zone rule, the trigger and lock design, the record values for the no-provider case, and the
+full test list; this one follows the owner decisions of 2026-10-21 (approval after the run's `now`
+is an issue; the loader has SELECT and INSERT only and `kb_load` takes one global lock; the dive
+professional approves the manifest hash), hardens the `SECURITY DEFINER` functions, and fixes the
+time zone, envelope, egress-record and test wording. The owner's acceptance is still needed before
+any code is written. The owner has not accepted it. Narrows ADR 0003 (which named pgvector): ADR
+0003's boundaries stand, its mechanism does not apply to version 1.
 ADR 0023 (the egress basis) is ACCEPTED by the owner (2026-10-20). Its status line records only
 that reviews were needed and that the owner accepted it; the build reviews are in the conversation
 record and the commit messages, not in a history section, and this ADR claims nothing more.
@@ -72,6 +75,13 @@ not a safety limit; reviewers may change it.**
      APPROVED to WITHDRAWN. Nothing returns to an earlier status.
    - **Dates (normative).** The effective, review-by and approval dates are **calendar dates in
      Asia/Kuala_Lumpur (+08:00)**, whatever the server or database time zone.
+      - **How the zone is applied (normative).** In SQL, a local date is taken from a `timestamptz`
+        with `AT TIME ZONE 'Asia/Kuala_Lumpur'` (or `SET TimeZone = 'Asia/Kuala_Lumpur'` on the
+        function), **never** `AT TIME ZONE '+08'`: PostgreSQL reads a bare numeric zone as a POSIX
+        name, whose sign is flipped, so `'+08'` means UTC-8. In Python the zone is the **fixed
+        offset +08:00** (`timezone(timedelta(hours=8))`); Malaysia has no daylight saving time.
+        `zoneinfo` would need tz data in the container, and `tzdata` would be a new dependency that
+        needs its own ADR, so the fixed offset is preferred and this ADR adds no dependency.
      - A document is **in force from 00:00 local on its effective date**; `valid_at` is that
        instant (an aware datetime at +08:00).
      - It is **usable until 00:00 local on the day after its review-by date**, so the review-by
@@ -89,8 +99,12 @@ not a safety limit; reviewers may change it.**
        effective date is at most **12 calendar months after the approval date** (same clamp rule
        as the review-by limit in decision 7). The APPROVED-event trigger refuses a later date, so a
        document cannot sit approved and unseen for years and then take effect unreviewed.
+        **Together with the review-by limit (decision 7: review-by at most 12 calendar months
+        after the effective date) a text can stay in use up to 24 months after its approval.**
+        This is stated in "Owner answers" and "Not solved" so the owner sees it.
      - Database and run clocks can differ, so a version can look approved "in the future" to a
-       run. The table below fixes that case: **nothing from the family**.
+       run. The table below fixes that case: **nothing from the family, and an evidence issue**
+        (owner decision, 2026-10-21).
    - Site and the all-sites flag are identical across every version of a family (a trigger), so
      the site filter and the version choice cannot disagree.
    - **Version selection.** Per `document_id` (a "family"), the **governing version** is the
@@ -112,14 +126,22 @@ not a safety limit; reviewers may change it.**
    - **A governing version whose approval date is after `now`** (by the local-date rule above)
      returns **nothing from the family**. There is no fall-back to a lower version: a newer
      version exists and is approved, so the lower one may be the very text it replaces. This is
-     the safer reading; it can hide context for a short time after a load.
+     the safer reading. **It is an evidence issue (owner decision, 2026-10-21), not a note**, with
+      the fixed wording "knowledge store/run clock disagreement: an approved document family is
+      dated after this run's clock" (no title, no document id). Hiding a family is not harmless:
+      a database clock that is wrong **can hide a family for days** (the approval date is set from
+      the database clock at INSERT, decision 10), and a quiet note would let the human read the
+      silence as "no hazards". A database clock that is wrong **at query time** has no effect on
+      selection, which uses the run's `now` (decision 3); one that was wrong **when the APPROVED
+      event was inserted** stamps the wrong approval date permanently, which hides the family from
+      every run whose local date is earlier and raises this issue.
    - `supersedes` is informational (decision 10); selection never reads it.
 
    | Situation | Returned | Classification |
    | --- | --- | --- |
    | Governing version approved, window end before 00:00 local on the day after review-by | its chunks | none |
    | Governing version approved, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
-   | Governing (highest approved) version whose approval date is after `now` | nothing from the family; no fall-back to a lower version | not in force (note) |
+   | Governing (highest approved) version whose approval date is after `now` | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
    | Governing version withdrawn (higher or only), had been approved | nothing from the family | withdrawn (note) |
    | Higher version approved or withdrawn, effective after window end | the lower governing version, if in date | none, or expired |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
@@ -140,8 +162,8 @@ not a safety limit; reviewers may change it.**
      `_usable` ignores a KNOWLEDGE item in any other category, and `WINDOW_EXEMPT[KNOWLEDGE]`
      drops `historical_observations`. `_exempt` additionally requires `valid_at <= window end`, so
      a document that takes effect after the dive is not exempt. (Both are in `risk/engine.py`;
-     `_exempt` today compares `valid_until >= window_start`, inclusive, which the instant rule of
-     decision 3 makes harmless because an expired document never reaches the engine.)
+     `_exempt` today compares `valid_until >= window_start`, inclusive; for the knowledge branch only it becomes the strict `valid_until > window_end`, because re-assessing stored record-form evidence skips the connector's filter (NOTICE unchanged; test in "Identity and exemption").
+     The engine does not rely on the connector having removed an expired document.)
    - `kb_load` refuses any `variables`, `ranges` or `units` key in a knowledge `value`.
    - Only the knowledge connector may emit KNOWLEDGE items or `kb:` ids. `gather_evidence` passes
      the connector object itself, and the check is identity (`is`) with the single instance built
@@ -153,7 +175,7 @@ not a safety limit; reviewers may change it.**
    - `id`: `kb:<document_id>:<version>:<chunk>`. **Document id grammar:** lowercase letters and
      digits in at most 3 hyphen-separated tokens (`^[a-z0-9]+(-[a-z0-9]+){0,2}$`), at most 40
      characters (a parsing limit). **Version** is `[1-9][0-9]{0,5}` (zero is invalid; the database
-     has a CHECK that version is between 1 and 999999). **Chunk** is `[0-9]{1,6}`, numbered from 1
+     has a CHECK that version is between 1 and 999999). **Chunk** is `[1-9][0-9]{0,5}` (one chunk, one id string), numbered from 1
      with the same CHECK range. **Every validator uses the strict document grammar**: the lookup
      (decision 16), the loader, the connector and the record-form validator validate the document
      id with `^[a-z0-9]+(-[a-z0-9]+){0,2}$` (max 40), not with the looser whole-id pattern
@@ -184,11 +206,14 @@ not a safety limit; reviewers may change it.**
      not from `value`. **The envelope fields sent for a knowledge item are:** `id`, `category`,
      `valid_at`, `valid_until` (validity), `data_kind` (kind), `quality`, a **scope marker**
      (`site` or `all_sites`, so an all-sites document is not read as site-specific) and the
-     allow-listed `value`. **Not sent:** `source` (the label), `upstream`, `upstream_known`,
-     `location` and `quality_notes`. (Today `_payload_item` sends `source` and `upstream` for
-     every item; the knowledge branch must not.) A test asserts this. The record does **not** hold them either (decision 16);
-      only
-     the scoped lookup shows title, attribution and licence, from the store.
+      allow-listed `value`. **Not sent:** `source` (the label), `upstream`, `upstream_known`,
+      `location`, `quality_notes`, `retrieved_at` and `is_forecast`. (Today `_payload_item` sends
+      `source`, `upstream`, `upstream_known`, `quality_notes`, `retrieved_at` and `is_forecast`
+      for every item; the knowledge branch must send exactly the fields listed as sent above and
+      none of these.) A test asserts this. The record form holds the label `kb:<document_id>` as
+      `source` and the version as `source_version` (decision 16), so the provenance of AGENTS
+      section 10 still holds in the record; only the scoped lookup shows title, attribution and
+      licence, from the store.
 7. **Documents carry provenance or are refused whole.** Required: title, `origin`
    (`dive_professional` or `published_document`; no generated origin exists), `author_role`,
    effective date, review-by date, integer version, licence or permission (short text), site
@@ -224,22 +249,41 @@ not a safety limit; reviewers may change it.**
      the target month** (28 February in a non-leap year); the same clamp applies to any date whose
      day does not exist in the target month. After the review-by date the document is not used
      (decision 3).
-   - Dates must be consistent: effective date not after review-by, review-by on or after the
-     approval's local date and not before the effective date, approval not in the future by the
-     local-date rule of decision 3, and effective date at most 12 calendar months after the
-     approval date (decision 3). The effective and review-by dates are checked at load; the
-     approval-based ones by the APPROVED-event trigger (decision 10), because the loader does not
-     supply the approval date. Review-by is **not** required to be after the approval date by a
-     whole day: review-by equal to the approval date is valid (and the approval date may differ
-     from the effective date).
-   - **Chunk hash and chunk boundaries.** `content_sha256` is the SHA-256 of the UTF-8 bytes of the
-     stored, NFC chunk text. **Chunk boundaries are part of what the dive professional approves.**
-     The chunks are split **by the dive professional's staging of the file, not by code**: the
-     manifest lists each chunk (section, text span or separate file, chunk number from 1) with its
-     own SHA-256, and `kb_load` splits nothing and rewrites nothing. `kb_load` checks only the
-     length (decision 12), the character rules (decision 13) and that the hash matches. The
-     approved file hash (decision 11) therefore covers the exact chunking. A different split is a
-     new version.
+    - Dates must be consistent. Checked at load: the effective date is not after the review-by
+      date, and the review-by date is at most 12 calendar months after the effective date. Checked
+      by the APPROVED-event trigger (decision 10), because the loader does not supply the approval
+      date: **review-by on or after the approval's local date**, and **effective date at most 12
+      calendar months after the approval's local date** (decision 3). "Approval not in the future"
+      is true by construction at insert, because the trigger sets the approval time from the
+      database clock; at run time it is compared with the run's `now` (decision 3) and a
+      disagreement is an evidence issue. Review-by equal to the approval date is valid (and the
+      approval date may differ from the effective date).
+    - **Chunk hash and chunk boundaries.** `content_sha256` is the SHA-256 of the UTF-8 bytes of the
+      stored, NFC chunk text. **Chunk boundaries are part of what the dive professional approves.**
+      The chunks are split **by the dive professional's staging of the file, not by code**: the
+      manifest lists each chunk (section, text span or separate file, chunk number from 1) with its
+      own SHA-256, and `kb_load` splits nothing and rewrites nothing. `kb_load` checks only the
+      length (decision 12), the character rules (decision 13), the spans below and that the hashes
+      match. A different split is a new version.
+    - **Text span (normative).** A span is a half-open range of **byte offsets `[start, end)` in the
+      NFC-normalised UTF-8 file** as `kb_load` reads it (the file must already be NFC, decision 13,
+      so the offsets describe the approved bytes). **Newlines are not translated:** the file uses
+      `\n` only, a `\r` is refused as a control character (decision 13), and a newline is one
+      byte. A span starts and ends on a character boundary (its bytes decode as UTF-8). **Spans
+      must cover the whole file, in order, with no gap and no overlap, unless the manifest states
+      the gap** (an entry with `start`, `end` and a reason code, for example a heading or a
+      licence notice that is not corpus text). An unstated gap, overlap or out-of-order span is
+      refused. A chunk staged as a separate file is that whole file.
+    - **What the dive professional approves is the SHA-256 of the MANIFEST** (owner decision,
+      2026-10-21), computed over the manifest's bytes as read. The manifest lists every file (with
+      its SHA-256), every chunk span and chunk hash, the effective and review-by dates, the site
+      or the all-sites flag and the attestations of this decision, so a changed date, site, span
+      or attestation changes the manifest hash even when every file hash is unchanged. `kb_load`
+      stores it in `kb_documents` (a `manifest_sha256` column on each document row of the load) so
+      the owner can compare it with the hash in the private approval record (decision 11), and in
+      production `kb_load` is given the approved manifest hash and refuses a load whose computed
+      hash differs. A file-hash mismatch, a chunk-hash mismatch and a manifest-hash mismatch are
+      three separate refusals.
    - **Character and id rules apply to every stored, prompted or displayed manifest field** (title,
      section, attribution, licence, role labels, ids), not only chunk text: the NFC check, the
      allow-list and the id screen of decisions 9 and 13. These fields are rendered as plain text
@@ -248,10 +292,10 @@ not a safety limit; reviewers may change it.**
      basis at run time (decision 15). A per-document permission would be a second control that
      could disagree with it; one can be added only by an ADR amendment, and then only as a
      further restriction (it may withhold more, never send more).
-   - **Production approval is a process control by the dive professional.** Whoever holds the
-     loader credential must not approve their own load: the approval is the dive professional's
-     step, it applies to `published_document` sources too, and the dive professional records the
-     file's SHA-256 in the private approval record (decision 11).
+    - **Production approval is a process control by the dive professional.** Whoever holds the
+      loader credential must not approve their own load: the approval is the dive professional's
+      step, it applies to `published_document` sources too, and the dive professional records the
+      manifest's SHA-256 in the private approval record (decision 11).
 8. **Knowledge cannot relax, satisfy or block anything in the deterministic result.** Each is a
    requirement with a failure test. The deterministic result is what the engine and `reconcile`
    produce with no provider; with an agent stage and egress basis `declared_local` the knowledge
@@ -329,35 +373,63 @@ not a safety limit; reviewers may change it.**
       every existing version of that `document_id`), and site and the all-sites flag are identical
       across a family. Neither trigger uses a clock for ordering. A CHECK limits version and chunk to 1 through 999999 (decision 6).
     - **Trigger functions are `SECURITY DEFINER`, owned by the owner role, with
-      `SET search_path = pg_catalog, public`** (as migration 1 does for the assessment guard).
-      **Concurrency uses a per-document advisory lock** (`pg_advisory_xact_lock` on a hash of the
-      `document_id`), not `SELECT ... FOR UPDATE`: `FOR UPDATE` needs the UPDATE privilege, which
-      the loader deliberately lacks, whereas a definer function may take the advisory lock without
-      giving the loader any right. The lock is taken by (a) the version trigger and (b) the
-      same-site-per-family trigger, so two loaders inserting first versions of one family with
-      different sites cannot both succeed; and (c) the status-event trigger, so concurrent
-      loaders cannot race into an order the rules forbid. **All knowledge triggers are
-      `ENABLE ALWAYS`** (as migration 3 did for `assessments`), so `session_replication_role`
-      does not skip them; a test pins `ENABLE ALWAYS` for each.
+      `SET search_path = pg_catalog, pg_temp`.** `pg_temp` is **last and explicit**, `public` is
+      not on the path, and **every object a body names is schema-qualified**
+      (`public.kb_documents`, `public.kb_chunks`, `public.kb_status_events`,
+      `nextval('public.<ordering sequence>')`), so a temporary table, sequence or function that a
+      caller creates cannot shadow a real one. Migration 1's functions run with the caller's
+      rights and `search_path = pg_catalog, public`, so they are **not a precedent** for this.
+      **Only trigger functions may be `SECURITY DEFINER`; no definer helper function exists.**
+      The migration runs `REVOKE EXECUTE ON FUNCTION ... FROM PUBLIC` for every knowledge
+      function and grants EXECUTE to no application role.
+    - **Locks (owner decision, 2026-10-21).** `kb_load` takes **one global advisory lock for the
+      whole load**, as the first statement of its transaction, with a `lock_timeout` (a load that
+      cannot get the lock is refused, not left waiting), and inserts documents sorted by
+      `document_id`. Loads therefore run one at a time: no deadlock between loaders and no
+      same-site race. The triggers also take a **per-document advisory lock** in the two-key form
+      `pg_advisory_xact_lock(<knowledge class constant>, hashtext(document_id))`, a different
+      lock space from the single-key `_LOCK_KEY` (`services/migrations.py`) and `_RUNS_LOCK_KEY`
+      (`services/postgres.py`); a hash collision only makes two ids wait. The global lock is a
+      further, distinct two-key constant. The per-document lock is a second line of defence for a
+      writer that does not go through `kb_load`; it is not `SELECT ... FOR UPDATE`, which needs
+      the UPDATE privilege the loader lacks. It is taken by (a) the version trigger, (b) the
+      same-site-per-family trigger, so two inserts of first versions of one family with different
+      sites cannot both succeed, and (c) the status-event trigger, so concurrent writers cannot
+      race into an order the rules forbid. **All knowledge triggers are `ENABLE ALWAYS`** (as
+      migration 3 did for `assessments`), so `session_replication_role` does not skip them; a test
+      pins `ENABLE ALWAYS` for each.
     - `kb_status_events`: **the loader cannot supply the ordering key or the approval time.** A
       `clock_timestamp()` default can be overridden, and so can a `GENERATED ALWAYS` identity
       (`OVERRIDING SYSTEM VALUE`). So the loader role gets **column-level INSERT that excludes the
       ordering column and the recorded-at column**, **and** a BEFORE INSERT trigger sets the
-      ordering key from a sequence and the recorded-at timestamp from the database clock,
-      overwriting anything supplied. The loader has **no UPDATE on the sequence** (the definer
-      trigger calls `nextval`, so the loader needs no sequence privilege at all); the loader
-      self-check refuses UPDATE on it. A failure test inserts with a supplied key (and with
-      `OVERRIDING SYSTEM VALUE`) as the loader and expects refusal or an overwritten key. An event
-      must reference an existing document version; the trigger enforces: **the first event is
-      DRAFT** (APPROVED directly is refused), then only DRAFT to APPROVED, DRAFT to WITHDRAWN and
-      APPROVED to WITHDRAWN. On APPROVED it also checks the effective date is at most 12 calendar
-      months after the approval's local date (decision 3). Independently of order, selection
-      treats any WITHDRAWN event as final (decision 3). The approval date is taken from the
-      recorded-at timestamp of the APPROVED event, as an Asia/Kuala_Lumpur calendar date.
+      ordering key from a sequence and the recorded-at timestamp (`timestamptz`) from
+      `clock_timestamp()`, overwriting anything supplied. **The loader has no privilege on the
+      ordering sequence at all** (no USAGE, SELECT or UPDATE: the definer trigger calls
+      `nextval`); the loader self-check refuses all three. **Order inside the status-event
+      trigger: take the per-document lock, validate, and only then call `nextval` and
+      `clock_timestamp()`**, so a refused event burns no sequence value and an event that waited
+      for the lock is stamped after it got it. A failure test inserts with a supplied key (and
+      with `OVERRIDING SYSTEM VALUE`) and with a supplied recorded-at as the loader and expects
+      refusal or an overwritten value. An event must reference an existing document version; the
+      trigger enforces: **the first event is DRAFT** (APPROVED directly is refused), then only
+      DRAFT to APPROVED, DRAFT to WITHDRAWN and APPROVED to WITHDRAWN. On APPROVED it also checks
+      that the effective date is at most 12 calendar months after the approval's local date and
+      that review-by is on or after it (decisions 3 and 7); "approval not in the future" is true
+      by construction at insert. Independently of order, selection treats any WITHDRAWN event as
+      final (decision 3). The approval date is
+      `(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date` of the APPROVED event (decision 3,
+      "Dates").
     - `supersedes` is informational: it may only name an earlier version of the same
       `document_id`, and is read only to list superseded documents in the record, by id. Selection
       never reads it.
     - The app role gets `SELECT` only; `REVOKE ALL ... FROM PUBLIC` on the new tables.
+    - **The loader role gets `SELECT` and column-level `INSERT` only, on the `kb_*` tables only
+      (owner decision, 2026-10-21).** SELECT is there because `kb_load` reads the store for the
+      per-site chunk check (decision 12) and for version conflicts. No UPDATE, DELETE, TRUNCATE,
+      TRIGGER or REFERENCES, and the INSERT column list excludes the ordering and recorded-at
+      columns. PostgreSQL grants TEMP on a database to PUBLIC by default, so `db_init` revokes it
+      from PUBLIC and from the loader (a follow-up check at code time: nothing in the app or the
+      migration runner creates temporary tables).
     - Each knowledge trigger is checked as a pair with the function it must call, in `public`, as
       for the assessment guard, after migrating and in `verify()`. `guarded()` keeps every
       migration-1 forbidden word applying to every later migration, including this one, and adds
@@ -370,23 +442,28 @@ not a safety limit; reviewers may change it.**
       DELETE, TRUNCATE or alter triggers, owns a knowledge table or function (directly or by
       membership), or is a member of the loader role. Outside production these checks are skipped,
       as for the existing ones.
-11. **A separate loader role** (insert-only), with its own `SecretStr` setting for its connection
+11. **A separate loader role** (SELECT and INSERT only), with its own `SecretStr` setting for its connection
     string and a role-name setting validated like `postgres.py` does for the app role.
-    - `db_init` creates the grants (the loader role itself is created by the bootstrap superuser,
-      see "Required ADR 0024 amendment" below). **`kb_load`'s privilege self-check is the app
-      role's existing check plus further items, and does not claim to match it.** The existing app
-      check (`services/postgres.py`, `_privilege_problems`) tests: ownership of tables, schema and
-      database (directly or by membership), CREATE on `public` and on the database, superuser
-      membership, the server-file and program roles, CREATEROLE membership, DELETE, TRUNCATE and
-      TRIGGER on `assessments`, writes to `schema_migrations`, `pending_runs` and
-      `run_failure_counts`, guard-function ownership, `session_replication_role = replica` and the
-      privilege to set it. It has **no `rolcreatedb` test**. The loader check adds: **CREATEDB**
-      (the role or a membership), not a member of the owner or app roles, no UPDATE, DELETE,
-      TRUNCATE, TRIGGER or column privileges beyond the grants above, **no UPDATE on the ordering
-      sequence**, no privilege at all on `assessments`, `pending_runs`, `run_failure_counts` or
-      `schema_migrations`, and no `session_replication_role` setting or privilege to set it. It
-      refuses to run as the owner or app role. The application refuses to start if its own
-      credentials are the loader's. Each refusal has a test.
+    - `db_init` creates the grants; the loader role itself is created by the bootstrap superuser
+      (see "Required ADR 0024 amendment" below). **`db_init` FAILS, with a fixed message, if the
+      loader role does not exist; it never creates the role.** **`kb_load`'s privilege self-check
+      is the app role's existing check plus further items, and does not claim to match it.** The
+      existing app check (`services/postgres.py`, `_privilege_problems`) tests: ownership of
+      tables, schema and database (directly or by membership), CREATE on `public` and on the
+      database, superuser membership, the server-file and program roles, CREATEROLE membership,
+      DELETE, TRUNCATE and TRIGGER on `assessments`, writes to `schema_migrations`,
+      `pending_runs` and `run_failure_counts`, guard-function ownership,
+      `session_replication_role = replica` and the privilege to set it. It has **no `rolcreatedb`
+      test**. The loader check adds: **CREATEDB** (the role or a membership); not a member of the
+      owner or app roles; no UPDATE, DELETE, TRUNCATE, TRIGGER or REFERENCES on `kb_*`; no column
+      privilege beyond the grants above (in particular no INSERT on the ordering column or the
+      recorded-at column, and no UPDATE of any column); **no TEMP privilege on the database**
+      (directly or through PUBLIC); **no USAGE, SELECT or UPDATE on the ordering sequence**; no
+      EXECUTE on any knowledge function; no privilege at all on `assessments`, `pending_runs`,
+      `run_failure_counts` or `schema_migrations`; and no `session_replication_role` setting or
+      privilege to set it. It refuses to run as the owner or app role. The application refuses to
+      start if its own credentials are the loader's. Each refusal has a test (the full list is
+      under "Loader role" in the tests).
     - **In production the loader connection string must carry `sslmode`** (`require` or stronger,
       as for the app's), and `kb_load` refuses otherwise; test.
     - **The loader setting is added to `SECRET_FILES`** (`config/secret_files.py`) so it is mounted
@@ -406,9 +483,14 @@ not a safety limit; reviewers may change it.**
          `tests/safety/test_secret_files.py` that pins the exact set.
       5. **The production compose test pins** (`tests/safety/test_production_compose.py`),
          including the new service and the new script.
-    - The trigger functions are `SECURITY DEFINER` (above), so trigger lookups do not need the
-      loader's `SELECT`. The pair test checks each function's definer flag, owner and
-      `search_path` setting.
+       6. **Stage order.** The schema migration, the `db_init` grants, the loader code and a
+          development-only `kb_load` (against a developer database with a developer-created loader
+          role) can be built now. Changes under `docker/` and to compose files wait for the ADR
+          0024 amendment above.
+    - The loader has SELECT (above); the trigger functions' own lookups run with the owner's
+      rights (definer) and do not depend on it. The pair test checks each function's definer
+      flag, its owner, its exact `search_path` setting (`pg_catalog, pg_temp`) and that EXECUTE is
+      not held by PUBLIC, the loader or the app role.
     - **Withdrawal is an append-only row in `kb_status_events`**; a WITHDRAWN event takes effect when
       inserted (decision 3). A correction is a new version.
     - In production the application refuses to start if the loader's or the owner's connection
@@ -416,9 +498,10 @@ not a safety limit; reviewers may change it.**
       (`DIVESAFE_ADMIN_DATABASE_URL`) in the application's environment in production; this ADR
       extends that existing refusal to the loader's string and does not fix an open gap.
     - **Approval authenticity is a process control.** Whoever holds the loader credential can
-      insert an APPROVED event. The dive professional approves (decision 7), records the file's
-      SHA-256 in the private approval record outside the system, and the owner compares it. The
-      loader credential holder does not approve their own load.
+      insert an APPROVED event. The dive professional approves (decision 7), records the
+      manifest's SHA-256 in the private approval record outside the system, and the owner
+      compares it with the `manifest_sha256` stored in `kb_documents`. The loader credential
+      holder does not approve their own load.
     - Nothing from an assessment, decision, history record or model reply is ever loaded. No API
       endpoint writes the corpus.
 12. **Bound (a parsing limit, not a safety limit; reviewers may change it):** a chunk is at most
@@ -442,18 +525,22 @@ not a safety limit; reviewers may change it.**
       counts the **largest chunk total of any version that could govern** (any version that is
       not WITHDRAWN-without-approval, whatever its status or date), sums the families, and refuses
       the load if the sum exceeds the per-run bound. It may refuse a load that selection would
-      never have exceeded; that fails closed.
+      never have exceeded; that fails closed. It runs inside the global lock (decision 10), so two
+      loads cannot each pass it and together exceed the bound.
     - *Recorded inconsistency:* hitting the bound is an issue because a dropped chunk is hazard
       context known to exist, yet an expired document next to live ones is only a note (decision
       14). The owner chose this; it is recorded, not resolved.
 13. **Loading input.** Plain UTF-8 text only. PDF, HTML, DOCX or zip each need their own ADR (what
     is approved is the extracted text).
     - The manifest is validated with Pydantic (`extra="forbid"`, bounded fields, input values
-      hidden in error text) and carries each file's SHA-256 and each chunk's SHA-256 (decision 7,
-      "Chunk hash and chunk boundaries"); a mismatch is refused.
+      hidden in error text) and carries each file's SHA-256, each chunk's span and SHA-256, the
+      dates, the site flag and the attestations (decision 7, "Chunk hash and chunk boundaries"
+      and "What the dive professional approves"). A file-hash, a chunk-hash and a manifest-hash
+      mismatch are separate refusals.
     - A file must already be NFC; a file that is not is refused, not normalised. The approved
       bytes, the stored text and `content_sha256` therefore describe the same text. The same NFC
-      check applies to every manifest string field (decision 7).
+      check applies to every manifest string field (decision 7). Newlines are `\n` only; a `\r` is
+      refused.
     - Characters are checked against an **allow-list**: Latin-script letters, digits, common
       punctuation and symbols, space and newline. English and Bahasa Melayu are both Latin, and
       this also stops other scripts posing as Latin letters. Combining marks are refused (the text
@@ -488,7 +575,9 @@ not a safety limit; reviewers may change it.**
       any other). A family is one that "would otherwise be returned" when its governing version
       passes every filter except review-by. A site where every such family is past review-by is an
       evidence issue (owner decision). A site with no documents ever, only withdrawn or
-      not-in-force families, or some expired families beside live ones is a **note**. Catch-all:
+      not-in-force families, or some expired families beside live ones is a **note**. A family hidden
+      because its approval is dated after the run's `now` is an **evidence issue**, never a note
+      (decision 3). Catch-all:
       zero items returned and no issue is always a note.
     - **Documented gap:** a connector that is *not configured* is only a note, while "all
       expired" is an issue. This is recorded as an accepted gap, not resolved. Once a corpus
@@ -511,8 +600,10 @@ not a safety limit; reviewers may change it.**
     gives the **egress basis** from `check_egress`.
     - **The rule (owner answer):** knowledge items go into a prompt **only when the basis is exactly
       `declared_local`.** For every other basis (`loopback_external_opt_in`,
-      `remote_external_opt_in`, `none`, missing, unrecognised or unparsable) **every knowledge
-      item is withheld.** `none` (the `fake` provider) means withhold: nothing is sent anyway, and
+      `remote_external_opt_in`, `none`, `no_agent_stage`, missing, unrecognised or unparsable) **every knowledge
+      item is withheld.** `none` (ADR 0023's value for the exact fake class reached through
+      `check_egress`; it is **not** what the record shows for `llm_provider=fake`, which is
+      `no_agent_stage`, below) means withhold: nothing is sent anyway, and
       the record lists the items as withheld. `wall-e.ch30ng.org` is remote
       (`remote_external_opt_in`), so on the current deployment no corpus text reaches the model.
       The rule is the same for every document; there is no per-document override (decision 7).
@@ -535,11 +626,20 @@ not a safety limit; reviewers may change it.**
       returns `None` and `check_egress` is never called, so there is no basis from the gate.
       **`build_provider` must return provider and basis as one pair** (`(provider, basis)`), so
       the two cannot be separated: for the no-provider case the pair is `(None, "no_agent_stage")`.
-      The record then holds `egress_basis = "no_agent_stage"` and `model_host = null`. A record
-      with knowledge evidence and no agent stage is therefore distinguishable from one whose
-      stage ran, and `no_agent_stage` is treated like every non-`declared_local` value: the items
-      are listed as withheld (nothing is sent anyway). The value `none` of ADR 0023 (the exact
-      fake class reached through `check_egress`) is likewise withheld.
+      The record then holds `egress_basis = "no_agent_stage"` and `model_host = null`
+      (`model_host` is also null for basis `none`). `egress_basis` is an **enum** in the record:
+      `declared_local`, `loopback_external_opt_in`, `remote_external_opt_in`, `none`,
+      `no_agent_stage`; any other value fails validation of a new record, and records made before
+      the field existed have it absent. ADR 0023 lists `no_agent_stage` among the basis values (a
+      one-line cross-reference there). `no_agent_stage` is treated like every non-`declared_local`
+      value: the items are listed as withheld (nothing is sent anyway). The value `none` of ADR
+      0023 is likewise withheld.
+    - **What `no_agent_stage` does and does not show (narrowed).** It distinguishes **only the
+      fake-provider case**, in which no agent stage exists. Under `declared_local`, a stage that
+      was skipped (for example by the `MAX_EVIDENCE_ITEMS` cap, decision 12) or that failed leaves
+      the record unable to show whether knowledge reached a model. The one-way safety invariant
+      below still holds (knowledge in a prompt implies `declared_local`); its converse does not.
+      Recorded in "Not solved".
     - **The filter is applied once, where the agent stage starts (`run_agent_stage`)**, so every
       specialist, ToT and the risk agent see the same filtered set. Withheld ids are never in
       `ALLOWED_EVIDENCE_IDS` (a test asserts this), the trusted wording says site documents were
@@ -607,7 +707,9 @@ not a safety limit; reviewers may change it.**
   draft withdrawn without ever being approved above an approved lower version (the lower version
   is returned) and a review-by date inside the dive window (expired)**; an expired, withdrawn,
   superseded, draft, future-effective or other-site document is never returned; a store error,
-  collision or all-expired site becomes an evidence issue; the bound becomes an issue; any other
+  collision or all-expired site becomes an evidence issue; an approved family dated after the
+  run's `now` becomes an evidence issue with the fixed "store/run clock disagreement" wording; the
+  bound becomes an issue; any other
   connector emitting KNOWLEDGE or `kb:` is an issue.
 - Loader failure tests: a review-by 12 months and one day after the effective date is refused, and
   12 months exactly is accepted; an effective date of 29 February resolves to the last day of
@@ -617,14 +719,19 @@ not a safety limit; reviewers may change it.**
   and an author that is not a role label, are refused; a load that would put any site over the
   per-run chunk bound is refused; a manifest over the size, document or chunk limits is refused; a
   manifest root inside the repository working tree is refused, and the `.gitignore` entry exists;
-  the loader refuses to run with CREATE on `public`, schema or database ownership, CREATEROLE,
-  CREATEDB, superuser, or membership in such a role (one test each), and without `sslmode` in
-  production; the loader setting is in `SECRET_FILES`.
-- Status-event tests: a supplied ordering key is overwritten or refused, including with
-  `OVERRIDING SYSTEM VALUE`; the loader has no INSERT privilege on that column; two loaders racing
-  an APPROVED and a WITHDRAWN event on one version leave it withdrawn, and a WITHDRAWN event is
-  final whatever the order. Mutation checks: drop the trigger, grant the column, make selection
-  take the latest event only.
+  the loader setting is in `SECRET_FILES`. (The loader's own refusals are listed under "Loader
+  role" below.)
+- Status-event tests: a loader-supplied ordering key is refused or overwritten, including with
+  `OVERRIDING SYSTEM VALUE`; a loader-supplied recorded-at is refused or overwritten; the loader
+  has no INSERT privilege on the ordering column and none on the recorded-at column; a refused
+  event (APPROVED first) does not advance the sequence, and the recorded-at is taken after the
+  lock is held (order: lock, validate, then `nextval` and `clock_timestamp()`); two loaders
+  racing an APPROVED and a WITHDRAWN event on one version leave it withdrawn, and a WITHDRAWN
+  event is final whatever the order. **Shadowing:** a session that creates temporary tables and
+  sequences named like the real ones (TEMP granted for this test only, because the loader
+  self-check forbids it) cannot change what the triggers do, and they still refuse. Mutation
+  checks: drop the trigger, grant a column, make selection take the latest event only, drop the
+  schema qualification or the `pg_temp` pinning (the shadow test must fail).
 - Safety tests (`pytestmark = pytest.mark.safety`): knowledge items change nothing in the
   deterministic result (outcomes, rule ids, rationales, and evidence ids except where the
   placeholder cites knowledge ids), with no provider and over the engine from `build_engine`;
@@ -675,18 +782,27 @@ not a safety limit; reviewers may change it.**
     that instant (expired) and one ending a second before (usable); a window that starts before
     and ends after review-by (expired). Mutation: make review-by inclusive of the next day, or
     compare with the window start.
-  - The date uses Asia/Kuala_Lumpur whatever the process or database time zone (run with
-    `TZ=UTC` and a UTC database session; the result is unchanged). "Approval not in the future"
-    uses the local date of the run's `now`: a run at 23:30 UTC (07:30 next day local) sees an
-    approval dated that local day. Mutation: use the UTC date.
+  - The date uses Asia/Kuala_Lumpur whatever the process or database time zone: run with `TZ=UTC`
+    and a UTC database session, and again with the **loader session set to an extreme zone**
+    (for example +14 and -12), across 16:00 UTC (00:00 local); the approval date and the
+    selection are unchanged. A run at 23:30 UTC (07:30 next day local) sees an approval dated
+    that local day. Mutations: use the UTC date; write `AT TIME ZONE '+08'` (a POSIX sign flip,
+    UTC-8); each must fail. Python uses the fixed +08:00 offset; a static check finds no
+    `zoneinfo` or `tzdata` import.
   - The approval date comes from the APPROVED event: a manifest with an approval date field is
-    refused; a loader-supplied recorded-at is overwritten. Review-by with an approval date that
-    differs from the effective date (earlier and later) is accepted or refused by the stated
-    rules; an effective date more than 12 calendar months after the approval date is refused by
-    the trigger, exactly 12 months accepted (and 29 February clamps).
-  - A governing version whose approval date is after `now` returns **nothing from the family**,
-    and a lower in-date approved version is **not** returned (mutation: fall back to the lower
-    version).
+    refused; a loader-supplied recorded-at is refused or overwritten. A review-by date earlier
+    than the approval's local date is refused by the APPROVED trigger and one equal to it is
+    accepted; the approval date may differ from the effective date, earlier or later; an
+    effective date more than 12 calendar months after the approval date is refused by the
+    trigger, exactly 12 months accepted (and 29 February clamps).
+  - A governing version whose approval date is after `now` returns **nothing from the family**
+    and raises an **evidence issue** with the fixed "store/run clock disagreement" wording (no
+    title, no id); a lower in-date approved version is **not** returned (mutations: fall back to
+    the lower version; classify it as a note). **Two clock tests, kept apart:** (1) moving the
+    database clock **at query time**, far forward and far back, has no effect on selection or
+    classification; (2) moving it **at INSERT time** of the APPROVED event, so the approval date
+    is later than the run's local date, hides the family and raises the issue. How the test moves
+    the database clock is chosen at code time.
   - First event must be DRAFT: APPROVED first is refused by the trigger; a version with no events
     is ignored by selection and lookup. A WITHDRAWN event on only the governing version leaves
     the lower versions' lookup text available; WITHDRAWN on every version returns no text for
@@ -696,6 +812,14 @@ not a safety limit; reviewers may change it.**
   the future); the code re-check must drop each. Mutation: remove the code check; this must fail.
   (b) Against PostgreSQL with the same rows, the SQL alone must return none of them (run the query
   without the code check). Mutation: remove one SQL predicate at a time; each must fail.
+- **Manifest, spans and hashes (decision 7).** A changed effective date, review-by date, site,
+  all-sites flag or attestation with every file hash unchanged is refused (when the approved
+  manifest hash is supplied) and changes the manifest hash (assert both); a per-chunk hash
+  mismatch and a file-hash mismatch are separate refusals with separate fixed messages; the
+  manifest hash is stored in `kb_documents` and equals the SHA-256 of the manifest bytes as read;
+  a gap, an overlap or an out-of-order span is refused unless the gap is stated in the manifest;
+  a span that splits a UTF-8 character is refused; spans are byte offsets in the NFC file and a
+  `\r` is refused. Mutations: skip the gap check; hash the parsed manifest instead of its bytes.
 - **Display and licence loader rows:** `display_permitted` false is refused; a missing
   `licence_requires_personal_name` is refused (not only `true`); the licence text is covered by
   the no-name attestation test (a manifest without the attestation is refused); no licence or
@@ -704,7 +828,10 @@ not a safety limit; reviewers may change it.**
   connector but not the same object is dropped; a subclass of the knowledge connector is dropped
   (identity `is`, not name, not `isinstance`; mutation: compare by name or `isinstance`; each
   must fail). `_exempt` returns false for a knowledge item with `valid_at` after the window end
-  (mutation: drop the clause).
+  (mutation: drop the clause). For the knowledge branch only, `_exempt` returns false when
+  `valid_until` equals the window end or is earlier (strict `valid_until > window_end`), tested on
+  a stored record-form item re-assessed without the connector's filter (mutation: `>=`); the
+  NOTICE exemption is unchanged and has its own case.
 - **No request field reaches SQL (decision 2):** a query-capture test passes hostile values in
   every request field and asserts that the only SQL parameters are `site_id`, the run clock and
   the window. **Order (decision 4):** the result is ordered by document id, version, chunk number
@@ -713,20 +840,32 @@ not a safety limit; reviewers may change it.**
   refused); the run clock, not the database clock, decides selection (set the database clock far
   away). Each knowledge trigger refuses UPDATE, DELETE and TRUNCATE **as the table owner**
   (mutation: drop the trigger). All are `ENABLE ALWAYS` (query `pg_trigger.tgenabled`; a
-  `session_replication_role = replica` attempt still fires them). The functions are `SECURITY
-  DEFINER`, owned by the owner role, with `search_path = pg_catalog, public`. **Concurrency:** two
-  sessions inserting the first versions of one family with different sites, and two inserting the
-  same next version, yield one success and one refusal (mutation: remove the advisory lock). The
-  migration's checksum is pinned; `verify()` fails when a trigger or its function is missing,
-  disabled or not paired; `guarded()` refuses the forbidden words, DROP and RENAME of a knowledge
-  table in a later migration, and `DROP TRIGGER IF EXISTS`. The production start-up check refuses
-  an app role that owns a knowledge table or function (directly or by membership) and one that is
-  a member of the loader role.
-- **Loader role (decision 11).** Refusals, one test each: running as the owner or app role;
-  membership in the owner or app role; no privileges on `assessments`, `pending_runs`,
-  `run_failure_counts` or `schema_migrations`; UPDATE on the ordering sequence; the app refusing
-  to start with the loader credential as its own, and with the loader or owner connection string
-  in its environment in production.
+  `session_replication_role = replica` attempt still fires them). **Function-definition test:**
+  each trigger function is `SECURITY DEFINER`, owned by the owner role, with `proconfig` exactly
+  `search_path=pg_catalog, pg_temp`; EXECUTE is not held by PUBLIC, the loader or the app role;
+  no other knowledge function is `SECURITY DEFINER`. **Concurrency:** two sessions inserting the
+  first versions of one family with different sites, and two inserting the same next version,
+  yield one success and one refusal (mutation: remove the per-document lock); two `kb_load` runs
+  at once serialise on the global lock, the second waiting or refused by `lock_timeout`; two
+  loads touching the same documents in different order do not deadlock (documents are inserted
+  sorted by `document_id`). The migration's checksum is pinned; `verify()` fails when a trigger
+  or its function is missing, disabled or not paired; `guarded()` refuses the forbidden words,
+  DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`. The
+  production start-up check refuses an app role that owns a knowledge table or function
+  (directly or by membership) and one that is a member of the loader role.
+- **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
+  membership in the owner or app role; CREATE on `public` or on the database; ownership of a
+  table, the schema or the database (directly or by membership); CREATEROLE; CREATEDB;
+  superuser; the server-file and program roles; a `session_replication_role` setting, and the
+  privilege to set it; any privilege at all on `assessments`, `pending_runs`,
+  `run_failure_counts` or `schema_migrations`; TRIGGER, UPDATE, DELETE, TRUNCATE or REFERENCES
+  on any `kb_*` table; any column privilege beyond the grants (INSERT on the ordering column,
+  INSERT on the recorded-at column, UPDATE of any column); TEMP on the database (granted
+  directly or through PUBLIC); USAGE, SELECT or UPDATE on the ordering sequence; EXECUTE on a
+  knowledge function; no `sslmode` in production; the app refusing to start with the loader
+  credential as its own, and with the loader or owner connection string in its environment in
+  production; `db_init` failing with the fixed message when the loader role does not exist, and
+  never creating it.
 - **Bounds (decision 12):** an over-long chunk is refused at load; at run time, a chunk over the
   length bound and a result over the count bound are each caught by the re-check (fake store
   returning them); a manifest over the byte limit, with a file that would exceed the remaining
@@ -746,7 +885,10 @@ not a safety limit; reviewers may change it.**
   `egress_basis = "no_agent_stage"` and `model_host = null` and the items are listed as withheld;
   the invariant "any record whose prompt held knowledge items has `declared_local`" is checked
   from the record alone. The knowledge envelope sent to a model has exactly: id, category,
-  validity, kind, quality, scope marker and the allow-listed value (not `source` or `upstream`).
+  validity, kind, quality, scope marker and the allow-listed value, and none of `source`,
+  `upstream`, `upstream_known`, `location`, `quality_notes`, `retrieved_at` or `is_forecast`.
+  `egress_basis` rejects a value outside the enum, and `model_host` is null for `none` and
+  `no_agent_stage`.
 - **Lookup (decision 16):** role checks as for the record; the read rate limit; `Cache-Control:
   no-store`; the store-unreachable wording; the "context, not conditions" label; an in-memory
   store and a PostgreSQL store give identical lookup behaviour (parity test). **A named safety
@@ -773,7 +915,7 @@ not a safety limit; reviewers may change it.**
   basis; the owner chose the basis alone.
 - **Personal names in permanent records.** Role labels and document ids instead (owner answer).
 
-## Owner answers (2026-10-20)
+## Owner answers (2026-10-20 and 2026-10-21)
 
 A record of what the owner said. The normative text is in the numbered decisions above, where each
 answer is folded in. None of them accepts the ADR or lets code start (see the status line).
@@ -801,6 +943,17 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   effective date and usable until 00:00 local on the day after its review-by date (review-by
   inclusive). (Decision 3, "Dates")
 - **ADR 0024 amendments** are recorded as a required follow-up, not written now. (Decision 11)
+- **Approval after the run's clock (2026-10-21):** an approved family dated after the run's `now`
+  is an evidence issue ("store/run clock disagreement"), not a note. (Decision 3)
+- **Loader and lock (2026-10-21):** the loader has SELECT and INSERT on its columns only, on the
+  `kb_*` tables; `kb_load` takes one global advisory lock for the whole load. (Decisions 10, 11)
+- **What is approved (2026-10-21):** the dive professional approves the SHA-256 of the manifest
+  (every file, chunk span and hash, dates, site flag and attestations), stored in `kb_documents`
+  so the owner can compare it. (Decision 7)
+- **Longest use of a text (for the owner to confirm):** the effective date may be up to 12 months
+  after approval and review-by up to 12 months after the effective date, so a text can stay in
+  use **up to 24 months after approval**. Both limits are parsing limits the owner may change.
+  (Decisions 3, 7)
 
 ### Still open
 
@@ -847,3 +1000,18 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - The effective-date bound (12 months after approval) and the other numeric bounds are parsing
   limits that reviewers may change.
 - The table owner or a superuser can still change the corpus.
+- **Longest use of a text is 24 months after approval** (12 months to take effect plus 12 months
+  to review-by; decisions 3 and 7). The owner has not said whether that is acceptable.
+- **`no_agent_stage` is narrow.** It marks only the fake-provider case. Under `declared_local`, a
+  skipped agent stage (for example over `MAX_EVIDENCE_ITEMS`) or a failed one leaves the record
+  unable to show whether knowledge reached a model. The invariant "knowledge in a prompt implies
+  `declared_local`" holds one way only (decision 15).
+- **A wrong database clock at INSERT time** stamps a wrong approval date permanently (rows cannot
+  be updated) and hides the family from earlier-dated runs, with an evidence issue each time,
+  until a new version is approved (decision 3).
+- **The global load lock** makes loads one at a time, and a stuck holder makes later loads fail on
+  `lock_timeout`; the per-document lock only protects writers that skip `kb_load` (decision 10).
+- **The manifest hash is a process control.** Code compares it only when the approved hash is
+  supplied; that the dive professional really approved it is not checkable (decisions 7, 11).
+- **TEMP revoked from PUBLIC** may affect other users of the database; at code time check that the
+  app and the migration runner create no temporary tables (decision 10).
