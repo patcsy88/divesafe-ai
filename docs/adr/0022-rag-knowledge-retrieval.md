@@ -383,6 +383,29 @@ configuration. Decisions 3, 5, 8 and 9 make them structural.
 - The setting is `DIVESAFE_LLM_SERVER_IS_LOCAL` (ADR 0023); confirm the name and meaning.
 - Whether a withdrawn higher version should hide the lower one (proposed, decision 3).
 
+### Owner answers (2026-10-20)
+
+Recorded as given; none of them accepts the ADR or lets code start (see the status line).
+
+- **Approver:** the dive professional only. The owner does not approve content.
+- **Review-by interval:** 12 months for every document; after the date the document is not used.
+- **Hosted models:** corpus text goes only where the egress basis (ADR 0023) is exactly
+  `declared_local`; otherwise knowledge items are withheld from the prompt. `wall-e.ch30ng.org`
+  is external, so on the current deployment no corpus text reaches the model.
+- **Who may read the text:** every authenticated user. Consequence for the loader: only text the
+  owner is free to show to anyone holding a key may be loaded, and the owner must confirm that
+  per source before loading. The licence of each source is still to be recorded.
+- **Names:** no personal names in permanent records; records carry role labels and document ids
+  (the private approval record keeps the names).
+- **Corpus location:** outside the repository, git-ignored.
+- **Per-run bound reached:** an issue, not a note.
+- **Withdrawn higher version:** hides the lower versions too.
+- **Setting name:** `DIVESAFE_LLM_SERVER_IS_LOCAL`, as in the now accepted ADR 0023.
+
+Still open: the code and its reviews, the licence of each source, and the owner's acceptance of the
+whole ADR. Recording the egress basis and host in `model_version` is also open (it is what makes
+the `declared_local` rule checkable afterwards).
+
 ## Not solved
 
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
