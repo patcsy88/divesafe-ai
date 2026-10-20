@@ -339,7 +339,8 @@ docker compose -f docker/docker-compose.production.yml --env-file docker/product
 
 The status stays PROPOSED until all of these are done.
 
-1. **Open:** the stack has been started, not exercised. Needed: an assessment created through the
+1. **Mostly done (repeat run below); still open: a Linux host, the 401 line and per-call
+   durations.** Needed: an assessment created through the
    API on this stack's roles (reaching the model host, with the real secrets on the real host),
    seen as `PENDING_HUMAN`, and decided through the API (write-once); then a restart with that
    data in the volume. What has been done: images built, the stack started four times, a restart
@@ -357,16 +358,31 @@ The status stays PROPOSED until all of these are done.
    compose file passing no `DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, so the 1500 default applied: the
    compose file now defaults it to 3000 together with a 120 s call and a 300 s stage timeout (the
    three values evaluation runs 2 and 3 used; run 1 used 1500/60/150; the run deadline derived from them is 360 s), and
-   **those settings have not been run on the stack** (the run must be repeated to see whether the
-   calls then complete, or fail on time instead; no call durations were recorded). A budget of
+   **those settings were run in the repeat below**. A budget of
    3000 can still stop a call at the limit (one did in evaluation run 2), and the 1 MiB response
    limit counts the raw stream, so a long reply is refused, never trimmed. `model_version` does
-   not record the token budget, so a record made at 1500 cannot be told from one made at 3000. The paste did not show `/health`, the 401, the 409 on a second decision, or the
-   record after either restart, so those are unconfirmed; the `PENDING_HUMAN` state was not seen
-   (only `DECIDED`). `model_version` does not record the host or the egress basis. An earlier
+   not record the token budget, so a record made at 1500 cannot be told from one made at 3000.
+   That first paste did not show `/health`, the 401, the 409 or the record after a restart; the
+   repeat run covers all but the 401. `model_version` does not record the host or the egress
+   basis. An earlier
    attempt the same day was abandoned and its secrets deleted; no stack, volume or assessment
    existed afterwards, and whether it sent anything to the model host is not known (its
    model-host key file was missing).
+   **Repeat run (owner, macOS arm64, Docker Compose, 2026-10-20, empty volume, compose budgets
+   3000/120/300), seen from the output the owner pasted:** `/health` returned
+   `{"status":"ok","version":"0.1.0","storage":"durable"}`. The create returned 202 with a
+   `Location` header and status `RUNNING`; two polls were `RUNNING`; the finished record was
+   there about 46 s after the POST (inside the 360 s deadline), `PENDING_HUMAN`, with
+   `agent_issues: []`, so none of the four calls hit the token limit this time. Recommendation
+   `INSUFFICIENT EVIDENCE` (deterministic, proposed and final equal; no tide evidence;
+   `llm_tightened` and `llm_attempted_downgrade` false); five findings, three scenarios and an
+   explanation were produced; `model_version` was
+   `openai_compatible/claude-sonnet-5-5; prompts=2026-10-17.2`. MET was not used. The owner's
+   `NO-GO` (actor `first-run`) was recorded, `DECIDED`, `is_override` true, not a less severe
+   override; a second, different decision (`CAUTION`) returned 409. After `restart api` and after
+   `down` (no `-v`) then `up -d --wait api` (db healthy at 8.0 s, api at 12.9 s) the record was
+   identical and `DECIDED`. **Not seen:** the 401 line, individual call durations, a Linux host,
+   and any other data set; this is one record from one host.
 2. ~~The owner chooses `DIVESAFE_DECISION_MAX_AGE_MINUTES`.~~ Done: 180 minutes (owner,
    2026-10-18), the compose default, pinned by a test. In this compose file an empty or unset
    variable becomes 180 (`:-`), and `0` or a negative number is refused by the settings, so this
