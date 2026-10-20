@@ -356,7 +356,7 @@ The status stays PROPOSED until all of these are done.
    four calls to the token limit (`specialist:weather` and the three scenarios), with the
    compose file passing no `DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, so the 1500 default applied: the
    compose file now defaults it to 3000 together with a 120 s call and a 300 s stage timeout (the
-   three values the live evaluation runs used; the run deadline derived from them is 360 s), and
+   three values evaluation runs 2 and 3 used; run 1 used 1500/60/150; the run deadline derived from them is 360 s), and
    **those settings have not been run on the stack** (the run must be repeated to see whether the
    calls then complete, or fail on time instead; no call durations were recorded). A budget of
    3000 can still stop a call at the limit (one did in evaluation run 2), and the 1 MiB response
@@ -418,6 +418,13 @@ The status stays PROPOSED until all of these are done.
 
 ## Not solved
 
+- **Longer model budgets (3000 tokens, 120 s call, 300 s stage) are not shown to work.** The stage
+  limit is below three sequential calls at the call limit (3 x 120 s), so the risk proposal can be
+  cut off; that fails closed (the rules' result stands). Calls hold the shared model slots for up
+  to 360 s per run and cost roughly double the tokens, so consider a lower
+  `DIVESAFE_MAX_RUNS_PER_ACTOR`. The web page stops polling at 360 s, the same as the run deadline,
+  so a run finishing near it may show "outcome unknown" until reload (nothing may be acted on
+  then). The re-review of this change found these and the missing timeouts (fixed).
 - **The secrets reach the container as files, but still pass through the host.** They sit in
   `docker/secrets/` with mode 0444 inside a 0700 directory; anyone who can read that directory or
   the Docker socket can read them. A secrets manager is not used. The API runs as a different user

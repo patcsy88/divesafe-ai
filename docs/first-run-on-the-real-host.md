@@ -89,8 +89,8 @@ Expect `202` with a `Location: /v1/assessments/<id>` header and a run status. Co
 ID=<paste the id>
 ```
 
-Poll until the body is an assessment, not a run status. Allow up to a few minutes (a model call
-can take about two minutes):
+Poll until the body is an assessment, not a run status. Allow up to about 6 minutes (the run deadline is 360 s; a model call may take up to 120 s,
+its timeout; no durations have been measured):
 
 ```sh
 curl -sS -H "Authorization: Bearer $KEY" http://127.0.0.1:8000/v1/assessments/$ID | python3 -m json.tool
@@ -152,7 +152,8 @@ Keep the volume if this is your real deployment. If it was only a trial, `down -
 `rm -rf docker/secrets` remove the data and the secrets.
 
 Record in ADR 0024, condition 1, with the date: the host OS, whether the model host was reached,
-the final status, whether the agent stage ran or listed an issue, the 409 on the second decision,
+the final status, whether the agent stage ran or listed an issue (and how many calls stopped at
+the token limit or timed out), the token and time budgets in effect (the record does not show them), the 409 on the second decision,
 and the result after each restart. Say what you did not see. Do not paste the key, the hash, a
 prompt, or a model reply into the ADR.
 

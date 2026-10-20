@@ -102,8 +102,8 @@ def _secret_name_problems(environments: dict[str, dict[str, str]]) -> list[tuple
 
 
 def test_no_secret_value_is_in_any_environment(services: dict[str, list[str]]) -> None:
-    """A setting named like a secret may only point at a file or be a required variable that the
-    operator's own settings file fills in (never a literal value)."""
+    """A setting named like a secret may only be a file path under /run/secrets (a *_FILE setting);
+    one exact key, the model output token budget, is checked separately (never a literal value)."""
     assert _secret_name_problems({n: _environment(b) for n, b in services.items()}) == []
 
 
@@ -120,6 +120,7 @@ def test_the_secret_name_check_rejects_each_way_round_the_one_exception() -> Non
         "a quoted value": {"api": {TOKEN_BUDGET_KEY: '"' + good + '"'}},
         "the key on db-init": {"db-init": {TOKEN_BUDGET_KEY: good}},
         "a second TOKEN-named literal": {"api": {"DIVESAFE_OTHER_TOKEN": "abc123"}},
+        "the key in lower case": {"api": {TOKEN_BUDGET_KEY.lower(): "abc123"}},
         "a near-name literal": {"api": {TOKEN_BUDGET_KEY + "_X": "abc123"}},
         "a credential named like the secret files": {"api": {"DIVESAFE_MET_API_TOKEN": "abc"}},
     }
@@ -334,7 +335,7 @@ def test_the_output_token_budget_defaults_to_the_value_the_live_runs_used(
 def test_the_model_time_budgets_travel_with_the_token_budget(
     services: dict[str, list[str]],
 ) -> None:
-    """The live evaluation runs that used 3000 tokens also used a 120 s call and a 300 s stage.
+    """Evaluation runs 2 and 3 used 3000 tokens together with a 120 s call and a 300 s stage.
     At the code defaults (60 s and 150 s) a longer reply could time out instead of finishing."""
     environment = _environment(services["api"])
     assert (

@@ -120,7 +120,7 @@ services:
       DIVESAFE_LLM_ALLOWED_HOSTS: ${DIVESAFE_LLM_ALLOWED_HOSTS:?set DIVESAFE_LLM_ALLOWED_HOSTS in docker/production.env}
       DIVESAFE_LLM_MODEL: ${DIVESAFE_LLM_MODEL:?set DIVESAFE_LLM_MODEL in docker/production.env}
       # The first real run at the 1500 default lost four agent calls to the token limit (ADR 0024).
-      # The live evaluation runs used these three values together (docs/evaluation-strategy.md).
+      # Evaluation runs 2 and 3 used these three values together (docs/evaluation-strategy.md).
       DIVESAFE_LLM_MAX_OUTPUT_TOKENS: ${DIVESAFE_LLM_MAX_OUTPUT_TOKENS:-3000}
       DIVESAFE_LLM_CALL_TIMEOUT_SECONDS: ${DIVESAFE_LLM_CALL_TIMEOUT_SECONDS:-120}
       DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS: ${DIVESAFE_LLM_STAGE_TIMEOUT_SECONDS:-300}
