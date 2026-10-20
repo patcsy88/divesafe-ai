@@ -1,10 +1,12 @@
 # ADR 0021: Tide predictions from the PHN e-Tide endpoint
 
-Status: PROPOSED (2026-10-17). Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and
+Status: ACCEPTED by the owner (2026-10-20); the design and the connector are accepted. **PHN's
+wording (or a dated record of the permission) is still not on file**, so the connector stays
+**off by default** and nothing here makes the permission verified. Originally PROPOSED
+(2026-10-17). Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and
 `risk-reviewer` on 2026-10-17, then re-reviewed against the fixes (commit `3e239e3`): no blockers
-and no Major findings; the minor findings are folded in below. It stays PROPOSED, and
-the connector stays **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED=false`), until the owner puts
-PHN's wording (or a dated record of the permission) on file and accepts this ADR.
+and no Major findings; the minor findings are folded in below. The connector stays **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED=false`) until the owner puts
+PHN's wording (or a dated record of the permission) on file; acceptance does not change that.
 
 ## Context
 

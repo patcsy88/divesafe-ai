@@ -57,7 +57,7 @@ whatever model the host served under that name; they do not show a model is safe
 proxy at `localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). Those runs
 predate ADR 0023: the proxy was treated as local and no opt-in was required. What left the
 machine was the synthetic scenarios plus recorded fixtures, including the recorded PHN tide item,
-which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, open). Which
+which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, accepted but permission wording not on file). Which
 model answered rests on the proxy's routing; no digest was recorded. Today the evaluation runs
 the same gate as start-up and skips a loopback server unless `DIVESAFE_LLM_SERVER_IS_LOCAL=true`
 or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Each
@@ -75,7 +75,7 @@ a new file and never replaces an earlier raw record, whose hash a record here ma
 `remote_external_opt_in`, run by the owner in their own shell). The host is on a public address
 and its response header names are consistent with a routing proxy, so prompts probably go on to a
 hosted model; that is inferred, not confirmed (ADR 0023). The same data left the machine as in run 2, including the
-recorded PHN tide item, while PHN's terms are still not on file (ADR 0021, open). Which model
+recorded PHN tide item, while PHN's terms are still not on file (ADR 0021, accepted but permission wording not on file). Which model
 answered rests on the host's routing; no digest was recorded.
 
 | Setting | Run 1 | Run 2 | Run 3 |

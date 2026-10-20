@@ -1,6 +1,6 @@
 # ADR 0023: A loopback model server needs the operator's declaration
 
-Status: PROPOSED (2026-10-18). Needs `security-reviewer` and `risk-reviewer` (it touches config,
+Status: ACCEPTED by the owner (2026-10-20); originally PROPOSED (2026-10-18). Needed `security-reviewer` and `risk-reviewer` (it touches config,
 the egress gate and `tests/safety/`). Amends ADR 0007, 0016 and 0018. Closes the start-up part of the gap
 recorded in ADR 0022 decision 15; recording the basis in `model_version` and using it in the
 knowledge filter are not done.

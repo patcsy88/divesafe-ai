@@ -177,7 +177,7 @@ def test_phn_data_with_a_model_server_not_declared_local_is_warned_about_at_star
     external: bool,
     warned: bool,
 ) -> None:
-    """The PHN tide item goes to the model with every assessment (ADR 0021 is still proposed)."""
+    """The PHN tide item goes to the model with every assessment (PHN's wording is not on file)."""
     _with_stub(monkeypatch, external=external)
     with caplog.at_level("WARNING"):
         build_provider(_settings(llm_provider="openai", phn_etide_enabled=True, **flags))
