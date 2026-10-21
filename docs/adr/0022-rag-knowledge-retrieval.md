@@ -43,7 +43,14 @@ WITHDRAWN (never by a check outside the lock); exit statuses have a published pr
 not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
-**Update (2026-10-21, fourth revision, text only; neither reviewer has seen it):** an unchecked
+**Update (2026-10-21, fifth revision, text only; previous revision the reviewers read: the
+fourth, `c0457ef`; neither reviewer has seen the fifth):** the decision 3 table puts the two issue
+rows (clock disagreement, unchecked approval) before every other row, so an unchecked in-date
+version can no longer match "its chunks"; the unchecked rule applies in every environment;
+decision 14 lists the unchecked issue; more tests; the unchecked-approval gap is in "Not solved";
+stale cross-references to the migration are fixed.
+**Update (2026-10-21, fourth revision, text only, committed as `c0457ef`; both reviewers accepted
+it as a recorded design, no blockers):** an unchecked
 APPROVED event still counts as approved for governing and hiding, and the family returns nothing
 with an evidence issue (decision 3, table row, decision 12); `hash_checked` has fixed values on
 DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gates the stage-1
@@ -197,10 +204,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
 
    | Situation | Returned | Classification |
    | --- | --- | --- |
-   | Governing version approved, window end before 00:00 local on the day after review-by | its chunks | none |
-   | Governing version approved, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
-   | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
-   | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
+   | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
+   | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
+   | Governing version approved **and checked**, approval date not after `now`, window end before 00:00 local on the day after review-by | its chunks | none |
+   | Governing version approved **and checked**, approval date not after `now`, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
    | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now` | nothing from the family | withdrawn (note) |
    | Higher version approved or withdrawn, effective after window end | the lower governing version, if in date | none, or expired |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
@@ -208,11 +215,15 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    | Draft withdrawn without ever being approved, above an approved lower version | the lower version, if in date | none, or expired |
    | Only future-effective, only draft or only never-approved-and-withdrawn versions | nothing | not in force (note) |
 
-   **Precedence.** The table is read top to bottom. The clock-disagreement row comes first, then
-   the unchecked-approval row, then the withdrawn row (so an unchecked approval is an issue even
-   when withdrawn; when the clock row and the unchecked row both apply, the family raises the
-   clock-disagreement issue only, one issue per family). The clock-disagreement row comes before the
-   withdrawn row: a governing version that is WITHDRAWN **and** has an approval date after `now` is
+   **Precedence.** The table is read top to bottom. **The two issue rows come before every other
+   row**: the clock-disagreement row first, then the unchecked-approval row, then the in-date,
+   expired and withdrawn rows (so an unchecked approval is an issue even when withdrawn or expired,
+   and an unchecked in-date version never matches the "its chunks" row). When the clock row and the
+   unchecked row both apply, the family raises the clock-disagreement issue only (**one issue per
+   family**, a choice the risk reviewer judged safe). **Consequence, recorded:** while the clock
+   issue is active, the run's record does not show the unchecked approval; the post-restore check
+   and the ADR 0024 A7 report are then the only way the operator sees it. The
+   clock-disagreement row comes before the withdrawn row: a governing version that is WITHDRAWN **and** has an approval date after `now` is
    the ISSUE, not the note (fail-closed: a clock that disagrees is not allowed to turn into a quiet
    "withdrawn"). **What clears it:** a new version that is approved, in force by the window end and
    dated on or before the run's local date governs instead and clears it. Withdrawing does not clear
@@ -381,7 +392,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     basis at run time (decision 15). A per-document permission would be a second control that
     could disagree with it; one can be added only by an ADR amendment, and then only as a
     further restriction (it may withhold more, never send more).
-   - **Production approval is a process control by the dive professional.** Whoever holds the
+  - **Production approval is a process control by the dive professional.** Whoever holds the
      loader credential writes APPROVED only on the dive professional's recorded approval, with the
      hash supplied by the dive professional: the approval is the dive professional's
      step, it applies to `published_document` sources too, and the dive professional records the
@@ -755,7 +766,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       evidence issue (owner decision). A site with no documents ever, only withdrawn or
       not-in-force families, or some expired families beside live ones is a **note**. A family hidden
       because its approval is dated after the run's `now` is an **evidence issue**, never a note
-      (decision 3). Catch-all:
+      (decision 3). **So is a family whose governing version has an unchecked approval
+      (`hash_checked = false`)**, in every environment, whether or not that version is withdrawn or
+      expired: never a note, and a withdrawn unchecked family is not "withdrawn (note)" (decision 3
+      table, issue rows first). Catch-all:
       zero items returned and no issue is always a note.
     - **Documented gap:** a connector that is *not configured* is only a note, while "all
       expired" is an issue. This is recorded as an accepted gap, not resolved. Once a corpus
@@ -1022,7 +1036,20 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `psql` fallback INSERT succeed with the column (mutation: leave the column out); the fixed values
   on DRAFT and WITHDRAWN events are enforced. "Already withdrawn" matches the exact SQLSTATE: another
   trigger refusal exits with a different status (mutation: match `P0001` or message text); a
-  dropped connection during COMMIT gives "outcome unknown: re-run".
+  dropped connection during COMMIT gives "outcome unknown: re-run", and **a re-run that then reports
+  "already withdrawn" reads and prints the existing WITHDRAWN event's `recorded_at`** (the loader
+  has SELECT), so the withdrawal log keeps it (mutation: print nothing, or the current time).
+- **Fifth-revision rows (decision 3 table, issue rows first).** (a) An **expired** unchecked
+  version expects the unchecked-approval **issue**, not an "expired" note (mutation: put the
+  in-date/expired rows above the issue rows); an in-date unchecked governing version never returns
+  its chunks. (b) The **code-layer fake store** returns a lower in-date v1 next to an unchecked v2,
+  and next to a v2 dated after `now`; the code must drop v1 and raise the issue (mutation: a code
+  check that looks at each row alone). (c) The unchecked SQL tests run **against PostgreSQL** and
+  assert the issue is raised, not only that zero items come back. (d) The rule applies in **every
+  environment**: a test with `DIVESAFE_ENVIRONMENT` unset and one with `development` give the same
+  result as production (mutation: apply the rule only in production). (e) A withdrawn unchecked
+  family is the issue, not "withdrawn (note)". (f) With the clock issue active on a family that is
+  also unchecked, one issue is raised (the clock one).
 - **Manifest, spans and hashes (decision 7).** A changed effective date, review-by date, site,
   all-sites flag or attestation with every file hash unchanged is refused (production `kb_load`
   with the approved hash supplied) and changes the manifest hash (assert both); a production `load` or
@@ -1060,7 +1087,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   and in the loader's INSERT grant (mutation: add a default, or drop it from the grant); an approval
   with `hash_checked = false` still counts as approved for governing and hiding, and the family
   returns nothing and raises the evidence issue (superseded wording of the third revision; see the
-  fourth-revision rows below; mutation: treat it as approved, or as not approved); (e) `kb_load` stalled inside its transaction is ended by the
+  fourth- and fifth-revision rows above; mutation: return the unchecked version's text, or treat it
+  as not approved); (e) `kb_load` stalled inside its transaction is ended by the
   server within `idle_in_transaction_session_timeout` (mutation: drop the setting), and a connection
   to a black-holed address fails within `connect_timeout`.
 - **Display and licence loader rows:** `display_permitted` false is refused; a missing
@@ -1242,6 +1270,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - A passage that is right when written and wrong later is caught only by the review-by date.
 - A withdrawn document in a pending record is shown as withdrawn at lookup time; the decision is
   not re-run.
+- **An unchecked approval in production** (written by a raw `psql` insert, or by an environment
+  override plus the development flag) keeps the affected site or sites at INSUFFICIENT EVIDENCE
+  until the dive professional writes a new, checked version, **even after a licence is revoked**;
+  it fails closed (decision 3).
 - Hidden text inside a source document the owner converted to plain text.
 - Authenticity of an approval is a process control (decisions 7 and 11), as is the attestation that
   no field holds a personal name, and the dive professional's approval being separate from the
@@ -1292,8 +1324,9 @@ The owner accepted this ADR after the seventh revision, on the reviewers' advice
 to be settled in the first code stage. Each needs a test with a failure condition and a mutation
 check, and the code stages still need both reviewers. Nothing here changes a decision above.
 
-First stage allowed now: schema and migration, `db_init` grants, the loader role and a
-development-only `kb_load`. Changes under `docker/` and the compose files wait for the ADR 0024
+First stage allowed now: schema and migration **except the migration, which waits for the
+owner's answer on `hash_checked`** (decision 10; the column cannot be added later), `db_init`
+grants, the loader role and a development-only `kb_load`. Changes under `docker/` and the compose files wait for the ADR 0024
 amendment (items 1-7 above); the knowledge connector, the prompt path, the record fields and the
 citation guard are later stages.
 
@@ -1335,7 +1368,8 @@ citation guard are later stages.
 8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
    the over-long line ~88.
 
-Still open for the owner (also gating shipping: the withdrawal log's location and the
-re-acknowledgement of decision 11; and the `hash_checked` answer): the licence and `display_permitted` evidence for each source,
+Still open for the owner (gating shipping: the withdrawal log's location and the
+re-acknowledgement of decision 11; gating the stage-1 **migration**, not only shipping: the
+`hash_checked` answer): the licence and `display_permitted` evidence for each source,
 where the private approval record lives, and whether production should refuse to start when the
 knowledge connector is not configured once a corpus exists.

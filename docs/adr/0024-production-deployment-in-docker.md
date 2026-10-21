@@ -18,9 +18,9 @@
   The text after round 6 has not been seen by either reviewer.
 - **Amendment 1 (2026-10-21), the knowledge loader,** is at the end of "Conditions before
   acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **Nothing in
-  the amendment is built or run**. Both reviewers accepted its second revision as a recorded design
-  (no blockers, no Majors); the third revision (small, text only) has not been seen by them (see the
-  notes at its start).
+  the amendment is built or run**. Both reviewers accepted its second, third and fourth revisions as
+  recorded designs (no blockers; the fourth is committed as `c0457ef`); the fifth revision (small,
+  text only) has not been seen by either (see the notes at its start).
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
   compose file and ADR" gap recorded in ADR 0023.
 - **Started on the developer machine** (2026-10-18, four runs and a restart, throwaway secrets, a
@@ -499,9 +499,10 @@ API refusal's `.env` gap (A4); a mandatory `.dockerignore` line (A3, A5); the st
 worse than an outage (A6); a backup after `approve` too, and lost newer versions (A7); and two
 shipping gates (above, A6).
 
-**Fourth revision (2026-10-21, small, text only; docs only; not yet committed).** The previous
+**Fourth revision (2026-10-21, small, text only; docs only; committed as `c0457ef`).** The previous
 revision, which the reviewers read, is the third, `d8ede5a`; they accepted it as a recorded design
-(no blockers). **Neither reviewer has seen this text.** Changes: **an unchecked APPROVED event
+(no blockers), and both have since accepted this fourth revision as a recorded design (no
+blockers). Changes: **an unchecked APPROVED event
 still counts as approved for choosing the governing version and for hiding lower versions; the
 family returns nothing and raises an evidence issue** (A3; ADR 0022 decision 3), which fixes a
 literal reading of "counts as NOT approved" that would let a lower version's text back in;
@@ -514,6 +515,15 @@ the next step after "already withdrawn" (A3); `connect_timeout` in the connectio
 the mandatory `.dockerignore` line named where `.gitignore` is (A3); `fullmatch` for the role
 pattern (A1); the `\getenv` fallback changes a pin (A1); "security-reviewer confirmed the self-check
 default" (A3, A8).
+
+**Fifth revision (2026-10-21, small, text only; docs only; not yet committed).** The previous
+revision, which the reviewers read, is the fourth, `c0457ef`. **Neither reviewer has seen this
+text.** Changes: the ADR 0022 decision 3 table puts the clock-disagreement and unchecked-approval
+issue rows before every other row (an unchecked in-date version can no longer match "its chunks"),
+and the unchecked rule applies in **every** environment (A3); a re-run after "outcome unknown" that
+reports "already withdrawn" prints the existing event's `recorded_at` (A3); `connect_timeout` is
+validated strictly (A3); the self-check probe is a run with no arguments, and `approve` is never a
+probe (A3); stale cross-references and status text are fixed (A6, A8, the header).
 
 ### A1. The loader role and its password
 
@@ -614,8 +624,9 @@ default" (A3, A8).
 - **The password secret.** `make-secrets.sh` gains the same pattern for the loader password file
   and the connection string file (`sslmode=require&channel_binding=require&connect_timeout=<n>`;
   **decision: `make-secrets.sh` writes `connect_timeout`**, with a fixed small value chosen at code
-  time, and the narrow settings model **refuses a loader string without it**; both are pinned and a
-  test fails when either is missing), written by
+  time, and the narrow settings model **refuses a loader string whose `connect_timeout` is
+  missing, duplicated, not an integer, not positive, or above the fixed value**; both are pinned
+  and a test fails when either is missing; mutation: accept `0` (which means "no limit")), written by
   `write_new`: never overwritten, never printed, `0444` inside the `0700` `docker/secrets` (the
   container user differs, as for the existing secrets; a `0400` file fails to start). On the
   owner's host it creates only the missing files. The new files are git- and Docker-ignored by the
@@ -752,7 +763,8 @@ default" (A3, A8).
     This still does not stop an operator who overrides the environment **and** passes the flag
     (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; the owner has not been
     asked):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
-    included in the loader's column-level INSERT grant (ADR 0022 decision 10). In production,
+    included in the loader's column-level INSERT grant (ADR 0022 decision 10). **In every
+    environment** (not only production; a test runs with the environment unset),
     **an APPROVED event with `hash_checked = false` still counts as approved for choosing the
     governing version and for hiding lower versions, and the family returns NOTHING with an
     evidence issue, no fall-back** (fails closed; ADR 0022 decision 3 has the table row and its
@@ -839,9 +851,15 @@ default" (A3, A8).
     self-check incomplete**; (3) **already withdrawn**; (4) **ok**. When "already withdrawn" and
     "over-privileged" coincide, **"already withdrawn" is reported alone** (nothing was written, so
     nothing is claimed about this run). **Next step, decided:** there is no separate read-only check
-    subcommand; the next `load` or `approve` runs the self-check and hard-refuses an over-privileged
-    role anyway, and the operator may run `load` or `approve` only to see that refusal (a
-    read-only `check` subcommand would be a fourth command and is not added); the
+    subcommand and **no probe**: the next real `load` or `approve` runs the self-check and
+    hard-refuses an over-privileged role before writing anything. **Never use `approve` (or `load`)
+    as a probe**: if the role were fine it would write an event. A read-only `check` subcommand
+    would be a fourth command and is not added. Test and mutation: with an over-privileged role,
+    `load` and `approve` refuse and write nothing (mutation: move the self-check after the first
+    write). **A re-run after "outcome unknown" that then reports "already withdrawn" reads and
+    prints the existing WITHDRAWN event's `recorded_at`** (the loader has SELECT), so the
+    withdrawal log keeps it; this is part of the exit-table test (mutation: print nothing, or the
+    current time). The
     over-privileged text appears only for a run that committed. Each error code maps to one fixed
     message so the runbook step is obvious (`55P03` and `57014` go to the runbook above). A table
     test pins code to message to status, and a mutation that swaps two statuses must fail.
@@ -1019,8 +1037,9 @@ condition; the mutation check is to break the compose file once and watch it fai
 
 ### A6. Stage order
 
-- **May be built before this amendment is made** (and are, per ADR 0022 "Conditions of acceptance"):
-  the schema migration, `db_init` grants and its loader-role check, the loader code, and a
+- **May be built before this amendment is made** (and are, per ADR 0022 "Conditions of acceptance"),
+  **except the schema migration, which waits for the owner's answer on `hash_checked`** (A3): `db_init`
+  grants and its loader-role check, the loader code, and a
   **development-only** `kb_load` against a developer database with a developer-created role.
 - **Wait for this amendment** (made, and reviewed by both reviewers): everything under `docker/`
   (the new script, `make-secrets.sh`, `pg_hba.conf`, the backup scripts) and the compose files, and
@@ -1190,6 +1209,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The existing role script does not set `log_statement = 'none'`**, so a server with
   `log_statement = ddl` would log `CREATE ROLE ... PASSWORD` from `10-create-app-role.sh`. The
   loader script sets it (A1); the existing one is not changed here.
+- **An unchecked approval keeps its site(s) at INSUFFICIENT EVIDENCE** until the dive professional
+  writes a new, checked version, even after a licence is revoked (fails closed; ADR 0022 "Not
+  solved"). While a clock issue is active on the same family the run's record shows only the clock
+  issue, so the A7 report and post-restore check are the only way the operator sees the unchecked
+  approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
 - **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
   ADR 0022 decision 11 (A6).
@@ -1199,8 +1223,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 
 ## Not solved
 
-- **The knowledge loader (Amendment 1) is not built or run.** Both reviewers accepted its second
-  revision as a recorded design (no blockers, no Majors); they have not seen the third. Its gaps are
+- **The knowledge loader (Amendment 1) is not built or run.** Both reviewers accepted its second,
+  third and fourth revisions as recorded designs (no blockers); neither has seen the fifth. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.
 - **Longer model budgets (3000 tokens, 120 s call, 300 s stage) are not shown to work.** The stage
