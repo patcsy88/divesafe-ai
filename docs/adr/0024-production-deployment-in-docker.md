@@ -16,6 +16,9 @@
     built from it with no `target`), and `.gitattributes` keeps the scripts on LF endings. The
     rest is listed under "Not solved".
   The text after round 6 has not been seen by either reviewer.
+- **Amendment 1 (2026-10-21), the knowledge loader,** is at the end of "Conditions before
+  acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **Nothing in
+  the amendment is built or run**, and neither reviewer has seen its text.
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
   compose file and ADR" gap recorded in ADR 0023.
 - **Started on the developer machine** (2026-10-18, four runs and a restart, throwaway secrets, a
@@ -93,7 +96,8 @@ filesystem and do not run as root. The API has a `/tmp` tmpfs limited to 16 MiB 
 `divesafe_api_key_hashes`. Rules, each with a failing test:
 
 - Only those five names are read. A file named like any other setting (`environment`,
-  `allow_external_llm`, ...) is ignored, so a stray file cannot flip a safety setting.
+  `allow_external_llm`, ...) is ignored, so a stray file cannot flip a safety setting. (Amendment 1
+  adds a sixth name, the loader's; until that is built the list and its pin stay five.)
 - A value present both as a file and as a non-empty environment variable is **refused**, not
   resolved by precedence. The message names the setting, never a value.
 - With `DIVESAFE_SECRETS_DIR` set, the presence of a `.env` file (the one `Settings` is configured
@@ -432,8 +436,279 @@ The status stays PROPOSED until all of these are done.
    assessment is INSUFFICIENT EVIDENCE); once signed limits exist, it decides whether old evidence
    can support GO or CAUTION, and it is a safety limit that no one has reviewed.
 
+## Amendment 1 (2026-10-21): the knowledge loader
+
+ADR 0022 (ACCEPTED with conditions, 2026-10-21) requires this amendment before its feature ships.
+**Nothing in it is built or run.** No file under `docker/`, no compose service, no test and no
+setting described here exists; the text below says what must be made. ADR 0024 stays PROPOSED and
+its four conditions are unchanged. The feature does not ship until what follows is made and has been
+reviewed by both `risk-reviewer` and `security-reviewer`. No decision above is changed and no pin
+is weakened; every pin named here is added beside the existing ones. Names of settings, scripts and
+files are fixed at code time unless stated.
+
+### A1. The loader role and its password
+
+- **What changes.** A new role, the loader (name fixed at code time, `divesafe_*`, validated like
+  `DIVESAFE_APP_DB_ROLE`), is created by the bootstrap superuser through a **new script that is
+  safe to re-run on an existing volume**. `divesafe_owner` is NOCREATEROLE, and
+  `docker/db/10-create-app-role.sh` runs only on an empty volume, so neither can do it; the owner's
+  host already has a volume from 2026-10-19. The new script is run by hand with
+  `docker compose exec` in the `db` container as `divesafe_bootstrap` over the local socket (not
+  mounted into `docker-entrypoint-initdb.d`, which would run it on new volumes only). It creates
+  the role if absent, with `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
+  and `GRANT CONNECT` on `divesafe`. It sets the password only when it creates the role (the
+  existing "set once" gap applies). Passwords reach psql through the environment and `\getenv`,
+  with `log_min_error_statement = panic`, as in the existing script. It grants **no table
+  privilege**: those come from `db_init`.
+- **The password secret.** `make-secrets.sh` gains the same pattern for a loader password file and
+  a loader connection string file (`sslmode=require&channel_binding=require`, like the others),
+  written by `write_new`: never overwritten, never printed, `0444` inside the `0700`
+  `docker/secrets` (the container user differs, as for the existing secrets; a `0400` file fails to
+  start). Because the secrets directory already exists on the owner's host, the script must create
+  only the missing files and leave the rest. The new files are git- and Docker-ignored by the
+  existing `docker/secrets` entries. The script reads the password from `/run/secrets` inside the `db`
+  container, so the `db` service must also be given the loader **password** secret (a change to its
+  `secrets:` list; the existing tests do not pin that list, so A5 adds a pin). The loader
+  **connection string** goes to `kb_load` alone (A3).
+- **Failure behaviour.** The script exits non-zero and writes nothing if the role exists with a
+  dangerous attribute (it does not repair it). Re-running changes nothing. `db_init` **fails with
+  a fixed message if the loader role is missing and never creates it** (ADR 0022 decision 11); the
+  stack then stops at `db-init`, so the API does not start until the role exists. Order for the
+  owner's host: run the script, then `up`.
+- **Pins.** (a) A new test reads the script line by line, as `_ROLE_SCRIPT_LINES` does for the
+  existing one, and fails on a swapped password, an extra statement, a `SUPERUSER`/`CREATEROLE`/
+  `CREATEDB` word, a password on a command line, an unconditional `CREATE ROLE` (it must be
+  guarded so a second run succeeds), or a table `GRANT`. (b) `test_the_secrets_script_prints_no_secret_by_any_command`
+  is extended to the loader password variable, and a test fails if `write_new` is replaced by a
+  bare redirect. Mutation checks: drop the existence guard; add `CREATEROLE`; print the password;
+  each must fail.
+- **Documented gap.** Nothing proves the role in a running volume is the one the script made
+  (`db_init`'s grants and `kb_load`'s self-check, ADR 0022 decision 11, are the check). A changed
+  password secret does not change the role. The scan of `make-secrets.sh` still does not see a
+  pipe through `tee`.
+
+### A2. The `pg_hba` entry
+
+- **What changes.** `docker/db/pg_hba.conf` gains one line, same form as the others:
+  `hostssl divesafe <loader role> samenet scram-sha-256`. The owner and app lines stay exactly as
+  they are.
+- **Failure behaviour.** A plaintext connection, another database, another source or a wrong
+  password matches no rule or fails SCRAM and is refused, as today.
+- **Pins.** `test_the_bootstrap_superuser_is_not_reachable_over_the_network` is widened only to
+  accept the loader role as a third allowed name (an exact set of three, not a pattern); the check
+  that every rule is `local` or `hostssl` with `scram-sha-256`, `samenet`, database `divesafe` and
+  no IPv6 range stays. A new test requires exactly one rule for the loader. Mutation checks:
+  `host` instead of `hostssl`; `all` as database or user; a CIDR instead of `samenet`; `trust`;
+  a rule for the bootstrap role; each must fail.
+- **Documented gap.** Unchanged from the existing text: the host may reach the database through the
+  bridge on Linux (not checked); the certificate is self-signed and not verified.
+
+### A3. `kb_load` as a one-off compose service
+
+- **What changes.** `docker/docker-compose.production.yml` gains a service `kb_load` (the name
+  that the loader command and the tests use) that `up` does not start: it carries a **compose
+  profile** (for example `knowledge`), so only `docker compose --profile knowledge run --rm
+  kb_load ...` starts it. It uses the same image and Dockerfile as `api` and `db-init`
+  (`divesafe-api:local`, same `build` block, no `target`, no `user:`), `restart: "no"`, and:
+  - **Network:** `[data]` only. It has no route out.
+  - **Secrets:** exactly one, the loader connection string, mounted as a file under the
+    `/run/secrets` target for the new `SECRET_FILES` name (A4). No LLM key, MET token, key hashes,
+    owner or app secret.
+  - **Mounts:** exactly one, the corpus directory, **read-only**, from a host path **outside the
+    repository**. The path is the operator's choice (`${...:?}` with no default, so a forgotten
+    value stops the run); it is never a path in the working tree. No other volume.
+  - **No `ports`, no `expose`.** Read-only root filesystem, `cap_drop: [ALL]`,
+    `no-new-privileges`, no `cap_add`, memory and process limits as `api` has.
+  - **Environment:** `DIVESAFE_ENVIRONMENT: production` (ADR 0022 condition 1, so the hash is
+    required even if an operator forgets a flag), `DIVESAFE_SECRETS_DIR: /run/secrets`, and
+    nothing else except the corpus path setting the code needs. It does not get
+    `DIVESAFE_LLM_*`, `DIVESAFE_ALLOW_EXTERNAL_LLM`, an owner URL or a hash.
+  - **Command:** the entrypoint is exec form (`["python", "-m", "<kb_load module>"]`, module fixed
+    at code time), with no `sh -c`, no shell, and no `${...}` interpolation of operator input. The
+    subcommand and arguments come from `docker compose run ... kb_load load|approve|withdraw ...`
+    and reach the process as arguments, never through a shell.
+  - **The approved manifest hash** is an operator argument, `--approved-manifest-sha256 <hash>`,
+    validated `^[0-9a-f]{64}$`. It is **never** read from a file under the corpus mount, from an
+    environment variable, from a compose variable or from a secret, so whoever can change the
+    corpus cannot also supply the hash that approves it. The compose file has no setting for it.
+- **What each command writes (ADR 0022 decision 11).** `kb_load load` writes the documents, the
+  chunks and a **DRAFT** event only. `approve` and `withdraw` are separate commands, in separate
+  invocations. `approve` writes the APPROVED event only on the dive professional's recorded
+  approval of that manifest hash (ADR 0022 condition 3); the hash is supplied by the operator from
+  that approval and is not computed by the operator.
+- **Failure behaviour.** Missing corpus mount, missing or malformed hash, a hash that differs, a
+  loader that fails its self-check (ADR 0022 decision 11), or the global lock not obtained in time:
+  the command exits non-zero with a fixed message that does not echo the supplied value, and
+  writes nothing. A stack started with `up` never runs it.
+- **Pins** (`tests/safety/test_production_compose.py`; see A5 for the list). Mutation checks as in
+  A5.
+- **Documented gaps.** (1) The hash check is **client-side**: it catches mistakes such as approving
+  the wrong version; an operator in bad faith, or the loader credential used through `psql`, is
+  caught only by process controls (ADR 0022 condition 4). (2) **The loader can approve its own
+  load technically**: the credential can insert an APPROVED event. Approval is a process control by
+  the dive professional, recorded in the private approval record; **this ADR does not name a path
+  for that record** (the owner and the dive professional choose it, ADR 0022 "Still open"). (3) The
+  corpus mount is outside the repository by operator discipline; compose cannot check it, and the
+  loader's own refusal of a manifest root inside the repository (ADR 0022 decision 13) is the
+  check. (4) Anyone who can run `docker compose` on the host can run the service with another
+  mount.
+
+### A4. The `SECRET_FILES` entry and the API's refusal
+
+- **What changes.** `config/secret_files.py` gains one name in `SECRET_FILES` for the loader
+  connection string, **single line (`False`)**. The name is **chosen at code time**; it follows the
+  existing lower-case convention, so the file is `divesafe_<name>` and the setting
+  `DIVESAFE_<NAME>` (for example `loader_database_url`; that is an example, not a decision). The
+  matching `Settings` field is a `SecretStr`, and in production it must carry `sslmode`
+  (ADR 0022 decision 11), through the same check as the app's.
+- **The API never receives it.** The compose pin (A5) fails if the loader secret appears on `api`,
+  `db` or `db-init`. In production the application also **refuses to start if the loader's
+  connection string is in its own environment or in its secrets directory**, extending the existing
+  refusal of `DIVESAFE_ADMIN_DATABASE_URL` in `api/state.py`, and refuses to start if its own
+  credentials are the loader's (ADR 0022 decision 11).
+- **Amended statement.** The earlier sentence of this ADR that "only those five names are read" now
+  reads: only the names in `SECRET_FILES` are read, **six once this amendment is built** (the
+  five above and the loader's). The rule that a file named like any other setting is ignored is
+  unchanged. Until it is built the list and its test stay at five.
+- **Tests.** `tests/safety/test_secret_files.py`:
+  `test_the_allow_list_is_exactly_these_five_names` becomes an exact set of six, never a prefix or a
+  pattern, and its name is updated; the loader file is read, refused alongside an environment
+  value of the same setting, refused when over 64 KiB or multi-line, and a stray file named like
+  any other setting is still ignored. A test in the API start-up suite fails when the loader string
+  is set in the production environment. Mutations: add a seventh name; make the loader multi-line;
+  drop the production refusal; drop the environment/file conflict check; each must fail.
+- **Documented gap.** A secret in the loader file reaches only `kb_load`; the host's `docker/secrets`
+  directory (0700, files 0444) remains the weak point it is for every other secret (see "Not solved").
+
+### A5. Production compose pins
+
+New or changed tests in `tests/safety/test_production_compose.py`. None removes or loosens an
+existing pin. The service-set pin (`{"db-tls", "db", "db-init", "api"}`) is changed to the exact set
+of five including `kb_load`, never to a pattern. Each has a failure condition; the mutation check is
+to break the compose file once and watch it fail.
+
+1. **Under a profile only.** `kb_load` has a `profiles:` entry, and no service `depends_on` it. Fails
+   if the profile is removed (so `up` would start it).
+2. **Networks.** `_value(services["kb_load"], "networks") == "[data]"`; `egress` is not named in
+   it. Fails on `[data, egress]`.
+3. **Mounts.** Exactly one volume, ending in `:ro`, whose host side is not a path inside the
+   repository (not `..`, `.` or `./`-relative and not under the compose file's parent). Fails on
+   a missing `:ro`, a second volume, a Docker socket, or a relative path.
+4. **No ports.** No `ports` and no `expose`. Fails on either.
+5. **Secrets exactly the loader one.** `_secret_targets(services["kb_load"])` equals the one name.
+   Fails on any added secret, and on the loader secret in any other service. The existing API pin
+   (exactly four secrets) is unchanged and now also asserts the loader secret is absent.
+6. **Environment.** `DIVESAFE_ENVIRONMENT == "production"` and the set of keys is exactly the
+   expected few; no `DIVESAFE_LLM_*`, no key named like a hash. Fails on `development`, on a missing
+   key (ADR 0022 condition 1) and on an added one.
+7. **Exec-form command.** The `command` or `entrypoint` is a JSON list, not a string and not
+   `sh -c`; no `${` in it. Fails on a string form or a shell.
+8. **No approved hash anywhere in compose.** No `manifest`, `sha256` or `approved` key in the
+   service's environment, secrets or mounts. Fails if a hash setting is added.
+9. **Hardening.** `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges`, no `cap_add`,
+   `privileged`, `pid` or `user:` on `kb_load`, through the existing per-service tests extended to
+   include it.
+10. **The secret-name safety scan still passes** (`test_no_secret_value_is_in_any_environment` and
+    the ten-bad-environments test run unchanged over the new service, whose environment must hold no
+    secret-named value). A new case feeds it a `DIVESAFE_LOADER_...DATABASE_URL` literal and
+    requires a failure.
+11. The pins on `pg_hba.conf` (A2), the role script (A1) and the secret-name map: the
+    `secrets:` map test gains exactly the loader entries (password and connection string) and is
+    otherwise unchanged.
+12. **The `db` service's secrets** are pinned to exactly its three today plus the loader password,
+    and the loader connection string appears in no service but `kb_load`. Fails on any other
+    addition.
+
+- **Documented gap.** Like the existing tests these read the layout of one file; a profile or
+  mount written in a way the scan does not read (YAML anchors are already refused) is not seen.
+
+### A6. Stage order
+
+- **May be built before this amendment is made** (and are, per ADR 0022 "Conditions of acceptance"):
+  the schema migration, `db_init` grants and its loader-role check, the loader code, and a
+  **development-only** `kb_load` against a developer database with a developer-created role.
+- **Wait for this amendment** (made, and reviewed by both reviewers): everything under `docker/`
+  (the new script, `make-secrets.sh`, `pg_hba.conf`, the backup scripts) and the compose files, and
+  therefore any production use. The knowledge connector, the prompt path, the record fields and
+  the citation guard are later stages of ADR 0022 and are outside this amendment.
+- **Failure behaviour.** Until the `docker/` changes exist, the production stack has no loader role
+  and `kb_load` has no production path; `db_init` with the grants but no role fails with its fixed
+  message, so the order must be: role script, then `db-init`.
+
+### A7. Backup and restore
+
+Today `docker/backup-common.sh` facts cover only `assessments`, `pending_runs`,
+`run_failure_counts` and `schema_migrations` (13 fact keys, three guard triggers, a `hardening`
+count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision 13).
+
+- **What changes.**
+  - **Facts.** `facts_sql` gains `kb_*` row counts for `kb_documents`, `kb_chunks` and
+    `kb_status_events`, and a **digest** of the knowledge tables, made like the `assessments`
+    digest (ordered with the `C` collation, fixed formats, pinned `search_path`, names cast to
+    text). **The digest includes the status events** (document, version, status, the ordering key
+    and the recorded-at in the fixed format), so a damaged archive that loses a WITHDRAWN event
+    produces a different digest and a different event count and does not pass. `fact_keys`,
+    `compared_facts`, `facts_complete` and `tables_line` are extended to the new keys and tables;
+    the knowledge triggers are added to the shape check by name, all `ENABLE ALWAYS`.
+  - **Restore.** After the load, the restore re-applies the **TEMP revoke from PUBLIC** (and from
+    the loader): `pg_dump` without `--create` carries no database ACLs, so after a restore TEMP is
+    back on PUBLIC until `db_init` runs. `restore.sh` already says `db-init` re-applies the grants
+    and runs it as the next step; this amendment makes the revoke an explicit step in the document
+    and a check in the script's closing report, and `kb_load` refusing while TEMP is present
+    (ADR 0022 decision 10) is the fail-closed backstop.
+  - **`docs/backup-and-restore.md`** says in plain words that **dumps and archives contain the
+    licensed corpus text**, that a licence revoked later cannot be honoured in an existing dump or
+    off-machine copy, and that the archive must be kept as the owner would keep the licensed
+    sources. Docs are written when the scripts are.
+- **Golden-copy and script-review round.** `tests/safety/golden_backup/backup-common.sh.txt` and
+  `restore.sh.txt` (and `backup.sh.txt` if it changes) are line-by-line change detectors, so these
+  edits fail `test_backup_scripts.py` until someone reads the diff and updates the copies. That is
+  a round of its own: the new SQL and the restore step are read by both reviewers, the golden
+  copies are updated in the same change, and the scans in layers 2 and 3 of that test are extended
+  (the new fact queries pin the search path and cast names; the fake `docker` is given the new keys).
+- **Failure behaviour.** The backup refuses and keeps nothing when the knowledge facts differ
+  between the live database and the scratch restore, when a knowledge trigger is missing or not
+  `ENABLE ALWAYS`, or when a fact is missing. The restore refuses before the load if the manifest
+  lacks the knowledge facts or they differ, and reports a mismatch after it. **A backup made before
+  this change cannot be restored by the new scripts** (its manifest has 13 keys): the restore
+  refuses with a message that says the manifest is the old format. Order for an upgrade, as for
+  migration 3: run `db-init` (which applies the knowledge migration), then take a backup with the
+  new scripts. No production backup holding knowledge rows exists.
+- **Pins.** (a) The golden copies. (b) A scan that `fact_keys` names the new keys and that the
+  knowledge digest SQL contains the status-event table. (c) A fake-docker test where the scratch
+  facts lack one status event and the backup keeps nothing; and the same for the restore.
+  (d) A scan that the restore text names the TEMP revoke step. Mutation checks: remove the
+  status events from the digest (the lost-WITHDRAWN test must fail); drop a knowledge key from
+  `fact_keys`; skip the TEMP step; each must fail. Without the line comparison the SQL checks are
+  by text scan only, as for the existing facts.
+- **Documented gaps.** (1) The fake `docker` cannot run SQL, so the content of the new facts is
+  covered by scans and by a hand run on a throwaway volume, which has not been done. (2) The digest
+  detects damage, not tampering, as today (the manifest sits next to its archive). (3) The count and
+  digest cover what is in the tables; they do not show that a text matches its approved manifest
+  (ADR 0022 condition 5, the read-only verify step, is separate). (4) A restore re-applies the
+  TEMP revoke only through `db-init`; a restore that is not followed by `db-init` leaves
+  `kb_load` refusing and the app role's TEMP unchecked (ADR 0022 decision 10, accepted).
+
+### A8. Documented gaps recorded by this amendment
+
+- **The loader credential can stall advisory locks.** Any loader connection can take the existing
+  `_RUNS_LOCK_KEY` and `_LOCK_KEY` advisory locks and stall runs or migrations; stored per-role
+  settings cannot cap it, because `hardening` requires none (ADR 0022 "Not solved"). The global
+  `kb_load` lock also makes a stuck holder fail later loads on `lock_timeout`.
+- **The loader can approve its own load technically**; approval is a process control by the dive
+  professional (A3).
+- **The manifest hash check is client-side** (A3).
+- **The private approval record** has no path in this ADR.
+- **The loader role and password are not covered by the backup**, as the other roles are not
+  (see the existing `docs/backup-and-restore.md` table): after a restore into a new volume the
+  role script must be run again.
+- **Nothing in this amendment is built or run.** Every pin above is a description of a test to be
+  written, with its mutation check to be run when it is.
+
 ## Not solved
 
+- **The knowledge loader (Amendment 1) is not built or run, and no reviewer has seen it.** Its new
+  gaps are listed in A8; the feature does not ship until it is made and reviewed.
 - **Longer model budgets (3000 tokens, 120 s call, 300 s stage) are not shown to work.** The stage
   limit is below three sequential calls at the call limit (3 x 120 s), so the risk proposal can be
   cut off; that fails closed (the rules' result stands). Calls hold the shared model slots for up
