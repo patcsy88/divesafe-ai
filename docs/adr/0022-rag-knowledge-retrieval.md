@@ -43,8 +43,11 @@ WITHDRAWN (never by a check outside the lock); exit statuses have a published pr
 not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
-**Update (2026-10-21, sixth revision, text only; previous revision the reviewers read: the fifth,
-`6545bd7`; neither reviewer has seen the sixth):** the decision 3 table rows for "its chunks" and
+(Note on numbering: the "fourth", "fifth" and "sixth" revisions in the updates below are
+**text-amendment revisions** 4 to 6, not the numbered revisions in the status paragraph above.)
+**Update (2026-10-21, text-amendment revision 6, text only, committed as `4cb5bef`; both reviewers
+accepted it, no blockers, no Majors; previous revision the reviewers read: the fifth, `6545bd7`).
+Seventh pass: wording only, not re-reviewed:** the decision 3 table rows for "its chunks" and
 "expired" now require the current status to be APPROVED (a withdrawn, checked version no longer
 matches them before the withdrawn row; fails closed), the lower-version classification reads "as for
 that version", the single-issue-per-family consequence is in "Not solved", and every "already
@@ -180,7 +183,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      from the family, with no fall-back, and raises an evidence issue** with the fixed wording
      "knowledge store: an approved document family has an unchecked approval" (no title, no
      document id), **even when that version is also withdrawn**. **Only a newer, checked, in-force
-     approved version dated on or before `now` clears it** (it then governs); withdrawing does not. `hash_checked` is read
+     approved version dated on or before `now`, whose current status is APPROVED (no WITHDRAWN event), clears it** (it then governs); withdrawing does not, and a clearing version that is later withdrawn keeps the issue (fails closed). `hash_checked` is read
      **only from the APPROVED event**; the other statuses carry a fixed value (decision 10). The
      per-site chunk check (decision 12) uses the same "approved" meaning. The column records a
      **client claim, not proof**: a raw `psql` insert by the loader credential can claim true
@@ -238,7 +241,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    clock-disagreement row comes before the withdrawn row: a governing version that is WITHDRAWN **and** has an approval date after `now` is
    the ISSUE, not the note (fail-closed: a clock that disagrees is not allowed to turn into a quiet
    "withdrawn"). **What clears it:** a new version that is approved, in force by the window end and
-   dated on or before the run's local date governs instead and clears it. Withdrawing does not clear
+   dated on or before the run's local date and whose current status is APPROVED (no WITHDRAWN event) governs instead and clears it (a clearing version later withdrawn keeps the issue). Withdrawing does not clear
    it (the withdrawn version still governs and is still dated after `now`). A later run whose local
    date has reached the approval date no longer sees a disagreement, and the family is then
    classified by the other rows.
@@ -681,7 +684,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       (`withdraw` cannot tell a re-run from a first attempt by another operator); the read is made
       in a **new transaction with its own `statement_timeout`**, because the refused one is
       aborted; if that read fails, the fixed message is "already withdrawn; recorded_at
-      unavailable", with a defined exit status. `load` inserts the documents, the chunks and
+      unavailable", with its own exit status, ranked between "already withdrawn" and "withdrawn
+      but over-privileged or self-check incomplete" in the precedence (ADR 0024 A3 has the list). `load` inserts the documents, the chunks and
       the **DRAFT** event together and writes nothing else, so a load never approves itself.
       `approve <document_id> <version>` writes the **APPROVED** event, in a separate transaction and
       a separate invocation, so the approval time (and with it the 12-month bound of decision 3) is
@@ -1048,7 +1052,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   not approved; v1 must not appear); an unchecked v2 that is also WITHDRAWN: still the issue and
   still hides v1 (mutation: read it as "withdrawn without ever having been approved"); the issue
   is raised even when withdrawn and comes after the clock-disagreement row; a newer checked
-  in-force approved version clears it and withdrawing does not; the per-site chunk check counts an
+  in-force approved version (current status APPROVED, no WITHDRAWN event) clears it, and
+  withdrawing does not (unchecked v2, then checked in-date v3 later withdrawn: the issue stays;
+  mutation: let a withdrawn v3 clear it); the per-site chunk check counts an
   unchecked approved version as one that could govern. `hash_checked` on a WITHDRAWN event with
   false still withdraws (mutation: filter every event on `hash_checked`); `withdraw` and the owner
   `psql` fallback INSERT succeed with the column (mutation: leave the column out); the fixed values
@@ -1057,6 +1063,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   dropped connection during COMMIT gives "outcome unknown: re-run", and **a re-run that then reports
   "already withdrawn" reads and prints the existing WITHDRAWN event's `recorded_at`** (the loader
   has SELECT), so the withdrawal log keeps it (mutation: print nothing, or the current time).
+- **Clearing version must be current APPROVED (wording pass).** An unchecked v2, then a checked
+  in-date v3 that is later WITHDRAWN: the unchecked issue stays and nothing is returned (mutation:
+  let a withdrawn v3 clear the issue).
 - **Sixth-revision rows (decision 3 table, not-withdrawn condition).** An in-date, checked,
   **WITHDRAWN** v2 over an approved v1 returns nothing from the family and the withdrawn note, never
   v1's text and never v2's (mutation: drop the not-withdrawn condition from rows 3 and 4; v2's text

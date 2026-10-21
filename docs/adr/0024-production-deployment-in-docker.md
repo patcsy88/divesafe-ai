@@ -536,6 +536,7 @@ can no longer match them before the withdrawn row (fails closed); the single-iss
 consequence is recorded (A8); `connect_timeout` validation covers percent-encoded keys and a strict
 value pattern (A1); every "already withdrawn" report prints the stored `recorded_at`, read in a new
 transaction (A3).
+Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; no blockers, no Majors). Seventh pass: wording only, not re-reviewed.
 
 ### A1. The loader role and its password
 
@@ -641,12 +642,18 @@ transaction (A3).
   and a test fails when either is missing; mutation: accept `0` (which means "no limit")).
   **libpq decodes percent-encoded keys and values**, so `...&connect_timeout=5&connect%5Ftimeout=0`
   would pass a duplicate check on literal text while libpq uses the later value `0` (no limit).
-  So the narrow model **refuses any `%` in the keys of the query string** (or decodes exactly as
-  libpq does), requires the value to `fullmatch` `[1-9][0-9]*` (no sign, no spaces, no leading
-  zero) and to be at most the fixed value. Mutation test: the encoded duplicate must be refused.
-  **The same question for the existing `sslmode` and `channel_binding` checks** (could an encoded
-  or duplicated key weaken them?) is **not answered here and is recorded as a gap (A8)**; to
-  verify against the existing check in `settings.py` and libpq at code time. The strings are made
+  **Decision (one of two options picked): the narrow model requires the URI form** and refuses a
+  keyword/value string (`host=... connect_timeout=0`), because the `%` check below assumes a URI.
+  In the URI it **refuses any `%` in the keys of the query string**, refuses a repeated key,
+  requires the value to `fullmatch` `[1-9][0-9]*` (no sign, no spaces, no leading zero) and to be
+  at most the fixed value. Mutations: the encoded duplicate must be refused; a keyword/value
+  string `host=... connect_timeout=0` must be refused.
+  **The same question for the existing checks, answered as far as known:** `_require_tls` in
+  `settings.py` (L17-24) already reads `sslmode` through `psycopg.conninfo.conninfo_to_dict`, so
+  the **encoding half** of the `sslmode` question is answered (it sees the decoded key). The
+  **duplicate-key half** (what libpq does with a repeated key) is **still unconfirmed**. **Nothing
+  in `settings.py` checks `channel_binding` at all**; `make-secrets.sh` only writes it. Recorded
+  in A8. The strings are made
   by `make-secrets.sh`, so the risk is a hand-edited file. The files are written by
   `write_new`: never overwritten, never printed, `0444` inside the `0700` `docker/secrets` (the
   container user differs, as for the existing secrets; a `0400` file fails to start). On the
@@ -790,7 +797,7 @@ transaction (A3).
     governing version and for hiding lower versions, and the family returns NOTHING with an
     evidence issue, no fall-back** (fails closed; ADR 0022 decision 3 has the table row and its
     order; reading it as "not approved" would let a lower version's text back in). Only a newer,
-    checked, in-force approved version clears it; withdrawing does not. The A7 report and the
+    checked, in-force approved version (current status APPROVED, no WITHDRAWN event) clears it; withdrawing does not. The A7 report and the
     post-restore check list such versions. **It records a client claim, not proof**: a raw `psql`
     insert by the loader credential can claim `true`. **Other statuses:** selection reads the column
     only from the APPROVED event; `load` writes the fixed value for DRAFT and `withdraw` for
@@ -1236,9 +1243,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The existing role script does not set `log_statement = 'none'`**, so a server with
   `log_statement = ddl` would log `CREATE ROLE ... PASSWORD` from `10-create-app-role.sh`. The
   loader script sets it (A1); the existing one is not changed here.
-- **`sslmode` and `channel_binding` checks and encoded or duplicated query keys:** whether the
-  existing check (`settings.py`) could be weakened by a percent-encoded or duplicated key, as
-  `connect_timeout` could, is not answered (A1); to verify at code time.
+- **`sslmode` and `channel_binding` checks and query keys:** `_require_tls` (`settings.py`
+  L17-24) reads `sslmode` through `conninfo_to_dict`, so the encoding half is answered; what libpq
+  does with a repeated key is **unconfirmed**; and **nothing in `settings.py` checks
+  `channel_binding` at all** (only `make-secrets.sh` writes it), so a hand-edited string could drop
+  it (A1).
 - **An unchecked approval keeps its site(s) at INSUFFICIENT EVIDENCE** until the dive professional
   writes a new, checked version, even after a licence is revoked (fails closed; ADR 0022 "Not
   solved"). While a clock issue is active on the same family the run's record shows only the clock
@@ -1254,7 +1263,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 ## Not solved
 
 - **The knowledge loader (Amendment 1) is not built or run.** Both reviewers accepted its second,
-  third and fourth revisions as recorded designs (no blockers); neither has seen the fifth. Its gaps are
+  third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.
 - **Longer model budgets (3000 tokens, 120 s call, 300 s stage) are not shown to work.** The stage
