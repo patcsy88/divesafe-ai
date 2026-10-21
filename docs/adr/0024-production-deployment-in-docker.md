@@ -471,22 +471,25 @@ guards in `settings.py`, `tests/safety/test_production_compose.py`) were read fo
 claims about them come from those files. What I could not confirm from files is marked **to
 verify**.
 
-**Second revision (2026-10-21, after both reviewers read the first revision, committed as
-`9e8fd04`; docs only).** Both reviewers looked at the `withdraw` exemption on 2026-10-21 and their
+**Second revision (2026-10-21, docs only).** The previous revision, which the reviewers read, is
+the first revision, committed as `75cbd58`/`9e8fd04`; this second revision is committed as
+`72dad38`. Both reviewers looked at the `withdraw` exemption on 2026-10-21 and their
 findings are folded in; **the owner has not yet re-acknowledged it.** (**Superseded:** both
 reviewers have since accepted this second text as a recorded design, with no blockers and no
 Majors.) Main changes: a load can block a withdrawal when it holds that family's
 per-document lock, so `withdraw` has an isolation level, timeouts and a runbook (A3); the
 `pg_read_file` design says plainly what it does and does not hide, and is tightened (A1); `withdraw`
 runs the privilege self-check but reports instead of refusing, **a default delegated by the owner
-that `security-reviewer` has not confirmed** (A3); the compose long volume syntax, more pins and an
+that `security-reviewer` has since confirmed, 2026-10-21, conditions met in the third revision**
+(A3); the compose long volume syntax, more pins and an
 exact `db` volume list (A5); the upgrade needs `--build` (A6); R1 re-applies by state, not by time
 (A7); an approval event records whether the hash was checked (A3); old-script recovery is stated
 accurately (A7).
 
-**Third revision (2026-10-21, small, text only, committed as `72dad38`; docs only).** Both reviewers
-accepted the second revision as a recorded design; this folds in their minors and **they have not
-seen this text**. Changes: "already withdrawn" is decided by the trigger, not outside the lock, and
+**Third revision (2026-10-21, small, text only, committed as `d8ede5a`; docs only).** The previous
+revision, which the reviewers read, is the second, `72dad38`; they accepted it as a recorded
+design. This third revision folded in their minors, and both reviewers have since accepted it as a
+recorded design (no blockers). Changes: "already withdrawn" is decided by the trigger, not outside the lock, and
 the self-check runs after the commit, with an exit-status table (A3); the `hash_checked` column is
 specified, **proposed by `risk-reviewer`, owner not yet asked** (A3, A7; ADR 0022 decisions 3 and
 10); the "text psql sends" sentence is corrected, and the script's logging settings and psql flags
@@ -496,11 +499,27 @@ API refusal's `.env` gap (A4); a mandatory `.dockerignore` line (A3, A5); the st
 worse than an outage (A6); a backup after `approve` too, and lost newer versions (A7); and two
 shipping gates (above, A6).
 
+**Fourth revision (2026-10-21, small, text only; docs only; not yet committed).** The previous
+revision, which the reviewers read, is the third, `d8ede5a`; they accepted it as a recorded design
+(no blockers). **Neither reviewer has seen this text.** Changes: **an unchecked APPROVED event
+still counts as approved for choosing the governing version and for hiding lower versions; the
+family returns nothing and raises an evidence issue** (A3; ADR 0022 decision 3), which fixes a
+literal reading of "counts as NOT approved" that would let a lower version's text back in;
+`hash_checked` on other event statuses and in the fallback INSERT (A3); **the owner's answer on
+`hash_checked` gates the stage-1 migration** (A3, A6; **proposed by `risk-reviewer`, the owner has
+not been asked**); stage-1 recovery uses the old scripts and image (A6); "not found" and "missing
+from the archive" are one message, an exact SQLSTATE for "already withdrawn", "outcome unknown:
+re-run", the self-check's own `statement_timeout`, `recorded_at` printed before the self-check, and
+the next step after "already withdrawn" (A3); `connect_timeout` in the connection string (A1, A3);
+the mandatory `.dockerignore` line named where `.gitignore` is (A3); `fullmatch` for the role
+pattern (A1); the `\getenv` fallback changes a pin (A1); "security-reviewer confirmed the self-check
+default" (A3, A8).
+
 ### A1. The loader role and its password
 
 - **Names.** Role `divesafe_loader`. Setting `DIVESAFE_LOADER_DB_ROLE` (field `loader_db_role`),
   validated with the same pattern as `DIVESAFE_APP_DB_ROLE` (`^[a-z_][a-z0-9_]{0,62}$`, ADR 0022
-  decision 11) and given as a literal in the compose file, as the app role is. It is given to
+  decision 11), **applied with `fullmatch` or `\Z`** (`$` accepts a trailing newline), and given as a literal in the compose file, as the app role is. It is given to
   `db-init`, which grants to the role and fails if it is missing. `kb_load` does not need it: its
   self-check uses `current_user`. Password file `db_loader_password`, connection string file
   `divesafe_loader_database_url`. `db_init` and the role script both refuse a loader name equal to
@@ -562,7 +581,7 @@ shipping gates (above, A6).
   `SELECT format('CREATE ROLE %I ...', ...) \gexec`, and signals a refusal with a statement that
   raises an error inside the `\if` branch (`\quit` exits zero). **psql echoes a failing statement**
   (a `LINE n:` excerpt) and the server logs it unless suppressed, so the password must not be in
-  statement text that psql sends. Design **to verify** on a throwaway volume (not run): the password
+  **the script file, a psql variable or an environment variable**. Design **to verify** on a throwaway volume (not run): the password
   is read **by the server** with `pg_read_file('/run/secrets/db_loader_password')` inside the
   `format(...)`, so the statement the operator's file contains names only a path. That is why the
   permanent mount matters. **What this does and does not hide, plainly:** the generated `CREATE ROLE
@@ -589,9 +608,14 @@ shipping gates (above, A6).
   - **To verify** also: that the bootstrap superuser may read that path in the container.
   If it does not work, the fallback is the existing script's `\getenv` pattern. With `VERBOSITY
   terse` the `LINE n:` excerpt is gone, so the residual risk of a quoted statement is **mostly
-  closed in both designs**; the ADR text at code time says which was built.
+  closed in both designs**; the ADR text at code time says which was built. **Choosing the
+  `\getenv` fallback changes a pin** (the pin below that forbids a password in statement text,
+  `PASSWORD :'...'`, which is what that pattern uses) and **needs a re-review by both reviewers** before it is built.
 - **The password secret.** `make-secrets.sh` gains the same pattern for the loader password file
-  and the connection string file (`sslmode=require&channel_binding=require`), written by
+  and the connection string file (`sslmode=require&channel_binding=require&connect_timeout=<n>`;
+  **decision: `make-secrets.sh` writes `connect_timeout`**, with a fixed small value chosen at code
+  time, and the narrow settings model **refuses a loader string without it**; both are pinned and a
+  test fails when either is missing), written by
   `write_new`: never overwritten, never printed, `0444` inside the `0700` `docker/secrets` (the
   container user differs, as for the existing secrets; a `0400` file fails to start). On the
   owner's host it creates only the missing files. The new files are git- and Docker-ignored by the
@@ -729,12 +753,23 @@ shipping gates (above, A6).
     (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; the owner has not been
     asked):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
     included in the loader's column-level INSERT grant (ADR 0022 decision 10). In production,
-    **selection treats an approval with `hash_checked = false` as NOT approved and raises an
-    evidence issue** (fails closed; ADR 0022 decision 3). The A7 report and the post-restore check
-    list such versions. **It records a client claim, not proof**: a raw `psql` insert by the
-    loader credential can claim `true`. Tests and mutations: an unchecked approval is stored as
-    `false`; production selection ignores it and raises the issue (mutation: treat it as approved);
-    a status event without the column is refused (mutation: add a default).
+    **an APPROVED event with `hash_checked = false` still counts as approved for choosing the
+    governing version and for hiding lower versions, and the family returns NOTHING with an
+    evidence issue, no fall-back** (fails closed; ADR 0022 decision 3 has the table row and its
+    order; reading it as "not approved" would let a lower version's text back in). Only a newer,
+    checked, in-force approved version clears it; withdrawing does not. The A7 report and the
+    post-restore check list such versions. **It records a client claim, not proof**: a raw `psql`
+    insert by the loader credential can claim `true`. **Other statuses:** selection reads the column
+    only from the APPROVED event; `load` writes the fixed value for DRAFT and `withdraw` for
+    WITHDRAWN (values fixed at code time and stated then; a CHECK or the trigger enforces them),
+    and **the owner `psql` fallback INSERT includes the column** (pinned in the runbook scan).
+    **The owner's answer gates the stage-1 migration** (A6). Tests and mutations: an unchecked
+    approval is stored as `false`; the unchecked family returns nothing and raises the issue, never
+    the lower version (mutation: treat it as not approved); an unchecked v2 that is withdrawn still
+    hides v1 (mutation: read it as never approved); `withdraw` and the fallback INSERT succeed with
+    the column, and a WITHDRAWN event with `false` still withdraws (mutations: filter every event on
+    `hash_checked`; leave the column out); a status event without the column is refused (mutation:
+    add a default).
 - **What each command writes (ADR 0022 decision 11).** `load` writes the documents, the chunks and
   a **DRAFT** event only. `approve` and `withdraw` are separate commands, in separate invocations.
   **Rule for the operator:** run `approve` only after the dive professional has recorded approval of
@@ -767,10 +802,13 @@ shipping gates (above, A6).
     messages that never echo input.
   - Refusals that **do not** apply: the manifest and corpus checks, the manifest hash, the per-site
     chunk check and the global lock.
-  - **The privilege self-check reports but does not refuse (owner-delegated default; reviewers to
-    confirm; `security-reviewer` has not confirmed it).** `withdraw` **commits the WITHDRAWN event
-    first, then runs the self-check in its own read-only transaction** (an error inside the
-    withdraw transaction would abort the withdrawal). If the check finds the role over-privileged,
+  - **The privilege self-check reports but does not refuse (owner-delegated default; confirmed by
+    `security-reviewer` on 2026-10-21, conditions met in the third revision; the owner has not
+    re-acknowledged ADR 0022 decision 11).** `withdraw` **commits the WITHDRAWN event first, prints
+    its `recorded_at` straight away, then runs the self-check in its own read-only transaction**
+    (an error inside the withdraw transaction would abort the withdrawal). That transaction sets
+    **its own `statement_timeout`** (the `SET LOCAL` of the withdraw transaction ended at its
+    commit), so a stalled check reaches "self-check incomplete". If the check finds the role over-privileged,
     it exits non-zero with the fixed message "withdrawn; loader role over-privileged, fix before
     any load"; if the check cannot finish, "withdrawn; self-check incomplete", also non-zero. A
     damaged loader role can therefore still tighten. `load` and `approve` keep the hard refusal.
@@ -779,7 +817,10 @@ shipping gates (above, A6).
     must fail.
   - **"Already withdrawn" is decided by the status-event trigger**, which refuses WITHDRAWN to
     WITHDRAWN with a **distinct error code and message** (or by a check made after taking the
-    per-document lock), **never by a check outside the lock**. `withdraw` maps that error to its
+    per-document lock), **never by a check outside the lock**. It is matched on **an exact SQLSTATE
+    that only this refusal uses** (never `P0001`, never message text), so **another trigger refusal
+    does not map to "already withdrawn"** (its own table row; test and mutation: match on `P0001`
+    or on the message). `withdraw` maps that error to its
     own fixed message and exit status, writes nothing, and is safe to repeat when re-applying a log
     (A7). Concurrency test and mutation: two concurrent withdrawals of one version yield one
     success and one "already withdrawn"; a retry after an uncertain commit never double-writes or
@@ -789,12 +830,18 @@ shipping gates (above, A6).
     commit**.
   - **Exit statuses, with precedence** (numbers fixed at code time; the order is the decision).
     From highest: (1) **failed, nothing written**: lock timeout (`55P03`, "lock busy: see the
-    runbook"), statement timeout (`57014`), the isolation refusal, deadlock (`40P01`), version not
-    found, the version missing from the restored archive (its own message, for a log re-apply), an
-    argument or connection refusal; (2) **withdrawn but over-privileged**, or **withdrawn but
+    runbook"), statement timeout (`57014`), the isolation refusal, deadlock (`40P01`), **version not
+    found, which is also a version missing from a restored archive: one state, one message** (it
+    serves a log re-apply too), an argument or connection refusal, and any other trigger refusal
+    (its own row, never "already withdrawn"); (1b) **outcome unknown: re-run**, for a dropped
+    connection during COMMIT (re-running is safe because "already withdrawn" is idempotent);
+    (2) **withdrawn but over-privileged**, or **withdrawn but
     self-check incomplete**; (3) **already withdrawn**; (4) **ok**. When "already withdrawn" and
     "over-privileged" coincide, **"already withdrawn" is reported alone** (nothing was written, so
-    nothing is claimed about this run, and the operator is told to run the check separately); the
+    nothing is claimed about this run). **Next step, decided:** there is no separate read-only check
+    subcommand; the next `load` or `approve` runs the self-check and hard-refuses an over-privileged
+    role anyway, and the operator may run `load` or `approve` only to see that refusal (a
+    read-only `check` subcommand would be a fourth command and is not added); the
     over-privileged text appears only for a run that committed. Each error code maps to one fixed
     message so the runbook step is obvious (`55P03` and `57014` go to the runbook above). A table
     test pins code to message to status, and a mutation that swaps two statuses must fail.
@@ -838,7 +885,8 @@ shipping gates (above, A6).
   mount target, not the host's working tree, so ADR 0022 decision 13's "`kb_load` refuses a
   manifest root inside the repository" **cannot work as written**, and the compose pin sees only
   the text `${DIVESAFE_CORPUS_DIR:?...}`, not its value. The controls are **operator discipline and
-  the `.gitignore` entry**. An optional **host-side wrapper script** may refuse a path inside the
+  the `.gitignore` entry and the mandatory `.dockerignore` line** (pinned by a test, see the
+  staging paragraph below and A5 item 19). An optional **host-side wrapper script** may refuse a path inside the
   repository (and the placeholder) before it calls `docker compose run`; it is bypassable by
   running compose directly. ADR 0022 decision 13 is reworded to say this.
 - **A deliberate override bypasses the check.** `docker compose run` can override the environment,
@@ -986,10 +1034,17 @@ condition; the mutation check is to break the compose file once and watch it fai
   outage:** the knowledge migration applies, `db-init` then fails at the grants, the old backup
   scripts refuse a database that has `kb_*` tables, and the new ones do not exist, so **no backup
   can be taken**; and going back to the old image may meet a schema it does not know. **Recovery:**
-  restore the backup taken before the pull into a **new** volume.
+  restore the backup taken before the pull into a **new** volume, **using the OLD scripts** (a git
+  worktree of the pre-pull commit: the new scripts refuse a format-1 archive) **and the old
+  image**. If no backup was taken before the pull, use the latest daily backup; **decisions made
+  after it are lost**.
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
+- **The owner's answer on `hash_checked` gates the stage-1 MIGRATION, not only shipping.**
+  Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
+  column with no default cannot be added later. **The column is not written (the migration is not
+  made) until the owner answers** (proposed by `risk-reviewer`; the owner has not been asked).
 - **Order on the owner's host once this is built:** add the corpus line to `docker/production.env`;
   take a backup with the **old** scripts; pull; `make-secrets.sh`; `up -d --wait db`; the role
   script; **`up -d --build`** (without `--build` the old image runs the old `db_init`, the knowledge
@@ -1126,7 +1181,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **`withdraw` departs from ADR 0022 decision 11** (A3). Both reviewers looked at the exemption on
   2026-10-21 and their findings are folded in; the owner has not re-acknowledged it. The
   "report but do not refuse" privilege self-check is an owner-delegated default that
-  `security-reviewer` has not confirmed.
+  `security-reviewer` confirmed on 2026-10-21 (conditions met in the third revision).
 - **A load that holds a family's per-document lock can block a withdrawal of that family**, and so
   can the owner `INSERT` fallback; the runbook is stop the run container, terminate the backend,
   or stop the API (A3).

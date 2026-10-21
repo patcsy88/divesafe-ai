@@ -31,9 +31,11 @@ not re-accepted, and `risk-reviewer` must look at it** (see decision 11 and the 
 recorded design (no blockers, no Majors)**, and their findings are folded in (a load holding the same
 family's per-document lock can still block a withdrawal; `withdraw` sets READ COMMITTED and
 timeouts and refuses with a fixed message; the privilege self-check reports but does not refuse in
-`withdraw`, an owner-delegated default `security-reviewer` has not confirmed). **The owner has not
+`withdraw`, an owner-delegated default that `security-reviewer` confirmed on 2026-10-21, its
+conditions being met in the third revision). **The owner has not
 yet re-acknowledged the changed decision**, so it is still not re-accepted.
-**Update (2026-10-21, third revision, text only; the reviewers have not seen it):** in `withdraw`
+**Update (2026-10-21, third revision, text only, committed as `d8ede5a`; both reviewers accepted it
+as a recorded design, no blockers):** in `withdraw`
 the privilege self-check runs **after** the WITHDRAWN commit, in its own read-only transaction;
 "already withdrawn" is decided by the status-event trigger's distinct refusal of WITHDRAWN to
 WITHDRAWN (never by a check outside the lock); exit statuses have a published precedence
@@ -41,6 +43,13 @@ WITHDRAWN (never by a check outside the lock); exit statuses have a published pr
 not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
+**Update (2026-10-21, fourth revision, text only; neither reviewer has seen it):** an unchecked
+APPROVED event still counts as approved for governing and hiding, and the family returns nothing
+with an evidence issue (decision 3, table row, decision 12); `hash_checked` has fixed values on
+DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gates the stage-1
+migration, not only shipping**; "must not approve their own load" is reworded; the exit-status
+table gains "outcome unknown: re-run" and a check on the exact SQLSTATE for "already withdrawn"
+(decision 11).
 Decision 13's claim that `kb_load` refuses a manifest root inside the repository is reworded,
 because the check cannot work inside the container, and condition 1 gains the explicit development
 flag form. The status above is otherwise unchanged.
@@ -147,10 +156,21 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      without ever having been approved is ignored**: it neither governs nor hides a lower version.
      A version that takes effect during the window governs the whole window and replaces the
      version in force at its start. This is stated on purpose and has a test row.
-   - **`hash_checked` (third revision; proposed by `risk-reviewer`, owner not yet asked).** In
-     production, an approval whose `hash_checked` is false counts as **NOT approved** and raises an
-     evidence issue (fails closed). The column records a **client claim, not proof**: a raw `psql`
-     insert by the loader credential can claim true (ADR 0024 A3).
+   - **`hash_checked` (third and fourth revisions; proposed by `risk-reviewer`, the owner has not
+     been asked).** **An APPROVED event with `hash_checked = false` still counts as "approved at
+     some point"** for choosing the governing version and for hiding lower versions (reading it as
+     "not approved" would drop that version out of selection, let the lower version govern and
+     return its text, which is the fall-back this decision forbids; and an unchecked version that
+     is also withdrawn would read as "withdrawn without ever having been approved" and stop hiding
+     the lower one). **A family whose governing version's approval is unchecked returns NOTHING
+     from the family, with no fall-back, and raises an evidence issue** with the fixed wording
+     "knowledge store: an approved document family has an unchecked approval" (no title, no
+     document id), **even when that version is also withdrawn**. **Only a newer, checked, in-force
+     approved version clears it** (it then governs); withdrawing does not. `hash_checked` is read
+     **only from the APPROVED event**; the other statuses carry a fixed value (decision 10). The
+     per-site chunk check (decision 12) uses the same "approved" meaning. The column records a
+     **client claim, not proof**: a raw `psql` insert by the loader credential can claim true
+     (ADR 0024 A3). **The owner's answer on this column gates the stage-1 migration** (decision 10).
    - A governing version that is WITHDRAWN returns nothing from the family (unless its approval date
      is after `now`, in which case the clock-disagreement issue below takes precedence). **A withdrawn higher
      version hides the lower versions too** (owner answer): a document withdrawn because it was
@@ -180,14 +200,18 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    | Governing version approved, window end before 00:00 local on the day after review-by | its chunks | none |
    | Governing version approved, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
    | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
-   | Governing version withdrawn (higher or only), had been approved, approval date not after `now` | nothing from the family | withdrawn (note) |
+   | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
+   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now` | nothing from the family | withdrawn (note) |
    | Higher version approved or withdrawn, effective after window end | the lower governing version, if in date | none, or expired |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
    | Draft or never-approved version | ignored; does not hide a lower version | none |
    | Draft withdrawn without ever being approved, above an approved lower version | the lower version, if in date | none, or expired |
    | Only future-effective, only draft or only never-approved-and-withdrawn versions | nothing | not in force (note) |
 
-   **Precedence.** The table is read top to bottom and the clock-disagreement row comes before the
+   **Precedence.** The table is read top to bottom. The clock-disagreement row comes first, then
+   the unchecked-approval row, then the withdrawn row (so an unchecked approval is an issue even
+   when withdrawn; when the clock row and the unchecked row both apply, the family raises the
+   clock-disagreement issue only, one issue per family). The clock-disagreement row comes before the
    withdrawn row: a governing version that is WITHDRAWN **and** has an approval date after `now` is
    the ISSUE, not the note (fail-closed: a clock that disagrees is not allowed to turn into a quiet
    "withdrawn"). **What clears it:** a new version that is approved, in force by the window end and
@@ -358,7 +382,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     could disagree with it; one can be added only by an ADR amendment, and then only as a
     further restriction (it may withhold more, never send more).
    - **Production approval is a process control by the dive professional.** Whoever holds the
-     loader credential must not approve their own load: the approval is the dive professional's
+     loader credential writes APPROVED only on the dive professional's recorded approval, with the
+     hash supplied by the dive professional: the approval is the dive professional's
      step, it applies to `published_document` sources too, and the dive professional records the
      manifest's SHA-256 in the private approval record (decision 11).
 8. **Knowledge cannot relax, satisfy or block anything in the deterministic result.** Each is a
@@ -496,7 +521,15 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       by construction at insert. **WITHDRAWN to WITHDRAWN is refused with a distinct error code and
       message**; `withdraw` uses that refusal to report "already withdrawn" (decision 11). **The
       status-event row has a column `hash_checked`, `NOT NULL` with no default** (proposed by
-      `risk-reviewer`; owner not yet asked; decision 3). Independently of order, selection treats
+      `risk-reviewer`; owner not yet asked; decision 3). **Selection reads it only from the APPROVED
+      event; the other statuses carry fixed values** (a CHECK or the trigger enforces them, the
+      values fixed at code time and stated in the ADR then): `load` writes the fixed value for DRAFT
+      and `withdraw` the fixed value for WITHDRAWN, so a WITHDRAWN event with `hash_checked = false`
+      still withdraws. **The owner `psql` fallback INSERT must include the column** (pinned in the
+      runbook scan). **The owner's answer on this column gates the stage-1 MIGRATION, not only
+      shipping:** migrations are forward-only and checksum-pinned and the rows are not updatable, so
+      a NOT NULL column with no default cannot be added later; **the column is not written until
+      the owner answers.** Independently of order, selection treats
       any WITHDRAWN event as final (decision 3). The approval date is
       `(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date` of the APPROVED event (decision 3,
       "Dates").
@@ -564,12 +597,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
          existing script cannot do it.
       2. **The `pg_hba` entry for the loader:** TLS and SCRAM, same-net source only.
       3. **`kb_load` and `kb_withdraw` as one-off compose services** (`kb_withdraw` has no corpus mount
-          and runs `withdraw` only) on the data network, with only the loader
+         and runs `withdraw` only) on the data network, with only the loader
          secret and no other secrets and no API port. `kb_load` alone has a read-only corpus mount;
-          `kb_withdraw` has none. The approved manifest hash is passed on the command line of the
-          one-off run, typed by the operator (for example `docker compose run --rm kb_load load
-          --approved-manifest-sha256 <hash>`), never as an environment variable, a secret file or a
-          file in the corpus mount.
+         `kb_withdraw` has none. The approved manifest hash is passed on the command line of the
+         one-off run, typed by the operator (for example `docker compose run --rm kb_load load
+         --approved-manifest-sha256 <hash>`), never as an environment variable, a secret file or a
+         file in the corpus mount.
       4. **The `SECRET_FILES` allow-list entry** (`config/secret_files.py`) and the change to
          `tests/safety/test_secret_files.py` that pins the exact set.
       5. **The production compose test pins** (`tests/safety/test_production_compose.py`),
@@ -608,14 +641,19 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       WITHDRAWN event is committed first, then the check runs in its own read-only transaction, and
       an over-privileged role gives a non-zero exit with a distinct fixed message (a check that
       cannot finish gives "withdrawn; self-check incomplete", also non-zero); owner-delegated
-      default, `security-reviewer` has not confirmed it; `load` and `approve` keep the hard
-      refusal. **"Already withdrawn" is decided by the trigger's distinct refusal of WITHDRAWN to
-      WITHDRAWN** (or a check after the per-document lock), never outside the lock; it has its own
-      message and exit status and writes nothing. **Exit-status precedence:** failed (lock timeout
-      `55P03`, statement timeout `57014`, isolation refusal, deadlock `40P01`, not found, version
-      missing from the archive) > withdrawn but over-privileged or self-check incomplete > already
-      withdrawn > ok; when already-withdrawn and over-privileged coincide, "already withdrawn" is
-      reported alone (ADR 0024 A3 has the table). `load` inserts the documents, the chunks and
+      default, confirmed by `security-reviewer` on 2026-10-21 (conditions met in the third
+      revision; the owner has still not re-acknowledged decision 11); `load` and `approve` keep the
+      hard refusal. **"Already withdrawn" is decided by the trigger's distinct refusal of WITHDRAWN
+      to WITHDRAWN**, matched on **an exact SQLSTATE that only this refusal uses** (never `P0001`,
+      never message text), or by a check after the per-document lock, never outside the lock; it has
+      its own message and exit status and writes nothing. **Any other trigger refusal does not map
+      to "already withdrawn"** (test and mutation: match on `P0001` or on message text). **Exit-status
+      precedence:** failed (lock timeout `55P03`, statement timeout `57014`, isolation refusal,
+      deadlock `40P01`, **version not found, including a version missing from a restored archive:
+      one state, one message**) > **outcome unknown: re-run** (a dropped connection during COMMIT;
+      re-running is safe because "already withdrawn" is idempotent) > withdrawn but over-privileged
+      or self-check incomplete > already withdrawn > ok; when already-withdrawn and over-privileged
+      coincide, "already withdrawn" is reported alone (ADR 0024 A3 has the table). `load` inserts the documents, the chunks and
       the **DRAFT** event together and writes nothing else, so a load never approves itself.
       `approve <document_id> <version>` writes the **APPROVED** event, in a separate transaction and
       a separate invocation, so the approval time (and with it the 12-month bound of decision 3) is
@@ -623,8 +661,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       **WITHDRAWN** event. In production `load` and `approve` both require the approved manifest
       hash (decision 7); `approve` compares it with the `manifest_sha256` stored for that version and
       refuses when it is absent or different. `withdraw` needs no hash, because it only tightens.
-      There is no other writer: no API endpoint and no agent. The process rule stands that the
-      credential holder does not approve their own load.
+      There is no other writer: no API endpoint and no agent. The process rule stands: the
+      credential holder writes APPROVED only on the dive professional's recorded approval, with the
+      hash supplied by the dive professional.
     - In production the application refuses to start if the loader's or the owner's connection
       string is present in its own environment. `api/state.py` **already refuses** the admin URL
       (`DIVESAFE_ADMIN_DATABASE_URL`) in the application's environment in production; this ADR
@@ -633,14 +672,16 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       insert an APPROVED event. The dive professional approves (decision 7), records the
       manifest's SHA-256 in the private approval record outside the system, and the owner
       compares it with the `manifest_sha256` stored in `kb_documents`. The loader credential
-      holder does not approve their own load.
+      holder writes APPROVED only on the dive professional's recorded approval, with the hash
+      supplied by the dive professional.
     - Nothing from an assessment, decision, history record or model reply is ever loaded. No API
       endpoint writes the corpus.
 12. **Bound (a parsing limit, not a safety limit; reviewers may change it):** a chunk is at most
     1500 characters and at most 20 chunks per run; length and count are re-checked in code at run
     time. Over-long chunks are refused at load, never truncated into the store. **`kb_load` also
     refuses a load that would push any site (its own documents plus all-sites documents that
-    could govern for it) over the per-run chunk bound**, so reaching the bound in operation
+    could govern for it) over the per-run chunk bound** ("could govern" uses the decision 3
+    meaning of approved: an APPROVED event counts whether or not `hash_checked` is true), so reaching the bound in operation
     always means a mistake that fails closed. Reaching the per-run bound is an **evidence issue**
     (owner answer; it forces INSUFFICIENT EVIDENCE) with the count returned and the count
     available (after the decision 3 filters). Exceeding the agent stage's existing
@@ -691,8 +732,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       target, not the host working tree, so `kb_load` **cannot** refuse a manifest root inside the
       repository there. The controls are the operator's discipline, an optional host-side wrapper
       that refuses such a path before calling `docker compose run` (bypassable), and the
-      repository's `.gitignore` entry for the corpus staging location chosen at code time; a test
-      checks the entry. A development run on the host may still check the path. See ADR 0024
+      repository's `.gitignore` entry **and a mandatory `.dockerignore` line** for the corpus
+      staging location chosen at code time (`up -d --build` would otherwise bake licensed text into
+      the image); a test checks both entries. A development run on the host may still check the path. See ADR 0024
       Amendment 1, A3.
     - `kb_load`, the connector and the API text lookup never log chunk text, titles or paths.
     - Documents are never downloaded by the application. No scraping.
@@ -865,7 +907,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   per-run chunk bound is refused; a manifest over the size, document or chunk limits is refused; a
   manifest root inside the repository working tree is refused **by the host-side check only (a
   development run or the optional wrapper; not inside the container, see decision 13)**, and the
-  `.gitignore` entry exists;
+  `.gitignore` entry and the `.dockerignore` line exist;
   the loader setting is in `SECRET_FILES`. (The loader's own refusals are listed under "Loader
   role" below.)
 - Status-event tests: a loader-supplied ordering key is refused or overwritten, including with
@@ -964,9 +1006,23 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     any (the lookup rule is per version).
 - **SQL layer and code layer, each with its own failing test (decision 3).** (a) A fake store
   returns ineligible rows (wrong site, draft, withdrawn, expired, future-effective, approval in
-  the future); the code re-check must drop each. Mutation: remove the code check; this must fail.
+  the future, **an unchecked approval (`hash_checked = false`), checked and unchecked, withdrawn
+  and not**); the code re-check must drop each. Mutation: remove the code check; this must fail.
   (b) Against PostgreSQL with the same rows, the SQL alone must return none of them (run the query
-  without the code check). Mutation: remove one SQL predicate at a time; each must fail.
+  without the code check). Mutation: remove one SQL predicate at a time (including the
+  unchecked-approval predicate); each must fail.
+- **Unchecked approvals (decision 3, fourth revision).** An unchecked v2 above an approved v1:
+  nothing from the family and the evidence issue, never v1's text (mutation: treat unchecked as
+  not approved; v1 must not appear); an unchecked v2 that is also WITHDRAWN: still the issue and
+  still hides v1 (mutation: read it as "withdrawn without ever having been approved"); the issue
+  is raised even when withdrawn and comes after the clock-disagreement row; a newer checked
+  in-force approved version clears it and withdrawing does not; the per-site chunk check counts an
+  unchecked approved version as one that could govern. `hash_checked` on a WITHDRAWN event with
+  false still withdraws (mutation: filter every event on `hash_checked`); `withdraw` and the owner
+  `psql` fallback INSERT succeed with the column (mutation: leave the column out); the fixed values
+  on DRAFT and WITHDRAWN events are enforced. "Already withdrawn" matches the exact SQLSTATE: another
+  trigger refusal exits with a different status (mutation: match `P0001` or message text); a
+  dropped connection during COMMIT gives "outcome unknown: re-run".
 - **Manifest, spans and hashes (decision 7).** A changed effective date, review-by date, site,
   all-sites flag or attestation with every file hash unchanged is refused (production `kb_load`
   with the approved hash supplied) and changes the manifest hash (assert both); a production `load` or
@@ -1002,8 +1058,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   withdrawn" alone when it coincides with over-privileged; "over-privileged" text only after a
   commit; `recorded_at` printed on that path too); (d) `hash_checked` is `NOT NULL` with no default
   and in the loader's INSERT grant (mutation: add a default, or drop it from the grant); an approval
-  with `hash_checked = false` is treated as NOT approved in production and raises the evidence issue
-  (mutation: treat it as approved); (e) `kb_load` stalled inside its transaction is ended by the
+  with `hash_checked = false` still counts as approved for governing and hiding, and the family
+  returns nothing and raises the evidence issue (superseded wording of the third revision; see the
+  fourth-revision rows below; mutation: treat it as approved, or as not approved); (e) `kb_load` stalled inside its transaction is ended by the
   server within `idle_in_transaction_session_timeout` (mutation: drop the setting), and a connection
   to a black-holed address fails within `connect_timeout`.
 - **Display and licence loader rows:** `display_permitted` false is refused; a missing
@@ -1167,7 +1224,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
 - **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
   lock, self-check after commit, exit-status precedence); it gates shipping.
-- **The owner's answer on the proposed `hash_checked` column** (decisions 3 and 10).
+- **The owner's answer on the proposed `hash_checked` column** (decisions 3 and 10). It gates the
+  stage-1 migration, not only shipping; the column is not written until the owner answers.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 
@@ -1255,8 +1313,8 @@ citation guard are later stages.
    function STABLE.
 3. **Who runs `approve`** (risk reviewer): the credential holder writes the APPROVED event only on
    the dive professional's recorded approval of that manifest hash, and the hash comes from the dive
-   professional, never computed by the operator. Reword the "must not approve their own load" text
-   to match, and fix the sentence saying the per-document lock and the isolation check both refuse
+   professional, never computed by the operator. The "must not approve their own load" text is
+   reworded to match (fourth revision: decision 7, decision 11), and fix the sentence saying the per-document lock and the isolation check both refuse
    writers that skip `kb_load` (the lock serialises READ COMMITTED writers; the check refuses the
    others).
 4. **The hash check is client-side** (security reviewer): it catches mistakes such as approving the
