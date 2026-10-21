@@ -25,6 +25,12 @@ Amendment 1 (the knowledge loader), which is PROPOSED. **Decision 11 changes:** 
 from the global lock, takes only the per-document lock, and runs from its own service with no
 corpus mount (owner decision). This is a text amendment after acceptance; **the changed decision is
 not re-accepted, and `risk-reviewer` must look at it** (see decision 11 and the tests list).
+**Update (2026-10-21, second revision):** both `risk-reviewer` and `security-reviewer` looked at the
+`withdraw` exemption on 2026-10-21 and their findings are folded in (a load holding the same
+family's per-document lock can still block a withdrawal; `withdraw` sets READ COMMITTED and
+timeouts and refuses with a fixed message; the privilege self-check reports but does not refuse in
+`withdraw`, an owner-delegated default `security-reviewer` has not confirmed). **The owner has not
+yet re-acknowledged the changed decision**, so it is still not re-accepted.
 Decision 13's claim that `kb_load` refuses a manifest root inside the repository is reworded,
 because the check cannot work inside the container, and condition 1 gains the explicit development
 flag form. The status above is otherwise unchanged.
@@ -540,7 +546,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
          NOCREATEROLE, and `docker/db/10-create-app-role.sh` runs only on an empty volume, so the
          existing script cannot do it.
       2. **The `pg_hba` entry for the loader:** TLS and SCRAM, same-net source only.
-      3. **`kb_load` as a one-off compose service** on the data network, with only the loader
+      3. **`kb_load` and `kb_withdraw` as one-off compose services** (`kb_withdraw` has no corpus mount
+          and runs `withdraw` only) on the data network, with only the loader
          secret and a read-only corpus mount (no other secrets, no API port). The approved manifest hash is passed on the command line of the
           one-off run, typed by the operator (for example `docker compose run --rm kb_load load
           --approved-manifest-sha256 <hash>`), never as an environment variable, a secret file or a
@@ -567,11 +574,19 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       transaction. `load` and `approve` run under the global lock (decision 10); **`withdraw` does
       not (text amendment 2026-10-21, owner decision; `risk-reviewer` must look):** it takes only the
       per-document lock, and runs from its own compose service (`kb_withdraw`, ADR 0024 Amendment 1)
-      with **no corpus mount**, so a stuck load or a missing corpus path cannot block a withdrawal.
-      The reasoning: a WITHDRAWN event is final whatever its order (decision 3) and the trigger
-      validates it under the per-document lock; the global lock serialises the per-site chunk check
-      and version inserts, which a withdrawal does not do. The loader's privilege self-check still
-      applies to it. `load` inserts the documents, the chunks and
+      with **no corpus mount**, so a missing corpus path cannot stop it and **a load cannot block a
+      withdrawal unless it holds that family's per-document lock** (or a `hashtext` collision; the
+      owner `psql` fallback goes through the same trigger and has the same limit). `withdraw` opens
+      its transaction with `ISOLATION LEVEL READ COMMITTED`, then `SET LOCAL lock_timeout` and
+      `statement_timeout`, and refuses with a fixed message rather than hang. A missing corpus
+      *variable* still blocks `compose run kb_withdraw` (Compose interpolates the whole file); only
+      a plain `docker exec` avoids it. The reasoning: a WITHDRAWN event is final whatever its order
+      (decision 3) and the trigger validates it under the per-document lock; the global lock
+      serialises the per-site chunk check and version inserts, which a withdrawal does not do. The
+      loader's privilege self-check runs in `withdraw` but **reports and does not refuse** (it
+      withdraws, then exits non-zero with a distinct fixed message; owner-delegated default,
+      `security-reviewer` has not confirmed it); `load` and `approve` keep the hard refusal.
+      Withdrawing an already-WITHDRAWN version has its own message and exit status. `load` inserts the documents, the chunks and
       the **DRAFT** event together and writes nothing else, so a load never approves itself.
       `approve <document_id> <version>` writes the **APPROVED** event, in a separate transaction and
       a separate invocation, so the approval time (and with it the 12-month bound of decision 3) is
@@ -938,8 +953,17 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   in production; read the hash from a file under the manifest root.
 - **Commands (decision 11).** `load` writes the documents, chunks and a DRAFT event and no APPROVED
   event; `approve` is a separate transaction; production `approve` without the hash, or with a hash
-  that differs from the stored `manifest_sha256`, is refused; `withdraw` works without a hash; the
-  APPROVED event's recorded-at is the approval time, not the load time.
+  that differs from the stored `manifest_sha256`, is refused; `withdraw` works without a hash and
+  **runs with no corpus mount or manifest**; the APPROVED event's recorded-at is the approval time,
+  not the load time. **`withdraw` (text amendment 2026-10-21):** behind a load that holds the
+  **same family's** per-document lock it refuses within the timeout with the fixed message
+  (mutation: drop the timeout); a statement capture shows `READ COMMITTED` is set first, then the
+  timeouts (mutation: move it later); **a status-event insert under REPEATABLE READ is refused**
+  (today's REPEATABLE READ rows cover only the version and site triggers; mutation: drop the check
+  from the status-event trigger); an over-privileged loader still withdraws and exits with the
+  distinct status (mutation: make it refuse, or exit zero); a second `withdraw` of the same version
+  writes nothing and has its own status; and an unchecked approval (development flag) is recorded
+  as unchecked. **`kb_load` with the environment unset** is its own test (condition 1).
 - **Display and licence loader rows:** `display_permitted` false is refused; a missing
   `licence_requires_personal_name` is refused (not only `true`); the licence text is covered by
   the no-name attestation test (a manifest without the attestation is refused); no licence or
@@ -1144,8 +1168,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   be updated) and hides the family from earlier-dated runs, with an evidence issue each time,
   until a new version is approved (decision 3).
 - **The global load lock** makes loads one at a time, and a stuck holder makes later loads fail on
-  `lock_timeout`; the per-document lock and the READ COMMITTED check only protect against writers
-  that skip `kb_load` by refusing them (decision 10).
+  `lock_timeout`; the per-document lock serialises READ COMMITTED writers and the isolation check
+  refuses the others (decision 10; condition 3). **`withdraw` does not take the global lock**
+  (text amendment 2026-10-21), but a load holding the same family's per-document lock can still
+  block it until the timeout; the runbook is in ADR 0024 Amendment 1, A3.
 - **Advisory locks are open to any loader connection.** A loader connection can take the existing
   `_RUNS_LOCK_KEY` and `_LOCK_KEY` advisory locks and stall runs or migrations. Per-role settings
   cannot cap it, because the hardening requires no stored role settings.
