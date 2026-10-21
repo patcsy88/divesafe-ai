@@ -20,6 +20,15 @@ match this ADR (2026-10-20/21; the decision itself is not re-accepted); the buil
 conversation record and the commit messages, not in a history section, and this ADR claims nothing
 more.
 
+**Text amendment (2026-10-21, after acceptance; docs only, nothing built).** Written with ADR 0024
+Amendment 1 (the knowledge loader), which is PROPOSED. **Decision 11 changes:** `withdraw` is exempt
+from the global lock, takes only the per-document lock, and runs from its own service with no
+corpus mount (owner decision). This is a text amendment after acceptance; **the changed decision is
+not re-accepted, and `risk-reviewer` must look at it** (see decision 11 and the tests list).
+Decision 13's claim that `kb_load` refuses a manifest root inside the repository is reworded,
+because the check cannot work inside the container, and condition 1 gains the explicit development
+flag form. The status above is otherwise unchanged.
+
 **Required follow-up outside this ADR (not written here; the feature does not ship without it):**
 amendments to ADR 0024 (decision 11, "Required ADR 0024 amendment") and to ADR 0023's text (done
 in this change: it now says the typed record fields are required by this ADR and not built).
@@ -424,7 +433,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       advisory lock for the whole load** as the **first statement after the transaction settings**.
       A load that cannot get the lock within the timeout is refused with a fixed message, not left
       waiting. It inserts documents sorted by `document_id`. Loads therefore run one at a time: no
-      deadlock between loaders and no same-site race.
+      deadlock between loaders and no same-site race. **`withdraw` does not take this lock** (text
+      amendment 2026-10-21, see "Commands and events"): it takes only the per-document lock.
       The global lock is the two-key form `pg_advisory_xact_lock(<global class constant>, 0)` with
       **its own class constant, different from the per-document class constant**, so it can never
       collide with `hashtext(document_id)`. The triggers take a **per-document advisory lock**,
@@ -554,7 +564,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     - **Withdrawal is an append-only row in `kb_status_events`**; a WITHDRAWN event takes effect when
       inserted (decision 3). A correction is a new version.
     - **Commands and events (who writes what, and when).** `kb_load` has three subcommands, each one
-      transaction under the global lock (decision 10). `load` inserts the documents, the chunks and
+      transaction. `load` and `approve` run under the global lock (decision 10); **`withdraw` does
+      not (text amendment 2026-10-21, owner decision; `risk-reviewer` must look):** it takes only the
+      per-document lock, and runs from its own compose service (`kb_withdraw`, ADR 0024 Amendment 1)
+      with **no corpus mount**, so a stuck load or a missing corpus path cannot block a withdrawal.
+      The reasoning: a WITHDRAWN event is final whatever its order (decision 3) and the trigger
+      validates it under the per-document lock; the global lock serialises the per-site chunk check
+      and version inserts, which a withdrawal does not do. The loader's privilege self-check still
+      applies to it. `load` inserts the documents, the chunks and
       the **DRAFT** event together and writes nothing else, so a load never approves itself.
       `approve <document_id> <version>` writes the **APPROVED** event, in a separate transaction and
       a separate invocation, so the approval time (and with it the 12-month bound of decision 3) is
@@ -625,10 +642,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       opened from a directory handle without following links, so a directory swapped after the
       check is not followed. The open handle must be a regular file with a single hard link, and
       the same bytes are hashed and parsed. Reads are bounded.
-    - **The corpus lives outside the repository and is git-ignored** (owner answer). `kb_load`
-      refuses a manifest root that lies inside the repository working tree, and the repository's
-      `.gitignore` carries a named entry for the corpus staging location chosen at code time; a
-      test checks both.
+    - **The corpus lives outside the repository and is git-ignored** (owner answer). **Text
+      amendment 2026-10-21:** inside the production container the loader sees only the mount
+      target, not the host working tree, so `kb_load` **cannot** refuse a manifest root inside the
+      repository there. The controls are the operator's discipline, an optional host-side wrapper
+      that refuses such a path before calling `docker compose run` (bypassable), and the
+      repository's `.gitignore` entry for the corpus staging location chosen at code time; a test
+      checks the entry. A development run on the host may still check the path. See ADR 0024
+      Amendment 1, A3.
     - `kb_load`, the connector and the API text lookup never log chunk text, titles or paths.
     - Documents are never downloaded by the application. No scraping.
     - **Database dumps and backups contain the licensed text.** `docs/backup-and-restore.md` must
@@ -798,7 +819,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `licence_requires_personal_name: true` are refused; an approver other than `dive_professional`,
   and an author that is not a role label, are refused; a load that would put any site over the
   per-run chunk bound is refused; a manifest over the size, document or chunk limits is refused; a
-  manifest root inside the repository working tree is refused, and the `.gitignore` entry exists;
+  manifest root inside the repository working tree is refused **by the host-side check only (a
+  development run or the optional wrapper; not inside the container, see decision 13)**, and the
+  `.gitignore` entry exists;
   the loader setting is in `SECRET_FILES`. (The loader's own refusals are listed under "Loader
   role" below.)
 - Status-event tests: a loader-supplied ordering key is refused or overwritten, including with
@@ -951,7 +974,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   the global lock, and the second is **refused with the fixed lock-timeout message** (a short
   `lock_timeout`; the test asserts the refusal and the message, not "waiting or refused"). A
   statement capture shows the lock is the first statement after the transaction settings (mutation:
-  move it later). **Two concurrent loads that each pass the per-site chunk check but together exceed
+  move it later). **`withdraw` succeeds while another session holds the global lock** (text
+  amendment 2026-10-21; mutation: make `withdraw` take the global lock; it must fail; `risk-reviewer`
+  must look). **Two concurrent loads that each pass the per-site chunk check but together exceed
   it:** the second is refused (mutations: drop the global lock; run the check before taking the
   lock; each must fail). **`kb_load` against a raw writer that bypasses it** and takes per-document
   locks in the opposite order: `kb_load` ends within the lock timeout or the deadlock detector with
@@ -1147,6 +1172,11 @@ citation guard are later stages.
    development flag and the environment is not production, or the ADR 0024 amendment makes the
    `kb_load` service set `DIVESAFE_ENVIRONMENT=production` with a compose test pin. Test that
    `kb_load` run without the environment set still refuses a load or approval with no hash.
+   **Form chosen (owner, 2026-10-21; ADR 0024 Amendment 1, A3):** both. The service sets
+   `DIVESAFE_ENVIRONMENT=production`, and the hash is skipped only when the operator passes the
+   explicit development flag **and** the environment is not production; an environment override
+   alone does not skip it. Pinned with mutations (flag alone in production; environment alone;
+   flag read from the environment).
 2. **Trigger functions are VOLATILE** (risk reviewer): a STABLE or IMMUTABLE PL/pgSQL function
    reuses the calling statement's snapshot, so the lock would protect nothing while the isolation
    check passed. The function-definition test checks `provolatile = 'v'`; mutation: mark one
