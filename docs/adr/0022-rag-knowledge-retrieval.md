@@ -1,6 +1,6 @@
 # ADR 0022: Contextual knowledge retrieval (RAG), curated and unranked in version 1
 
-Status: PROPOSED (2026-10-17, revised a seventh time on 2026-10-21 after the second diff check;
+Status: ACCEPTED by the owner with conditions (2026-10-21); originally PROPOSED (2026-10-17, revised a seventh time on 2026-10-21 after the second diff check;
 needs a quick look at the changed paragraphs by both `risk-reviewer` and `security-reviewer`). The
 fourth revision (2026-10-20) changed the domain record, the prompt path, the loader and the egress
 path; the fifth added the time zone rule, the trigger and lock design, the record values for the
@@ -11,8 +11,8 @@ takes one global lock; the dive professional approves the manifest hash) and har
 maximum use, makes every knowledge trigger refuse unless the transaction is READ COMMITTED (the
 advisory locks protect only there), makes the approved manifest hash mandatory in production, names
 the commands that write the status events, and tightens the lock, span, TEMP and test wording. The
-owner's acceptance of the ADR is still needed before any code is written. The owner has not
-accepted it. Narrows ADR 0003 (which named pgvector): ADR
+owner ACCEPTED the ADR with conditions on 2026-10-21 (see "Conditions of acceptance" at the end);
+both reviewers had found no blockers or Majors in the seventh revision. Narrows ADR 0003 (which named pgvector): ADR
 0003's boundaries stand, its mechanism does not apply to version 1.
 ADR 0023 (the egress basis) is ACCEPTED by the owner (2026-10-20). Its status line records the
 reviews that were needed, the owner's acceptance and the text amendments made after acceptance to
@@ -1130,3 +1130,51 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **TEMP revoked from PUBLIC** may affect other users of the database; at code time check that
   `src/` and the backup scripts create no temporary tables, and that `db_init` runs after every
   restore (decision 10; ADR 0024 amendment item 7).
+
+## Conditions of acceptance (2026-10-21)
+
+The owner accepted this ADR after the seventh revision, on the reviewers' advice, with these items
+to be settled in the first code stage. Each needs a test with a failure condition and a mutation
+check, and the code stages still need both reviewers. Nothing here changes a decision above.
+
+First stage allowed now: schema and migration, `db_init` grants, the loader role and a
+development-only `kb_load`. Changes under `docker/` and the compose files wait for the ADR 0024
+amendment (items 1-7 above); the knowledge connector, the prompt path, the record fields and the
+citation guard are later stages.
+
+1. **Production detection in `kb_load`** (risk reviewer): `Settings.environment` defaults to
+   `development`. Either the manifest hash is required unless the operator passes an explicit
+   development flag and the environment is not production, or the ADR 0024 amendment makes the
+   `kb_load` service set `DIVESAFE_ENVIRONMENT=production` with a compose test pin. Test that
+   `kb_load` run without the environment set still refuses a load or approval with no hash.
+2. **Trigger functions are VOLATILE** (risk reviewer): a STABLE or IMMUTABLE PL/pgSQL function
+   reuses the calling statement's snapshot, so the lock would protect nothing while the isolation
+   check passed. The function-definition test checks `provolatile = 'v'`; mutation: mark one
+   function STABLE.
+3. **Who runs `approve`** (risk reviewer): the credential holder writes the APPROVED event only on
+   the dive professional's recorded approval of that manifest hash, and the hash comes from the dive
+   professional, never computed by the operator. Reword the "must not approve their own load" text
+   to match, and fix the sentence saying the per-document lock and the isolation check both refuse
+   writers that skip `kb_load` (the lock serialises READ COMMITTED writers; the check refuses the
+   others).
+4. **The hash check is client-side** (security reviewer): it catches mistakes such as approving the
+   wrong version; an operator acting in bad faith, or the loader credential used through `psql`, is
+   caught only by process controls. Say so.
+5. **Stored text against hashes** (security reviewer): the chunk INSERT trigger recomputes
+   `sha256` of the UTF-8 bytes of the text and refuses a mismatch (test and mutation), and a
+   read-only verify step lets the owner re-hash the stored chunks against the manifest in the
+   private approval record.
+6. **Command arguments** (security reviewer): `--approved-manifest-sha256` is validated as
+   `^[0-9a-f]{64}$`; `approve` and `withdraw` arguments use the decision 6 grammar; refusal and
+   mismatch messages are fixed and never echo a supplied value; the compose entrypoint passes
+   arguments in exec form. One test each.
+7. **The record validator** (security reviewer): a new record holding knowledge evidence must carry
+   `egress_basis` (absent is valid only for records with no knowledge evidence); a knowledge item is
+   identified by its KNOWLEDGE kind or a `kb:` id, matched on (document, version, chunk) parsed from
+   the id against `withheld_knowledge`; the five-value enum lives in `domain`.
+8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
+   the over-long line ~88.
+
+Still open for the owner, unchanged: the licence and `display_permitted` evidence for each source,
+where the private approval record lives, and whether production should refuse to start when the
+knowledge connector is not configured once a corpus exists.
