@@ -19,8 +19,9 @@
 - **Amendment 1 (2026-10-21), the knowledge loader,** is at the end of "Conditions before
   acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **Nothing in
   the amendment is built or run**. Both reviewers accepted its second, third and fourth revisions as
-  recorded designs (no blockers; the fourth is committed as `c0457ef`); the fifth revision (small,
-  text only) has not been seen by either (see the notes at its start).
+  recorded designs (no blockers; the fourth is committed as `c0457ef`), and the fifth (committed as
+  `6545bd7`) likewise; the sixth revision (small, text only) has not been seen by either (see the
+  notes at its start).
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
   compose file and ADR" gap recorded in ADR 0023.
 - **Started on the developer machine** (2026-10-18, four runs and a restart, throwaway secrets, a
@@ -516,14 +517,25 @@ the mandatory `.dockerignore` line named where `.gitignore` is (A3); `fullmatch`
 pattern (A1); the `\getenv` fallback changes a pin (A1); "security-reviewer confirmed the self-check
 default" (A3, A8).
 
-**Fifth revision (2026-10-21, small, text only; docs only; not yet committed).** The previous
-revision, which the reviewers read, is the fourth, `c0457ef`. **Neither reviewer has seen this
-text.** Changes: the ADR 0022 decision 3 table puts the clock-disagreement and unchecked-approval
+**Fifth revision (2026-10-21, small, text only; docs only; committed as `6545bd7`).** The previous
+revision, which the reviewers read, is the fourth, `c0457ef`; both reviewers have since accepted
+this fifth revision as a recorded design (no blockers). Changes: the ADR 0022 decision 3 table puts the clock-disagreement and unchecked-approval
 issue rows before every other row (an unchecked in-date version can no longer match "its chunks"),
 and the unchecked rule applies in **every** environment (A3); a re-run after "outcome unknown" that
 reports "already withdrawn" prints the existing event's `recorded_at` (A3); `connect_timeout` is
-validated strictly (A3); the self-check probe is a run with no arguments, and `approve` is never a
-probe (A3); stale cross-references and status text are fixed (A6, A8, the header).
+validated strictly (A1, not A3; the first wording of this note said A3); **there is no privilege-check
+probe**: a run with no arguments exits non-zero and writes nothing and is **not** a privilege
+check, and `approve` is never a probe (A3); stale cross-references and status text are fixed (A6,
+A8, the header).
+
+**Sixth revision (2026-10-21, small, text only; docs only; not yet committed).** The previous
+revision, which the reviewers read, is the fifth, `6545bd7`; they accepted it as a recorded design
+(no blockers). **Neither reviewer has seen the sixth.** Changes: the ADR 0022 decision 3 table rows
+for "its chunks" and "expired" require the current status APPROVED, so a withdrawn, checked version
+can no longer match them before the withdrawn row (fails closed); the single-issue-per-family
+consequence is recorded (A8); `connect_timeout` validation covers percent-encoded keys and a strict
+value pattern (A1); every "already withdrawn" report prints the stored `recorded_at`, read in a new
+transaction (A3).
 
 ### A1. The loader role and its password
 
@@ -626,7 +638,16 @@ probe (A3); stale cross-references and status text are fixed (A6, A8, the header
   **decision: `make-secrets.sh` writes `connect_timeout`**, with a fixed small value chosen at code
   time, and the narrow settings model **refuses a loader string whose `connect_timeout` is
   missing, duplicated, not an integer, not positive, or above the fixed value**; both are pinned
-  and a test fails when either is missing; mutation: accept `0` (which means "no limit")), written by
+  and a test fails when either is missing; mutation: accept `0` (which means "no limit")).
+  **libpq decodes percent-encoded keys and values**, so `...&connect_timeout=5&connect%5Ftimeout=0`
+  would pass a duplicate check on literal text while libpq uses the later value `0` (no limit).
+  So the narrow model **refuses any `%` in the keys of the query string** (or decodes exactly as
+  libpq does), requires the value to `fullmatch` `[1-9][0-9]*` (no sign, no spaces, no leading
+  zero) and to be at most the fixed value. Mutation test: the encoded duplicate must be refused.
+  **The same question for the existing `sslmode` and `channel_binding` checks** (could an encoded
+  or duplicated key weaken them?) is **not answered here and is recorded as a gap (A8)**; to
+  verify against the existing check in `settings.py` and libpq at code time. The strings are made
+  by `make-secrets.sh`, so the risk is a hand-edited file. The files are written by
   `write_new`: never overwritten, never printed, `0444` inside the `0700` `docker/secrets` (the
   container user differs, as for the existing secrets; a `0400` file fails to start). On the
   owner's host it creates only the missing files. The new files are git- and Docker-ignored by the
@@ -859,7 +880,13 @@ probe (A3); stale cross-references and status text are fixed (A6, A8, the header
     write). **A re-run after "outcome unknown" that then reports "already withdrawn" reads and
     prints the existing WITHDRAWN event's `recorded_at`** (the loader has SELECT), so the
     withdrawal log keeps it; this is part of the exit-table test (mutation: print nothing, or the
-    current time). The
+    current time). **This applies to every "already withdrawn" report**, because `withdraw` cannot
+    tell a re-run from a first attempt by another operator. The read is made in a **new
+    transaction with its own `statement_timeout`** (the refused transaction is aborted). If that
+    read fails, the fixed message is **"already withdrawn; recorded_at unavailable"**, with its own
+    exit status (between "already withdrawn" and "withdrawn but self-check incomplete" in the
+    precedence, number fixed at code time); it is a row of the exit-table test (mutation: reuse the
+    aborted transaction). The
     over-privileged text appears only for a run that committed. Each error code maps to one fixed
     message so the runbook step is obvious (`55P03` and `57014` go to the runbook above). A table
     test pins code to message to status, and a mutation that swaps two statuses must fail.
@@ -1209,6 +1236,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The existing role script does not set `log_statement = 'none'`**, so a server with
   `log_statement = ddl` would log `CREATE ROLE ... PASSWORD` from `10-create-app-role.sh`. The
   loader script sets it (A1); the existing one is not changed here.
+- **`sslmode` and `channel_binding` checks and encoded or duplicated query keys:** whether the
+  existing check (`settings.py`) could be weakened by a percent-encoded or duplicated key, as
+  `connect_timeout` could, is not answered (A1); to verify at code time.
 - **An unchecked approval keeps its site(s) at INSUFFICIENT EVIDENCE** until the dive professional
   writes a new, checked version, even after a licence is revoked (fails closed; ADR 0022 "Not
   solved"). While a clock issue is active on the same family the run's record shows only the clock

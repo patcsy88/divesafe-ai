@@ -43,8 +43,15 @@ WITHDRAWN (never by a check outside the lock); exit statuses have a published pr
 not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
-**Update (2026-10-21, fifth revision, text only; previous revision the reviewers read: the
-fourth, `c0457ef`; neither reviewer has seen the fifth):** the decision 3 table puts the two issue
+**Update (2026-10-21, sixth revision, text only; previous revision the reviewers read: the fifth,
+`6545bd7`; neither reviewer has seen the sixth):** the decision 3 table rows for "its chunks" and
+"expired" now require the current status to be APPROVED (a withdrawn, checked version no longer
+matches them before the withdrawn row; fails closed), the lower-version classification reads "as for
+that version", the single-issue-per-family consequence is in "Not solved", and every "already
+withdrawn" report prints the stored `recorded_at` (decision 11); more tests.
+**Update (2026-10-21, fifth revision, text only, committed as `6545bd7`; both reviewers accepted it
+as a recorded design, no blockers; previous revision the reviewers read: the
+fourth, `c0457ef`):** the decision 3 table puts the two issue
 rows (clock disagreement, unchecked approval) before every other row, so an unchecked in-date
 version can no longer match "its chunks"; the unchecked rule applies in every environment;
 decision 14 lists the unchecked issue; more tests; the unchecked-approval gap is in "Not solved";
@@ -173,7 +180,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      from the family, with no fall-back, and raises an evidence issue** with the fixed wording
      "knowledge store: an approved document family has an unchecked approval" (no title, no
      document id), **even when that version is also withdrawn**. **Only a newer, checked, in-force
-     approved version clears it** (it then governs); withdrawing does not. `hash_checked` is read
+     approved version dated on or before `now` clears it** (it then governs); withdrawing does not. `hash_checked` is read
      **only from the APPROVED event**; the other statuses carry a fixed value (decision 10). The
      per-site chunk check (decision 12) uses the same "approved" meaning. The column records a
      **client claim, not proof**: a raw `psql` insert by the loader credential can claim true
@@ -206,21 +213,26 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    | --- | --- | --- |
    | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
    | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
-   | Governing version approved **and checked**, approval date not after `now`, window end before 00:00 local on the day after review-by | its chunks | none |
-   | Governing version approved **and checked**, approval date not after `now`, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
-   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now` | nothing from the family | withdrawn (note) |
-   | Higher version approved or withdrawn, effective after window end | the lower governing version, if in date | none, or expired |
+   | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end before 00:00 local on the day after review-by | its chunks | none |
+   | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
+   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now`, **in date or expired** | nothing from the family | withdrawn (note) |
+   | Higher version approved or withdrawn, effective after window end | the lower governing version, classified by rows 1-5 | as for that version |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
    | Draft or never-approved version | ignored; does not hide a lower version | none |
-   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, if in date | none, or expired |
+   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, classified by rows 1-5 | as for that version |
    | Only future-effective, only draft or only never-approved-and-withdrawn versions | nothing | not in force (note) |
 
    **Precedence.** The table is read top to bottom. **The two issue rows come before every other
    row**: the clock-disagreement row first, then the unchecked-approval row, then the in-date,
    expired and withdrawn rows (so an unchecked approval is an issue even when withdrawn or expired,
-   and an unchecked in-date version never matches the "its chunks" row). When the clock row and the
+   and an unchecked in-date version never matches the "its chunks" row). **Decision 3 defines
+   "approved" as having an APPROVED event whether or not it was later withdrawn, so rows 3 and 4
+   also require the current status to be APPROVED (no WITHDRAWN event)**: a withdrawn, checked
+   governing version, in date or expired, never matches them and is classified by the withdrawn row
+   (row 5), so it fails closed. When the clock row and the
    unchecked row both apply, the family raises the clock-disagreement issue only (**one issue per
-   family**, a choice the risk reviewer judged safe). **Consequence, recorded:** while the clock
+   family**, a choice the risk reviewer judged safe in the fourth-revision review, 2026-10-21).
+   **Consequence, recorded:** while the clock
    issue is active, the run's record does not show the unchecked approval; the post-restore check
    and the ADR 0024 A7 report are then the only way the operator sees it. The
    clock-disagreement row comes before the withdrawn row: a governing version that is WITHDRAWN **and** has an approval date after `now` is
@@ -664,7 +676,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       one state, one message**) > **outcome unknown: re-run** (a dropped connection during COMMIT;
       re-running is safe because "already withdrawn" is idempotent) > withdrawn but over-privileged
       or self-check incomplete > already withdrawn > ok; when already-withdrawn and over-privileged
-      coincide, "already withdrawn" is reported alone (ADR 0024 A3 has the table). `load` inserts the documents, the chunks and
+      coincide, "already withdrawn" is reported alone (ADR 0024 A3 has the table). **Every
+      "already withdrawn" report prints the stored `recorded_at` of the existing WITHDRAWN event**
+      (`withdraw` cannot tell a re-run from a first attempt by another operator); the read is made
+      in a **new transaction with its own `statement_timeout`**, because the refused one is
+      aborted; if that read fails, the fixed message is "already withdrawn; recorded_at
+      unavailable", with a defined exit status. `load` inserts the documents, the chunks and
       the **DRAFT** event together and writes nothing else, so a load never approves itself.
       `approve <document_id> <version>` writes the **APPROVED** event, in a separate transaction and
       a separate invocation, so the approval time (and with it the 12-month bound of decision 3) is
@@ -762,7 +779,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       wrapped in `ConnectorError` with a fixed string, never driver text.
     - Classification is **per document family** (decision 3 table; all-sites families count like
       any other). A family is one that "would otherwise be returned" when its governing version
-      passes every filter except review-by. A site where every such family is past review-by is an
+      passes every filter except review-by **and is not withdrawn** (a withdrawn family is not one
+      that would otherwise be returned; it is the withdrawn note, or an issue row). A site where every such family is past review-by is an
       evidence issue (owner decision). A site with no documents ever, only withdrawn or
       not-in-force families, or some expired families beside live ones is a **note**. A family hidden
       because its approval is dated after the run's `now` is an **evidence issue**, never a note
@@ -1039,6 +1057,16 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   dropped connection during COMMIT gives "outcome unknown: re-run", and **a re-run that then reports
   "already withdrawn" reads and prints the existing WITHDRAWN event's `recorded_at`** (the loader
   has SELECT), so the withdrawal log keeps it (mutation: print nothing, or the current time).
+- **Sixth-revision rows (decision 3 table, not-withdrawn condition).** An in-date, checked,
+  **WITHDRAWN** v2 over an approved v1 returns nothing from the family and the withdrawn note, never
+  v1's text and never v2's (mutation: drop the not-withdrawn condition from rows 3 and 4; v2's text
+  must not appear); the same for a withdrawn, checked, **expired** v2 (the withdrawn note, not the
+  expired classification). A newer checked approved version **dated after `now`** does not clear an
+  unchecked family (mutation: drop the date condition). Every "already withdrawn" report prints the
+  stored `recorded_at`, read in a new transaction with its own `statement_timeout`; when that read
+  fails the message is "already withdrawn; recorded_at unavailable" with its own exit status (part
+  of the exit-table test; mutation: reuse the aborted transaction, print nothing, or print the
+  current time).
 - **Fifth-revision rows (decision 3 table, issue rows first).** (a) An **expired** unchecked
   version expects the unchecked-approval **issue**, not an "expired" note (mutation: put the
   in-date/expired rows above the issue rows); an in-date unchecked governing version never returns
@@ -1270,6 +1298,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - A passage that is right when written and wrong later is caught only by the review-by date.
 - A withdrawn document in a pending record is shown as withdrawn at lookup time; the decision is
   not re-run.
+- **One issue per family hides the unchecked approval while the clock issue is active.** The run's
+  record then shows only the clock issue; the ADR 0024 A7 report and the post-restore check are the
+  only way the operator sees the unchecked approval (single issue per family: judged safe by
+  `risk-reviewer` in the fourth-revision review, 2026-10-21; decision 3).
 - **An unchecked approval in production** (written by a raw `psql` insert, or by an environment
   override plus the development flag) keeps the affected site or sites at INSUFFICIENT EVIDENCE
   until the dive professional writes a new, checked version, **even after a licence is revoked**;
