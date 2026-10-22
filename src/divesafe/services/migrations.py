@@ -8,6 +8,7 @@ already run is detected and refused. There is no downgrade.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -51,7 +52,46 @@ FORBIDDEN_IN_LATER_MIGRATIONS = (
 # The only later migrations that may name the guard, by version and checksum (ADR 0015). Editing
 # one brings the word scan back, so its text cannot change without a new reviewed entry here.
 REVIEWED_GUARD_MIGRATIONS: Mapping[int, str] = MappingProxyType(
-    {3: "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b306297"}
+    {
+        3: "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b306297",
+        4: "c95979fbf982c54ef0f05528d9549944d49a10c0210690854509c9042a36df8e",
+    }
+)
+KNOWLEDGE_MIGRATION = 4
+KNOWLEDGE_TABLES = ("kb_documents", "kb_chunks", "kb_status_events")
+KNOWLEDGE_TRIGGERS = (
+    "kb_documents_insert_guard",
+    "kb_chunks_insert_guard",
+    "kb_status_events_insert_guard",
+    "kb_documents_append_only_guard",
+    "kb_chunks_append_only_guard",
+    "kb_status_events_append_only_guard",
+    "kb_documents_no_truncate_guard",
+    "kb_chunks_no_truncate_guard",
+    "kb_status_events_no_truncate_guard",
+)
+# The function each knowledge trigger must call.
+KNOWLEDGE_FUNCTIONS = {
+    "kb_documents_insert_guard": "kb_documents_insert",
+    "kb_chunks_insert_guard": "kb_chunks_insert",
+    "kb_status_events_insert_guard": "kb_status_events_insert",
+    "kb_documents_append_only_guard": "kb_no_update_delete",
+    "kb_chunks_append_only_guard": "kb_no_update_delete",
+    "kb_status_events_append_only_guard": "kb_no_update_delete",
+    "kb_documents_no_truncate_guard": "kb_no_truncate",
+    "kb_chunks_no_truncate_guard": "kb_no_truncate",
+    "kb_status_events_no_truncate_guard": "kb_no_truncate",
+}
+# Forbidden only in migrations after the one that creates them.
+KNOWLEDGE_NAMES = (
+    *KNOWLEDGE_TRIGGERS,
+    *sorted(set(KNOWLEDGE_FUNCTIONS.values())),
+    "kb_status_event_order_seq",
+)
+_KB_TABLE_DDL = re.compile(
+    r"\b(drop|rename)\b[^;]*\bkb_(documents|chunks|status_events)\b"
+    r"|\balter table\b[^;]*\bkb_[a-z_]*[^;]*\b(rename|drop|owner|alter column|set default)\b"
+    r"|\b(grant|revoke)\b[^;]*\bkb_[a-z_]+"
 )
 _LOCK_KEY = 7_281_903_114
 
@@ -187,6 +227,232 @@ ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_no_truncate_gua
 """
 
 
+_V4 = """
+CREATE SEQUENCE public.kb_status_event_order_seq AS bigint;
+REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM PUBLIC;
+
+CREATE TABLE public.kb_documents (
+    document_id            text NOT NULL
+        CHECK (document_id ~ '^[a-z0-9]+(-[a-z0-9]+){0,2}$' AND length(document_id) <= 40),
+    version                integer NOT NULL CHECK (version BETWEEN 1 AND 999999),
+    title                  text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+    origin                 text NOT NULL
+        CHECK (origin IN ('dive_professional', 'published_document')),
+    author_role            text NOT NULL
+        CHECK (author_role IN ('dive_professional', 'published_source')),
+    approver_role          text NOT NULL CHECK (approver_role = 'dive_professional'),
+    effective_date         date NOT NULL,
+    review_by_date         date NOT NULL,
+    licence                text NOT NULL CHECK (length(licence) BETWEEN 1 AND 500),
+    licence_reference_present boolean NOT NULL CHECK (licence_reference_present),
+    attribution            text
+        CHECK (attribution IS NULL OR length(attribution) BETWEEN 1 AND 300),
+    site_id                text CHECK (site_id IS NULL OR site_id ~ '^[a-z0-9_-]{1,64}$'),
+    all_sites              boolean NOT NULL,
+    display_permitted      boolean NOT NULL CHECK (display_permitted),
+    supersedes             integer CHECK (supersedes BETWEEN 1 AND 999999),
+    manifest_sha256        text NOT NULL CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+    PRIMARY KEY (document_id, version),
+    CHECK (all_sites = (site_id IS NULL)),
+    CHECK (effective_date <= review_by_date),
+    CHECK (review_by_date <= (effective_date + interval '12 months')::date),
+    CHECK (supersedes IS NULL OR supersedes < version)
+);
+
+CREATE TABLE public.kb_chunks (
+    document_id    text NOT NULL,
+    version        integer NOT NULL CHECK (version BETWEEN 1 AND 999999),
+    chunk          integer NOT NULL CHECK (chunk BETWEEN 1 AND 999999),
+    section        text NOT NULL CHECK (length(section) BETWEEN 1 AND 200),
+    chunk_text     text NOT NULL CHECK (length(chunk_text) BETWEEN 1 AND 1500),
+    content_sha256 text NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    PRIMARY KEY (document_id, version, chunk),
+    FOREIGN KEY (document_id, version) REFERENCES public.kb_documents (document_id, version)
+);
+
+CREATE TABLE public.kb_status_events (
+    event_order   bigint NOT NULL UNIQUE,
+    document_id   text NOT NULL,
+    version       integer NOT NULL CHECK (version BETWEEN 1 AND 999999),
+    status        text NOT NULL CHECK (status IN ('DRAFT', 'APPROVED', 'WITHDRAWN')),
+    hash_checked  boolean NOT NULL,
+    recorded_at   timestamptz NOT NULL,
+    CHECK (status = 'APPROVED' OR hash_checked = false),
+    FOREIGN KEY (document_id, version) REFERENCES public.kb_documents (document_id, version)
+);
+
+REVOKE ALL ON public.kb_documents, public.kb_chunks, public.kb_status_events FROM PUBLIC;
+
+CREATE FUNCTION public.kb_no_update_delete() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    RAISE EXCEPTION 'knowledge tables are append-only';
+END;
+$$;
+
+CREATE FUNCTION public.kb_no_truncate() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    RAISE EXCEPTION 'knowledge tables are never truncated';
+END;
+$$;
+
+CREATE FUNCTION public.kb_documents_insert() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+    newest integer;
+    family_site text;
+    family_all boolean;
+    family_found boolean;
+BEGIN
+    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'knowledge writes need a READ COMMITTED transaction';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(1220001, pg_catalog.hashtext(NEW.document_id));
+    SELECT max(d.version) INTO newest
+        FROM public.kb_documents d WHERE d.document_id = NEW.document_id;
+    IF newest IS NOT NULL AND NEW.version <= newest THEN
+        RAISE EXCEPTION 'a new version must be greater than every existing version';
+    END IF;
+    SELECT d.site_id, d.all_sites, true INTO family_site, family_all, family_found
+        FROM public.kb_documents d WHERE d.document_id = NEW.document_id LIMIT 1;
+    IF family_found AND (family_site IS DISTINCT FROM NEW.site_id
+                         OR family_all IS DISTINCT FROM NEW.all_sites) THEN
+        RAISE EXCEPTION 'every version of a document must have the same site';
+    END IF;
+    IF NEW.supersedes IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.kb_documents d
+        WHERE d.document_id = NEW.document_id AND d.version = NEW.supersedes
+    ) THEN
+        RAISE EXCEPTION 'supersedes must name an earlier version of the same document';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION public.kb_chunks_insert() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'knowledge writes need a READ COMMITTED transaction';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(1220001, pg_catalog.hashtext(NEW.document_id));
+    IF EXISTS (
+        SELECT 1 FROM public.kb_status_events e
+        WHERE e.document_id = NEW.document_id AND e.version = NEW.version
+    ) THEN
+        RAISE EXCEPTION 'chunks cannot be added to a version that has a status event';
+    END IF;
+    IF NEW.content_sha256 IS DISTINCT FROM pg_catalog.encode(
+        pg_catalog.sha256(pg_catalog.convert_to(NEW.chunk_text, 'UTF8')), 'hex'
+    ) THEN
+        RAISE EXCEPTION 'the chunk text does not match its SHA-256';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION public.kb_status_events_insert() RETURNS trigger
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+    previous text;
+    effective date;
+    review_by date;
+    document_found boolean;
+    stamp timestamptz;
+    approved_on date;
+BEGIN
+    IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'knowledge writes need a READ COMMITTED transaction';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(1220001, pg_catalog.hashtext(NEW.document_id));
+    SELECT d.effective_date, d.review_by_date, true INTO effective, review_by, document_found
+        FROM public.kb_documents d
+        WHERE d.document_id = NEW.document_id AND d.version = NEW.version;
+    IF document_found IS NOT TRUE THEN
+        RAISE EXCEPTION 'a status event needs an existing document version';
+    END IF;
+    SELECT e.status INTO previous FROM public.kb_status_events e
+        WHERE e.document_id = NEW.document_id AND e.version = NEW.version
+        ORDER BY e.event_order DESC LIMIT 1;
+    IF previous = 'WITHDRAWN' AND NEW.status = 'WITHDRAWN' THEN
+        RAISE EXCEPTION 'this version is already withdrawn' USING ERRCODE = 'KB001';
+    END IF;
+    IF NOT COALESCE((
+        (previous IS NULL AND NEW.status = 'DRAFT')
+        OR (previous = 'DRAFT' AND NEW.status IN ('APPROVED', 'WITHDRAWN'))
+        OR (previous = 'APPROVED' AND NEW.status = 'WITHDRAWN')
+    ), false) THEN
+        RAISE EXCEPTION 'this status change is not allowed';
+    END IF;
+    IF NEW.status = 'APPROVED' AND NOT COALESCE((
+        SELECT true FROM public.kb_chunks c
+        WHERE c.document_id = NEW.document_id AND c.version = NEW.version LIMIT 1
+    ), false) THEN
+        RAISE EXCEPTION 'a version without chunks cannot be approved';
+    END IF;
+    stamp := pg_catalog.clock_timestamp();
+    IF NEW.status = 'APPROVED' THEN
+        approved_on := (stamp AT TIME ZONE 'Asia/Kuala_Lumpur')::date;
+        IF NOT COALESCE(effective <= (approved_on + interval '12 months')::date, false) THEN
+            RAISE EXCEPTION 'the effective date is more than 12 months after approval';
+        END IF;
+        IF NOT COALESCE(review_by >= approved_on, false) THEN
+            RAISE EXCEPTION 'the review-by date is before the approval date';
+        END IF;
+    END IF;
+    NEW.event_order := pg_catalog.nextval('public.kb_status_event_order_seq');
+    NEW.recorded_at := stamp;
+    RETURN NEW;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_documents_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_chunks_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;
+
+CREATE TRIGGER kb_documents_insert_guard
+    BEFORE INSERT ON public.kb_documents
+    FOR EACH ROW EXECUTE FUNCTION public.kb_documents_insert();
+CREATE TRIGGER kb_chunks_insert_guard
+    BEFORE INSERT ON public.kb_chunks
+    FOR EACH ROW EXECUTE FUNCTION public.kb_chunks_insert();
+CREATE TRIGGER kb_status_events_insert_guard
+    BEFORE INSERT ON public.kb_status_events
+    FOR EACH ROW EXECUTE FUNCTION public.kb_status_events_insert();
+CREATE TRIGGER kb_documents_append_only_guard
+    BEFORE UPDATE OR DELETE ON public.kb_documents
+    FOR EACH ROW EXECUTE FUNCTION public.kb_no_update_delete();
+CREATE TRIGGER kb_chunks_append_only_guard
+    BEFORE UPDATE OR DELETE ON public.kb_chunks
+    FOR EACH ROW EXECUTE FUNCTION public.kb_no_update_delete();
+CREATE TRIGGER kb_status_events_append_only_guard
+    BEFORE UPDATE OR DELETE ON public.kb_status_events
+    FOR EACH ROW EXECUTE FUNCTION public.kb_no_update_delete();
+CREATE TRIGGER kb_documents_no_truncate_guard
+    BEFORE TRUNCATE ON public.kb_documents
+    FOR EACH STATEMENT EXECUTE FUNCTION public.kb_no_truncate();
+CREATE TRIGGER kb_chunks_no_truncate_guard
+    BEFORE TRUNCATE ON public.kb_chunks
+    FOR EACH STATEMENT EXECUTE FUNCTION public.kb_no_truncate();
+CREATE TRIGGER kb_status_events_no_truncate_guard
+    BEFORE TRUNCATE ON public.kb_status_events
+    FOR EACH STATEMENT EXECUTE FUNCTION public.kb_no_truncate();
+
+ALTER TABLE public.kb_documents ENABLE ALWAYS TRIGGER kb_documents_insert_guard;
+ALTER TABLE public.kb_chunks ENABLE ALWAYS TRIGGER kb_chunks_insert_guard;
+ALTER TABLE public.kb_status_events ENABLE ALWAYS TRIGGER kb_status_events_insert_guard;
+ALTER TABLE public.kb_documents ENABLE ALWAYS TRIGGER kb_documents_append_only_guard;
+ALTER TABLE public.kb_chunks ENABLE ALWAYS TRIGGER kb_chunks_append_only_guard;
+ALTER TABLE public.kb_status_events ENABLE ALWAYS TRIGGER kb_status_events_append_only_guard;
+ALTER TABLE public.kb_documents ENABLE ALWAYS TRIGGER kb_documents_no_truncate_guard;
+ALTER TABLE public.kb_chunks ENABLE ALWAYS TRIGGER kb_chunks_no_truncate_guard;
+ALTER TABLE public.kb_status_events ENABLE ALWAYS TRIGGER kb_status_events_no_truncate_guard;
+"""
+
+
 class MigrationError(RuntimeError):
     """The migration history and the code disagree, or a migration list is malformed. Messages
     never contain connection details."""
@@ -207,6 +473,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "assessments table and guard triggers", _V1),
     Migration(2, "pending runs and failure counts", _V2),
     Migration(3, "guard triggers fire in every replication role", _V3),
+    Migration(4, "knowledge store tables and guard triggers", _V4),
 )
 
 Applied = tuple[int, str, str]  # version, name, checksum
@@ -236,11 +503,18 @@ def plan(applied: Sequence[Applied], known: Sequence[Migration] = MIGRATIONS) ->
 
 
 def guarded(known: Sequence[Migration]) -> None:
-    """Refuse a migration list in which a later migration mentions the audit guard."""
+    """Refuse a migration list in which a later migration mentions the audit guard, or one after
+    the knowledge migration touches the knowledge guard or drops or renames a knowledge table."""
     for m in known[1:]:
+        lowered = " ".join(m.sql.lower().split())
+        if m.version > KNOWLEDGE_MIGRATION:
+            for word in KNOWLEDGE_NAMES:
+                if word in lowered:
+                    raise MigrationError(f"migration {m.version} touches the knowledge guard")
+            if _KB_TABLE_DDL.search(lowered):
+                raise MigrationError(f"migration {m.version} touches the knowledge guard")
         if REVIEWED_GUARD_MIGRATIONS.get(m.version) == m.checksum:
             continue
-        lowered = " ".join(m.sql.lower().split())
         for word in FORBIDDEN_IN_LATER_MIGRATIONS:
             if word in lowered:
                 raise MigrationError(f"migration {m.version} touches the audit guard")
@@ -284,6 +558,17 @@ def migrate(
             }
             if not set(GUARD_TRIGGERS) <= enabled:
                 raise MigrationError("the audit guard is not intact after migrating")
+            if len(known) >= KNOWLEDGE_MIGRATION:
+                kb_enabled = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT tgname FROM pg_trigger WHERE tgenabled = 'A' AND tgrelid IN "
+                        "('public.kb_documents'::regclass, 'public.kb_chunks'::regclass, "
+                        "'public.kb_status_events'::regclass)"
+                    )
+                }
+                if not set(KNOWLEDGE_TRIGGERS) <= kb_enabled:
+                    raise MigrationError("the knowledge guard is not intact after migrating")
             return [m.version for m in pending]
     except psycopg.Error:
         raise RepositoryUnavailableError("could not apply the schema migrations") from None

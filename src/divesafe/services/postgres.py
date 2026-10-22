@@ -26,6 +26,7 @@ from psycopg import sql
 from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
 
+from divesafe.config.roles import RESERVED_ROLE_NAMES
 from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.services.migrations import (
     GUARD_FUNCTIONS,
@@ -68,16 +69,123 @@ _RUN_COLUMNS = (
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
-def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
+LOADER_ROLE_MISSING = "the knowledge loader role does not exist; create it before running db_init"
+# Columns the loader may insert into kb_status_events: never the ordering key or recorded_at.
+_LOADER_EVENT_COLUMNS = ("document_id", "version", "status", "hash_checked")
+
+
+class LoaderRoleError(RuntimeError):
+    """The knowledge loader role is missing or its name is not acceptable. Fixed messages."""
+
+
+class TempPrivilegeError(LoaderRoleError):
+    """TEMPORARY on the database is still held by PUBLIC or the loader after the revokes."""
+
+
+TEMP_STILL_HELD = "TEMPORARY on the database is still held by PUBLIC or the loader role"
+LOADER_ROLE_INVALID = "invalid loader role name"
+
+
+def check_role_name(role: str, *, what: str) -> None:
+    if not _ROLE_NAME.fullmatch(role) or role == "public" or role.startswith("pg_"):
+        raise ValueError(f"invalid {what} role name")
+
+
+def check_loader_role_name(role: str, app_role: str | None = None) -> None:
+    """Everything `install_schema` refuses for a loader role name, without echoing the value."""
+    check_role_name(role, what="loader")
+    if role == app_role or role in RESERVED_ROLE_NAMES:
+        raise ValueError(LOADER_ROLE_INVALID)
+
+
+def _kb_grants(
+    conn: psycopg.Connection[Any], app_role: str | None, loader_role: str | None
+) -> None:
+    tables = sql.SQL("public.kb_documents, public.kb_chunks, public.kb_status_events")
+    conn.execute(sql.SQL("REVOKE ALL ON {} FROM PUBLIC").format(tables))
+    conn.execute(
+        "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete(), public.kb_no_truncate(), "
+        "public.kb_documents_insert(), public.kb_chunks_insert(), "
+        "public.kb_status_events_insert() FROM PUBLIC"
+    )
+    conn.execute("REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM PUBLIC")
+    row = conn.execute("SELECT current_database()").fetchone()
+    assert row is not None
+    conn.execute(
+        sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(row[0]))
+    )
+    for role_name in (app_role, loader_role):
+        if role_name is None:
+            continue
+        role = sql.Identifier(role_name)
+        conn.execute(sql.SQL("REVOKE ALL ON {} FROM {}").format(tables, role))
+        conn.execute(
+            sql.SQL("REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM {}").format(role)
+        )
+        conn.execute(
+            sql.SQL(
+                "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete(), "
+                "public.kb_no_truncate(), public.kb_documents_insert(), "
+                "public.kb_chunks_insert(), public.kb_status_events_insert() FROM {}"
+            ).format(role)
+        )
+        conn.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(tables, role))
+    if loader_role is not None:
+        role = sql.Identifier(loader_role)
+        conn.execute(
+            sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM {}").format(sql.Identifier(row[0]), role)
+        )
+        conn.execute(sql.SQL("GRANT INSERT ON public.kb_documents TO {}").format(role))
+        conn.execute(sql.SQL("GRANT INSERT ON public.kb_chunks TO {}").format(role))
+        columns = sql.SQL(", ").join(sql.Identifier(c) for c in _LOADER_EVENT_COLUMNS)
+        conn.execute(
+            sql.SQL("GRANT INSERT ({}) ON public.kb_status_events TO {}").format(columns, role)
+        )
+    # REVOKE only warns when it changes nothing, so read the result back.
+    public_temp = conn.execute(
+        "SELECT has_database_privilege('public', current_database(), 'TEMPORARY')"
+    ).fetchone()
+    held = public_temp is None or public_temp[0] is not False
+    if loader_role is not None:
+        loader_temp = conn.execute(
+            "SELECT has_database_privilege(%s, current_database(), 'TEMPORARY')", (loader_role,)
+        ).fetchone()
+        held = held or loader_temp is None or loader_temp[0] is not False
+        # NOINHERIT / SET ROLE: any role the loader is a member of that holds TEMPORARY counts.
+        member_temp = conn.execute(
+            "SELECT r.rolname FROM pg_roles r "
+            "WHERE has_database_privilege(r.oid, current_database(), 'TEMPORARY') IS NOT FALSE "
+            "AND COALESCE(pg_has_role(%s, r.oid, 'MEMBER'), true) "
+            "AND r.rolname <> %s LIMIT 1",
+            (loader_role, loader_role),
+        ).fetchone()
+        held = held or member_temp is not None
+    if held:
+        raise TempPrivilegeError(TEMP_STILL_HELD)
+
+
+def install_schema(
+    admin_dsn: str, app_role: str | None = None, *, loader_role: str | None = None
+) -> None:
     """Create the table and guard as the OWNER role, and optionally grant a least-privilege
-    application role. Idempotent. Never run with the application's own credentials."""
-    if app_role is not None and (
-        not _ROLE_NAME.fullmatch(app_role) or app_role == "public" or app_role.startswith("pg_")
-    ):
-        raise ValueError("invalid application role name")
+    application role and the knowledge loader role (which must already exist; it is never created
+    here). Idempotent. Never run with the application's own credentials."""
+    if app_role is not None:
+        check_role_name(app_role, what="application")
+    if loader_role is not None:
+        check_loader_role_name(loader_role, app_role)
     migrate(admin_dsn, app_role=app_role)
     try:
         with psycopg.connect(admin_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
+            if loader_role is not None:
+                owner = conn.execute("SELECT current_user").fetchone()
+                found = conn.execute(
+                    "SELECT 1 FROM pg_roles WHERE rolname = %s", (loader_role,)
+                ).fetchone()
+                if owner is not None and owner[0] == loader_role:
+                    raise LoaderRoleError(LOADER_ROLE_INVALID)
+                if found is None:
+                    raise LoaderRoleError(LOADER_ROLE_MISSING)
             conn.execute("REVOKE ALL ON public.assessments FROM PUBLIC")
             conn.execute("REVOKE ALL ON public.pending_runs FROM PUBLIC")
             conn.execute("REVOKE ALL ON public.run_failure_counts FROM PUBLIC")
@@ -119,6 +227,7 @@ def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
                         "REVOKE DELETE, TRUNCATE, TRIGGER, REFERENCES ON public.assessments FROM {}"
                     ).format(role)
                 )
+            _kb_grants(conn, app_role, loader_role)
     except psycopg.Error:
         raise RepositoryUnavailableError("could not install the schema") from None
 

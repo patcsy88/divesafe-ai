@@ -30,10 +30,46 @@ from divesafe.services import (
     RecordExistsError,
     RecordNotFoundError,
 )
+from divesafe.services.migrations import MIGRATIONS
 from divesafe.services.postgres import GUARD_TRIGGERS, install_schema
 
 R = Recommendation
 TEST_DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
+
+
+def _forget_knowledge_store_without_history() -> None:
+    """Some integration tests drop `schema_migrations` to look like a fresh database, then call
+    reset_test_database(), which replays every migration. The knowledge tables can never be
+    emptied (ADR 0022), so a replay of migration 4 would collide with them. A database with no
+    history (missing, or not 1..N) is treated as one with no knowledge objects, so they are
+    removed here, and only then, in the *_test database this module already insists on."""
+    assert TEST_DSN is not None
+    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+        if conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() != (None,):
+            rows = conn.execute("SELECT version FROM public.schema_migrations").fetchall()
+            if sorted(r[0] for r in rows) == list(range(1, len(MIGRATIONS) + 1)):
+                return
+            # An incomplete or edited history is replayed from scratch, like a fresh database.
+            conn.execute("DROP TABLE public.schema_migrations")
+    drop_knowledge_objects()
+
+
+def drop_knowledge_objects() -> None:
+    """Remove the migration-4 objects (test databases only; see the function above)."""
+    assert TEST_DSN is not None
+    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+        conn.execute(
+            "DROP TABLE IF EXISTS public.kb_status_events, public.kb_chunks, public.kb_documents"
+        )
+        conn.execute("DROP SEQUENCE IF EXISTS public.kb_status_event_order_seq")
+        for function in (
+            "kb_no_update_delete",
+            "kb_no_truncate",
+            "kb_documents_insert",
+            "kb_chunks_insert",
+            "kb_status_events_insert",
+        ):
+            conn.execute(f"DROP FUNCTION IF EXISTS public.{function}()")  # type: ignore[call-overload]
 
 
 def reset_test_database() -> None:
@@ -43,6 +79,7 @@ def reset_test_database() -> None:
     name = psycopg.conninfo.conninfo_to_dict(TEST_DSN).get("dbname", "")
     if not str(name).endswith("_test"):
         raise RuntimeError("DIVESAFE_TEST_DATABASE_URL must point at a database named *_test")
+    _forget_knowledge_store_without_history()
     install_schema(TEST_DSN)
     with psycopg.connect(TEST_DSN) as conn:
         for trigger in GUARD_TRIGGERS:

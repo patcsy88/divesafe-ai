@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from divesafe.config.roles import RESERVED_ROLE_NAMES
+
 
 def _require_tls(dsn: str) -> None:
     """Refuse a production database connection that may fall back to plaintext. The message never
@@ -46,6 +48,8 @@ class Settings(BaseSettings):
     # schema; the running application never needs it.
     admin_database_url: SecretStr | None = None
     app_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    # Knowledge loader role (ADR 0022 decision 11). Only `db_init` reads it; unset skips its grants.
+    loader_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
     llm_provider: Literal["openai", "anthropic", "ollama", "openai_compatible", "fake"] = "fake"
     llm_model: str | None = None
@@ -73,6 +77,22 @@ class Settings(BaseSettings):
     # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
     # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.
     llm_allowed_hosts: str | None = None
+
+    @field_validator("loader_db_role")
+    @classmethod
+    def _loader_role_acceptable(cls, value: str | None) -> str | None:
+        # Same reserved names as services.postgres.check_loader_role_name; never echoed.
+        if value is not None and (
+            value == "public" or value.startswith("pg_") or value in RESERVED_ROLE_NAMES
+        ):
+            raise ValueError("DIVESAFE_LOADER_DB_ROLE is not an acceptable role name")
+        return value
+
+    @model_validator(mode="after")
+    def _loader_differs_from_app(self) -> Settings:
+        if self.loader_db_role is not None and self.loader_db_role == self.app_db_role:
+            raise ValueError("DIVESAFE_LOADER_DB_ROLE is not an acceptable role name")
+        return self
 
     def plain_http_host_set(self) -> frozenset[str]:
         return _host_set(self.ollama_plain_http_hosts, "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS")

@@ -39,8 +39,8 @@ as a recorded design, no blockers):** in `withdraw`
 the privilege self-check runs **after** the WITHDRAWN commit, in its own read-only transaction;
 "already withdrawn" is decided by the status-event trigger's distinct refusal of WITHDRAWN to
 WITHDRAWN (never by a check outside the lock); exit statuses have a published precedence
-(decision 11). The approval's `hash_checked` column is **proposed by `risk-reviewer`; the owner has
-not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
+(decision 11). The approval's `hash_checked` column was **proposed by `risk-reviewer`; the owner
+answered YES on 2026-10-21** (decisions 3 and 10; see "Owner answers"). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
 (Note on numbering: the "fourth", "fifth" and "sixth" revisions in the updates below are
@@ -63,8 +63,8 @@ stale cross-references to the migration are fixed.
 it as a recorded design, no blockers):** an unchecked
 APPROVED event still counts as approved for governing and hiding, and the family returns nothing
 with an evidence issue (decision 3, table row, decision 12); `hash_checked` has fixed values on
-DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gates the stage-1
-migration, not only shipping**; "must not approve their own load" is reworded; the exit-status
+DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gated the stage-1
+migration, not only shipping** (the owner has since answered: YES, 2026-10-21); "must not approve their own load" is reworded; the exit-status
 table gains "outcome unknown: re-run" and a check on the exact SQLSTATE for "already withdrawn"
 (decision 11).
 Decision 13's claim that `kb_load` refuses a manifest root inside the repository is reworded,
@@ -173,8 +173,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      without ever having been approved is ignored**: it neither governs nor hides a lower version.
      A version that takes effect during the window governs the whole window and replaces the
      version in force at its start. This is stated on purpose and has a test row.
-   - **`hash_checked` (third and fourth revisions; proposed by `risk-reviewer`, the owner has not
-     been asked).** **An APPROVED event with `hash_checked = false` still counts as "approved at
+   - **`hash_checked` (third and fourth revisions; proposed by `risk-reviewer`; DECIDED by the
+     owner, 2026-10-21: YES, the column is added, see decision 10).** **An APPROVED event with `hash_checked = false` still counts as "approved at
      some point"** for choosing the governing version and for hiding lower versions (reading it as
      "not approved" would drop that version out of selection, let the lower version govern and
      return its text, which is the fall-back this decision forbids; and an unchecked version that
@@ -187,7 +187,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      **only from the APPROVED event**; the other statuses carry a fixed value (decision 10). The
      per-site chunk check (decision 12) uses the same "approved" meaning. The column records a
      **client claim, not proof**: a raw `psql` insert by the loader credential can claim true
-     (ADR 0024 A3). **The owner's answer on this column gates the stage-1 migration** (decision 10).
+     (ADR 0024 A3). **The owner answered YES on 2026-10-21, so the stage-1 migration includes the
+      column** (decision 10).
    - A governing version that is WITHDRAWN returns nothing from the family (unless its approval date
      is after `now`, in which case the clock-disagreement issue below takes precedence). **A withdrawn higher
      version hides the lower versions too** (owner answer): a document withdrawn because it was
@@ -348,6 +349,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      the document id, section, title, attribution, **licence text** or status-event rows (process
      controls, not guarantees; code cannot detect a name). `kb_load` refuses a manifest without
      the attestation, and the failure test covers the licence text as well as the other fields.
+   - **Chunks are written only before a version's first status event (known; recorded
+     2026-10-21).** The trigger `kb_chunks_insert` refuses a chunk INSERT once any status event
+     exists for that document version; `kb_load` therefore writes the document and its chunks
+     **before** the DRAFT event, in one transaction (decision 11, "Commands and events"). A chunk
+     cannot be added to, or replaced in, a version that has an event; a correction is a new
+     version. Checked against the text: decision 11 and ADR 0024 A3 list the writes (documents,
+     chunks, DRAFT) in this order and say "together"/"one transaction", but they do not state the
+     refusal as a rule; this paragraph does. Nothing in the text contradicts it.
    - **Review-by limit (normative; an owner policy limit, not a parsing limit; only the owner changes it):** the review-by date is at most **12 calendar months after the
      document's effective date**, counted from the effective date, not from approval or load.
      `kb_load` refuses a later date. Twelve months from 29 February resolves to the **last day of
@@ -544,18 +553,28 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       DRAFT to APPROVED, DRAFT to WITHDRAWN and APPROVED to WITHDRAWN. On APPROVED it also checks
       that the effective date is at most 12 calendar months after the approval's local date and
       that review-by is on or after it (decisions 3 and 7); "approval not in the future" is true
-      by construction at insert. **WITHDRAWN to WITHDRAWN is refused with a distinct error code and
+      by construction at insert. **Owner decision, 2026-10-22: the database refuses to approve a
+      version that has no chunks.** The `kb_status_events_insert` trigger refuses an APPROVED
+      event for a version with no row in `kb_chunks`, with a fixed message and an ordinary
+      `P0001` (no distinct SQLSTATE, unlike the WITHDRAWN to WITHDRAWN refusal). It needs a
+      failure test and a mutation (drop the check; an empty version must then be approved). **WITHDRAWN to WITHDRAWN is refused with a distinct error code and
       message**; `withdraw` uses that refusal to report "already withdrawn" (decision 11). **The
-      status-event row has a column `hash_checked`, `NOT NULL` with no default** (proposed by
-      `risk-reviewer`; owner not yet asked; decision 3). **Selection reads it only from the APPROVED
-      event; the other statuses carry fixed values** (a CHECK or the trigger enforces them, the
-      values fixed at code time and stated in the ADR then): `load` writes the fixed value for DRAFT
-      and `withdraw` the fixed value for WITHDRAWN, so a WITHDRAWN event with `hash_checked = false`
-      still withdraws. **The owner `psql` fallback INSERT must include the column** (pinned in the
-      runbook scan). **The owner's answer on this column gates the stage-1 MIGRATION, not only
-      shipping:** migrations are forward-only and checksum-pinned and the rows are not updatable, so
-      a NOT NULL column with no default cannot be added later; **the column is not written until
-      the owner answers.** Independently of order, selection treats
+      status-event row has a column `hash_checked`, `NOT NULL` with no default.** **Owner decision,
+      2026-10-21: YES, add `kb_status_events.hash_checked`** (proposed by `risk-reviewer`; decision
+      3). **Selection reads it only from the APPROVED event. DRAFT and WITHDRAWN rows carry the
+      fixed value `false`, enforced by a DB CHECK: `status = 'APPROVED' OR hash_checked = false`.**
+      `load` writes `false` for DRAFT and `withdraw` writes `false` for WITHDRAWN, so a WITHDRAWN
+      event still withdraws (selection does not read the column there). **The DB accepts APPROVED
+      with `hash_checked = false`**: `approve` writes `true` only when the manifest hash was
+      supplied and compared; the development flag (ADR 0024 A3) leaves it `false`; the DB does not
+      refuse that row and **selection, not the DB, handles it**: in production an unchecked
+      approval makes the family return nothing and raises an evidence issue (decision 3), and it
+      applies **in every environment**. An unchecked APPROVED event still counts as "approved at
+      some point" for choosing the governing version and for hiding lower versions. **The owner
+      `psql` fallback INSERT must include the column** (pinned in the runbook scan). Migrations are
+      forward-only and checksum-pinned and the rows are not updatable, so a NOT NULL column with no
+      default could not be added later; the answer was needed before the stage-1 migration, and
+      the column goes into it. Independently of order, selection treats
       any WITHDRAWN event as final (decision 3). The approval date is
       `(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date` of the APPROVED event (decision 3,
       "Dates").
@@ -567,7 +586,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       (owner decision, 2026-10-21).** SELECT is there because `kb_load` reads the store for the
       per-site chunk check (decision 12) and for version conflicts. No UPDATE, DELETE, TRUNCATE,
       TRIGGER or REFERENCES, and the INSERT column list excludes the ordering and recorded-at
-      columns and **includes `hash_checked`** (proposed; see above). PostgreSQL grants TEMP on a database to PUBLIC by default, so `db_init` revokes it from PUBLIC
+      columns and **includes `hash_checked`** (owner decision, 2026-10-21; see above). PostgreSQL grants TEMP on a database to PUBLIC by default, so `db_init` revokes it from PUBLIC
       and from the loader **on every run**. `pg_dump` without `--create` does not carry database
       ACLs, so after a restore TEMP is back on PUBLIC until `db_init` runs; meanwhile the loader
       self-check finds TEMP and `kb_load` refuses (it fails closed). The database owner keeps TEMP
@@ -575,14 +594,29 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       creates temporary tables (a check at code time). The app role is not checked for TEMP, which
       is acceptable: schema qualification and `pg_temp` last (above) are the defence; the loader's
       TEMP is checked because the loader is the writing role.
-    - Each knowledge trigger is checked as a pair with the function it must call, in `public`, as
-      for the assessment guard, after migrating and in `verify()`. `guarded()` keeps every
+    - **Stage 1a checks trigger names and `tgenabled` only, in `migrate()` only.** `migrate()`
+      checks that the nine named knowledge triggers are present and `ENABLE ALWAYS` (a subset
+      check: it would not notice a tenth trigger). "Exactly nine, no tenth trigger" is enforced for
+      migration 4 by the SQL-text test only, and in the database by condition 9 (later). `verify()`
+      has no knowledge checks in stage 1a. Checking each trigger as a pair with the function it must call, in
+      `public`, as for the assessment guard, after migrating and in `verify()`, belongs to the
+      gated stage (see "Not solved" and condition 9); it is not built in stage 1a. `guarded()` keeps every
       migration-1 forbidden word applying to every later migration, including this one, and adds
       the knowledge trigger and function names as forbidden only in migrations **after** the one
       that creates them. It also forbids DROP and RENAME of any knowledge table in later
-      migrations (the same gap exists today for `assessments`; closing it is a follow-up). The migration's checksum is pinned in a safety test. No
-      `DROP TRIGGER IF EXISTS`.
-    - The production start-up check extends to these tables: it also tests column-level privileges
+      migrations (the same gap exists today for `assessments`; closing it is a follow-up). **Known
+      (2026-10-21): the `REVIEWED_GUARD_MIGRATIONS` entry for migration 4 skips the whole
+      forbidden-word scan for that version**; it is compensated by the pinned checksum and by the
+      check in `migrate()` that the nine named knowledge triggers are present and `ENABLE ALWAYS`
+      (a subset check), not by the scan. The migration's checksum is pinned in a safety test. No
+      `DROP TRIGGER IF EXISTS`. Any lasting database that applied an earlier text of migration 4
+      will refuse with "migration 4 was changed after it was applied"; migration 4 has only ever
+      been applied to throwaway test databases.
+    - **A version whose DRAFT was written with no chunks can never be approved** (the database
+      refuses, above); it can only be withdrawn or replaced by a new version. `kb_load` must
+      refuse a zero-chunk manifest before writing the DRAFT, with a test (later stage; not built
+      in stage 1a).
+    - **Later stage, not built:** the production start-up check extends to these tables: it also tests column-level privileges
       (`has_any_column_privilege` for INSERT, UPDATE, REFERENCES), and refuses an app role that can
       DELETE, TRUNCATE or alter triggers, owns a knowledge table or function (directly or by
       membership), or is a member of the loader role. Outside production these checks are skipped,
@@ -591,7 +625,11 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     string and a role-name setting validated like `postgres.py` does for the app role.
     - `db_init` creates the grants; the loader role itself is created by the bootstrap superuser
       (see "Required ADR 0024 amendment" below). **`db_init` FAILS, with a fixed message, if the
-      loader role does not exist; it never creates the role.** **`kb_load`'s privilege self-check
+      loader role does not exist; it never creates the role.** **Order (owner decision,
+      2026-10-22):** on a missing loader role the check runs **after** the migration, so the schema
+      stays migrated, `db_init` exits non-zero and the loader grants are not applied. **If
+      `DIVESAFE_LOADER_DB_ROLE` is unset, `db_init` skips the loader grants and the loader check**
+      (the production pin comes with the compose stage, ADR 0024 A1, A5). **`kb_load`'s privilege self-check
       is the app role's existing check plus further items, and does not claim to match it.** The
       existing app check (`services/postgres.py`, `_privilege_problems`) tests: ownership of
       tables, schema and database (directly or by membership), CREATE on `public` and on the
@@ -1168,11 +1206,15 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   it:** the second is refused (mutations: drop the global lock; run the check before taking the
   lock; each must fail). **`kb_load` against a raw writer that bypasses it** and takes per-document
   locks in the opposite order: `kb_load` ends within the lock timeout or the deadlock detector with
-  its fixed refusal and writes nothing; nothing hangs. The migration's checksum is pinned; `verify()` fails when a trigger
-  or its function is missing, disabled or not paired; `guarded()` refuses the forbidden words,
-  DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`. The
-  production start-up check refuses an app role that owns a knowledge table or function
-  (directly or by membership) and one that is a member of the loader role.
+  its fixed refusal and writes nothing; nothing hangs. The migration's checksum is pinned; `migrate()` fails when a named
+  knowledge trigger is missing or not `ENABLE ALWAYS`. **Condition 9 / a later stage, not built in
+  stage 1a:** `verify()` fails when a trigger or its function is missing, disabled or not paired.
+  `guarded()` refuses the forbidden words,
+  DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`.
+  **Later stage, not built:** the production start-up check refuses an app role that owns a
+  knowledge table or function (directly or by membership) and one that is a member of the loader
+  role, and checks knowledge-table column privileges. A zero-chunk manifest refused by `kb_load`
+  before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
   table, the schema or the database (directly or by membership); CREATEROLE; CREATEDB;
@@ -1277,6 +1319,20 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   after approval and review-by up to 12 months after the effective date, so a text can stay in use
   **up to 24 months after approval**. The owner accepted this maximum. Both 12-month limits are
   **owner policy limits**, not parsing limits; only the owner changes them. (Decisions 3, 7)
+- **`hash_checked` (2026-10-21, owner): YES.** Add `kb_status_events.hash_checked`, `NOT NULL`, no
+  default. Selection reads it only from the APPROVED event. DRAFT and WITHDRAWN rows carry the fixed
+  value `false` (DB CHECK `status = 'APPROVED' OR hash_checked = false`). In production an
+  unchecked approval makes the family return nothing and raises an evidence issue. An unchecked
+  APPROVED still counts as "approved at some point" for choosing the governing version and hiding
+  lower versions. It applies in every environment. The column records a client claim, not proof.
+  (Decisions 3, 10)
+- **Loader role missing (2026-10-22, owner):** the loader check runs **after** the migration; the
+  schema stays migrated, `db_init` exits non-zero with a fixed message and the loader grants are
+  not applied (decision 11). If `DIVESAFE_LOADER_DB_ROLE` is unset, `db_init` skips the loader
+  grants and the loader check; the production pin comes with the compose stage (ADR 0024 A1, A5).
+- **No approval of an empty version (2026-10-22, owner):** the database refuses an APPROVED event for
+  a version that has no chunks (`kb_status_events_insert`; fixed message; ordinary `P0001`).
+  (Decisions 7, 10)
 
 ### Still open
 
@@ -1289,8 +1345,6 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
 - **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
   lock, self-check after commit, exit-status precedence); it gates shipping.
-- **The owner's answer on the proposed `hash_checked` column** (decisions 3 and 10). It gates the
-  stage-1 migration, not only shipping; the column is not written until the owner answers.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 
@@ -1355,6 +1409,41 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **The manifest hash is a process control.** Production `kb_load` refuses a load without the
   approved hash and compares it; that the dive professional really approved it is not checkable
   (decisions 7, 11).
+- **The loader can take `LOCK TABLE`** on tables it can read (denial of service); not prevented.
+- **Default privileges for the owner role are not checked** by `db_init` or the loader check.
+- **The post-migration check looks at trigger names and `tgenabled` only** until `migrate()` and
+  `verify()` are extended (decision 10; condition 9). That extension is a **must-fix before migration
+  5 or the connector stage, whichever comes first**.
+- **`verify()` has no knowledge checks in stage 1a.** Only `migrate()` checks the nine trigger
+  names and `tgenabled` (a subset check). Trigger/function pairing, the production start-up
+  checks on knowledge objects and column privileges are condition 9 or a later stage.
+- **A zero-chunk approved version.** The database refuses to approve a version with no chunks, but
+  an owner or superuser write, or a restore, can still create an APPROVED version with zero
+  chunks. Later stage: the connector should raise an evidence issue for an approved governing
+  version with zero chunks.
+- **`guarded()` is a conservative word screen, not the control.** The control is review of every
+  migration plus the checksum pin. Shapes it is known not to catch (strict xfails in
+  `tests/safety/test_knowledge_guarded_rules.py`): `ALTER TABLE kb_*` with `SET SCHEMA`, `ADD COLUMN`,
+  `ADD CONSTRAINT`, `SET (...)` or `NO FORCE ROW LEVEL SECURITY`; `GRANT ALL ON ALL TABLES IN SCHEMA`;
+  `DROP SCHEMA public CASCADE`; a `;` inside a comment or string; an extra BEFORE trigger on a `kb_*`
+  table that fires after the guard (it could rewrite `chunk_text` or `hash_checked`); a `DO` block with
+  dynamic `EXECUTE` that replaces a guard function body; `ENABLE ROW LEVEL SECURITY` plus `CREATE POLICY`
+  on `kb_*`; `CREATE RULE ... DO INSTEAD` on `kb_*`; `CREATE TABLE ... INHERITS (kb_*)` (retrieval must
+  read `FROM ONLY`); `REASSIGN OWNED BY`; `ALTER TABLE public.kb_status_events SET UNLOGGED` (a
+  crash empties an unlogged table without firing the TRUNCATE guard, losing the status history);
+  `ALTER SCHEMA public OWNER TO` / `RENAME TO`; `CREATE EVENT TRIGGER`. Condition 9 closes the
+  structural ones by catalogue checks.
+- **Loader role attributes and memberships are checked by name only in stage 1a.** Superuser,
+  membership of the owner or app role, CREATEROLE, BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role
+  that holds TEMP are **not** checked by `kb_load` yet. `db_init` checks the TEMP path at install
+  time (TEMP read-back, member clause), but memberships can change after install, so `kb_load`'s
+  self-check MUST repeat it at load time, before the first production load (condition 10).
+- **The advisory-lock denial of service is not limited to the loader.** The app role can also call
+  `pg_advisory_lock(1220001, ...)` (the knowledge lock class) and stall loads; see the ADR 0024
+  runbook note.
+- **Test roles on the test server.** Integration tests create `divesafe_kb_app_test` and
+  `divesafe_kb_loader_test` on the test server. That server MUST stay bound to loopback and must never
+  be a shared or production server.
 - **TEMP revoked from PUBLIC** may affect other users of the database; at code time check that
   `src/` and the backup scripts create no temporary tables, and that `db_init` runs after every
   restore (decision 10; ADR 0024 amendment item 7).
@@ -1365,8 +1454,8 @@ The owner accepted this ADR after the seventh revision, on the reviewers' advice
 to be settled in the first code stage. Each needs a test with a failure condition and a mutation
 check, and the code stages still need both reviewers. Nothing here changes a decision above.
 
-First stage allowed now: schema and migration **except the migration, which waits for the
-owner's answer on `hash_checked`** (decision 10; the column cannot be added later), `db_init`
+First stage allowed now: schema and migration **including the `hash_checked` column** (the owner
+answered YES on 2026-10-21; decision 10), `db_init`
 grants, the loader role and a development-only `kb_load`. Changes under `docker/` and the compose files wait for the ADR 0024
 amendment (items 1-7 above); the knowledge connector, the prompt path, the record fields and the
 citation guard are later stages.
@@ -1409,8 +1498,20 @@ citation guard are later stages.
 8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
    the over-long line ~88.
 
+9. **Catalogue post-check (added 2026-10-22; MUST land before migration 5 or the connector stage,
+   whichever is first).** Extend the post-check in `migrate()` and `verify()` so that: the set of
+   non-internal triggers on the three `kb_*` tables equals the nine exactly, each paired with its
+   function in `public`; `md5(pg_get_functiondef(...))` of each guard function matches a pinned value;
+   there are no `pg_rewrite` rules on `kb_*`; `relrowsecurity` is false and there are no `pg_policy`
+   rows; there are no `pg_inherits` children; `relpersistence = 'p'` on the three tables; and the
+   table owners and the `public` schema owner are the expected owner role. Each check has a failure test and a mutation.
+   Until then the "pair with the function" wording of decision 10 is not built.
+10. **Loader attribute checks (added 2026-10-22; MUST land before the first production load).**
+    `kb_load`'s self-check tests superuser, membership of the owner or app role, CREATEROLE,
+    BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role holding TEMP, each with a failure test and a
+    mutation.
+
 Still open for the owner (gating shipping: the withdrawal log's location and the
-re-acknowledgement of decision 11; gating the stage-1 **migration**, not only shipping: the
-`hash_checked` answer): the licence and `display_permitted` evidence for each source,
+re-acknowledgement of decision 11; the `hash_checked` answer is no longer open): the licence and `display_permitted` evidence for each source,
 where the private approval record lives, and whether production should refuse to start when the
 knowledge connector is not configured once a corpus exists.

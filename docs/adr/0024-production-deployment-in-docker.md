@@ -492,8 +492,8 @@ revision, which the reviewers read, is the second, `72dad38`; they accepted it a
 design. This third revision folded in their minors, and both reviewers have since accepted it as a
 recorded design (no blockers). Changes: "already withdrawn" is decided by the trigger, not outside the lock, and
 the self-check runs after the commit, with an exit-status table (A3); the `hash_checked` column is
-specified, **proposed by `risk-reviewer`, owner not yet asked** (A3, A7; ADR 0022 decisions 3 and
-10); the "text psql sends" sentence is corrected, and the script's logging settings and psql flags
+specified, **proposed by `risk-reviewer`; the owner answered YES on 2026-10-21** (A3, A7; ADR 0022
+decisions 3 and 10); the "text psql sends" sentence is corrected, and the script's logging settings and psql flags
 are pinned (A1); timeouts for `kb_load` and `connect_timeout` (A3); `kb_withdraw`'s environment and
 the code rule for the subcommand (A3); the narrow settings model's secrets-directory rule (A3); the
 API refusal's `.env` gap (A4); a mandatory `.dockerignore` line (A3, A5); the stage-1 accident is
@@ -508,8 +508,8 @@ still counts as approved for choosing the governing version and for hiding lower
 family returns nothing and raises an evidence issue** (A3; ADR 0022 decision 3), which fixes a
 literal reading of "counts as NOT approved" that would let a lower version's text back in;
 `hash_checked` on other event statuses and in the fallback INSERT (A3); **the owner's answer on
-`hash_checked` gates the stage-1 migration** (A3, A6; **proposed by `risk-reviewer`, the owner has
-not been asked**); stage-1 recovery uses the old scripts and image (A6); "not found" and "missing
+`hash_checked` gated the stage-1 migration** (A3, A6; **proposed by `risk-reviewer`; the owner
+answered YES on 2026-10-21**); stage-1 recovery uses the old scripts and image (A6); "not found" and "missing
 from the archive" are one message, an exact SQLSTATE for "already withdrawn", "outcome unknown:
 re-run", the self-check's own `statement_timeout`, `recorded_at` printed before the self-check, and
 the next step after "already withdrawn" (A3); `connect_timeout` in the connection string (A1, A3);
@@ -789,9 +789,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     read the flag from an environment variable; each must fail. The case **"environment unset"**
     (the default is `development`) is its own test: without the flag the hash is still required.
     This still does not stop an operator who overrides the environment **and** passes the flag
-    (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; the owner has not been
-    asked):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
-    included in the loader's column-level INSERT grant (ADR 0022 decision 10). **In every
+    (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; owner decision, 2026-10-21:
+    YES):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
+    included in the loader's column-level INSERT grant (ADR 0022 decision 10). **The DB accepts an
+    APPROVED event with `hash_checked = false`** (the development flag leaves it `false`; `approve`
+    with a compared hash writes `true`); **selection, not the DB, handles it.** **In every
     environment** (not only production; a test runs with the environment unset),
     **an APPROVED event with `hash_checked = false` still counts as approved for choosing the
     governing version and for hiding lower versions, and the family returns NOTHING with an
@@ -800,10 +802,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     checked, in-force approved version (current status APPROVED, no WITHDRAWN event) clears it; withdrawing does not. The A7 report and the
     post-restore check list such versions. **It records a client claim, not proof**: a raw `psql`
     insert by the loader credential can claim `true`. **Other statuses:** selection reads the column
-    only from the APPROVED event; `load` writes the fixed value for DRAFT and `withdraw` for
-    WITHDRAWN (values fixed at code time and stated then; a CHECK or the trigger enforces them),
-    and **the owner `psql` fallback INSERT includes the column** (pinned in the runbook scan).
-    **The owner's answer gates the stage-1 migration** (A6). Tests and mutations: an unchecked
+    only from the APPROVED event; DRAFT and WITHDRAWN rows carry the fixed value `false`
+    (`load` and `withdraw` write it), enforced by a DB CHECK `status = 'APPROVED' OR hash_checked =
+    false`, and **the owner `psql` fallback INSERT includes the column** (pinned in the runbook
+    scan). **The owner answered YES (2026-10-21), so the stage-1 migration includes the column**
+    (A6). Tests and mutations: an unchecked
     approval is stored as `false`; the unchecked family returns nothing and raises the issue, never
     the lower version (mutation: treat it as not approved); an unchecked v2 that is withdrawn still
     hides v1 (mutation: read it as never approved); `withdraw` and the fallback INSERT succeed with
@@ -1072,7 +1075,7 @@ condition; the mutation check is to break the compose file once and watch it fai
 ### A6. Stage order
 
 - **May be built before this amendment is made** (and are, per ADR 0022 "Conditions of acceptance"),
-  **except the schema migration, which waits for the owner's answer on `hash_checked`** (A3): `db_init`
+  **including the schema migration with `hash_checked`** (the owner answered YES on 2026-10-21; A3): `db_init`
   grants and its loader-role check, the loader code, and a
   **development-only** `kb_load` against a developer database with a developer-created role.
 - **Wait for this amendment** (made, and reviewed by both reviewers): everything under `docker/`
@@ -1094,10 +1097,10 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
-- **The owner's answer on `hash_checked` gates the stage-1 MIGRATION, not only shipping.**
+- **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
-  column with no default cannot be added later. **The column is not written (the migration is not
-  made) until the owner answers** (proposed by `risk-reviewer`; the owner has not been asked).
+  column with no default could not be added later; it goes into the migration (proposed by
+  `risk-reviewer`).
 - **Order on the owner's host once this is built:** add the corpus line to `docker/production.env`;
   take a backup with the **old** scripts; pull; `make-secrets.sh`; `up -d --wait db`; the role
   script; **`up -d --build`** (without `--build` the old image runs the old `db_init`, the knowledge
@@ -1238,8 +1241,52 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **A load that holds a family's per-document lock can block a withdrawal of that family**, and so
   can the owner `INSERT` fallback; the runbook is stop the run container, terminate the backend,
   or stop the API (A3).
-- **The development flag's trace (`hash_checked`)** is a `risk-reviewer` proposal the owner has not
-  been asked about; it records a client claim, not proof (A3).
+- **The development flag's trace (`hash_checked`)** was a `risk-reviewer` proposal; the owner
+  decided YES on 2026-10-21. It records a client claim, not proof (A3). The DB accepts APPROVED
+  with `false`; selection handles it.
+- **Loader role handling in `db_init` (owner decision, 2026-10-22).** If `DIVESAFE_LOADER_DB_ROLE`
+  is unset, `db_init` skips the loader grants and the loader check (the production pin comes with
+  the compose stage, A5). On a missing loader role the check runs **after** the migration: the
+  schema stays migrated, `db_init` exits non-zero with a fixed message and the loader grants are
+  not applied.
+- **`REVIEWED_GUARD_MIGRATIONS` entry for migration 4** skips the whole forbidden-word scan for
+  that version; it is compensated by the checksum pin and the `migrate()` check that the nine named
+  knowledge triggers are present and `ENABLE ALWAYS` (a subset check; "exactly nine, no tenth" is
+  enforced for migration 4 by the SQL-text test only, and in the database by ADR 0022 condition 9;
+  ADR 0022 decision 10). Any lasting database that applied an earlier migration-4 text will refuse
+  with "migration 4 was changed after it was applied"; migration 4 has only ever been applied to
+  throwaway test databases.
+- **Not solved by the loader design:** `LOCK TABLE` denial of service by the loader; default
+  privileges for the owner role are not checked; the post-migration check looks at trigger names
+  and `tgenabled` only until `migrate()` and `verify()` are extended (must land before migration 5
+  or the connector stage, whichever is first; ADR 0022 condition 9).
+- **No approval of an empty version (owner decision, 2026-10-22).** The database refuses an APPROVED
+  event for a version with no chunks (`kb_status_events_insert`; fixed message; ordinary `P0001`).
+  The `approve` runbook should expect that refusal, not treat it as an outage (ADR 0022 decision 10).
+- **`guarded()` is a conservative word screen, not the control.** The control is review of every
+  migration plus the checksum pin. Known uncaught shapes (strict xfails in
+  `tests/safety/test_knowledge_guarded_rules.py`) are listed in ADR 0022 "Not solved": `ALTER TABLE
+  kb_*` (`SET SCHEMA`, `ADD COLUMN`, `ADD CONSTRAINT`, `SET (...)`, `NO FORCE ROW LEVEL SECURITY`),
+  `GRANT ALL ON ALL TABLES IN SCHEMA`, `DROP SCHEMA public CASCADE`, a `;` in a comment or string, an
+  extra BEFORE trigger on a `kb_*` table, `DO` blocks with dynamic `EXECUTE`, row-level security
+  with policies, `CREATE RULE ... DO INSTEAD`, `INHERITS (kb_*)`, `REASSIGN OWNED BY`,
+  `ALTER TABLE public.kb_status_events SET UNLOGGED` (a crash empties an unlogged table without
+  firing the TRUNCATE guard, losing status history), `ALTER SCHEMA public OWNER TO` / `RENAME TO`
+  and `CREATE EVENT TRIGGER`. ADR 0022 condition 9 adds `relpersistence = 'p'`, table owner and
+  schema owner checks.
+- **Loader role attributes and memberships are not all checked yet** (superuser, membership of the
+  owner or app role, CREATEROLE, BYPASSRLS, NOINHERIT/`SET ROLE` paths to a role holding TEMP).
+  `db_init` checks the TEMP path at install time (TEMP read-back, member clause); `kb_load`'s
+  self-check MUST repeat it at load time, because memberships can change after install, and carry
+  the other checks, before the first production load (ADR 0022 condition 10).
+- **Runbook note, advisory-lock denial of service:** it is not only the loader. The **app role** can
+  also call `pg_advisory_lock(1220001, ...)` and make `kb_load` fail on `lock_timeout`. A stuck or
+  hostile holder is cleared the same way (find the backend in `pg_locks`/`pg_stat_activity`, then
+  terminate it or stop the API); the cause may be the app role, not the loader.
+- **Test roles:** integration tests create `divesafe_kb_app_test` and `divesafe_kb_loader_test` on the
+  test server, which MUST stay bound to loopback and must not be a shared or production server.
+- **Chunks are inserted only before a version's first status event** (`kb_chunks_insert`); `kb_load`
+  writes document and chunks before the DRAFT event in one transaction (ADR 0022 decision 7).
 - **The existing role script does not set `log_statement = 'none'`**, so a server with
   `log_statement = ddl` would log `CREATE ROLE ... PASSWORD` from `10-create-app-role.sh`. The
   loader script sets it (A1); the existing one is not changed here.

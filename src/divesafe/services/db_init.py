@@ -11,14 +11,40 @@ role is too powerful.
 from __future__ import annotations
 
 from divesafe.config.settings import load_settings
-from divesafe.services.postgres import install_schema
+from divesafe.services.postgres import (
+    LOADER_ROLE_INVALID,
+    LoaderRoleError,
+    check_loader_role_name,
+    install_schema,
+)
+
+APP_ROLE_INVALID = "invalid application role name"
 
 
 def main() -> None:
     settings = load_settings()
     if settings.admin_database_url is None:
         raise SystemExit("DIVESAFE_ADMIN_DATABASE_URL is not set")
-    install_schema(settings.admin_database_url.get_secret_value(), settings.app_db_role)
+    dsn = settings.admin_database_url.get_secret_value()
+    if settings.loader_db_role is None:
+        try:
+            install_schema(dsn, settings.app_db_role)
+        except ValueError:
+            raise SystemExit(APP_ROLE_INVALID) from None
+        except LoaderRoleError as exc:
+            raise SystemExit(str(exc)) from None
+        print("schema is up to date")
+        return
+    try:
+        check_loader_role_name(settings.loader_db_role, settings.app_db_role)
+    except ValueError:
+        raise SystemExit(LOADER_ROLE_INVALID) from None
+    try:
+        install_schema(dsn, settings.app_db_role, loader_role=settings.loader_db_role)
+    except ValueError:
+        raise SystemExit(APP_ROLE_INVALID) from None
+    except LoaderRoleError as exc:
+        raise SystemExit(str(exc)) from None
     print("schema is up to date")
 
 

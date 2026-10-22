@@ -60,12 +60,57 @@ def test_the_replace_function_attack_is_refused() -> None:
 REVIEWED_THREE = "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b306297"
 
 
-def test_migration_three_is_pinned_and_is_the_only_reviewed_exception() -> None:
+REVIEWED_FOUR = "c95979fbf982c54ef0f05528d9549944d49a10c0210690854509c9042a36df8e"
+
+
+def test_migrations_three_and_four_are_pinned_and_are_the_only_reviewed_exceptions() -> None:
     from divesafe.services.migrations import REVIEWED_GUARD_MIGRATIONS
 
     assert MIGRATIONS[2].version == 3
     assert MIGRATIONS[2].checksum == REVIEWED_THREE
-    assert REVIEWED_GUARD_MIGRATIONS == {3: REVIEWED_THREE}
+    assert MIGRATIONS[3].version == 4
+    assert MIGRATIONS[3].checksum == REVIEWED_FOUR
+    assert dict(REVIEWED_GUARD_MIGRATIONS) == {3: REVIEWED_THREE, 4: REVIEWED_FOUR}
+    assert set(REVIEWED_GUARD_MIGRATIONS) == {3, 4}
+
+
+def test_the_reviewed_table_is_read_only_for_every_operation() -> None:
+    from divesafe.services.migrations import REVIEWED_GUARD_MIGRATIONS
+
+    with pytest.raises(TypeError):
+        REVIEWED_GUARD_MIGRATIONS[5] = "0" * 64  # type: ignore[index]
+    with pytest.raises(TypeError):
+        REVIEWED_GUARD_MIGRATIONS[4] = "0" * 64  # type: ignore[index]
+    with pytest.raises(TypeError):
+        del REVIEWED_GUARD_MIGRATIONS[3]  # type: ignore[attr-defined]
+    assert not hasattr(REVIEWED_GUARD_MIGRATIONS, "update")
+    assert not hasattr(REVIEWED_GUARD_MIGRATIONS, "pop")
+
+
+def test_an_edited_copy_of_migration_four_is_refused_by_the_word_scan() -> None:
+    edited = Migration(4, MIGRATIONS[3].name, MIGRATIONS[3].sql + "\n-- edited")
+    assert edited.checksum != REVIEWED_FOUR
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        guarded((*MIGRATIONS[:3], edited))
+
+
+def test_migration_four_sql_under_another_version_number_is_refused() -> None:
+    four = MIGRATIONS[3]
+    as_five = Migration(5, four.name, four.sql)
+    with pytest.raises(MigrationError):
+        guarded((*MIGRATIONS, as_five))
+    as_three = Migration(3, four.name, four.sql)
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        guarded((MIGRATIONS[0], MIGRATIONS[1], as_three))
+    as_two = Migration(2, four.name, four.sql)
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        guarded((MIGRATIONS[0], as_two))
+
+
+def test_migration_three_sql_at_version_five_is_refused() -> None:
+    three = MIGRATIONS[2]
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        guarded((*MIGRATIONS, Migration(5, three.name, three.sql)))
 
 
 def test_migration_three_only_sets_the_three_guard_triggers_to_enable_always() -> None:

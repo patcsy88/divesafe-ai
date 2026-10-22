@@ -1046,18 +1046,22 @@ def test_an_insert_that_breaks_the_insert_guard_is_refused_in_replica_mode() -> 
 
 def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> None:
     """A database at version 2 (triggers 'O') is brought to 'A' by db_init, and not before."""
+    from tests.unit.test_repository_contract import drop_knowledge_objects
+
     from divesafe.services.migrations import MIGRATIONS, migrate
 
     _postgres()
     try:
-        _sql("DELETE FROM schema_migrations WHERE version = 3")
+        # Back to version 2: migration 4 sits above 3, so it goes too, with its objects.
+        _sql("DELETE FROM schema_migrations WHERE version >= 3")
+        drop_knowledge_objects()
         for trigger in GUARD_TRIGGERS:
             _sql(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
         repo = PostgresAssessmentRepository(DSN)  # type: ignore[arg-type]
         problems = repo.verify(least_privilege=False)
         assert any("schema version 2" in p for p in problems)
         assert all(any(t in p for p in problems) for t in GUARD_TRIGGERS)
-        assert migrate(DSN) == [3]  # type: ignore[arg-type]
+        assert migrate(DSN) == [3, 4]  # type: ignore[arg-type]
         assert repo.verify(least_privilege=False) == []
     finally:
         _postgres()
