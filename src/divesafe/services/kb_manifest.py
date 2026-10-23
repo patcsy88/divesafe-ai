@@ -167,7 +167,9 @@ class DocumentEntry(_Strict):
             raise ValueError("bad id")
         return v
 
-    @field_validator("title", "licence", "licence_reference", "attribution")
+    @field_validator(
+        "title", "licence", "licence_reference", "attribution", "display_permission_reference"
+    )
     @classmethod
     def _texts(cls, v: str | None) -> str | None:
         return None if v is None else _field_text(v)

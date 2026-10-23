@@ -1357,15 +1357,32 @@ condition; the mutation check is to break the compose file once and watch it fai
   each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
   tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
   `unicodedata`-based approximation, which is for development only. **Added by the slice 2
-  review (2026-10-23; none of (7) to (9) is owner-approved as a design yet):** (7) **the decision 9
-  id screen is bypassable by lookalike characters. OWNER DECISION OPEN.** Colons written as
+  review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
+  id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
-  capitals such as U+1D0B and U+0299 (for `k` and `b`) pass, because the allow-list accepts every
-  `P*`, `Sm` and `Sk` character and every `LATIN ...` letter. Fix options: a **fixed allow-list of
-  punctuation**, or a **UTS #39 confusable-skeleton step**. **Unchecked:** whether downstream
-  citation validation rejects a spoofed id. (8) **A newline inside `kb:`** was a gap; it is **closed
-  in code in this pass** (not yet re-reviewed). (9) **Punctuation separators** (`k.b:`) and the
-  **"and similar" tail of the word list** remain open.
+  capitals such as U+1D0B and U+0299 (for `k` and `b`) passed, because the allow-list accepted every
+  `P*`, `Sm` and `Sk` character and every `LATIN ...` letter. **Owner decision 2026-10-23: the
+  ADR 0022 decision 13 allow-list is narrowed to a fixed set** (ASCII letters and digits, space,
+  newline where allowed, `LATIN SMALL/CAPITAL LETTER` accented letters, and only
+  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`; the name-based rule also refuses `SMALL CAPITAL`,
+  `LIGATURE` and `MODIFIER` names). **Re-reviewed 2026-10-23: closed for the reported vectors**
+  (colon, hyphen and minus lookalikes, LATIN LETTER small capitals, modifier letters, ligatures,
+  fullwidth and mathematical forms, combining marks, other scripts). **RESIDUAL, OWNER-ACCEPTED
+  2026-10-23 as a recorded gap:** Latin-named letters that look like ASCII id letters and that
+  NFKC does not fold (for example U+0138, U+0185, U+0131, U+0269, U+0251, U+0261, accented k and
+  b forms, U+A78B and U+A78C saltillo) pass both screens; UTS #39 and wildcard matching were not
+  adopted. Mitigations that exist: the prompt layer escapes non-ASCII as `\uXXXX`; `runner.py`
+  rejects top-level `evidence_ids` not in `allowed_ids` by exact match (nested `evidence_ids` and
+  a spoof of a REAL id in the same run are unchecked, and the knowledge connector and prompt path
+  are not built). Impact limit: `reconcile` only tightens and rules never read LLM values. **Must
+  be revisited when the knowledge connector and citation guard are built.** Consequence:
+  typographic quotes and dashes in corpus text are refused and must be ASCII; no data exists yet.
+  (8) **A newline inside `kb:`** was a gap; it is **closed in code** (not yet re-reviewed).
+  (9) **Stays OPEN:** the **"and similar" tail of the word list** and separators: hyphens dropped
+  or replaced in connector prefixes (`openmeteomarine:x`), percent-encoding (`kb%3Aabc`, since
+  `%` is allowed) and allowed ASCII punctuation separators (`k.b:`, `k-b:`, `k/b:`, `k'b:`,
+  `k(b:`, `k=b:`). Instruction wording is screened only in `document_id`, and fields joined at
+  display could form an id (to check when the prompt path is built).
 - **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
   column with no default could not be added later; it goes into the migration (proposed by
@@ -1487,6 +1504,21 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 
 ### A8. Documented gaps recorded by this amendment
 
+- **Narrowed character allow-list (owner decision, 2026-10-23; ADR 0022 decision 13).** Corpus
+  text with typographic quotes or dashes (and any other non-ASCII punctuation or symbol) is
+  refused and must use the ASCII forms; no data exists yet, so no known break. Consequences of
+  the name-based rule: ß æ ø ð þ ı are accepted, `œ` ligatures are refused, and the DŽ, LJ, NJ
+  and DZ digraphs are accepted (harmless for id matching). The accepted set follows the Python
+  `unicodedata` version; a safety test pins `unidata_version` and the count and hash of accepted
+  non-ASCII code points, and any change needs an ADR review. A6 gate (7) was re-reviewed
+  2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
+  look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261, U+A78B;
+  see A6). UTS #39 is not adopted. Gate (9) stays open: connector prefixes with hyphens dropped
+  or replaced, percent-encoding (`kb%3Aabc`) and ASCII punctuation separators (`k.b:` and kin),
+  plus the "and similar" word-list tail.
+- **`_fold` false positives (known usability gap).** Prose such as "Dock B:" folds to `kb:` and is
+  refused, and the refusal message gives no position, so the author must hunt for the cause.
+  Not fixed; recorded here.
 - **The loader credential can stall advisory locks.** Any loader connection can take the existing
   `_RUNS_LOCK_KEY` and `_LOCK_KEY` advisory locks and stall runs or migrations; stored per-role
   settings cannot cap it, because `hardening` requires none (ADR 0022 "Not solved"). The global

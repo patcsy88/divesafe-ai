@@ -1017,3 +1017,118 @@ def test_mutation_without_the_nfc_path_check_is_caught(tmp_path: Path) -> None:
     mutated = refused(root, mutant)
     assert real == "ManifestInvalid"
     assert mutated is None
+
+
+# --- every screened field (round 10): allow-list, id screen, accepted case, validator removal -----
+
+DOCUMENT_FIELDS = (
+    "title",
+    "licence",
+    "licence_reference",
+    "attribution",
+    "display_permission_reference",
+)
+SCREENED_FIELDS = (*DOCUMENT_FIELDS, "section", "chunk text")
+TEXTS_LINE = (
+    '        "title", "licence", "licence_reference", "attribution", '
+    '"display_permission_reference"\n'
+)
+SECTION_VALIDATOR = '    _section = field_validator("section")(_field_text)\n'
+
+
+def _set_field(root: Path, field: str, value: str) -> None:
+    def change(d: dict[str, Any]) -> None:
+        if field == "section":
+            d["documents"][0]["file"]["chunks"][0]["section"] = value
+        else:
+            d["documents"][0][field] = value
+
+    edit_manifest(root, change)
+
+
+def _field_corpus(tmp_path: Path, field: str, value: str) -> Path:
+    if field == "chunk text":
+        return build(tmp_path, [doc_spec("risky-guide", chunks=(f"{value}\n",))])
+    root = build(tmp_path)
+    _set_field(root, field, value)
+    return root
+
+
+@pytest.mark.parametrize("field", SCREENED_FIELDS)
+def test_every_screened_field_refuses_a_character_off_the_allow_list(
+    tmp_path: Path, field: str
+) -> None:
+    outcome = refused(_field_corpus(tmp_path, field, "it\u2019s"))
+    assert outcome == "ManifestInvalid"
+
+
+@pytest.mark.parametrize("field", SCREENED_FIELDS)
+def test_every_screened_field_refuses_an_evidence_id(tmp_path: Path, field: str) -> None:
+    outcome = refused(_field_corpus(tmp_path, field, "kb:other-guide"))
+    assert outcome == "ManifestInvalid"
+
+
+@pytest.mark.parametrize("field", SCREENED_FIELDS)
+def test_every_screened_field_accepts_ordinary_text(tmp_path: Path, field: str) -> None:
+    outcome = refused(_field_corpus(tmp_path, field, "Caf\u00e9 (v2): 100% ok"))
+    assert outcome is None
+
+
+def test_a_lookalike_colon_in_a_chunk_is_refused_at_manifest_level(tmp_path: Path) -> None:
+    root = build(tmp_path, [doc_spec("risky-guide", chunks=("kb\u2236abc\n",))])
+    outcome = refused(root)
+    assert outcome == "ManifestInvalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "old"),
+    [
+        (
+            "attribution",
+            TEXTS_LINE.replace('"attribution", ', ""),
+        ),
+        ("licence_reference", TEXTS_LINE.replace('"licence_reference", ', "")),
+        (
+            "display_permission_reference",
+            TEXTS_LINE.replace(', "display_permission_reference"', ""),
+        ),
+        ("title", TEXTS_LINE.replace('"title", ', "")),
+        ("licence", TEXTS_LINE.replace('"licence", ', "", 1)),
+        ("section", None),
+    ],
+)
+@pytest.mark.parametrize("bad", ["it\u2019s", "kb:other-guide"])
+def test_mutation_removing_a_field_validator_is_caught(
+    tmp_path: Path, field: str, old: str | None, bad: str
+) -> None:
+    edit = (SECTION_VALIDATOR, "") if old is None else (TEXTS_LINE, old)
+    mutant = mutated_module(kb_manifest, edit)
+    real_root = _field_corpus(tmp_path / "real", field, bad)
+    mutant_root = _field_corpus(tmp_path / "mut", field, bad)
+    real = refused(real_root)
+    mutated = refused(mutant_root, mutant)
+    assert real == "ManifestInvalid"
+    assert mutated is None  # the unvalidated field gets through: the test above would fail
+
+
+def test_the_path_is_not_screened_by_the_allow_list_only_by_nfc_and_shape(
+    tmp_path: Path,
+) -> None:
+    """PINNED CURRENT BEHAVIOUR: a path may hold ASCII punctuation outside the allow-list (`_`,
+    `@`); `FileEntry._path` checks NFC and shape only. A non-NFC path is still refused. If the
+    path is ever screened by the allow-list, revisit the first half of this test."""
+    root = build(tmp_path / "a")
+    _rename_document(root, "a_b@c.txt")
+    allowed_by_path_rules = refused(root)
+    assert allowed_by_path_rules is None
+    assert not kb_screen_allowed("a_b@c.txt")
+    other = build(tmp_path / "b")
+    _rename_document(other, "e\u0301.txt")
+    non_nfc = refused(other)
+    assert non_nfc == "ManifestInvalid"
+
+
+def kb_screen_allowed(value: str) -> bool:
+    from divesafe.services import kb_screen
+
+    return kb_screen.allowed_text(value, newlines=False)

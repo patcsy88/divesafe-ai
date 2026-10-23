@@ -8,6 +8,7 @@ gaps are listed in the loader report.
 
 from __future__ import annotations
 
+import string
 import unicodedata
 
 from divesafe.data import (
@@ -36,28 +37,34 @@ ID_WORD_LIST = frozenset(
     {"ignore", "system", "assistant", "instruction", "recommend", "go", "approve"}
 )
 
-# Decision 13: refused categories. Cc control, Cf format (bidi, zero-width, tag, soft hyphen),
-# Co private use, Cn unassigned and noncharacters, Cs surrogates, Mn/Mc/Me combining marks (which
-# include the variation selectors and the combining grapheme joiner).
-_REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Mn", "Mc", "Me"})
+# Decision 13 (owner decision 2026-10-23): a FIXED allow-list. Letters and digits are ASCII, plus
+# accented Latin letters by Unicode name; the only punctuation and symbols are these ASCII
+# characters. Every other character is refused, including all non-ASCII P* and S* characters
+# (curly quotes, dashes, U+2212 and the like), "LATIN LETTER ..." names (small capitals) and
+# modifier letters. Pin this constant in tests.
+ALLOWED_PUNCTUATION = frozenset(".,;:!?'\"()[]-/%+=<>")
+
+_ASCII_LETTERS_AND_DIGITS = frozenset(string.ascii_letters + string.digits)
+_LATIN_NAME_PREFIXES = ("LATIN SMALL LETTER ", "LATIN CAPITAL LETTER ")
+# A Latin-named letter whose name holds one of these is a lookalike form, not an accented letter
+# (e.g. U+A7AE "LATIN CAPITAL LETTER SMALL CAPITAL I"). Other Latin-named lookalikes are a
+# recorded gap (owner decision): no wildcard matching and no confusables map.
+REFUSED_NAME_FRAGMENTS: tuple[str, ...] = ("SMALL CAPITAL", "LIGATURE", "MODIFIER")
 
 
 def _char_allowed(ch: str, newlines: bool) -> bool:
     if ch == "\n":
         return newlines
-    if ch == " ":
+    if ch == " " or ch in _ASCII_LETTERS_AND_DIGITS or ch in ALLOWED_PUNCTUATION:
         return True
-    category = unicodedata.category(ch)
-    if category in _REFUSED_CATEGORIES:
+    if ord(ch) < 128:  # any other ASCII character, controls included
         return False
-    if category.startswith("L"):
-        # Latin-script letters only (decision 13). Hangul fillers (default-ignorable, category Lo)
-        # and every other non-Latin letter fail here.
-        return unicodedata.name(ch, "").startswith("LATIN ")
-    if category == "Nd":
-        return "0" <= ch <= "9"
-    # Common punctuation and symbols: all P* and the Sm, Sc, Sk symbols. So (emoji, (c)) is refused.
-    return category.startswith("P") or category in {"Sm", "Sc", "Sk"}
+    if not unicodedata.category(ch).startswith("L"):
+        return False  # marks, format, private use, unassigned, digits, P*, S*, Z* and the rest
+    name = unicodedata.name(ch, "")
+    return name.startswith(_LATIN_NAME_PREFIXES) and not any(
+        fragment in name for fragment in REFUSED_NAME_FRAGMENTS
+    )
 
 
 def allowed_text(value: str, *, newlines: bool) -> bool:

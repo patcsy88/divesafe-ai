@@ -784,15 +784,34 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       bytes, the stored text and `content_sha256` therefore describe the same text. The same NFC
       check applies to every manifest string field (decision 7). Newlines are `\n` only; a `\r` is
       refused.
-    - Characters are checked against an **allow-list**: Latin-script letters, digits, common
-      punctuation and symbols, space and newline. English and Bahasa Melayu are both Latin, and
-      this also stops other scripts posing as Latin letters. Combining marks are refused (the text
-      is precomposed NFC). A second check refuses every default-ignorable code point from the
+    - Characters are checked against a **fixed allow-list** (owner decision, 2026-10-23, narrowing
+      the earlier "common punctuation and symbols" wording). Allowed: ASCII letters; ASCII digits;
+      space; newline only where newlines are allowed; accented Latin letters whose Unicode name
+      starts with `LATIN SMALL LETTER` or `LATIN CAPITAL LETTER`; and exactly these ASCII
+      punctuation and symbol characters: `. , ; : ! ? ' " ( ) [ ] - / % + = < >`. Everything else
+      is refused: all non-ASCII punctuation and symbols (curly quotes, en and em dashes, U+2010,
+      U+2212, U+2236, U+A789, U+0589), `LATIN LETTER ...` letters (small capitals such as U+1D0B
+      and U+0299) and Latin modifier letters. The name-based rule also refuses any name
+      containing `SMALL CAPITAL`, `LIGATURE` or `MODIFIER` (this catches U+A7AE, whose name
+      starts with `LATIN CAPITAL LETTER`). **Consequence:** corpus text with typographic quotes
+      or dashes is refused and must be written with the ASCII forms. No corpus exists yet, so no
+      known break. English and Bahasa Melayu are both Latin, and this also stops other scripts
+      posing as Latin letters. Accepted letters include the ones NFKC does not decompose (ß æ ø
+      ð þ ı); the `œ` ligatures are refused (a name containing `LIGATURE`); the digraphs
+      DŽ, LJ, NJ and DZ (and their case forms) are accepted, which is harmless for id matching.
+      **The accepted set follows the Python `unicodedata` version.** A safety test pins
+      `unidata_version` and the count and hash of the accepted non-ASCII code points, so a Python
+      upgrade that changes the set fails the test and needs an ADR review. Combining marks are
+      refused (the text is precomposed NFC). A second
+      check refuses every default-ignorable code point from the
       code's own table (Python's `unicodedata` lacks the property), which covers variation
       selectors, the combining grapheme joiner and Hangul fillers. Control, bidi, zero-width,
       private-use, tag, other format characters, unassigned code points and noncharacters are
       refused too. Widening the set needs an ADR. The allow-list and the second check apply to
-      the manifest string fields as well.
+      the manifest string fields as well, **including `display_permission_reference`, which gets
+      the same NFC, allow-list and id screen as `licence_reference`**. The one exception is
+      `file.path`, which gets the NFC check only (not the allow-list), because it names a file
+      on disk and is never shown or used as an id.
     - Every path is resolved and must lie inside the manifest root. Each path component is
       opened from a directory handle without following links, so a directory swapped after the
       check is not followed. The open handle must be a regular file with a single hard link, and
@@ -1354,13 +1373,27 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **The decision 13 default-ignorable code point table** (owner decision, 2026-10-23): a gate for
   the first production load. Slice 2 uses a `unicodedata`-based approximation until it is built.
 - **Gates for the first production load from the slice 2 review (2026-10-23; ADR 0024 A6 (7) to
-  (9))**: (a) the decision 9 id screen is bypassable by lookalike characters (U+2236, U+A789,
+  (9))**: (a) the decision 9 id screen was bypassable by lookalike characters (U+2236, U+A789,
   U+0589 as colons; U+2010, U+2212; Latin small capitals such as U+1D0B, U+0299), because the
-  allow-list accepts every `P*`/`Sm`/`Sk` character and every `LATIN ...` letter; fix is a fixed
-  punctuation allow-list or a UTS #39 confusable-skeleton step; **OWNER DECISION OPEN**; whether
-  downstream citation validation rejects spoofed ids is unchecked; (b) the newline-inside-`kb:` gap
-  is closed in code in this pass; (c) punctuation separators (`k.b:`) and the "and similar"
-  word-list tail remain open.
+  allow-list accepted every `P*`/`Sm`/`Sk` character and every `LATIN ...` letter. **Owner decision
+  2026-10-23: the decision 13 allow-list is narrowed to a fixed set.** Re-reviewed 2026-10-23:
+  closed for the reported vectors (colon, hyphen and minus lookalikes, LATIN LETTER small
+  capitals, modifier letters, ligatures, fullwidth and mathematical forms, combining marks, other
+  scripts). **RESIDUAL, OWNER-ACCEPTED 2026-10-23 as a recorded gap:** Latin-named letters that
+  look like ASCII id letters and that NFKC does not fold (for example U+0138, U+0185, U+0131,
+  U+0269, U+0251, U+0261, accented k and b forms, U+A78B and U+A78C saltillo) pass both screens.
+  UTS #39 and wildcard matching were not adopted. Mitigations that exist: the prompt layer
+  escapes non-ASCII as `\uXXXX`; `runner.py` rejects top-level `evidence_ids` not in
+  `allowed_ids` by exact match (nested `evidence_ids` and a spoof of a REAL id in the same run
+  are unchecked, and the knowledge connector and prompt path are not built). Impact limit:
+  `reconcile` only tightens and rules never read LLM values. **Must be revisited when the
+  knowledge connector and citation guard are built.** (b) the newline-inside-`kb:` gap is closed
+  in code (not yet re-reviewed); (c) **stays OPEN**: the "and similar" word-list tail and
+  separators, namely hyphens dropped or replaced in connector prefixes (`openmeteomarine:x`),
+  percent-encoding (`kb%3Aabc`, since `%` is allowed), and allowed ASCII punctuation separators
+  (`k.b:`, `k-b:`, `k/b:`, `k'b:`, `k(b:`, `k=b:`). Instruction wording is screened only in
+  `document_id`, and fields joined at display could form an id (to check when the prompt path is
+  built).
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 
