@@ -286,6 +286,7 @@ def test_a_status_event_insert_under_a_stricter_isolation_level_is_refused(
 #    name, which would collide with a real deployment's roles; covered offline only.
 #  1-3 (owns a knowledge table / table missing), 4-5 (owns the schema / database), 24 (owns a
 #    function): would need an ownership transfer of objects the migration owns; covered offline.
+#  16 is covered by test_temporary_reached_only_through_a_noinherit_role_is_reported below.
 #  17 (session_replication_role other than origin NOW): the loader's own session starts at its
 #    default; only the stored setting (18) can be provoked from outside.
 # The SQL of those checks is therefore not proven against a server by this file.
@@ -483,3 +484,31 @@ def test_a_loader_in_a_custom_named_app_role_is_refused_before_a_write(loader_ds
     finally:
         _admin(f"REVOKE {APP} FROM {LOADER}")
     assert privileged is True
+
+
+_T_ROLE = "divesafe_kb_wdtemp_test"
+
+
+def test_temporary_reached_only_through_a_noinherit_role_is_reported_as_check_16(
+    loader_dsn: str,
+) -> None:
+    """The loader holds no TEMPORARY itself and does not inherit it (NOINHERIT), but it can SET
+    ROLE to a member role that has it: check 16, not check 15."""
+    assert DSN is not None
+    with psycopg.connect(DSN, autocommit=True) as admin:
+        _drop_role(admin, _T_ROLE)
+    try:
+        _admin(
+            f"CREATE ROLE {_T_ROLE}",
+            "GRANT TEMPORARY ON DATABASE {db} TO " + _T_ROLE,
+            f"ALTER ROLE {LOADER} NOINHERIT",
+            f"GRANT {_T_ROLE} TO {LOADER}",
+        )
+        problems = _problems(loader_dsn)
+    finally:
+        _admin(f"ALTER ROLE {LOADER} INHERIT")
+        with psycopg.connect(DSN, autocommit=True) as admin:
+            _drop_role(admin, _T_ROLE)  # DROP OWNED revokes its grants, then the role goes
+    assert _label(16) in problems
+    assert _label(15) not in problems  # the loader itself has no TEMPORARY
+    assert _label(9) in problems  # and it is, of course, a member of another role

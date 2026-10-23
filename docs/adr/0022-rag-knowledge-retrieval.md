@@ -984,6 +984,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `.gitignore` entry and the `.dockerignore` line exist;
   the loader setting is in `SECRET_FILES`. (The loader's own refusals are listed under "Loader
   role" below.)
+- **Slice 2 risk-review test obligations (2026-10-23). Required before slice 2 is committed**
+  (the test-engineer marks each done here when it lands, with its mutation check): (1) a live test
+  of the idle-timeout stall (P2); (2) a live test of a black-holed `connect_timeout`; (3) a live
+  test of two concurrent loads and the per-site bound; (4) a live test of an opposite-order raw
+  writer; (5) an offline mutation check for the idle setting and for `withdraw`'s idle position.
+  Status: none done.
 - Status-event tests: a loader-supplied ordering key is refused or overwritten, including with
   `OVERRIDING SYSTEM VALUE`; a loader-supplied recorded-at is refused or overwritten; the loader
   has no INSERT privilege on the ordering column and none on the recorded-at column; a refused
@@ -1345,6 +1351,16 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
 - **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
   lock, self-check after commit, exit-status precedence); it gates shipping.
+- **The decision 13 default-ignorable code point table** (owner decision, 2026-10-23): a gate for
+  the first production load. Slice 2 uses a `unicodedata`-based approximation until it is built.
+- **Gates for the first production load from the slice 2 review (2026-10-23; ADR 0024 A6 (7) to
+  (9))**: (a) the decision 9 id screen is bypassable by lookalike characters (U+2236, U+A789,
+  U+0589 as colons; U+2010, U+2212; Latin small capitals such as U+1D0B, U+0299), because the
+  allow-list accepts every `P*`/`Sm`/`Sk` character and every `LATIN ...` letter; fix is a fixed
+  punctuation allow-list or a UTS #39 confusable-skeleton step; **OWNER DECISION OPEN**; whether
+  downstream citation validation rejects spoofed ids is unchecked; (b) the newline-inside-`kb:` gap
+  is closed in code in this pass; (c) punctuation separators (`k.b:`) and the "and similar"
+  word-list tail remain open.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 

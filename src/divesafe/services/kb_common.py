@@ -7,7 +7,8 @@ fail closed: the command refuses to run until a reviewer sets them (see `require
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import psycopg
@@ -27,6 +28,26 @@ WITHDRAW_LOCK_TIMEOUT_MS: int | None = 10_000
 WITHDRAW_STATEMENT_TIMEOUT_MS: int | None = 30_000
 RECORDED_AT_READ_STATEMENT_TIMEOUT_MS: int | None = 10_000
 SELF_CHECK_STATEMENT_TIMEOUT_MS: int | None = 15_000
+
+# Owner-approved 2026-10-23 (ADR 0024 A3, P1 to P6). Constants in code: no environment key.
+WITHDRAW_IDLE_IN_TRANSACTION_TIMEOUT_MS = 10_000  # P1
+LOAD_IDLE_IN_TRANSACTION_TIMEOUT_MS = 30_000  # P2 (load and approve)
+LOAD_LOCK_TIMEOUT_MS = 10_000  # P3 and P5
+LOAD_STATEMENT_TIMEOUT_MS = 30_000  # P4 and P5
+LOAD_DEADLINE_SECONDS = 120.0  # P6 load
+APPROVE_DEADLINE_SECONDS = 60.0  # P6 approve
+
+# ADR 0022 decision 12 parsing limits (Q7: they stand for slice 2).
+MAX_MANIFEST_TOTAL_BYTES = 1_048_576
+MAX_DOCUMENTS_PER_LOAD = 50
+MAX_CHUNKS_PER_LOAD = 200
+MAX_CHUNK_CHARACTERS = 1500
+MAX_CHUNKS_PER_RUN = 20
+
+# Q8 APPROVED (owner, 2026-10-23): load-time self-check and privilege check 15 s; load's own reads
+# (the per-site chunk check) 10 s.
+LOAD_SELF_CHECK_STATEMENT_TIMEOUT_MS: int | None = 15_000
+LOAD_READ_STATEMENT_TIMEOUT_MS: int | None = 10_000
 
 _DOCUMENT_ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+){0,2}")
 _DOCUMENT_ID_MAX = 40
@@ -50,6 +71,27 @@ def require_limit(value: int | None) -> int:
     if value is None or value <= 0:
         raise LimitNotSet("a loader timeout is not set")
     return value
+
+
+class LimitExceeded(LoaderRefusal):
+    pass
+
+
+class DeadlineExceeded(LoaderRefusal):
+    pass
+
+
+class Deadline:
+    """Client-side monotonic deadline (P6), started before the connection and checked between
+    statements. It cannot interrupt a statement already running."""
+
+    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._end = clock() + seconds
+
+    def check(self) -> None:
+        if self._clock() > self._end:
+            raise DeadlineExceeded("the overall deadline was exceeded")
 
 
 def valid_document_id(value: str) -> bool:

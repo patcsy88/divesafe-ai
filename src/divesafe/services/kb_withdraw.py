@@ -105,7 +105,9 @@ def _emit(stream: Any, text: str) -> None:
     stream.flush()
 
 
-_TIMEOUT_NAMES = frozenset({"lock_timeout", "statement_timeout"})
+_TIMEOUT_NAMES = frozenset(
+    {"lock_timeout", "statement_timeout", "idle_in_transaction_session_timeout"}
+)
 
 
 def _timeout(conn: psycopg.Connection[Any], name: str, milliseconds: int) -> None:
@@ -197,6 +199,11 @@ def _prepare(conn: psycopg.Connection[Any], document_id: str, version: int) -> N
     )
     _timeout(conn, "lock_timeout", require_limit(kb_common.WITHDRAW_LOCK_TIMEOUT_MS))
     _timeout(conn, "statement_timeout", require_limit(kb_common.WITHDRAW_STATEMENT_TIMEOUT_MS))
+    _timeout(
+        conn,
+        "idle_in_transaction_session_timeout",
+        require_limit(kb_common.WITHDRAW_IDLE_IN_TRANSACTION_TIMEOUT_MS),
+    )
     # Assumes kb_documents is append-only (triggers refuse UPDATE/DELETE), so a row seen here
     # cannot vanish before the INSERT; the foreign key still decides if that assumption breaks.
     exists = conn.execute(

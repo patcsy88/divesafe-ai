@@ -180,6 +180,13 @@ BAD_SHAPES = [
     f"postgresql://loader:Zq9-never-echoed@/divesafe?host=/tmp,db.example&{SSL}",
     "postgresql://loader:Zq9-never-echoed@db.example/divesafe",  # sslmode defaults to prefer
     "postgresql://loader:Zq9-never-echoed@db.example/divesafe?sslmode=disable",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?{SSL}",  # no host at all
+    f"postgresql://u:p@/db?{SSL}",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=db.example,&{SSL}",  # empty last entry
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=,db.example&{SSL}",  # empty first entry
+    f"{BASE}?{SSL}&service=other",
+    f"{BASE}?{SSL}&hostaddr=192.0.2.1",
+    f"{BASE}?{SSL}&passfile=/tmp/pgpass",
 ]
 
 
@@ -228,6 +235,17 @@ def every_bad_shape_refused(check: Callable[[str], Any]) -> None:
             'if hosts[0].startswith("/"):',
         ),
         ("tls not required", "if mode not in _TLS_MODES:", "if False:"),
+        ("empty host allowed", "if any(not h for h in hosts):", "if False:"),
+        (
+            "only the first host checked for empty",
+            "if any(not h for h in hosts):",
+            "if not hosts[0]:",
+        ),
+        (
+            "service, hostaddr and passfile allowed",
+            "if _query_keys(dsn) & _PRODUCTION_REFUSED_KEYS:",
+            "if False:",
+        ),
     ],
 )
 def test_mutation_a_weaker_production_shape_is_caught(label: str, old: str, new: str) -> None:
@@ -251,3 +269,76 @@ def test_production_refuses_through_the_secrets_directory_without_an_echo(
     with pytest.raises(LoaderConfigError) as caught:
         load_loader_settings(env)
     assert "Zq9" not in str(caught.value) and "db.example" not in str(caught.value)
+
+
+# --- round 8: over-long timeout digits, empty hosts, keys that read parameters from elsewhere ---
+
+
+@pytest.mark.parametrize("digits", [400, 5000])
+def test_an_over_long_connect_timeout_is_a_config_error_not_a_value_error(digits: int) -> None:
+    url = f"{BASE}?connect_timeout={'1' * digits}"
+    with pytest.raises(LoaderConfigError) as caught:
+        loader_settings._check_uri_and_timeout(url)
+    assert "111" not in str(caught.value) and "Zq9" not in str(caught.value)
+    with pytest.raises(LoaderConfigError):
+        load_loader_settings(dev(url))
+
+
+def test_mutation_int_before_the_shape_check_is_caught_by_a_huge_digit_string() -> None:
+    mutated = _checker(
+        "_TIMEOUT_VALUE.fullmatch(value) is None or int(value) > _CONNECT_TIMEOUT_CEILING",
+        "not value.isdigit() or int(value) > _CONNECT_TIMEOUT_CEILING",
+    )
+    url = f"{BASE}?connect_timeout={'1' * 5000}"
+    assert refuses(loader_settings._check_uri_and_timeout, url)
+    with pytest.raises(ValueError) as caught:  # the mutant leaks int()'s own error
+        mutated(url)
+    assert not isinstance(caught.value, LoaderConfigError)
+
+
+def test_mutation_no_shape_check_lets_a_signed_or_padded_digit_string_through() -> None:
+    mutated = _checker(
+        "_TIMEOUT_VALUE.fullmatch(value) is None or int(value) > _CONNECT_TIMEOUT_CEILING",
+        "int(value) > _CONNECT_TIMEOUT_CEILING",
+    )
+    assert refuses(loader_settings._check_uri_and_timeout, f"{BASE}?connect_timeout=05")
+    assert not refuses(mutated, f"{BASE}?connect_timeout=05")
+
+
+@pytest.mark.parametrize("key", ["service", "hostaddr", "passfile"])
+def test_production_refuses_each_parameter_source_key_and_names_none_of_the_value(
+    key: str,
+) -> None:
+    url = f"{BASE}?{SSL}&{key}=Zq9-secret-value"
+    with pytest.raises(LoaderConfigError) as caught:
+        prod_check(url)
+    text = str(caught.value)
+    assert "Zq9" not in text and "db.example" not in text
+    assert prod_check_ok(f"{BASE}?{SSL}")
+
+
+def prod_check_ok(url: str) -> bool:
+    prod_check(url)
+    return True
+
+
+@pytest.mark.parametrize("key", ["service", "hostaddr", "passfile"])
+def test_mutation_dropping_one_refused_key_is_caught(key: str) -> None:
+    source = inspect.getsource(loader_settings._require_production_shape)
+    kept = loader_settings._PRODUCTION_REFUSED_KEYS - {key}
+    namespace: dict[str, Any] = dict(vars(loader_settings), _PRODUCTION_REFUSED_KEYS=kept)
+    exec(source, namespace)  # noqa: S102
+    mutated = namespace["_require_production_shape"]
+    url = f"{BASE}?{SSL}&{key}=x"
+    assert refuses(loader_settings._require_production_shape, url)
+    assert not refuses(mutated, url)
+
+
+def test_the_refused_keys_are_exactly_these_three() -> None:
+    assert {"service", "hostaddr", "passfile"} == loader_settings._PRODUCTION_REFUSED_KEYS
+
+
+@pytest.mark.parametrize("key", ["service", "hostaddr", "passfile"])
+def test_the_keys_are_refused_in_production_only(key: str) -> None:
+    url = f"{BASE}?{key}=x"
+    assert load_loader_settings(dev(url)).loader_database_url.get_secret_value() == url

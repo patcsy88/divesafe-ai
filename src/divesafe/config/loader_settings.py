@@ -28,13 +28,17 @@ LOADER_FIELD = "loader_database_url"
 ENVIRONMENT_KEY = "DIVESAFE_ENVIRONMENT"
 SECRETS_DIR_KEY = "DIVESAFE_SECRETS_DIR"
 LOADER_URL_KEY = f"{ENV_PREFIX}{LOADER_FIELD.upper()}"
-# OPEN QUESTION (ADR 0024 A3 says "the one corpus-target setting the code needs" and fixes no
-# name): this name is a placeholder for the reviewers. Optional; `withdraw` never reads it.
+# Owner decision Q3 (2026-10-23): the name stays DIVESAFE_CORPUS_TARGET. Required for load and
+# approve (`require_corpus_target`), optional for withdraw.
 CORPUS_TARGET_KEY = "DIVESAFE_CORPUS_TARGET"
 _TLS_MODES = frozenset({"require", "verify-ca", "verify-full"})
 _ENVIRONMENTS = ("development", "test", "production")
 _URI_SCHEMES = ("postgresql://", "postgres://")
-_TIMEOUT_VALUE = re.compile(r"[1-9][0-9]*")
+# Shape and length BEFORE int(): an over-long digit string must be a LoaderConfigError, not a
+# ValueError from int(). The ceiling is a single digit, so one digit is the whole grammar.
+_TIMEOUT_VALUE = re.compile(r"[1-9][0-9]{0,2}")
+# Production refuses keys that make libpq read connection parameters from another file or service.
+_PRODUCTION_REFUSED_KEYS = frozenset({"service", "hostaddr", "passfile"})
 _CONNECT_TIMEOUT_CEILING = 5  # ADR 0024 A3: the value make-secrets.sh writes
 
 
@@ -52,6 +56,12 @@ class LoaderSettings(BaseModel):
     @property
     def production(self) -> bool:
         return self.environment == "production"
+
+    def require_corpus_target(self) -> Path:
+        """`load` and `approve` need the corpus target; `withdraw` never calls this."""
+        if self.corpus_target is None:
+            raise LoaderConfigError("DIVESAFE_CORPUS_TARGET is required for load and approve")
+        return self.corpus_target
 
 
 def _check_uri_and_timeout(dsn: str) -> None:
@@ -79,6 +89,14 @@ def _check_uri_and_timeout(dsn: str) -> None:
             raise refused
 
 
+def _query_keys(dsn: str) -> set[str]:
+    try:
+        query = urlsplit(dsn).query
+    except ValueError:
+        return set()
+    return {part.partition("=")[0] for part in query.split("&")} if query else set()
+
+
 def _require_production_shape(dsn: str) -> None:
     from psycopg.conninfo import conninfo_to_dict
 
@@ -90,7 +108,13 @@ def _require_production_shape(dsn: str) -> None:
         raise LoaderConfigError(
             "production needs a user and a password in the loader connection string"
         )
+    if _query_keys(dsn) & _PRODUCTION_REFUSED_KEYS:
+        raise LoaderConfigError(
+            "production refuses service, hostaddr and passfile in the loader connection string"
+        )
     hosts = str(parts.get("host") or "").split(",")
+    if any(not h for h in hosts):
+        raise LoaderConfigError("production needs a non-empty host in the loader connection string")
     if any(h.startswith("/") for h in hosts):
         raise LoaderConfigError(
             "production refuses a Unix-socket host in the loader connection string"
@@ -145,6 +169,8 @@ def load_loader_settings(environ: Mapping[str, str] | None = None) -> LoaderSett
     if name == "production":
         _require_production_shape(url)
     target = env.get(CORPUS_TARGET_KEY)
+    if name == "production" and target and not Path(target).is_absolute():
+        raise LoaderConfigError("DIVESAFE_CORPUS_TARGET must be an absolute path in production")
     return LoaderSettings(
         environment=name,
         loader_database_url=SecretStr(url),

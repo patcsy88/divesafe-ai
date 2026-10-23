@@ -782,7 +782,7 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     approval record.
   - **The explicit development flag (owner decision, 2026-10-21; ADR 0022 condition 1).** In
     production the hash is required for `load` and `approve`. It is skipped **only when the
-    operator passes the explicit flag `--development-no-manifest-hash` (name fixed at code time)
+    operator passes the explicit flag `--development-no-manifest-hash` (name fixed by the owner, 2026-10-23)
     AND `DIVESAFE_ENVIRONMENT` is not `production`.** The flag alone in production is refused, and
     `docker compose run -e DIVESAFE_ENVIRONMENT=development` **alone does not skip the hash**: a
     bypass takes both a development environment and the flag. Each is a separate deliberate act.
@@ -869,12 +869,207 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     **Caveats that remain despite approval:** the libpq floor in item 1 (`1` raised to 2 s) is
     stated from memory and not checked against the libpq version in the image; the self-check
     workload in item 5 ("more work than item 4") is assumed, not measured.
-    **Still OPEN for slice 2 (not approved):** `idle_in_transaction_session_timeout` (for
-    `withdraw` and for `kb_load`) and the `kb_load` `lock_timeout` and `statement_timeout`, since
-    they depend on how long a legitimate load transaction runs, which is not yet known. That
-    length decides how often `withdraw` meets a held family lock, and so whether `lock_timeout` of
-    10 s should be revisited. If the `kb_load` values end up long, "lock busy" will be the normal
-    result of withdrawing during a load, and runbook step (1) the normal response.
+    **Slice 2 values (`idle_in_transaction_session_timeout` for `withdraw` and for `kb_load`, and
+    the `kb_load` `lock_timeout` and `statement_timeout`) are APPROVED by the owner, 2026-10-23
+    (table P1 to P6 below).** Because a load holds the family lock until its commit, "lock busy"
+    is the normal result of withdrawing during a load, and runbook step (1) is the normal
+    response (Q1, accepted below); the approved withdraw `lock_timeout` of 10 s stays.
+
+    **Slice 2 limits: APPROVED by the owner, 2026-10-23 (P1 to P6, as proposed by the architect;
+    the approved withdraw table above is unchanged).** No standard and
+    no measurement backs any number; they rest on the same repository facts as the approved table
+    and on the ADR 0022 decision 12 parsing limits (manifest and text at most 1 MiB, at most 50
+    documents and 200 chunks per load, a chunk at most 1500 characters, at most 20 chunks per
+    run). A load is inserts only (the loader has no route out and no LLM key), so a load is at
+    most about 1 + 50 documents + 200 chunks + status events in one transaction; how long that
+    takes is **not measured**.
+
+    | # | Limit | APPROVED (owner, 2026-10-23) | Rationale | Too short | Too long |
+    | --- | --- | --- | --- | --- | --- |
+    | P1 | `idle_in_transaction_session_timeout`, `withdraw` | **10 s** (`SET LOCAL` in the withdraw transaction; now applies to the withdraw transaction too) | The transaction is one INSERT and a commit with no human input inside it, so the client is never legitimately idle for seconds. A stalled client holds the family's per-document lock, which blocks the very action this command exists for, so it should be the shortest of the idle limits. | A slow terminal or GC pause between statements kills a healthy withdrawal: "failed, nothing written" or "outcome unknown"; retry is safe. | A hung client keeps the lock, and a second withdrawal of that family meets "lock busy" for this long. |
+    | P2 | `idle_in_transaction_session_timeout`, `kb_load` and `approve` | **30 s**; **differs from P1 on purpose** | Between statements a load does client work (row building, per-chunk checks) over up to 250 rows; `approve` is a few statements. One value for both keeps the settings model simple. | A load that is only slow is killed and rolled back; nothing is written, retry costs the operator time. | A stalled load holds the global lock (1220002) and every touched family's lock for this long, so later loads and withdrawals of those families fail on `lock_timeout`. |
+    | P3 | `SET LOCAL lock_timeout`, global lock (class 1220002) and per-document lock (class 1220001), `kb_load` | **10 s for both** | A second load is an operator mistake or a stuck run; waiting longer than a terminal wait gives the runbook (stop the container, terminate the backend) nothing. Same value as the approved withdraw 10 s, so one number to remember. **Caveat:** the locks are transaction-scoped, so a holder keeps them until its **commit**, not for one insert; the approved item 2 rationale ("only for one insert") holds for a withdraw holder, not for a load holder (see question Q1). | Spurious "lock busy" when another run commits a moment later; one retry. | The operator waits on a stuck holder; delay of a load costs little. |
+    | P4 | `SET LOCAL statement_timeout`, each `kb_load` statement | **30 s** | Must exceed `lock_timeout` (same pinned relation 10 s < 30 s) because the lock wait is inside a statement. A single-row insert plus its triggers, and the per-site chunk check over a store of at most a few hundred chunks, should take far less; 30 s is chosen to match the approved withdraw item 3, not derived from a measurement. | `57014` pre-empts `55P03`, or a healthy slow `db` cuts off a valid load (rolled back, nothing written). | A stalled server holds the operator and the locks; bounded only by P6 below. |
+    | P5 | `lock_timeout` and `statement_timeout`, `approve` | **10 s and 30 s** (same as P3 and P4) | Same shape as withdraw: one status-event INSERT under the per-document lock (plus the refusal for a version with no chunks). The same relation applies. | As P3 and P4. | As P3 and P4. |
+    | P6 | Overall wall-clock bound, `kb_load` | **Yes. 120 s for `load`, 60 s for `approve`** | Statement and idle limits bound each step, not the sum: 250 statements at 30 s each would be hours while holding the global lock. 120 s is the longest wait this project already tolerates (the LLM call limit; a ceiling, not a basis); 60 s for `approve` equals the approved withdraw whole-run figure. | A valid but slow load is rolled back whole; the operator must raise the limit by a reviewed change. | A stuck load blocks other loads and withdrawals of its families for minutes. |
+
+    **P1 to P6 are constants in code (owner decision Q2, 2026-10-23): no environment key and no
+    compose setting.**
+
+    **How P6 is enforced (approved with P6).** The image is PostgreSQL 16 (`pgvector/pgvector:pg16`), which
+    to my recollection has no `transaction_timeout` (added in 17; **not checked**), so the server
+    cannot cap the transaction. Approved design: a **client-side monotonic deadline in the `kb_load` process**,
+    started before the connection and checked between statements; when exceeded it rolls back,
+    prints a fixed message and exits with its own "failed, nothing written" status. Server-side
+    backstops are P2 and P4. **Limit of this design:** the client check cannot interrupt a
+    statement already running, so the worst case is the deadline plus one `statement_timeout`
+    plus `connect_timeout` (about 155 s for `load`), and a process that is killed leaves the
+    server to roll back at its idle or statement limit. Options not chosen: a host `timeout`
+    wrapper (outside the repository, not a pinned control) and a compose-level limit (compose has
+    no run timeout). Tests (to be written): a stalled client is ended by the server within P2
+    (mutation: drop the setting); a load past the deadline writes nothing and exits with the
+    status (mutation: remove the check); the pinned relation `lock_timeout` < `statement_timeout`
+    holds for load and approve. The loader's self-check, pre-write role check and recorded-at
+    style reads need their own `statement_timeout` in each new transaction (values APPROVED, Q8
+    below: 15 s for the checks, 10 s for `load`'s own reads).
+
+    **Owner decisions on the slice 2 questions, 2026-10-23.**
+    - Q1. **ACCEPTED.** "Lock busy" for a withdrawal during a load is normal and runbook step (1)
+      is the response. The withdraw `lock_timeout` stays 10 s; the load deadline (P6) bounds the
+      wait.
+    - Q2. **APPROVED.** P1 to P6 are constants in code (no environment key, no compose setting).
+    - Q3. **DECIDED.** The corpus-target setting name stays `DIVESAFE_CORPUS_TARGET`.
+    - Q4. **DECIDED.** The development flag is exactly `--development-no-manifest-hash`.
+    - Q7. **DECIDED.** The ADR 0022 manifest limits stand for slice 2: 1 MiB, 50 documents, 200
+      chunks per load, 1500 characters per chunk (and the 20 per run of decision 12).
+    - Q9. **DECIDED.** `kb_load` and `approve` never retry on `55P03` or `40P01`; they exit and
+      the operator re-runs. (The stop grace period of a stuck run container, runbook step 1, is
+      not part of this decision and was not checked.)
+
+    **Further owner decisions, 2026-10-23.**
+    - Q8. **APPROVED.** For `load` and `approve`: the privilege self-check and the pre-write
+      privilege (owner/app role) check each run with `statement_timeout` **15 s**, and `load`'s own
+      reads (the conflict read and the per-site chunk check's read) with **10 s**, in each new
+      transaction. These are the same values as the approved withdraw items 5 and 4. This also
+      settles the previously open reuse of 15 s for **withdraw's** pre-write role check (A3, "Slice 1
+      review outcomes"; pre-load item 5). Worst case with the pre-write check on one connection is
+      still about 75 s for `withdraw` (60 s whole-run figure plus 15 s); for `load` and `approve` the
+      P6 deadlines (120 s, 60 s) apply on top of the checks. As with every value here, no
+      measurement backs 15 s or 10 s. *Code note (2026-10-23):* `kb_common.py` has
+      `LOAD_SELF_CHECK_STATEMENT_TIMEOUT_MS = None` (refuses until set) and no constant yet for
+      `load`'s own reads; the engineer sets 15_000 and adds a 10_000 constant. Tests and mutations
+      as for P1 to P6 (drop the setting; swap 15 and 10).
+    - Q5. **APPROVED.** The `load` and `approve` exit-status table below, one fixed message per
+      row. Numbers 2 to 12 keep `withdraw`'s meanings; precedence is "failed, nothing written" rows
+      first, then 12, then 0.
+
+      | Exit | Meaning |
+      | --- | --- |
+      | 0 | OK (`load`: loaded as DRAFT; `approve`: approved) |
+      | 2 | argument refused |
+      | 3 | loader configuration refused |
+      | 4 | database connection failed |
+      | 5 | role has owner or application write privileges |
+      | 6 | lock busy (`55P03`; never retried, Q9) |
+      | 7 | statement timeout (`57014`) |
+      | 8 | isolation level (defensive mapping; see Slice 1 review outcomes) |
+      | 9 | deadlock (`40P01`; never retried, Q9) |
+      | 10 | version not found |
+      | 11 | any other database refusal |
+      | 12 | outcome unknown: check the status, then re-run if needed |
+      | 13 | manifest or corpus not valid |
+      | 14 | manifest hash does not match the approved hash |
+      | 15 | approved manifest hash required |
+      | 16 | zero chunks |
+      | 17 | size or count limit exceeded |
+      | 18 | overall deadline exceeded (P6) |
+      | 19 | loader role over-privileged |
+      | 20 | self-check incomplete |
+      | 21 | version not in DRAFT status (`approve`) |
+      | 22 | file hash does not match |
+      | 23 | chunk hash does not match |
+
+      **Any document with zero chunks is refused before anything is written**, not only a manifest
+      whose total is zero: a single empty document in a load of several refuses the whole load
+      (exit 16). A DRAFT with no chunks could never be approved (ADR 0022 decision 7 and the
+      trigger), so it is not created. `kb_manifest.read_corpus` does this (`total == 0 or any
+      document has no chunks`). Test and mutation: a two-document manifest with one empty
+      document writes nothing and exits 16 (mutation: check only the total). There is no "nothing
+      to do" outcome. `load` run twice reaches the existing-version refusal of the database (exit
+      11) rather than a success.
+
+    **APPROVED by the owner, 2026-10-23. Q6: manifest format and `load`/`approve` argument grammar.**
+    The owner approved the format and grammar as proposed below, with no change. The block records
+    what `src/divesafe/services/kb_manifest.py` and `kb_load.py` do (the engineer chose the names
+    where ADR 0022 gives none; the list of names that differ from ADR 0022 is kept below).
+    `MANIFEST_FILENAME` in code is still `None` and `read_corpus` refuses until the engineer sets it
+    to `manifest.json`.
+    - **File.** One file at the root of the corpus mount (`DIVESAFE_CORPUS_TARGET`, Q3): name
+      **`manifest.json`**. JSON only, UTF-8, no YAML, no comments, no new dependency (ADR 0022
+      decision 13: plain text only). `NaN` and `Infinity` are refused. Corpus files are named by
+      relative `path` from the same root.
+    - **Top level** (`extra="forbid"`; unknown keys refused): `format` (integer, exactly `1`);
+      `attests_no_generated_text` (boolean, exactly `true`); `attests_no_personal_names` (boolean,
+      exactly `true`); `documents` (array of 1 to 50 objects). *ADR 0022 decision 7 asks for one
+      owner attestation covering both statements; the code splits it into two fields, and adds
+      `format`, which the ADR does not mention.*
+    - **Document** (`extra="forbid"`): `document_id` (string, `[a-z0-9]+(-[a-z0-9]+){0,2}`, at most
+      40; decision 6 grammar); `version` (integer 1 to 999999); `title` (1 to 200 characters);
+      `origin` (`dive_professional` or `published_document`); `author_role` (`dive_professional` or
+      `published_source`); `effective_date`, `review_by_date` (ISO dates; effective <= review-by <=
+      effective + 12 calendar months, clamped to the last day of the month); `licence` (1 to 500);
+      `licence_reference` (1 to 500; checked and discarded, decision 7); `attribution` (optional, 1
+      to 300; decision 7 limits it to title and organisation); `licence_requires_personal_name`
+      (boolean, exactly `false`); `site_id` (string or null, must be in `SITES`); `all_sites`
+      (boolean; must be the opposite of `site_id` being null); `display_permitted` (boolean, exactly
+      `true`); `display_permission_reference` (1 to 500; checked and discarded); `supersedes`
+      (integer or null, 1 to 999999, below `version`); `file` (object). `approver_role` is **not** a
+      manifest field: code fixes it to `dive_professional` (decision 7: always that value). No
+      approval date field exists (decision 7). *Differences from the ADR text: `format`,
+      `supersedes`, `attribution` as an optional field with a 300 limit, `all_sites` as an explicit
+      boolean, the 200/500/300 text limits, and the separate attestation fields are the engineer's;
+      the ADR names the concepts but no field names or text lengths.*
+    - **File entry:** `path` (string, relative, `/`-separated, 1 to 200, no empty, `.` or `..`
+      component, no leading `/`); `sha256` (64 lower-case hex, of the file's bytes); `chunks`
+      (array, at most 200); `gaps` (array, default empty, at most 200). A path may appear for one
+      document only; an id and version pair may appear once.
+    - **Chunk entry:** `chunk` (integer from 1, consecutive in file order); `section` (1 to 200
+      characters); `start`, `end` (byte offsets `[start, end)` in the file, decision 7 "Text span");
+      `sha256` (64 lower-case hex of the chunk's bytes). *The ADR says "section, text span or
+      separate file, chunk number from 1, own SHA-256"; the code supports spans only, not a
+      separate file per chunk.* **Gap entry:** `start`, `end`, `reason` (`heading` or
+      `licence_notice`; decision 7 says "a reason code, for example"; these two are the engineer's
+      list).
+    - **Limits** (ADR 0022 decision 12, Q7): manifest and all files together at most 1,048,576
+      bytes (the manifest is read first; each file is read against the remaining budget); 50
+      documents and 200 chunks per load; a chunk at most 1,500 characters. Character rules:
+      NFC, no `\r`, no control, format, private-use, unassigned, surrogate, combining or line/
+      paragraph separator character, and only Latin-script letters. **Known difference:** decision
+      13 also asks for a default-ignorable code point table; the code says it has not built it
+      (`clean_text` is an approximation). **Owner decision, 2026-10-23: the table is a gate for
+      the first production load** (see "Remaining questions", item 7); slice 2 uses a
+      `unicodedata`-based approximation until then.
+    - **Hash computation.** `manifest_sha256` is the SHA-256 (lower-case hex) of the manifest
+      file's raw bytes as read, before parsing (ADR 0022 decision 7). Each file hash covers the
+      whole file's bytes; each chunk hash covers `data[start:end]`. The three mismatches are three
+      refusals (exit 14, 22, 23). The operator never computes the approved hash from the
+      corpus mount (decision 7); the dive professional supplies it.
+    - **Argument grammar (APPROVED).**
+      ```
+      python -m divesafe.services.kb_load load    [--approved-manifest-sha256 <64 hex>] | [--development-no-manifest-hash]
+      python -m divesafe.services.kb_load approve <document_id> <version> [same two options]
+      ```
+      `load` takes no positional argument and loads every document in the manifest as DRAFT.
+      `approve` takes the document id and version as `withdraw` does (decision 6 grammar, checked
+      with `fullmatch`). The two options are mutually exclusive; each may appear once; any other
+      option, a missing or malformed hash, or a repeated option exits 2. In production one of the
+      two is required (exit 15; the development flag alone is refused there, Q4). The module
+      names are `divesafe.services.kb_load` (entry), `kb_manifest`, `kb_common`, `kb_privileges`.
+      *`approve` has no manifest argument: the version to approve is looked up in the database and
+      its stored `manifest_sha256` is compared with the supplied hash.*
+    - **Q6 sub-questions: owner answers, 2026-10-23.** Sub-questions 1 to 6 and 8 are answered by
+      approving the proposal as written; sub-question 7 is decided separately.
+      1. **File name: `manifest.json`** at the mount root. Approved.
+      2. **`format` stays** (it versions the manifest); the attestation **stays as two fields**
+         (`attests_no_generated_text`, `attests_no_personal_names`). Approved.
+      3. **The text limits stand** (title 200, licence and references 500, attribution 300,
+         section 200, path 200). Approved.
+      4. **Gap reasons stay `heading` and `licence_notice`; chunks are spans only.** A chunk as a
+         separate file is not supported; ADR 0022 decision 7 is to be read that way. Approved.
+      5. **Both `licence_reference` and `display_permission_reference` are required**, covered by
+         the manifest hash, checked and not stored. Approved.
+      6. **`approve` takes both hash options exactly as `load` does** (mutually exclusive; one is
+         required in production). Approved.
+      7. **The default-ignorable table (ADR 0022 decision 13) is a GATE for the first production
+         load.** It joins the other first-production-load gates (withdrawal-log location, the
+         decision 11 re-acknowledgement, the A7 hand run, ADR 0022 condition 10, licence and
+         `display_permitted` evidence per source). **Slice 2 uses a `unicodedata`-based
+         approximation until the table exists**; the approximation is not accepted for production.
+      8. **A repeated `load` is left to the database refusal (exit 11);** no separate exit status.
+         Approved.
+    - Q10. The compose profile name (A3 says "for example `knowledge`"), and the process and
+      memory limit values for both services ("as `api` has" is a reference, not numbers); decided
+      at the docker stage.
   - **Runbook when it refuses on the lock:** (1) stop the `kb_load` run container (the server rolls
     the load back) and retry; (2) or the bootstrap superuser finds the stuck loader backend in
     `pg_stat_activity` and runs `pg_terminate_backend`; (3) else fallback (b) below.
@@ -892,9 +1087,9 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
       status events at all falls through to the trigger's `P0001` (exit 11), not the "version not
       found" message.
     - **The pre-write owner/app-role check reuses the 15 s self-check `statement_timeout`.
-      This reuse is NOT separately approved by the owner: OPEN.** The owner approved five values
-      for five limits (table above), not a sixth use of item 5. Worst case with the reuse: about
-      75 s on one connection (60 s whole-run figure plus 15 s).
+      APPROVED by the owner, 2026-10-23, with Q8 (above).** The original five-value approval did
+      not cover this sixth use of item 5; Q8 does. Worst case with the reuse: about 75 s on one
+      connection (60 s whole-run figure plus 15 s).
   - Refusals that **do not** apply: the manifest and corpus checks, the manifest hash, the per-site
     chunk check and the global lock.
   - **The privilege self-check reports but does not refuse (owner-delegated default; confirmed by
@@ -1155,6 +1350,22 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
+- **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
+  (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
+  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
+  (loader attribute checks) has landed; (5) the **licence and `display_permitted` evidence** for
+  each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
+  tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
+  `unicodedata`-based approximation, which is for development only. **Added by the slice 2
+  review (2026-10-23; none of (7) to (9) is owner-approved as a design yet):** (7) **the decision 9
+  id screen is bypassable by lookalike characters. OWNER DECISION OPEN.** Colons written as
+  U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
+  capitals such as U+1D0B and U+0299 (for `k` and `b`) pass, because the allow-list accepts every
+  `P*`, `Sm` and `Sk` character and every `LATIN ...` letter. Fix options: a **fixed allow-list of
+  punctuation**, or a **UTS #39 confusable-skeleton step**. **Unchecked:** whether downstream
+  citation validation rejects a spoofed id. (8) **A newline inside `kb:`** was a gap; it is **closed
+  in code in this pass** (not yet re-reviewed). (9) **Punctuation separators** (`k.b:`) and the
+  **"and similar" tail of the word list** remain open.
 - **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
   column with no default could not be added later; it goes into the migration (proposed by
@@ -1337,15 +1548,31 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   `db_init` checks the TEMP path at install time (TEMP read-back, member clause); `kb_load`'s
   self-check MUST repeat it at load time, because memberships can change after install, and carry
   the other checks, before the first production load (ADR 0022 condition 10).
-- **Pre-load requirements from the slice 1 review (A3; none owner-approved yet).** Before `load` or
+- **Pre-load requirements from the slice 1 review (A3; only items 3 and 5 are owner-approved).** Before `load` or
   `approve` ship: (1) the owner/app refusal must become **privilege-based**: refuse when the
   role, or any role it belongs to, can write `assessments` or `pending_runs`, or compare against
   a configured app-role name; with a **live test using a custom-named app role** (a name-only
   check is not enough). (2) **OPEN decision for the owner and `risk-reviewer`:** whether
   `withdraw`'s behaviour for an over-privileged loader changes (today it reports but still
-  withdraws). (3) **OPEN:** `idle_in_transaction_session_timeout` for `withdraw`. (4) The
+  withdraws). (3) `idle_in_transaction_session_timeout` for `withdraw`: 10 s, APPROVED by the owner, 2026-10-23 (A3, P1). (4) The
   self-check must have **live failure coverage for each check** before `load` and `approve` rely
-  on it. (5) The pre-write role check's reuse of the 15 s timeout is also open (A3).
+  on it. (5) ~~The pre-write role check's reuse of the 15 s timeout is also open.~~ Settled: 15 s,
+  APPROVED by the owner with Q8, 2026-10-23 (A3).
+- **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
+  - **Stored `manifest_sha256` is a client claim**, like `hash_checked`: the database cannot
+    recompute it.
+  - **Privileges are checked in separate transactions before the write.** There is a
+    time-of-check gap, and the check is not repeated inside the write transaction.
+  - **A missing application table gives exit 5, whose message names privileges** (the wrong
+    cause). The exit table is approved, so this is documented, not changed.
+  - **A missing ordering sequence is not flagged** by the app/owner check.
+  - **`withdraw` still checks role names only** (see the privilege-based pre-load item above).
+  - **libpq fallbacks.** The code now refuses the `service`, `hostaddr` and `passfile`
+    connection keys. It does **not** refuse the environment-variable case (`PG*` variables such as
+    `PGSERVICE`, `PGHOSTADDR`, `PGPASSFILE`, `PGSSLMODE`), which libpq reads when the string omits a key.
+  - **Unverified from memory:** that libpq applies TLS on Unix-socket connections, and libpq's
+    keyword precedence (connection string vs environment vs service file).
+  - **The CPU cost of a huge integer literal is unchecked.**
 - **Runbook note, advisory-lock denial of service:** it is not only the loader. The **app role** can
   also call `pg_advisory_lock(1220001, ...)` and make `kb_load` fail on `lock_timeout`. A stuck or
   hostile holder is cleared the same way (find the backend in `pg_locks`/`pg_stat_activity`, then
@@ -1369,7 +1596,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
 - **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
-  ADR 0022 decision 11 (A6).
+  ADR 0022 decision 11 (A6). The first production load has further gates, including the
+  default-ignorable code point table (A6, "First-production-load gates").
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Nothing in this amendment is built or run.** Every pin above is a description of a test to be
   written, with its mutation check to be run when it is.

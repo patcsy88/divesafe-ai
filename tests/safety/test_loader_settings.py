@@ -281,3 +281,64 @@ def test_mutation_an_api_that_ignores_the_secret_file_is_caught(tmp_path: Path) 
     namespace["refuse_loader_credentials"](env)  # type: ignore[operator]
     with pytest.raises(RuntimeError):
         refuse_loader_credentials(env)
+
+
+# --- round 8: the corpus target is an absolute path in production --------------------------------
+
+
+@pytest.mark.parametrize("target", ["corpus", "./corpus", "../corpus", "a/b", "~/corpus"])
+def test_production_refuses_a_relative_corpus_target(tmp_path: Path, target: str) -> None:
+    env = {**production(secrets_dir(tmp_path)), "DIVESAFE_CORPUS_TARGET": target}
+    text = refused(env)
+    assert "absolute" in text and "Zq9" not in text and target not in text
+
+
+def test_production_accepts_an_absolute_corpus_target(tmp_path: Path) -> None:
+    target = str(tmp_path / "corpus")
+    env = {**production(secrets_dir(tmp_path)), "DIVESAFE_CORPUS_TARGET": target}
+    settings = load_loader_settings(env)
+    assert settings.corpus_target == Path(target)
+
+
+def test_production_without_a_corpus_target_is_still_accepted_for_withdraw(tmp_path: Path) -> None:
+    settings = load_loader_settings(production(secrets_dir(tmp_path)))
+    assert settings.corpus_target is None
+
+
+def test_a_relative_corpus_target_is_allowed_outside_production(tmp_path: Path) -> None:
+    for name in ("development", "test"):
+        env = {
+            "DIVESAFE_ENVIRONMENT": name,
+            "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test",
+            "DIVESAFE_CORPUS_TARGET": "corpus",
+        }
+        assert load_loader_settings(env).corpus_target == Path("corpus")
+
+
+def test_mutation_a_relative_target_allowed_in_production_is_caught(tmp_path: Path) -> None:
+    source = inspect.getsource(loader_settings.load_loader_settings)
+    old = '    if name == "production" and target and not Path(target).is_absolute():\n'
+    assert old in source
+    namespace: dict[str, object] = {}
+    exec(source.replace(old, "    if False:\n"), vars(loader_settings), namespace)  # noqa: S102
+    mutated = namespace["load_loader_settings"]
+    env = {**production(secrets_dir(tmp_path)), "DIVESAFE_CORPUS_TARGET": "corpus"}
+    assert mutated(env).corpus_target == Path("corpus")  # type: ignore[operator]
+    with pytest.raises(LoaderConfigError):
+        load_loader_settings(env)
+
+
+def test_mutation_the_absolute_rule_applied_outside_production_is_caught(tmp_path: Path) -> None:
+    source = inspect.getsource(loader_settings.load_loader_settings)
+    old = '    if name == "production" and target and not Path(target).is_absolute():\n'
+    namespace: dict[str, object] = {}
+    mutated_source = source.replace(old, "    if target and not Path(target).is_absolute():\n")
+    exec(mutated_source, vars(loader_settings), namespace)  # noqa: S102
+    env = {
+        "DIVESAFE_ENVIRONMENT": "development",
+        "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test",
+        "DIVESAFE_CORPUS_TARGET": "corpus",
+    }
+    load_loader_settings(env)  # the real rule allows it
+    with pytest.raises(LoaderConfigError):
+        namespace["load_loader_settings"](env)  # type: ignore[operator]

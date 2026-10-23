@@ -9,6 +9,7 @@ claim to match it. All checks run in ONE statement, so the check either complete
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import Any
 
 import psycopg
@@ -40,7 +41,12 @@ class SelfCheckConnectionLost(SelfCheckIncomplete):
     """The role check failed with a connection-class error. Carries no detail."""
 
 
+_NAME = re.compile(r"[a-z_]+")
+
+
 def _lit(values: tuple[str, ...]) -> str:
+    # built into SQL text: only fixed lower-case names may ever reach it
+    assert all(_NAME.fullmatch(v) for v in values)
     return ", ".join(f"'{v}'" for v in values)
 
 
@@ -77,6 +83,76 @@ def running_as_privileged_role(conn: psycopg.Connection[Any], *, statement_timeo
     except psycopg.OperationalError as exc:
         _end(conn)
         if exc.sqlstate != "57014":  # a statement timeout is not a lost connection
+            raise SelfCheckConnectionLost("the role check lost the connection") from None
+        raise SelfCheckIncomplete("the role check could not finish") from None
+    except Exception:
+        _end(conn)
+        raise SelfCheckIncomplete("the role check could not finish") from None
+    return row is None or row[0] is not False
+
+
+_APP_WRITE_TABLES = ("assessments", "pending_runs", "run_failure_counts")
+
+
+def _writes_app_tables() -> str:
+    """True when the current role, or any role it is a member of (including a NOINHERIT member
+    path), can INSERT/UPDATE/DELETE an application table or any of its columns. A missing table
+    is treated as a problem (NULL oid counts as unknown, so the whole expression is not FALSE)."""
+    parts = []
+    for table in _APP_WRITE_TABLES:
+        reg = f"to_regclass('public.{table}')"
+        parts.append(
+            f"({reg} IS NULL OR has_table_privilege({reg}, 'INSERT, UPDATE, DELETE') "
+            f"OR has_any_column_privilege({reg}, 'INSERT, UPDATE') "
+            "OR EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user "
+            "AND pg_has_role(current_user, r.oid, 'MEMBER') "
+            f"AND (has_table_privilege(r.oid, {reg}, 'INSERT, UPDATE, DELETE') "
+            f"OR has_any_column_privilege(r.oid, {reg}, 'INSERT, UPDATE'))))"
+        )
+    return " OR ".join(parts)
+
+
+def _owner_privileges() -> str:
+    kb = _lit(KNOWLEDGE_TABLES)
+    return (
+        "COALESCE((SELECT pg_has_role(current_user, c.relowner, 'MEMBER') FROM pg_class c "
+        f"WHERE c.oid = to_regclass('public.{_EVENTS_TABLE}')), true) OR "
+        "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        f"WHERE n.nspname = 'public' AND c.relname IN ({kb}, 'assessments', 'pending_runs', "
+        "'run_failure_counts', 'schema_migrations') "
+        "AND pg_has_role(current_user, c.relowner, 'MEMBER')) OR "
+        "COALESCE((SELECT pg_has_role(current_user, nspowner, 'MEMBER') FROM pg_namespace "
+        "WHERE nspname = 'public'), true) OR "
+        "COALESCE((SELECT pg_has_role(current_user, datdba, 'MEMBER') FROM pg_database "
+        "WHERE datname = current_database()), true) OR " + _member_of("r.rolsuper")
+    )
+
+
+def running_with_app_or_owner_privileges(
+    conn: psycopg.Connection[Any], *, statement_timeout_ms: int
+) -> bool:
+    """Privilege-based replacement of the name-only check, for `load` and `approve`: True when the
+    role, or any role it belongs to, can write assessments, pending_runs or run_failure_counts, or
+    holds owner privileges. Reads privileges, not names, so a custom-named app role is caught.
+    Unknown counts as True. Own read-only transaction and statement_timeout; raises
+    `SelfCheckIncomplete` / `SelfCheckConnectionLost` when it cannot finish."""
+    try:
+        conn.read_only = True
+        conn.execute("SET LOCAL search_path = pg_catalog, pg_temp")
+        conn.execute(
+            sql.SQL("SET LOCAL statement_timeout = {}").format(
+                sql.Literal(require_limit(statement_timeout_ms))
+            )
+        )
+        row = conn.execute(
+            sql.SQL("SELECT ({writes}) IS NOT FALSE OR ({owner}) IS NOT FALSE").format(
+                writes=sql.SQL(_writes_app_tables()), owner=sql.SQL(_owner_privileges())
+            )
+        ).fetchone()
+        conn.rollback()
+    except psycopg.OperationalError as exc:
+        _end(conn)
+        if exc.sqlstate != "57014":
             raise SelfCheckConnectionLost("the role check lost the connection") from None
         raise SelfCheckIncomplete("the role check could not finish") from None
     except Exception:

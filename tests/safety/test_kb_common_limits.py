@@ -67,11 +67,19 @@ def test_require_limit_returns_a_set_limit() -> None:
     assert require_limit(5) == 5
 
 
-def test_limits_that_are_not_approved_do_not_exist_so_they_fail_closed() -> None:
-    names = {n for n in vars(kb_common) if n.isupper()}
-    assert not {n for n in names if "IDLE" in n or n.startswith("KB_LOAD_") and "TIMEOUT" in n}
-    for module in (kb_common, kb_withdraw):
-        assert "idle_in_transaction_session_timeout" not in inspect.getsource(module)
+def test_only_the_approved_idle_and_load_timeouts_exist() -> None:
+    """P1/P2 were approved 2026-10-23; any other idle or kb_load timeout name is not approved."""
+    approved = {
+        "WITHDRAW_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+        "LOAD_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+        "LOAD_LOCK_TIMEOUT_MS",
+        "LOAD_STATEMENT_TIMEOUT_MS",
+        "LOAD_SELF_CHECK_STATEMENT_TIMEOUT_MS",
+        "LOAD_READ_STATEMENT_TIMEOUT_MS",
+    }
+    names = {n for n in vars(kb_common) if n.isupper() and ("IDLE" in n or "TIMEOUT" in n)}
+    extra = names - approved - set(APPROVED) - {"CONNECT_TIMEOUT_SECONDS"}
+    assert not extra
 
 
 class _Conn:

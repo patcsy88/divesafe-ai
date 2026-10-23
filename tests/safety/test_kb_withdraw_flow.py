@@ -64,9 +64,24 @@ def check_isolation_first(monkeypatch: pytest.MonkeyPatch, run: Run | None = Non
     iso = fake.index_of("ISOLATION LEVEL READ COMMITTED")
     lock = fake.index_of("SET LOCAL lock_timeout = 10000")
     statement = fake.index_of("SET LOCAL statement_timeout = 30000")
+    idle = fake.index_of("SET LOCAL idle_in_transaction_session_timeout = 10000")
     insert = fake.index_of("INSERT INTO public.kb_status_events")
-    assert iso < lock < statement < insert
-    assert fake.log[iso][0] == fake.log[lock][0] == fake.log[insert][0]
+    assert iso < lock < statement < idle < insert
+    assert fake.log[iso][0] == fake.log[lock][0] == fake.log[idle][0] == fake.log[insert][0]
+
+
+def test_mutation_without_the_idle_in_transaction_timeout_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = (
+        "    _timeout(\n"
+        "        conn,\n"
+        '        "idle_in_transaction_session_timeout",\n'
+        "        require_limit(kb_common.WITHDRAW_IDLE_IN_TRANSACTION_TIMEOUT_MS),\n"
+        "    )\n"
+    )
+    with pytest.raises(AssertionError):
+        check_isolation_first(monkeypatch, mutant((old, "")))
 
 
 def test_read_committed_is_set_before_the_timeouts_and_the_insert(
@@ -552,7 +567,7 @@ def test_the_timeout_helper_refuses_any_other_setting_name() -> None:
         def execute(self, *a: Any) -> None:
             raise AssertionError("must not execute")
 
-    for name in ("idle_in_transaction_session_timeout", "lock_timeout; DROP", "", "work_mem"):
+    for name in ("idle_session_timeout", "lock_timeout; DROP", "", "work_mem"):
         with pytest.raises(ValueError):  # noqa: PT011
             kb_withdraw._timeout(Conn(), name, 5)  # type: ignore[arg-type]
 
