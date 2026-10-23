@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 from pydantic import SecretStr
@@ -23,7 +23,10 @@ SECRET_FILES: dict[str, bool] = {
     "llm_api_key": False,
     "met_api_token": False,
     "api_key_hashes": True,
+    # Read only by the knowledge loader's narrow settings model (ADR 0024 A4); the API refuses it.
+    "loader_database_url": False,
 }
+LOADER_SECRET_FIELD = "loader_database_url"
 FILE_PREFIX = "divesafe_"
 ENV_PREFIX = "DIVESAFE_"
 MAX_SECRET_BYTES = 65_536
@@ -37,19 +40,27 @@ def secret_file_name(field: str) -> str:
     return f"{FILE_PREFIX}{field}"
 
 
-def read_secret_files(directory: Path, environ: Mapping[str, str]) -> dict[str, SecretStr]:
+def read_secret_files(
+    directory: Path, environ: Mapping[str, str], fields: Collection[str] | None = None
+) -> dict[str, SecretStr]:
     """The secrets found in `directory`, by Settings field name. An empty or blank file means
-    "not set", as an empty environment variable does."""
+    "not set", as an empty environment variable does. `fields` limits which files are opened (a
+    name not in SECRET_FILES is ignored); None means every field except the loader's."""
     if not directory.is_dir():
         raise SecretFileError("DIVESAFE_SECRETS_DIR is not a directory")
+    wanted = (
+        {f for f in SECRET_FILES if f != LOADER_SECRET_FIELD} if fields is None else set(fields)
+    )
     set_in_environment = {name.upper() for name, value in environ.items() if value}
     found: dict[str, SecretStr] = {}
     for field, multiline in SECRET_FILES.items():
+        if field not in wanted:
+            continue
         path = directory / secret_file_name(field)
         if not os.path.lexists(path):
             continue
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         except OSError:
             raise SecretFileError(f"{path.name} cannot be read") from None
         try:

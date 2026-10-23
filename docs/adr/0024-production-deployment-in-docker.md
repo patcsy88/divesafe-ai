@@ -648,6 +648,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   requires the value to `fullmatch` `[1-9][0-9]*` (no sign, no spaces, no leading zero) and to be
   at most the fixed value. Mutations: the encoded duplicate must be refused; a keyword/value
   string `host=... connect_timeout=0` must be refused.
+  **Slice 1 note (A1/A3):** the code also passes `connect_timeout=5` to the driver as a keyword
+  argument, **in addition to** the string validation above. Which value wins when the string and
+  the keyword both carry `connect_timeout` (libpq/psycopg precedence) is stated **from memory,
+  not checked**; a test pins the parameters actually passed to the driver, so a change of
+  precedence or of the keyword is caught.
   **The same question for the existing checks, answered as far as known:** `_require_tls` in
   `settings.py` (L17-24) already reads `sslmode` through `psycopg.conninfo.conninfo_to_dict`, so
   the **encoding half** of the `sslmode` question is answered (it sees the decoded key). The
@@ -837,12 +842,59 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     `connect_timeout` in the connection string and these timeouts it does not wait without limit;
     a server that accepts the connection and then stops answering is bounded by the statement
     timeout, and a dead network by `connect_timeout` (tested).
+  - **Operational limits of `withdraw`: APPROVED by the owner, 2026-10-23.**
+    The owner approved all five values in the table below. **Only these five values are approved
+    here;** the open items after the table (slice 2) are not. The values come from no standard and
+    no measurement; each rests only on
+    things in this repository: `withdraw` only tightens and an operator waits at a terminal; the
+    runbook below is a human action (stop the load, or terminate the backend), so waiting longer
+    than a short time for a lock gives the runbook nothing; and the production compose defaults
+    (120 s LLM call, 300 s stage) show the longest wait this project already treats as tolerable
+    (they are LLM limits, **not** a basis for database timeouts, and are used here only as a
+    ceiling on the whole run).
+
+    | # | Limit | APPROVED (owner, 2026-10-23) | Rationale | Too short | Too long |
+    | --- | --- | --- | --- | --- | --- |
+    | 1 | `connect_timeout` in the loader string | **5 s** (the value `make-secrets.sh` writes and the ceiling the narrow model accepts) | Compose-internal network to `db`; a healthy connect (TLS and password exchange) is quick, and a dead network should fail while the operator is still looking at the terminal. libpq reads `0` as no limit and raises `1` to 2 s, so the value is a positive integer of at least 2. | False "connection refused" under a loaded `db` or slow start; the operator retries, no state change. | Operator stares at a hung terminal during a network fault; the validation ceiling would let a larger loader string through. |
+    | 2 | `SET LOCAL lock_timeout` (per-document advisory lock) | **10 s** | The lock is taken inside the status-event trigger, so a healthy holder keeps it only for one insert. A holder that keeps it longer is a long or stuck load, and only the runbook (stop the container, terminate the backend) clears that, which a human does. | Spurious `55P03` "lock busy" when a load commits a moment later; cost is one retry. | The operator waits on a load that may be stuck, and the withdrawal is delayed while the API still serves the text; no benefit, since the runbook is manual anyway. |
+    | 3 | `SET LOCAL statement_timeout` of the withdraw transaction | **30 s** | Must be **greater than** `lock_timeout`: the lock wait happens inside the INSERT statement, so a statement timeout at or below it would fire first and turn the lock refusal into `57014`. 30 s leaves 20 s over the lock wait for a single-row insert and its triggers. | `57014` pre-empts `55P03`, so the "lock busy" message and its runbook step are lost, or a slow but healthy `db` is cut off. | A stalled server holds the operator at the terminal; only the 120 s ceiling above limits it. |
+    | 4 | `statement_timeout` of the new transaction that reads the existing WITHDRAWN event's `recorded_at` | **10 s** | One single-row read by the loader's SELECT (index use not checked); it takes no advisory lock, so it does not wait behind a load. | Falsely reaches "already withdrawn; recorded_at unavailable" (its own exit status), and the operator must find the time with `psql` for the withdrawal log. | Operator waits after a refusal that already wrote nothing; the only gain is a log time. |
+    | 5 | `statement_timeout` of the post-commit privilege self-check transaction | **15 s** | Runs after the commit and after `recorded_at` is printed, read-only, over catalog privilege checks (more work than item 4, no lock). The withdrawal is already durable, so a long wait costs only terminal time. | False "withdrawn; self-check incomplete" (non-zero exit), which makes the operator doubt a role that may be fine. | Operator waits after the safety action is done; a stalled check is only reported, never changes the withdrawal. |
+
+    **Whole-run check:** connect 5 s + statement 30 s + read 10 s + self-check 15 s is 60 s in the
+    worst case on one connection (about 70 s if each phase reconnects), under the 120 s the
+    compose file allows for one LLM call. **Pinned relation:** `lock_timeout` < `statement_timeout`
+    (10 s < 30 s) is part of the approved decision, not only each number; a test pins the relation
+    (mutation: set them equal or reversed).
+    **Caveats that remain despite approval:** the libpq floor in item 1 (`1` raised to 2 s) is
+    stated from memory and not checked against the libpq version in the image; the self-check
+    workload in item 5 ("more work than item 4") is assumed, not measured.
+    **Still OPEN for slice 2 (not approved):** `idle_in_transaction_session_timeout` (for
+    `withdraw` and for `kb_load`) and the `kb_load` `lock_timeout` and `statement_timeout`, since
+    they depend on how long a legitimate load transaction runs, which is not yet known. That
+    length decides how often `withdraw` meets a held family lock, and so whether `lock_timeout` of
+    10 s should be revisited. If the `kb_load` values end up long, "lock busy" will be the normal
+    result of withdrawing during a load, and runbook step (1) the normal response.
   - **Runbook when it refuses on the lock:** (1) stop the `kb_load` run container (the server rolls
     the load back) and retry; (2) or the bootstrap superuser finds the stuck loader backend in
     `pg_stat_activity` and runs `pg_terminate_backend`; (3) else fallback (b) below.
   - Refusals that **apply**: the argument grammar (ADR 0022 decision 6), the TLS requirement on the
     connection, the refusal to run as the owner or app role, that the version exists, and fixed
     messages that never echo input.
+  - **Slice 1 review outcomes (2026-10-23; recorded, none of them owner-approved except where
+    stated).**
+    - **The 25001 / isolation row is effectively unreachable.** The status-event trigger raises a
+      plain `P0001` for a non-READ-COMMITTED transaction, so that case exits with the "any other
+      trigger refusal" status (exit 11), not the isolation status (exit 8). Both mean "failed,
+      nothing written". Migration 4's checksum is pinned, so the trigger cannot change without a
+      new migration; the row stays in the table as a defensive mapping only.
+    - **The not-found pre-check relies on documents being append-only.** A version with no
+      status events at all falls through to the trigger's `P0001` (exit 11), not the "version not
+      found" message.
+    - **The pre-write owner/app-role check reuses the 15 s self-check `statement_timeout`.
+      This reuse is NOT separately approved by the owner: OPEN.** The owner approved five values
+      for five limits (table above), not a sixth use of item 5. Worst case with the reuse: about
+      75 s on one connection (60 s whole-run figure plus 15 s).
   - Refusals that **do not** apply: the manifest and corpus checks, the manifest hash, the per-site
     chunk check and the global lock.
   - **The privilege self-check reports but does not refuse (owner-delegated default; confirmed by
@@ -900,6 +952,12 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     over-privileged text appears only for a run that committed. Each error code maps to one fixed
     message so the runbook step is obvious (`55P03` and `57014` go to the runbook above). A table
     test pins code to message to status, and a mutation that swaps two statuses must fail.
+  - **Runbook: a broken stdout after a durable commit looks like a failure.** If the commit
+    succeeded but writing to stdout then fails (closed pipe, terminal gone), the operator sees an
+    error although the withdrawal is durable. Re-running `withdraw` gives "already withdrawn" with
+    the original `recorded_at`, which is the check. Any exception after the INSERT has been sent
+    maps to "outcome unknown" (exit 12), never to "failed, nothing written". (Recorded from the
+    slice 1 review; not separately owner-approved.)
   - **A missing `DIVESAFE_CORPUS_DIR` variable still blocks `compose run kb_withdraw`** and the
     role-script `exec`: Compose interpolates the whole file, so the missing *variable* stops every
     compose command, even though `kb_withdraw` mounts no directory. Only the `docker exec`
@@ -1279,6 +1337,15 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   `db_init` checks the TEMP path at install time (TEMP read-back, member clause); `kb_load`'s
   self-check MUST repeat it at load time, because memberships can change after install, and carry
   the other checks, before the first production load (ADR 0022 condition 10).
+- **Pre-load requirements from the slice 1 review (A3; none owner-approved yet).** Before `load` or
+  `approve` ship: (1) the owner/app refusal must become **privilege-based**: refuse when the
+  role, or any role it belongs to, can write `assessments` or `pending_runs`, or compare against
+  a configured app-role name; with a **live test using a custom-named app role** (a name-only
+  check is not enough). (2) **OPEN decision for the owner and `risk-reviewer`:** whether
+  `withdraw`'s behaviour for an over-privileged loader changes (today it reports but still
+  withdraws). (3) **OPEN:** `idle_in_transaction_session_timeout` for `withdraw`. (4) The
+  self-check must have **live failure coverage for each check** before `load` and `approve` rely
+  on it. (5) The pre-write role check's reuse of the 15 s timeout is also open (A3).
 - **Runbook note, advisory-lock denial of service:** it is not only the loader. The **app role** can
   also call `pg_advisory_lock(1220001, ...)` and make `kb_load` fail on `lock_timeout`. A stuck or
   hostile holder is cleared the same way (find the backend in `pg_locks`/`pg_stat_activity`, then
