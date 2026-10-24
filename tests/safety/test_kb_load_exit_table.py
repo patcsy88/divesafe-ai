@@ -13,6 +13,7 @@ from divesafe.services.kb_common import (
     LimitExceeded,
     LimitNotSet,
 )
+from divesafe.services.kb_screen import UnicodeNotReviewed
 
 pytestmark = pytest.mark.safety
 
@@ -148,6 +149,7 @@ def check_maps(module: object) -> None:
         LimitExceeded: 17,
         kb_manifest.ManifestInvalid: 13,
         LimitNotSet: 3,
+        UnicodeNotReviewed: 3,
         ArgumentRefused: 2,
     }
 
@@ -200,3 +202,30 @@ def test_an_unlisted_refusal_falls_back_to_manifest_invalid(
 
     found = next((o for t, o in kb_load._BY_REFUSAL if isinstance(Odd("x"), t)), None)
     assert found is None  # run() then uses FAILED_MANIFEST_INVALID, never success
+
+
+def test_exit_3_is_reachable_by_an_unreviewed_unicode_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """Documents this cause of exit 3. The corpus target does not exist and the hash is
+    well-formed: were the Unicode check not first, the result would be a different number."""
+    import unicodedata
+    from pathlib import Path
+
+    from pydantic import SecretStr
+
+    from divesafe.config.loader_settings import LoaderSettings
+
+    monkeypatch.setattr(unicodedata, "unidata_version", "15.0.0")
+    settings = LoaderSettings(
+        environment="test",
+        loader_database_url=SecretStr("postgresql://u:never-echoed@127.0.0.1:1/x_test"),
+        corpus_target=Path(str(tmp_path)) / "no-such-corpus",
+    )
+    for argv in (
+        ["load", "--approved-manifest-sha256", "0" * 64],
+        ["approve", "site-guide", "1", "--approved-manifest-sha256", "0" * 64],
+    ):
+        outcome = kb_load.run(kb_load.parse_arguments(argv), settings)
+        assert (outcome.status, outcome.message) == EXPECTED["FAILED_CONFIGURATION"]
+    check_table(kb_load)  # the table and its fixed text are unchanged

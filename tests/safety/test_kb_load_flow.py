@@ -6,6 +6,7 @@ Mutations run on COPIES of the module source, never on `src`."""
 from __future__ import annotations
 
 import sys
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -1193,3 +1194,135 @@ def test_no_outcome_message_echoes_the_dsn_a_path_or_a_hash(
             assert secret not in outcome.message
     seen = capsys.readouterr()
     assert "never-echoed" not in seen.out + seen.err
+
+
+# --- the runtime Unicode control comes first (owner decision 2026-10-24) -------------------------
+
+UNICODE_CALL = (
+    "        kb_screen.require_reviewed_unicode()"
+    "  # before any corpus read or connection (exit 3)\n"
+)
+UNICODE_BLOCK = (
+    "    try:\n"
+    + UNICODE_CALL
+    + "    except kb_screen.UnicodeNotReviewed:\n"
+    + "        return FAILED_CONFIGURATION\n"
+)
+AFTER_READ = "    try:\n        conn = kb_common.connect("
+AFTER_CONNECT = "    try:\n        return _run_on("
+
+
+class Spies:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, module: Any, real_read: Any) -> None:
+        self.connects: list[str] = []
+        self.reads: list[Path] = []
+        self.hash_checks: list[Any] = []
+        monkeypatch.setattr(kb_common, "connect", lambda dsn: self.connects.append(dsn))
+        monkeypatch.setattr(
+            module, "_read", lambda target: (self.reads.append(target), real_read(target))[1]
+        )
+        real_check = module.hash_must_be_checked
+        monkeypatch.setattr(
+            module,
+            "hash_must_be_checked",
+            lambda *a: (self.hash_checks.append(a), real_check(*a))[1],
+        )
+
+    def untouched(self) -> bool:
+        return self.connects == [] and self.reads == [] and self.hash_checks == []
+
+
+def run_with_unicode_spies(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str, module: Any = kb_load
+) -> tuple[Outcome, Spies]:
+    monkeypatch.setattr(unicodedata, "unidata_version", "15.0.0")
+    spies = Spies(monkeypatch, module, module._read)
+    args = load_args(env) if command == "load" else approve_args()
+    result = module.run(module.parse_arguments(args), env.settings())
+    return Outcome(result.status, result.message), spies
+
+
+@pytest.mark.parametrize("command", ["load", "approve"])
+@pytest.mark.parametrize("version", ["15.0.0", "14.0.0", "17.0.0", ""])
+def test_an_unreviewed_unicode_version_is_exit_3_and_nothing_else_runs(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str, version: str
+) -> None:
+    env.corpus()
+    spies = Spies(monkeypatch, kb_load, kb_load._read)
+    monkeypatch.setattr(unicodedata, "unidata_version", version)
+    args = load_args(env) if command == "load" else approve_args()
+    result = kb_load.run(kb_load.parse_arguments(args), env.settings())
+    assert (result.status, result.message) == (3, "refused: loader configuration; nothing written")
+    assert spies.connects == []  # no connection
+    assert spies.reads == []  # corpus not read
+    assert spies.hash_checks == []  # the hash check was not reached
+
+
+def test_a_reviewed_unicode_version_does_not_change_the_flow(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    env.corpus()
+    monkeypatch.setattr(unicodedata, "unidata_version", "16.0.0")
+    result = go(monkeypatch, LoadFakeConnection(), load_args(env), env.settings())
+    assert result.status == 0
+
+
+def check_unicode_first(module: Any, monkeypatch: pytest.MonkeyPatch, env: Env) -> None:
+    for command in ("load", "approve"):
+        result, spies = run_with_unicode_spies(monkeypatch, env, command, module)
+        assert result.status == 3, command
+        assert spies.untouched(), command
+
+
+@pytest.mark.parametrize(
+    ("edits", "label"),
+    [
+        pytest.param(((UNICODE_CALL, "        pass\n"),), "call-removed", id="call-removed"),
+        pytest.param(
+            ((UNICODE_BLOCK, ""), (AFTER_READ, UNICODE_BLOCK + AFTER_READ)),
+            "after-corpus-read",
+            id="moved-after-corpus-read",
+        ),
+        pytest.param(
+            ((UNICODE_BLOCK, ""), (AFTER_CONNECT, UNICODE_BLOCK + AFTER_CONNECT)),
+            "after-connect",
+            id="moved-after-connect",
+        ),
+    ],
+)
+def test_mutation_a_missing_or_late_unicode_check_is_caught(
+    monkeypatch: pytest.MonkeyPatch, env: Env, edits: tuple[tuple[str, str], ...], label: str
+) -> None:
+    env.corpus()
+    mutant = mutated_module(kb_load, *edits)
+    caught = False
+    try:
+        check_unicode_first(mutant, monkeypatch, env)
+    except CAUGHT:
+        caught = True
+    assert caught, label
+    monkeypatch.undo()
+    check_unicode_first(kb_load, monkeypatch, env)
+
+
+def test_without_its_map_entry_the_refusal_is_still_exit_3_from_run_but_not_from_a_corpus_read(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    """OBSERVED: run() catches UnicodeNotReviewed itself, so removing the _BY_REFUSAL entry does not
+    change the exit of the first check (an equivalent mutant for that path; the map pin in the
+    exit-table tests catches it). It does change a refusal raised from the corpus read: 3 -> 13."""
+    env.corpus()
+    mutant = mutated_module(
+        kb_load, ("    (kb_screen.UnicodeNotReviewed, FAILED_CONFIGURATION),\n", "")
+    )
+    results = {}
+    for name, module in (("real", kb_load), ("mutant", mutant)):
+
+        def raise_it(target: Path) -> Any:
+            raise kb_load.kb_screen.UnicodeNotReviewed("x")
+
+        monkeypatch.setattr(module, "_read", raise_it)
+        monkeypatch.setattr(kb_common, "connect", lambda dsn: LoadFakeConnection())
+        outcome = module.run(module.parse_arguments(load_args(env)), env.settings())
+        results[name] = outcome.status
+    assert results == {"real": 3, "mutant": 13}

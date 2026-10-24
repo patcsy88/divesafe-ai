@@ -29,7 +29,7 @@ from divesafe.config.loader_settings import (
     load_loader_settings,
 )
 from divesafe.data.sites import SITES
-from divesafe.services import kb_common, kb_manifest, kb_privileges
+from divesafe.services import kb_common, kb_manifest, kb_privileges, kb_screen
 from divesafe.services.kb_common import (
     ArgumentRefused,
     Deadline,
@@ -122,6 +122,7 @@ _BY_REFUSAL: tuple[tuple[type[LoaderRefusal], Outcome], ...] = (
     (LimitExceeded, FAILED_LIMIT),
     (kb_manifest.ManifestInvalid, FAILED_MANIFEST_INVALID),
     (LimitNotSet, FAILED_CONFIGURATION),
+    (kb_screen.UnicodeNotReviewed, FAILED_CONFIGURATION),
     (ArgumentRefused, FAILED_ARGUMENTS),
 )
 
@@ -454,6 +455,10 @@ def run(request: Request, settings: LoaderSettings) -> Outcome:
         else kb_common.APPROVE_DEADLINE_SECONDS
     )
     deadline = Deadline(seconds)  # started before the connection
+    try:
+        kb_screen.require_reviewed_unicode()  # before any corpus read or connection (exit 3)
+    except kb_screen.UnicodeNotReviewed:
+        return FAILED_CONFIGURATION
     try:
         checked = hash_must_be_checked(settings.production, request)
         target = settings.require_corpus_target()

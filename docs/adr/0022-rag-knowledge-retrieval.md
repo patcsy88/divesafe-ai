@@ -791,17 +791,29 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       punctuation and symbol characters: `. , ; : ! ? ' " ( ) [ ] - / % + = < >`. Everything else
       is refused: all non-ASCII punctuation and symbols (curly quotes, en and em dashes, U+2010,
       U+2212, U+2236, U+A789, U+0589), `LATIN LETTER ...` letters (small capitals such as U+1D0B
-      and U+0299) and Latin modifier letters. The name-based rule also refuses any name
-      containing `SMALL CAPITAL`, `LIGATURE` or `MODIFIER` (this catches U+A7AE, whose name
-      starts with `LATIN CAPITAL LETTER`). **Consequence:** corpus text with typographic quotes
+      and U+0299) and Latin modifier letters. The **prefix rule** (`LATIN SMALL LETTER` /
+      `LATIN CAPITAL LETTER`) already refuses `œ` (U+0153, `LATIN SMALL LIGATURE OE`) and the
+      modifier letters. The name-based fragments `LIGATURE` and `MODIFIER` are defence in depth
+      and have **no effect under Unicode 16.0.0**; only `SMALL CAPITAL` does work (U+A7AE, whose
+      name starts with `LATIN CAPITAL LETTER`). A test goes red if a future Unicode version makes
+      the LIGATURE or MODIFIER fragment reachable. **Consequence:** corpus text with typographic quotes
       or dashes is refused and must be written with the ASCII forms. No corpus exists yet, so no
       known break. English and Bahasa Melayu are both Latin, and this also stops other scripts
       posing as Latin letters. Accepted letters include the ones NFKC does not decompose (ß æ ø
-      ð þ ı); the `œ` ligatures are refused (a name containing `LIGATURE`); the digraphs
+      ð þ ı); `œ` is refused by the prefix rule (its name is `LATIN SMALL LIGATURE OE`); the digraphs
       DŽ, LJ, NJ and DZ (and their case forms) are accepted, which is harmless for id matching.
       **The accepted set follows the Python `unicodedata` version.** A safety test pins
       `unidata_version` and the count and hash of the accepted non-ASCII code points, so a Python
-      upgrade that changes the set fails the test and needs an ADR review. Combining marks are
+      upgrade that changes the set fails the test and needs an ADR review.
+      **Runtime control (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14"):** the
+      reviewed set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse to run
+      unless `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any
+      connection). The safety test pins the set on 16.0.0 and, on any other interpreter, asserts
+      that the loader refuses (it does not skip). CI runs Python 3.11 (Unicode 14.0.0) and 3.14
+      (16.0.0), so the 3.11 leg cannot run the knowledge-set pin and relies on the refusal
+      assertion; `docker/Dockerfile` is `python:3.12-slim` (Unicode 15.0.0), so it must move to
+      3.14 before the first production load (ADR 0024 Amendment 1 build list). (Interpreter and
+      Unicode versions are from memory, to be confirmed by running.) Combining marks are
       refused (the text is precomposed NFC). A second
       check refuses every default-ignorable code point from the
       code's own table (Python's `unicodedata` lacks the property), which covers variation
@@ -1381,19 +1393,32 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   capitals, modifier letters, ligatures, fullwidth and mathematical forms, combining marks, other
   scripts). **RESIDUAL, OWNER-ACCEPTED 2026-10-23 as a recorded gap:** Latin-named letters that
   look like ASCII id letters and that NFKC does not fold (for example U+0138, U+0185, U+0131,
-  U+0269, U+0251, U+0261, accented k and b forms, U+A78B and U+A78C saltillo) pass both screens.
-  UTS #39 and wildcard matching were not adopted. Mitigations that exist: the prompt layer
-  escapes non-ASCII as `\uXXXX`; `runner.py` rejects top-level `evidence_ids` not in
-  `allowed_ids` by exact match (nested `evidence_ids` and a spoof of a REAL id in the same run
-  are unchecked, and the knowledge connector and prompt path are not built). Impact limit:
-  `reconcile` only tightens and rules never read LLM values. **Must be revisited when the
-  knowledge connector and citation guard are built.** (b) the newline-inside-`kb:` gap is closed
+  U+0269, U+0251, U+0261, accented k and b forms) pass both screens. U+A78B and U+A78C (saltillo)
+  are a different case: they imitate an apostrophe (ASCII punctuation), not an id letter.
+  UTS #39 and wildcard matching were not adopted. **Escaping non-ASCII as `\uXXXX` in the prompt
+  layer is transport protection only** (a model may still read the escaped form); the real
+  mitigation is the citation check. **`reconcile` only tightens covers the recommendation, not the
+  explanation text a human reads, which a spoofed citation could steer.** Two partial mitigations
+  exist elsewhere, **none on the knowledge path yet (not built)**: `prompts.neutralize`, and
+  `runner.py` exact-match rejection of top-level `evidence_ids` not in `allowed_ids` (nested
+  `evidence_ids` and a spoof of a REAL id in the same run are unchecked; the knowledge connector
+  and prompt path are not built). Impact limit: `reconcile` only tightens the recommendation and
+  rules never read LLM values. **Must be revisited when the knowledge connector and citation guard
+  are built.** (b) the newline-inside-`kb:` gap is closed
   in code (not yet re-reviewed); (c) **stays OPEN**: the "and similar" word-list tail and
   separators, namely hyphens dropped or replaced in connector prefixes (`openmeteomarine:x`),
   percent-encoding (`kb%3Aabc`, since `%` is allowed), and allowed ASCII punctuation separators
-  (`k.b:`, `k-b:`, `k/b:`, `k'b:`, `k(b:`, `k=b:`). Instruction wording is screened only in
+  (every allowed ASCII punctuation character as a separator between `k` and `b`:
+  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`, for example `k.b:`, `k,b:`, `k-b:`, `k/b:`), and the
+  colon itself replaced by allowed ASCII (`kb;abc`, `kb=abc`, `kb/abc`). `k_b:` is no longer an
+  open vector (underscore is refused by the allow-list). Instruction wording is screened only in
   `document_id`, and fields joined at display could form an id (to check when the prompt path is
   built).
+- **Unicode version gate for the first production load (OWNER-APPROVED 2026-10-24, option
+  "runtime check plus 3.14"; ADR 0024 A6 (10)):** `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3), the safety test pins the set on 16.0.0 and
+  asserts the refusal elsewhere, and `docker/Dockerfile` moves to Python 3.14 first (not done;
+  docker changes wait for A1 to A7). See decision 13.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 
@@ -1555,10 +1580,11 @@ citation guard are later stages.
    rows; there are no `pg_inherits` children; `relpersistence = 'p'` on the three tables; and the
    table owners and the `public` schema owner are the expected owner role. Each check has a failure test and a mutation.
    Until then the "pair with the function" wording of decision 10 is not built.
-10. **Loader attribute checks (added 2026-10-22; MUST land before the first production load).**
-    `kb_load`'s self-check tests superuser, membership of the owner or app role, CREATEROLE,
-    BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role holding TEMP, each with a failure test and a
-    mutation.
+10. **Loader attribute checks (added 2026-10-22; implemented in slice 1, committed `b1d636f`, and
+    live-tested).** `kb_load`'s self-check tests superuser, membership of the owner or app role,
+    CREATEROLE, BYPASSRLS, NOINHERIT/`SET ROLE` to a TEMP role, and replication. **Remaining gap
+    (ADR 0024 A8):** the privilege checks run in separate transactions, and `withdraw` checks role
+    names only.
 
 Still open for the owner (gating shipping: the withdrawal log's location and the
 re-acknowledgement of decision 11; the `hash_checked` answer is no longer open): the licence and `display_permitted` evidence for each source,

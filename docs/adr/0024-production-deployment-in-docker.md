@@ -1353,7 +1353,8 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
   (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
   0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
-  (loader attribute checks) has landed; (5) the **licence and `display_permitted` evidence** for
+  (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
+  remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
   each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
   tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
   `unicodedata`-based approximation, which is for development only. **Added by the slice 2
@@ -1364,25 +1365,38 @@ condition; the mutation check is to break the compose file once and watch it fai
   `P*`, `Sm` and `Sk` character and every `LATIN ...` letter. **Owner decision 2026-10-23: the
   ADR 0022 decision 13 allow-list is narrowed to a fixed set** (ASCII letters and digits, space,
   newline where allowed, `LATIN SMALL/CAPITAL LETTER` accented letters, and only
-  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`; the name-based rule also refuses `SMALL CAPITAL`,
-  `LIGATURE` and `MODIFIER` names). **Re-reviewed 2026-10-23: closed for the reported vectors**
+  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`; the prefix rule already refuses `œ` (U+0153, `LATIN
+  SMALL LIGATURE OE`) and modifier letters; the name fragments `LIGATURE` and `MODIFIER` are
+  defence in depth with no effect under Unicode 16.0.0, and only `SMALL CAPITAL` does work). **Re-reviewed 2026-10-23: closed for the reported vectors**
   (colon, hyphen and minus lookalikes, LATIN LETTER small capitals, modifier letters, ligatures,
   fullwidth and mathematical forms, combining marks, other scripts). **RESIDUAL, OWNER-ACCEPTED
   2026-10-23 as a recorded gap:** Latin-named letters that look like ASCII id letters and that
   NFKC does not fold (for example U+0138, U+0185, U+0131, U+0269, U+0251, U+0261, accented k and
-  b forms, U+A78B and U+A78C saltillo) pass both screens; UTS #39 and wildcard matching were not
-  adopted. Mitigations that exist: the prompt layer escapes non-ASCII as `\uXXXX`; `runner.py`
-  rejects top-level `evidence_ids` not in `allowed_ids` by exact match (nested `evidence_ids` and
-  a spoof of a REAL id in the same run are unchecked, and the knowledge connector and prompt path
-  are not built). Impact limit: `reconcile` only tightens and rules never read LLM values. **Must
+  b forms) pass both screens; U+A78B and U+A78C (saltillo) instead imitate an apostrophe (ASCII
+  punctuation), not an id letter. UTS #39 and wildcard matching were not adopted. Escaping
+  non-ASCII as `\uXXXX` is transport protection only (a model may still read the escaped form);
+  the real mitigation is the citation check. `reconcile` only tightens covers the recommendation,
+  not the explanation text a human reads, which a spoofed citation could steer. Partial mitigations
+  elsewhere, **none on the knowledge path yet (not built)**: `prompts.neutralize`, and `runner.py`
+  exact-match rejection of top-level `evidence_ids` not in `allowed_ids` (nested `evidence_ids` and
+  a spoof of a REAL id in the same run are unchecked). Impact limit: `reconcile` only tightens the
+  recommendation and rules never read LLM values. **Must
   be revisited when the knowledge connector and citation guard are built.** Consequence:
   typographic quotes and dashes in corpus text are refused and must be ASCII; no data exists yet.
   (8) **A newline inside `kb:`** was a gap; it is **closed in code** (not yet re-reviewed).
   (9) **Stays OPEN:** the **"and similar" tail of the word list** and separators: hyphens dropped
   or replaced in connector prefixes (`openmeteomarine:x`), percent-encoding (`kb%3Aabc`, since
-  `%` is allowed) and allowed ASCII punctuation separators (`k.b:`, `k-b:`, `k/b:`, `k'b:`,
-  `k(b:`, `k=b:`). Instruction wording is screened only in `document_id`, and fields joined at
+  `%` is allowed) and every allowed ASCII punctuation character as a separator between `k` and `b`
+  (`. , ; : ! ? ' " ( ) [ ] - / % + = < >`, including the comma: `k.b:`, `k,b:`, `k-b:`, `k/b:`,
+  `k'b:`, `k(b:`, `k=b:`), and the colon itself replaced by allowed ASCII (`kb;abc`, `kb=abc`,
+  `kb/abc`). `k_b:` is no longer an open vector (underscore is refused by the allow-list).
+  Instruction wording is screened only in `document_id`, and fields joined at
   display could form an id (to check when the prompt path is built).
+  (10) **Unicode version (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14").** The
+  reviewed character set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection), and
+  `docker/Dockerfile` moves to Python 3.14 first (A1 to A7 build list item below). No production
+  load until both are done.
 - **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
   column with no default could not be added later; it goes into the migration (proposed by
@@ -1507,15 +1521,40 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **Narrowed character allow-list (owner decision, 2026-10-23; ADR 0022 decision 13).** Corpus
   text with typographic quotes or dashes (and any other non-ASCII punctuation or symbol) is
   refused and must use the ASCII forms; no data exists yet, so no known break. Consequences of
-  the name-based rule: ß æ ø ð þ ı are accepted, `œ` ligatures are refused, and the DŽ, LJ, NJ
-  and DZ digraphs are accepted (harmless for id matching). The accepted set follows the Python
-  `unicodedata` version; a safety test pins `unidata_version` and the count and hash of accepted
-  non-ASCII code points, and any change needs an ADR review. A6 gate (7) was re-reviewed
+  the name rules: ß æ ø ð þ ı are accepted, `œ` (U+0153, `LATIN SMALL LIGATURE OE`) and modifier
+  letters are refused by the prefix rule (`LATIN SMALL/CAPITAL LETTER `), and the DŽ, LJ, NJ
+  and DZ digraphs are accepted (harmless for id matching). The `LIGATURE` and `MODIFIER` fragments
+  are defence in depth with no effect under Unicode 16.0.0; only `SMALL CAPITAL` does work
+  (U+A7AE). A test goes red if a future Unicode version makes the other two reachable. The
+  accepted set follows the Python `unicodedata` version; a safety test pins `unidata_version` and
+  the count and hash of accepted non-ASCII code points, and any change needs an ADR review.
+  **Runtime control (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14"):** the reviewed
+  set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection). The
+  safety test pins the set on 16.0.0 and, on any other interpreter, asserts that the loader
+  refuses (it does not skip). CI runs Python 3.11 (Unicode 14.0.0) and 3.14 (16.0.0), so the 3.11
+  leg cannot run the knowledge-set pin and relies on the refusal assertion;
+  `docker/Dockerfile` is `python:3.12-slim` (Unicode 15.0.0). Versions are from memory, to be
+  confirmed by running. A6 gate (7) was re-reviewed
   2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
-  look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261, U+A78B;
-  see A6). UTS #39 is not adopted. Gate (9) stays open: connector prefixes with hyphens dropped
-  or replaced, percent-encoding (`kb%3Aabc`) and ASCII punctuation separators (`k.b:` and kin),
-  plus the "and similar" word-list tail.
+  look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261; U+A78B
+  and U+A78C imitate an apostrophe instead; see A6). Escaping non-ASCII as `\uXXXX` is transport
+  protection only; the real mitigation is the citation check; `reconcile` only tightens covers the
+  recommendation, not the explanation text a human reads, which a spoofed citation could steer;
+  the partial mitigations (`prompts.neutralize`, the `runner.py` exact match of top-level
+  `evidence_ids`) are elsewhere, none on the knowledge path yet (not built). UTS #39 is not
+  adopted. Gate (9) stays open: connector prefixes with hyphens dropped
+  or replaced, percent-encoding (`kb%3Aabc`), every allowed ASCII punctuation character
+  (including the comma) as a separator (`k.b:`, `k,b:` and kin), the colon replaced by allowed
+  ASCII (`kb;abc`, `kb=abc`, `kb/abc`), plus the "and similar" word-list tail. `k_b:` is no
+  longer open (underscore is refused).
+- **Amendment 1 build list, REQUIRED before the first production load: move `docker/Dockerfile`
+  from `python:3.12-slim` to Python 3.14** (Unicode 16.0.0; see the runtime control above). Not
+  done now; `docker/` changes wait for A1 to A7. Without it `kb_load` and `approve` refuse in the
+  production image.
+- **Loader attribute checks (ADR 0022 condition 10)** are implemented in slice 1 (committed
+  `b1d636f`) and live-tested. Remaining gap: the privilege checks run in separate transactions, and
+  `withdraw` checks role names only.
 - **`_fold` false positives (known usability gap).** Prose such as "Dock B:" folds to `kb:` and is
   refused, and the refusal message gives no position, so the author must hunt for the cause.
   Not fixed; recorded here.

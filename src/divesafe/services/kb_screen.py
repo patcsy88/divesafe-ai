@@ -19,6 +19,7 @@ from divesafe.data import (
     open_meteo_wind,
     phn_etide,
 )
+from divesafe.services.kb_common import LoaderRefusal
 
 # Decision 9: "the prefixes are listed in code from the connectors, not a generic pattern". Each
 # connector's own SOURCE constant is the prefix of its evidence ids ("<SOURCE>:...").
@@ -36,6 +37,21 @@ CONNECTOR_PREFIXES: tuple[str, ...] = (
 ID_WORD_LIST = frozenset(
     {"ignore", "system", "assistant", "instruction", "recommend", "go", "approve"}
 )
+
+# The accepted-letter set below was reviewed against this Unicode data version (owner decision
+# 2026-10-24). The loader refuses to run on any other (`require_reviewed_unicode`).
+REVIEWED_UNIDATA_VERSION = "16.0.0"
+
+
+class UnicodeNotReviewed(LoaderRefusal):
+    pass
+
+
+def require_reviewed_unicode() -> None:
+    """Read at call time (so a test can patch it). The message echoes nothing."""
+    if unicodedata.unidata_version != REVIEWED_UNIDATA_VERSION:
+        raise UnicodeNotReviewed("the loader needs the reviewed Python Unicode data")
+
 
 # Decision 13 (owner decision 2026-10-23): a FIXED allow-list. Letters and digits are ASCII, plus
 # accented Latin letters by Unicode name; the only punctuation and symbols are these ASCII

@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from tests.safety.kb_fakes import mutated_module
 
-from divesafe.services import kb_screen
+from divesafe.services import kb_common, kb_screen
 
 pytestmark = pytest.mark.safety
 
@@ -615,20 +615,28 @@ def fingerprint(module: Any) -> tuple[int, str]:
 
 
 def check_pinned_set(module: Any) -> None:
-    assert unicodedata.unidata_version == PINNED_UNIDATA_VERSION, (
-        f"Unicode data is {unicodedata.unidata_version}, the accepted set was reviewed under "
-        f"{PINNED_UNIDATA_VERSION}: the set of accepted non-ASCII characters MUST be re-reviewed "
-        "(ADR review) and the pinned constants updated; do not skip this test"
-    )
-    count, digest = fingerprint(module)
-    assert (count, digest) == (PINNED_ACCEPTED_NON_ASCII_COUNT, PINNED_ACCEPTED_NON_ASCII_SHA256), (
-        "the set of accepted non-ASCII characters changed; widening it needs an ADR review"
-    )
+    """Version-aware (owner decision 2026-10-24). Under the reviewed Unicode version the accepted
+    set must equal the pinned one. Under any other version the set is NOT compared (it may
+    legitimately differ) and nothing is skipped: the runtime control must refuse instead."""
+    if unicodedata.unidata_version == PINNED_UNIDATA_VERSION:
+        count, digest = fingerprint(module)
+        assert (count, digest) == (
+            PINNED_ACCEPTED_NON_ASCII_COUNT,
+            PINNED_ACCEPTED_NON_ASCII_SHA256,
+        ), "the set of accepted non-ASCII characters changed; widening it needs an ADR review"
+    else:
+        with pytest.raises(module.UnicodeNotReviewed) as caught:
+            module.require_reviewed_unicode()
+        assert str(caught.value) == UNICODE_MESSAGE
+
+
+UNICODE_MESSAGE = "the loader needs the reviewed Python Unicode data"
 
 
 def test_the_accepted_non_ascii_set_is_pinned_by_version_count_and_hash() -> None:
-    """Widening the accepted set needs ADR review. A different Unicode version fails loudly: the
-    set must be re-reviewed, then the constants updated."""
+    """Widening the accepted set needs ADR review. On another Unicode version the set is not
+    compared; the runtime refusal is asserted instead (so CI on 3.11 still proves the control)."""
+    assert kb_screen.REVIEWED_UNIDATA_VERSION == PINNED_UNIDATA_VERSION
     check_pinned_set(kb_screen)
 
 
@@ -638,15 +646,80 @@ def test_mutation_widening_the_accepted_set_by_one_code_point_fails_the_pin() ->
     )
     assert widened.allowed_text("\u00b5", newlines=False)
     assert not kb_screen.allowed_text("\u00b5", newlines=False)
-    with pytest.raises(CAUGHT):
-        check_pinned_set(widened)
+    assert fingerprint(widened) != fingerprint(kb_screen)  # true on any Unicode version
+    if unicodedata.unidata_version == PINNED_UNIDATA_VERSION:
+        with pytest.raises(CAUGHT):
+            check_pinned_set(widened)
     check_pinned_set(kb_screen)
 
 
 def test_mutation_accepting_u_a7ae_fails_the_pin_too() -> None:
     mutant = mutated_module(kb_screen, (NAME_RULE, PREFIX_ONLY))
+    assert fingerprint(mutant) != fingerprint(kb_screen)
+    if unicodedata.unidata_version == PINNED_UNIDATA_VERSION:
+        with pytest.raises(CAUGHT):
+            check_pinned_set(mutant)
+
+
+# --- the runtime Unicode control (owner decision 2026-10-24) --------------------------------------
+
+
+@pytest.mark.parametrize("version", ["15.0.0", "14.0.0", "17.0.0", "", "16.0", "16.0.1", "16"])
+def test_an_unreviewed_unicode_version_is_refused_with_a_fixed_message(
+    monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    monkeypatch.setattr(unicodedata, "unidata_version", version)
+    with pytest.raises(kb_screen.UnicodeNotReviewed) as caught:
+        kb_screen.require_reviewed_unicode()
+    assert str(caught.value) == UNICODE_MESSAGE
+    assert version not in str(caught.value) or version == ""  # echoes nothing
+    assert isinstance(caught.value, kb_common.LoaderRefusal)
+
+
+def test_the_reviewed_unicode_version_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unicodedata, "unidata_version", "16.0.0")
+    result = kb_screen.require_reviewed_unicode()
+    assert result is None
+
+
+def check_unicode_control(module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    for version in ("15.0.0", "14.0.0", "17.0.0", "", "16.1.0", "16.0.1", "15.9.9"):
+        monkeypatch.setattr(unicodedata, "unidata_version", version)
+        with pytest.raises(module.UnicodeNotReviewed):
+            module.require_reviewed_unicode()
+    monkeypatch.setattr(unicodedata, "unidata_version", "16.0.0")
+    module.require_reviewed_unicode()
+
+
+def test_the_unicode_control_checker_passes_on_the_real_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check_unicode_control(kb_screen, monkeypatch)
+
+
+COMPARE = "    if unicodedata.unidata_version != REVIEWED_UNIDATA_VERSION:"
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        pytest.param(COMPARE.replace("!=", "=="), id="inverted-compare"),
+        pytest.param(
+            '    if unicodedata.unidata_version.split(".")[0]'
+            ' != REVIEWED_UNIDATA_VERSION.split(".")[0]:',
+            id="major-version-only",
+        ),
+        pytest.param("    if False:", id="never-refuses"),
+    ],
+)
+def test_mutation_a_weaker_unicode_compare_is_caught(
+    monkeypatch: pytest.MonkeyPatch, new: str
+) -> None:
+    mutant = mutated_module(kb_screen, (COMPARE, new))
     with pytest.raises(CAUGHT):
-        check_pinned_set(mutant)
+        check_unicode_control(mutant, monkeypatch)
+    monkeypatch.undo()
+    check_unicode_control(kb_screen, monkeypatch)
 
 
 def test_the_refused_name_fragments_are_exactly_these_three() -> None:
@@ -725,8 +798,22 @@ def test_the_name_and_the_behaviour_of_each_special_latin_letter(
 
 # RECORDED GAP, owner-accepted 2026-10-23: Latin-named lookalike letters pass both screens (no
 # wildcard or confusables matching). If the screens ever catch them, revisit these tests.
+# U+A78B and U+A78C (LATIN CAPITAL/SMALL LETTER SALTILLO) imitate an APOSTROPHE (ASCII punctuation),
+# not an id letter; they are accepted today like the rest.
 @pytest.mark.parametrize(
-    "char", ["\u0138", "\u0185", "\u0131", "\u0269", "\u0251", "\u0261", "\u1e35", "\u0137"]
+    "char",
+    [
+        "\u0138",
+        "\u0185",
+        "\u0131",
+        "\u0269",
+        "\u0251",
+        "\u0261",
+        "\u1e35",
+        "\u0137",
+        "\ua78b",
+        "\ua78c",
+    ],
 )
 def test_recorded_gap_latin_named_lookalike_letters_pass_both_screens(char: str) -> None:
     assert unicodedata.name(char).startswith(LATIN_PREFIXES)
