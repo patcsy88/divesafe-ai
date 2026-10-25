@@ -54,6 +54,7 @@ from divesafe.orchestration import (
 from divesafe.services import (
     ConflictError,
     InMemoryAssessmentRepository,
+    InvalidSuccessorError,
     RecordNotFoundError,
     RepositoryIntegrityError,
     RepositoryUnavailableError,
@@ -70,6 +71,7 @@ from divesafe.services.runs import (
 
 logger = logging.getLogger(__name__)
 
+_NOT_UPDATABLE = "the assessment could not be updated; reload it"
 _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
 )
@@ -535,6 +537,11 @@ def create_app(state: AppState | None = None) -> FastAPI:
             ) from exc
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "decision refused: invalid successor", extra={"assessment_id": assessment_id}
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
         logger.info(
             "human decision recorded",
             extra={
@@ -582,6 +589,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="assessment changed; reload it") from exc
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "actual conditions refused: invalid successor",
+                extra={"assessment_id": assessment_id},
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
         logger.info(
             "actual conditions recorded",
             extra={"assessment_id": assessment_id, "actor": principal.actor},

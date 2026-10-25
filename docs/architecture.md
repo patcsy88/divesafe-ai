@@ -93,6 +93,15 @@ project's concept names map onto it like this:
 | HumanDecision | decider, decision, time, derived `is_override`, rationale |
 | PostDiveObservation | `ActualConditions` (alias `PostDiveObservation`) |
 
+**Terms: "withheld" has three meanings.**
+
+- `withheld_evidence`: conflicting evidence dropped before the rules run, kept in the record and
+  shown to the human, never evaluated ([ADR 0008](adr/0008-evidence-usability.md)).
+- `decision_withheld` / `DECISION_WITHHELD`: the human decision hidden from a create-only key
+  ([ADR 0019](adr/0019-asynchronous-assessment-creation.md)).
+- `withheld_knowledge`: knowledge items not sent to a model because of the egress basis
+  ([ADR 0022](adr/0022-rag-knowledge-retrieval.md)).
+
 ## Data provenance
 
 Every `EvidenceItem` carries: `source` and `source_version`; `location` (`GeoPoint`, the data's
@@ -135,6 +144,10 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 ## Known gaps
 
 Tracked items not yet built (each needs an ADR or design before implementation):
+
+- **Evidence-id conflicts hide the most severe variant** (a conflict can turn NO-GO into
+  INSUFFICIENT EVIDENCE; the deferred "keep the most severe variant" option must be decided before
+  any validated rule ships). See [risk-model.md](risk-model.md) and ADR 0008.
 
 - **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
   Still open: a migration tool, record hashing for tamper evidence, connection pooling.

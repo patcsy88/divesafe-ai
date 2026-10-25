@@ -271,6 +271,14 @@ class AssessmentRecord(_Frozen):
     evidence_issues: tuple[str, ...] = Field(
         default=(), description="Sources or categories that failed or were rejected."
     )
+    withheld_evidence: tuple[EvidenceItem, ...] = Field(
+        default=(),
+        description=(
+            "Items dropped because different items shared one id. For the human reviewer only: "
+            "NOT evaluated, NOT citable, never given to the engine, agents or prompts. They may "
+            "hold a more severe result than anything evaluated."
+        ),
+    )
     findings: tuple[Finding, ...] = ()
     scenarios: tuple[Scenario, ...] = ()
     proposal_evidence_ids: tuple[str, ...] = Field(
@@ -327,6 +335,17 @@ class AssessmentRecord(_Frozen):
         ids = [e.id for e in self.evidence]
         if len(ids) != len(set(ids)):
             raise ValueError("evidence ids must be unique")
+
+        if {e.id for e in self.withheld_evidence} & set(ids):
+            raise ValueError("withheld evidence ids must not appear in the evidence")
+        if self.withheld_evidence:
+            if not any(s.startswith("evidence.conflict:") for s in self.evidence_issues):
+                raise ValueError("withheld evidence requires an evidence.conflict issue")
+            by_id: dict[str, list[EvidenceItem]] = {}
+            for held in self.withheld_evidence:
+                by_id.setdefault(held.id, []).append(held)
+            if any(all(x == items[0] for x in items) for items in by_id.values()):
+                raise ValueError("each withheld id must appear on at least two different items")
 
         cited = {i for r in self.rule_results for i in r.evidence_ids}
         cited |= {i for s in self.scenarios for i in s.evidence_ids}

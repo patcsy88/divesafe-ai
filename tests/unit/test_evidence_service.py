@@ -54,14 +54,27 @@ def test_unexpected_exceptions_are_not_swallowed() -> None:
         asyncio.run(gather_evidence([_Bug()], TIOMAN_ISLAND, NOW, NOW, NOW))  # type: ignore[list-item]
 
 
-def test_identical_duplicates_collapse_and_conflicts_are_rejected() -> None:
+def test_identical_duplicates_collapse_and_conflicts_are_dropped_with_an_issue() -> None:
     a = make_evidence(DataCategory.WIND, speed=1)
     same = make_evidence(DataCategory.WIND, speed=1)
     different = make_evidence(DataCategory.WIND, speed=2)
     merged = build_evidence_set([("x", FetchResult((a,)), None), ("y", FetchResult((same,)), None)])
     assert len(merged.items) == 1
-    with pytest.raises(DuplicateEvidenceError):
-        build_evidence_set([("x", FetchResult((a,)), None), ("y", FetchResult((different,)), None)])
+    assert merged.issues == ()
+    conflicted = build_evidence_set(
+        [("x", FetchResult((a,)), None), ("y", FetchResult((different,)), None)]
+    )  # no longer raises: it drops every claim and says so
+    assert conflicted.items == ()
+    assert conflicted.issues == (
+        "evidence.conflict: x, y returned different wind evidence under one id; none of it used "
+        "(withheld, not evaluated; it could hold a more severe result)",
+    )
+    assert list(conflicted.withheld) == [a, different]
+    assert conflicted.data_versions == {}
+
+
+def test_duplicate_evidence_error_is_still_exported_but_not_raised() -> None:
+    assert issubclass(DuplicateEvidenceError, ValueError)
 
 
 def test_data_versions_are_recorded_per_source() -> None:

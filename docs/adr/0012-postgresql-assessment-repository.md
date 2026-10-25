@@ -48,8 +48,20 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
   hashing, a decision-only function) is not built.
 - **Float values in free-form evidence `value`** that JSONB would re-type (for example 1e22) are
   refused rather than stored; such data cannot be recorded.
-- Stored JSON from an older model version must still validate; no upcasting yet (a failing read is
-  a 500 with no content logged).
+- Stored JSON from an older model version must still validate. There is no general upcasting; the
+  only accommodation is the `replace()` rule below (a failing read is a 500 with no content logged).
+- **`replace()` and keys missing from an old row (2026-10-26).** `replace()` leaves out top-level
+  keys that are missing from the stored row when the successor's value equals the model default.
+  The append-only trigger is unchanged and still requires every key except `human_decision` and
+  `actual_conditions` to stay identical. The read-back compares against the exact JSON written and
+  the loaded model. Verified live on PostgreSQL 17: an old-shape row was decided, then actual
+  conditions were reported, and no new key was written. ADR 0015's "never disable the triggers"
+  still holds.
+- **Not solved (replace):** a defaulted field added *inside a nested value* is written into an old
+  row's successor and refused by the trigger, so old pending rows would become undecidable. It
+  fails closed (HTTP 409, "the assessment could not be updated; reload it"). A migration or an
+  upcasting plan is needed before any nested field is added. Changing an existing field's default
+  silently changes what old rows mean.
 - No connection pool, backups, or replication. An ambiguous commit failure (network drop after the
   server committed) is reported as an error although the write may exist; a retry then conflicts.
 - Roles exist (ADR 0013) but there is no per-assessment ownership: any viewer reads any assessment.

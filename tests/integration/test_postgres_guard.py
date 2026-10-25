@@ -1173,3 +1173,200 @@ def test_a_search_path_setting_cannot_let_a_look_alike_view_hide_a_superuser_own
     finally:
         _sql("ALTER ROLE divesafe_app_test RESET search_path")
         _sql("DROP VIEW public.pg_roles")
+
+
+def _withheld_record() -> object:
+    """A record that carries WITHHELD evidence: two different items under one id, none evaluated."""
+    from tests.conftest import make_evidence
+
+    from divesafe.domain import AssessmentRecord, DataCategory
+
+    base = _record()
+    held = tuple(
+        make_evidence(DataCategory.WIND, speed=speed).model_copy(update={"source": source})
+        for speed, source in ((1, "x"), (2, "y"))
+    )
+    issue = (
+        "evidence.conflict: x, y returned different wind evidence under one id; none of it used "
+        "(withheld, not evaluated; it could hold a more severe result)"
+    )
+    return AssessmentRecord.model_validate(
+        {
+            **base.model_dump(),
+            "withheld_evidence": [i.model_dump() for i in held],
+            "evidence_issues": (issue,),
+        }
+    )
+
+
+def test_a_record_with_withheld_evidence_is_stored_and_read_back_identical() -> None:
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    loaded = repo.get(record.id)
+    assert loaded == record
+    assert loaded is not None
+    assert len(loaded.withheld_evidence) == 2
+    stored = _sql_value("SELECT jsonb_array_length(record -> 'withheld_evidence') FROM assessments")
+    assert stored == "2"
+
+
+def test_a_row_stored_before_the_field_existed_still_loads_with_no_withheld_items() -> None:
+    repo = _postgres()
+    repo.create(_record())
+    old = _base()
+    del old["withheld_evidence"]  # the shape written before the field existed
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _sql_value("SELECT (record ? 'withheld_evidence')::text FROM assessments") == "false"
+    loaded = repo.get("r1")
+    assert loaded is not None
+    assert loaded.withheld_evidence == ()
+    assert loaded == _record()
+
+
+def test_a_stored_row_whose_withheld_id_is_also_an_evidence_id_fails_validation() -> None:
+    from divesafe.services import RepositoryIntegrityError
+
+    repo = _postgres()
+    repo.create(_record())
+    forged = _base()
+    forged["withheld_evidence"] = forged["evidence"]  # same ids as the evaluated evidence
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(forged)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(RepositoryIntegrityError):
+        repo.get("r1")
+
+
+def _has_withheld_key() -> str:
+    return _sql_value(
+        "SELECT (record ? 'withheld_evidence')::text FROM assessments WHERE id = 'r1'"
+    )
+
+
+def _store_old_shape() -> PostgresAssessmentRepository:
+    """A pending row exactly as written before `withheld_evidence` existed (the key is absent)."""
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    repo.create(_record())
+    old = _base()
+    del old["withheld_evidence"]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _has_withheld_key() == "false"
+    return repo
+
+
+def _with_actual(decided: object) -> object:
+    from datetime import timedelta
+
+    from tests.conftest import NOW
+
+    from divesafe.domain import ActualConditions, AssessmentRecord
+
+    assert isinstance(decided, AssessmentRecord)
+    actual = ActualConditions(
+        reported_at=NOW + timedelta(hours=2), reported_by="a", observations={"v": 1}
+    )
+    return AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+
+
+def test_an_old_shape_row_can_be_decided_and_given_actual_conditions_without_gaining_the_key() -> (
+    None
+):
+    from divesafe.domain import AssessmentRecord
+
+    repo = _store_old_shape()
+    pending = _record()
+    decided = _decided(pending, "alice")
+    repo.replace(pending, decided)  # must not be refused by the append-only guard
+    assert _has_withheld_key() == "false"
+    after_decision = repo.get("r1")
+    assert after_decision == decided
+    assert after_decision is not None and after_decision.withheld_evidence == ()
+    assert after_decision.human_decision is not None
+
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _has_withheld_key() == "false"  # still the old shape
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and final.withheld_evidence == ()
+    assert final.actual_conditions is not None
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert "withheld_evidence" not in stored
+    assert stored["human_decision"]["decided_by"] == "alice"
+
+
+def test_a_new_shape_row_keeps_its_withheld_key_when_decided_and_given_actual_conditions() -> None:
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    assert _has_withheld_key() == "true"
+    decided = _decided(record, "alice")
+    repo.replace(record, decided)
+    assert _has_withheld_key() == "true"
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _has_withheld_key() == "true"
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and len(final.withheld_evidence) == 2
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert len(stored["withheld_evidence"]) == 2
+
+
+def test_a_successor_that_changes_another_field_is_still_refused_on_an_old_shape_row() -> None:
+    from divesafe.domain import AssessmentRecord
+    from divesafe.services import InvalidSuccessorError
+
+    repo = _store_old_shape()
+    pending = _record()
+    decided = _decided(pending, "alice")
+    changed = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "explanation": "rewritten after the fact"}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, changed)
+    withheld = _withheld_record()
+    assert isinstance(withheld, AssessmentRecord)
+    smuggled = AssessmentRecord.model_validate(
+        {
+            **decided.model_dump(),
+            "withheld_evidence": [i.model_dump() for i in withheld.withheld_evidence],
+            "evidence_issues": withheld.evidence_issues,
+        }
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, smuggled)  # a non-default value is never dropped or added silently
+    assert _has_withheld_key() == "false"
+    assert repo.get("r1") == pending
+
+
+def test_a_successor_that_changes_another_field_is_still_refused_on_a_new_shape_row() -> None:
+    from divesafe.domain import AssessmentRecord
+    from divesafe.services import InvalidSuccessorError
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    changed = AssessmentRecord.model_validate(
+        {**_decided(record, "alice").model_dump(), "withheld_evidence": []}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(record, changed)  # emptying withheld_evidence is a change, not a default
+    assert repo.get("r1") == record

@@ -25,6 +25,7 @@ import psycopg
 from psycopg import sql
 from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
+from pydantic_core import to_jsonable_python
 
 from divesafe.config.roles import RESERVED_ROLE_NAMES
 from divesafe.domain import AssessmentRecord, DivePlan
@@ -258,6 +259,25 @@ def _same(a: Any, b: Any) -> bool:
     if isinstance(a, list):
         return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b, strict=True))
     return bool(a == b)
+
+
+def _without_new_defaults(new: AssessmentRecord, stored: Any) -> dict[str, Any]:
+    """The successor's JSON, minus top-level keys the stored row does not have whose value is the
+    model default. A row written before a field existed lacks its key, and the append-only
+    trigger refuses any other change to the record, so adding the default key would refuse every
+    update. Keys present in the stored row are always kept. Only TOP-LEVEL keys are handled:
+    defaults nested inside other values are not (a nested field added later needs its own plan).
+    The omitted key still loads as the same default, which the read-back checks."""
+    data: dict[str, Any] = json.loads(new.model_dump_json())
+    if not isinstance(stored, dict):
+        return data
+    for name, field in AssessmentRecord.model_fields.items():
+        if name in stored or name not in data or field.is_required():
+            continue
+        default = to_jsonable_python(field.get_default(call_default_factory=True))
+        if _same(default, data[name]):
+            del data[name]
+    return data
 
 
 @contextmanager
@@ -521,22 +541,31 @@ class PostgresAssessmentRepository:
             if AssessmentRecord.model_validate_json(row[0]) != expected:
                 raise ConflictError(expected.id)
             check_successor(expected, new)
+            intended = _without_new_defaults(new, json.loads(row[0]))
             cursor = conn.execute(
                 "UPDATE public.assessments SET record = %s::jsonb WHERE id = %s",
-                (new.model_dump_json(), new.id),
+                (json.dumps(intended), new.id),
             )
             if cursor.rowcount != 1:
                 raise RepositoryIntegrityError("the update did not apply")
-            self._read_back_must_match(conn, new)
+            self._read_back_must_match(conn, new, intended)
 
     @staticmethod
-    def _read_back_must_match(conn: psycopg.Connection[Any], record: AssessmentRecord) -> None:
+    def _read_back_must_match(
+        conn: psycopg.Connection[Any],
+        record: AssessmentRecord,
+        intended: dict[str, Any] | None = None,
+    ) -> None:
+        """`intended` is the exact JSON object that was written (default: the full dump). The
+        stored text must equal it exactly (types included), and must also load as a record equal
+        to `record`, so an omitted default key is tolerated only because it loads as the default."""
         row = conn.execute(
             "SELECT record::text FROM public.assessments WHERE id = %s", (record.id,)
         ).fetchone()
         if row is None:
             raise RepositoryIntegrityError("the record did not persist")
-        if not _same(json.loads(record.model_dump_json()), json.loads(row[0])):
+        wanted = json.loads(record.model_dump_json()) if intended is None else intended
+        if not _same(wanted, json.loads(row[0])):
             raise UnstorableRecordError("the record would not read back identical")
         if AssessmentRecord.model_validate_json(row[0]) != record:
             raise UnstorableRecordError("the record would not read back identical")

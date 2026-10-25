@@ -14,7 +14,9 @@ visible to the human. It is a structured comparison tool, **not** a safety deter
 - **Fixed depth:** one expansion level per scenario (evidence -> risk factors -> summary).
   No recursive search, no open-ended self-reflection loops.
 - **Fixed budget:** one structured LLM call per scenario, validated against the `Scenario`
-  schema. Failure to validate drops that scenario and is recorded.
+  schema. Failure to validate drops that scenario and is recorded. The prompt's length limits are
+  deliberately stricter than the schema's (ADR 0007), so a reply that follows the prompt always
+  validates; an over-long reply is refused, never trimmed.
 
 ## Inputs and outputs
 

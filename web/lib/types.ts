@@ -116,6 +116,9 @@ export interface EvidenceView {
   assessed_at: string;
   evidence: EvidenceEntry[];
   evidence_issues: string[];
+  // Items that were NOT used or evaluated; absent in an older API response.
+  withheld_evidence?: EvidenceItem[];
+  withheld_note?: string;
   unevaluated_factors: string[];
   evidence_note: string;
   notice: string;

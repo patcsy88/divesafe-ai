@@ -32,6 +32,11 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
   `evidence_issues` and `unevaluated_factors`. `effective_quality` is the quality an item earned
   from its own checks, not a statement that it is fresh or covers the dive window. Age is since
   retrieval at assessment time; future-dated items are flagged, not hidden.
+- **Additive fields (2026-10-26).** `EvidenceView` gains `withheld_evidence` (items dropped
+  because of an evidence-id conflict, ADR 0008) and `withheld_note`; `AssessmentView` now embeds
+  `withheld_evidence`. Old clients ignore them. The decision and actual-conditions endpoints answer
+  409 with the fixed message "the assessment could not be updated; reload it" for
+  `InvalidSuccessorError`.
 - Third-party text (`value`, warning text) must be rendered by clients as plain text only.
 - `/v1/*` responses carry `Cache-Control: no-store`.
 

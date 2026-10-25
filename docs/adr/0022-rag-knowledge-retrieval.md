@@ -292,8 +292,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      id screen of decision 9 and a word list (no `ignore`, `system`, `assistant`, `instruction`,
      `recommend`, `go`, `approve` and similar tokens as a whole token), so an id cannot read as an
      instruction; the list is a screen, not a control. The database has a unique constraint on
-     (document, version, chunk). A collision at run time becomes an evidence issue, not an
-     uncaught `DuplicateEvidenceError`.
+     (document, version, chunk). A collision at run time becomes an evidence issue. As of
+     2026-10-25 (owner decision) `gather_evidence` and `build_evidence_set` no longer raise: when two
+     connectors return different items under one id, every item with that id is dropped and a fixed
+     `evidence.conflict` issue is recorded, so the existing connector-issues rule yields
+     INSUFFICIENT EVIDENCE. The dropped items are kept as withheld evidence (not evaluated, not
+     passed to the engine, agents or prompts), and a conflict can hide a more severe result
+     (INSUFFICIENT EVIDENCE instead of NO-GO); see `docs/risk-model.md` and ADR 0008.
    - `data_kind` KNOWLEDGE, `is_forecast` false, `upstream_known` false, `quality` DEGRADED, with a
      `quality_notes` entry saying why, and a `transformations` entry for chunking.
    - `location` is the site for a site document. An all-sites document has no location and an
@@ -871,7 +876,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       prompts.
     - **Notes need a channel that does not exist today, and so do the other record fields.** One
       shape change to `AssessmentRecord` adds: `notes` (typed codes plus counts, never free
-      connector strings), `withheld_knowledge` (document id, version and chunk, never titles),
+      connector strings), `withheld_knowledge` (document id, version and chunk, never titles; one of three meanings of
+      "withheld", see the terms block in `docs/architecture.md`, and not `withheld_evidence` of ADR 0008),
       `superseded_knowledge` (ids only), and the typed egress fields of decision 15
       (`egress_basis`, `model_host`). All default to empty or absent so older records still
       validate, none enters a prompt, and each is shown to the human in fixed wording, with a test

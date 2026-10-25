@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 class DuplicateEvidenceError(ValueError):
-    """Two different evidence items claimed the same id."""
+    """Two different evidence items claimed the same id. Kept exported for compatibility;
+    `build_evidence_set` no longer raises it (a conflict drops the items and adds an issue, so the
+    run gets more cautious instead of failing). Nothing in the package raises it now."""
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,9 @@ class EvidenceSet:
     items: tuple[EvidenceItem, ...]
     issues: tuple[str, ...]
     data_versions: dict[str, str]
+    # Items dropped because two different items shared an id. For the audit record only: they are
+    # never evaluated, cited, or passed to the engine, the agents or a prompt.
+    withheld: tuple[EvidenceItem, ...] = ()
 
     def by_category(self, category: DataCategory) -> tuple[EvidenceItem, ...]:
         return tuple(i for i in self.items if i.category == category)
@@ -41,22 +46,43 @@ def build_evidence_set(
     results: Sequence[tuple[str, FetchResult | None, str | None]],
 ) -> EvidenceSet:
     """Merge (connector name, result, error) triples. Exactly one of result/error is set."""
-    by_id: dict[str, EvidenceItem] = {}
     issues: list[str] = []
-    versions: dict[str, str] = {}
+    # id -> (connector, item) in arrival order, so a third or later duplicate is seen too.
+    claims: dict[str, list[tuple[str, EvidenceItem]]] = {}
     for name, result, error in results:
         if result is None:
             issues.append(f"{name}: {error or 'failed'}")
             continue
         issues.extend(f"{name}: {issue}" for issue in result.issues)
         for item in result.items:
-            existing = by_id.get(item.id)
-            if existing is not None and existing != item:
-                raise DuplicateEvidenceError(f"conflicting evidence for id {item.id}")
-            by_id[item.id] = item
-            versions[item.source] = item.source_version or "unversioned"
-    ordered = tuple(sorted(by_id.values(), key=lambda i: (i.category.value, i.valid_at, i.id)))
-    return EvidenceSet(ordered, tuple(issues), versions)
+            claims.setdefault(item.id, []).append((name, item))
+    kept: list[EvidenceItem] = []
+    withheld: list[EvidenceItem] = []
+    versions: dict[str, str] = {}
+    for claimed in claims.values():
+        first = claimed[0][1]
+        if any(item != first for _, item in claimed[1:]):
+            # Different items under one id: use none of them, whichever connector sent them. They
+            # are kept apart in `withheld` so a reviewer can see them; they may hold a more severe
+            # result than anything evaluated. The issue names the connectors and the categories
+            # (fixed names and enum values) and not the id or any content.
+            connectors = sorted({name for name, _ in claimed})
+            categories = sorted({item.category.value for _, item in claimed})
+            issues.append(
+                f"evidence.conflict: {', '.join(connectors)} returned different "
+                f"{', '.join(categories)} evidence under one id; none of it used "
+                "(withheld, not evaluated; it could hold a more severe result)"
+            )
+            for _, item in claimed:
+                if item not in withheld:
+                    withheld.append(item)
+            logger.warning("conflicting evidence dropped", extra={"connectors": connectors})
+            continue
+        kept.append(first)
+        versions[first.source] = first.source_version or "unversioned"
+    ordered = tuple(sorted(kept, key=lambda i: (i.category.value, i.valid_at, i.id)))
+    held = tuple(sorted(withheld, key=lambda i: (i.category.value, i.valid_at, i.id)))
+    return EvidenceSet(ordered, tuple(issues), versions, held)
 
 
 async def gather_evidence(

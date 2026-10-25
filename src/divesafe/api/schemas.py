@@ -161,6 +161,9 @@ _WITHHELD_NOTE = (
 )
 
 
+_MAX_ATTRIBUTION_CHARS = 300
+
+
 class AssessmentView(BaseModel):
     record: AssessmentRecord
     # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
@@ -192,8 +195,13 @@ class AssessmentView(BaseModel):
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentView:
+        # Only strings, stripped and cut to a bound before deduplicating; anything else is ignored.
         attributions = sorted(
-            {str(e.value["attribution"]) for e in record.evidence if "attribution" in e.value}
+            {
+                text[:_MAX_ATTRIBUTION_CHARS]
+                for e in (*record.evidence, *record.withheld_evidence)
+                if isinstance(raw := e.value.get("attribution"), str) and (text := raw.strip())
+            }
         )
         problems = [
             r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
@@ -316,6 +324,15 @@ class EvidenceView(BaseModel):
     assessed_at: AwareDatetime
     evidence: tuple[EvidenceEntry, ...]
     evidence_issues: tuple[str, ...]
+    # Plain data, labelled by the field name and the note: dropped because different items shared
+    # one id. NOT evaluated and NOT cited; they may hold a more severe result.
+    withheld_evidence: tuple[EvidenceItem, ...] = ()
+    withheld_note: str = (
+        "The items listed here were NOT used: sources sent conflicting information that could not "
+        "be reconciled, so none of it was evaluated or cited in this assessment. It may hold a "
+        "more severe result than anything that was evaluated, so check these sources yourself "
+        "before deciding. Read it as plain text only."
+    )
     unevaluated_factors: tuple[str, ...]
     evidence_note: str = (
         "This lists only what was retrieved. Anything absent was not assessed, and absence is "
@@ -346,6 +363,7 @@ class EvidenceView(BaseModel):
             assessed_at=record.created_at,
             evidence=entries,
             evidence_issues=record.evidence_issues,
+            withheld_evidence=record.withheld_evidence,
             unevaluated_factors=tuple(k.value for k in record.unevaluated_factors),
         )
 

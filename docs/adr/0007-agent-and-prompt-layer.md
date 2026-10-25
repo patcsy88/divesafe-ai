@@ -44,7 +44,11 @@ truncated at 4,000 characters. The plan and the allowed evidence ids sit outside
 prompt states the data-not-instructions rule, the citation rule, and that rules are authoritative.
 The prompt version is stored in `model_version`. Rule 8 states the output length limits (a live
 run showed 44% of calls rejected for length, ADR 0016) and says brevity never outranks the caveat
-rules. Rule 2 (prompt `2026-10-13.1`) bars a hazard from general knowledge that no input mentions
+rules. **The prompt limits are deliberately stricter than the schema limits (owner decision,
+2026-10-25):** summary 800, rationale 1500, risk factor / conflicting signal / uncertainty 200, at
+most 6 items each in the prompt, against 1000, 2000, 300 and 10 in the schema, so a reply that
+follows the prompt always validates. The schema limits were not raised, and an over-long reply is
+refused, never trimmed. Rule 2 (prompt `2026-10-13.1`) bars a hazard from general knowledge that no input mentions
 (a live run added "heat stress" and "eddies"), allows interpreting cited values, and tells the
 model to state the gap instead. Not solved: nothing checks that a reply keeps its caveats or
 invents no hazard, and a lower rejection rate is not evidence that it does. Evidence text can

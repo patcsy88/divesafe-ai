@@ -156,6 +156,7 @@ async def assess_dive(
         created_at=completed,
         plan=plan,
         evidence=evidence.items,
+        withheld_evidence=evidence.withheld,
         rule_results=tuple(rule_results),
         deterministic_recommendation=reconciled.deterministic,
         proposed_recommendation=reconciled.proposed,

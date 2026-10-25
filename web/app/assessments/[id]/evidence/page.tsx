@@ -1,18 +1,11 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import Banner from "../../../../components/Banner.tsx";
+import WithheldBox from "../../../../components/WithheldBox.ts";
 import { ApiError, getEvidence } from "../../../../lib/api.ts";
 import { requireKey } from "../../../../lib/auth.ts";
-import { formatWhen, plain, provenanceLabel } from "../../../../lib/present.ts";
+import { formatWhen, plain, provenanceLabel, shown } from "../../../../lib/present.ts";
 import type { EvidenceView } from "../../../../lib/types.ts";
-
-const MAX_SHOWN = 20_000;
-
-function shown(value: unknown): string {
-  const text = JSON.stringify(value ?? null, null, 2) ?? "null";
-  const clean = plain(text);
-  return clean.length > MAX_SHOWN ? `${clean.slice(0, MAX_SHOWN)}\n… truncated` : clean;
-}
 
 export default async function EvidencePage({ params }: { params: Promise<{ id: string }> }) {
   const key = await requireKey();
@@ -54,6 +47,8 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
           <p>{view.unevaluated_factors.map(plain).join(", ")}</p>
         </section>
       )}
+
+      <WithheldBox items={view.withheld_evidence} note={view.withheld_note} />
 
       {view.evidence.length === 0 && <p>No evidence was retrieved for this assessment.</p>}
       {view.evidence.map(({ item, effective_quality, retrieval_age_minutes_at_assessment, future_dated }) => (

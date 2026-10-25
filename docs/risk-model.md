@@ -90,6 +90,27 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 - Failed or rejected sources never abort the assessment. They are recorded in
   `AssessmentRecord.evidence_issues` and add an `evidence.connector_issues` rule result that
   forces at least `INSUFFICIENT EVIDENCE`, even for categories that are not required.
+- **Evidence id conflicts (owner decision, 2026-10-25).** `evidence.duplicate_ids` can now fire only
+  for direct engine callers. In the pipeline, when two connectors return different items under one
+  id, every item with that id is dropped before the rules run and an `evidence.conflict` issue is
+  recorded, which then yields `evidence.connector_issues`. **A conflict can hide a more severe
+  result:** a dropped item that would have crossed a signed-off limit, or a marine warning, never
+  reaches the rules, so the result is `INSUFFICIENT EVIDENCE` instead of `NO-GO`. This is latent
+  while the repository ships no validated ruleset. A human can override `INSUFFICIENT EVIDENCE`, so
+  the dropped items are kept in the audit record as **withheld evidence**: not cited, not
+  evaluated, and not passed to the engine, the agents or the prompts. They are shown, clearly
+  labelled, to the human. The conflict issue names the category and says the withheld evidence was
+  not evaluated. A source whose only items were dropped is left out of `data_versions`, so the
+  record does not show that source's version; the withheld items keep their own `source_version`.
+  **Deferred (not built):** evaluate each variant and keep the most severe outcome. Not chosen on
+  2026-10-25; it must be decided before any validated rule ships, because until then a conflict can
+  turn NO-GO into INSUFFICIENT EVIDENCE.
+  **Known gaps (evidence conflicts):** a conflict hides the most severe variant; the withheld items
+  are shown to the human but not evaluated; the deferred option above is open; and the record
+  validator checks shape only (an `evidence.conflict:` issue exists and each withheld id is on at
+  least two different items). It does not check that the items match the issue's categories or
+  connectors, and it sets no count limit on withheld items. "Withheld" has three meanings in this
+  project; see the terms block in [architecture.md](architecture.md).
 - `confidence` is `None` (not computed) until a risk model exists; it is never defaulted.
 - Every result is `PENDING_HUMAN`. `decide()` derives `is_override` from the decision, requires a
   rationale for overrides, refuses to replace a recorded decision, and returns a new revalidated
@@ -112,6 +133,15 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   need `DIVESAFE_TEST_DATABASE_URL`, see ADR 0012); unvalidated `model_copy` records are untrusted.
 - **Decision-time staleness:** `DIVESAFE_DECISION_MAX_AGE_MINUTES` rejects decisions on old
   assessments, but there is no default (unset means no limit) and evidence is not re-checked.
+  The age is measured from the assessment's `created_at`, not from `planned_start`: a dive planned
+  for later is judged against the assessment's age only. It is enforced whenever the setting is
+  set. The production compose sets 180 (owner choice, ADR 0024). `Settings` still does not refuse
+  an unset value (ADR 0019, "raised, not decided"). **Owner decision (2026-10-25):** leave the
+  anchor as `created_at` and add no `planned_start` cap. `created_at` is the time the run
+  **finished** (ADR 0019), so the evidence can be older than the age implies by the length of the
+  agent stage. With no `planned_start` cap, a decision is accepted after the dive window has started
+  or ended, as long as it is within the age limit. The age check is enforced only at the API
+  decision endpoint; `decide()` itself does not check it.
 - **`now`** is the server clock in the API. `assess_dive` still takes it as a parameter, so
   non-API callers must pass a trusted clock.
 - **Untrusted inputs:** `proposed`, `scenarios` and `explanation` must come only from the agent
