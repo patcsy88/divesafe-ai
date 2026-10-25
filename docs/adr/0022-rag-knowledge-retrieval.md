@@ -1592,10 +1592,14 @@ citation guard are later stages.
    2026-10-25 by `kb_pins` with `APPLY=1` on fresh scratch databases on PostgreSQL 16 (the
    `pgvector/pgvector:pg16` image) and PostgreSQL 17, with identical output. The full live suite
    (3881 passed, 2 skipped, 31 xfailed) and the catalogue live file (92 passed) ran on
-   **PostgreSQL 17 only**. **Requirement:** the live catalogue file
-   (`tests/integration/test_kb_catalogue_live.py`) MUST be run on PostgreSQL 16, the deployment
-   major, before the connector stage. A wrong 16 pin would fail closed (an outage, not a safety
-   failure). The owner approved only two changes: the trigger-shape fix with small hardening, and
+   PostgreSQL 17. **The PostgreSQL 16 live run is done (2026-10-25):** the suite was run against a
+   throwaway `pgvector/pgvector:pg16` container (PostgreSQL 16.15, started with `--pull never`,
+   removed afterwards). `tests/integration/test_kb_catalogue_live.py`: 92 passed; full `pytest`:
+   3881 passed, 2 skipped, 31 xfailed; `pytest -m safety`: 2622 passed, 30 xfailed. The counts are
+   the same as on PostgreSQL 17. This satisfies the earlier requirement to run the live catalogue
+   file on the deployment major, for the current pins. **It must be repeated** whenever the
+   pgvector image tag or digest changes, a PostgreSQL minor version changes, or the pins change; a
+   wrong pin fails closed (an outage, not a safety failure). The owner approved only two changes: the trigger-shape fix with small hardening, and
    switching the pins from MD5 to SHA-256. Trigger-shape checks: `tgtype`, no WHEN clause, no
    column list, no arguments, not deferrable, no transition tables.
    **Caught:** extra trigger, replaced function body, trigger shape, RLS and policies, rules,
