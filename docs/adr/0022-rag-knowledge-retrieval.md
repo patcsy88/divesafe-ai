@@ -594,13 +594,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       creates temporary tables (a check at code time). The app role is not checked for TEMP, which
       is acceptable: schema qualification and `pg_temp` last (above) are the defence; the loader's
       TEMP is checked because the loader is the writing role.
-    - **Stage 1a checks trigger names and `tgenabled` only, in `migrate()` only.** `migrate()`
-      checks that the nine named knowledge triggers are present and `ENABLE ALWAYS` (a subset
-      check: it would not notice a tenth trigger). "Exactly nine, no tenth trigger" is enforced for
-      migration 4 by the SQL-text test only, and in the database by condition 9 (later). `verify()`
-      has no knowledge checks in stage 1a. Checking each trigger as a pair with the function it must call, in
-      `public`, as for the assessment guard, after migrating and in `verify()`, belongs to the
-      gated stage (see "Not solved" and condition 9); it is not built in stage 1a. `guarded()` keeps every
+    - **Stage 1a checked trigger names and `tgenabled` only, in `migrate()` only; condition 9
+      (2026-10-25) replaces that.** Stage 1a's `migrate()` checked that the nine named knowledge
+      triggers were present and `ENABLE ALWAYS` (a subset check). Condition 9 now checks, in
+      `migrate()` and in `verify()` (start-up only), that the non-internal triggers on the three
+      `kb_*` tables are exactly the nine, each paired with its function in `public`, with the
+      expected shape and pinned function bodies (see condition 9 and condition 11 for what it does
+      not cover). `guarded()` keeps every
       migration-1 forbidden word applying to every later migration, including this one, and adds
       the knowledge trigger and function names as forbidden only in migrations **after** the one
       that creates them. It also forbids DROP and RENAME of any knowledge table in later
@@ -1244,13 +1244,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   lock; each must fail). **`kb_load` against a raw writer that bypasses it** and takes per-document
   locks in the opposite order: `kb_load` ends within the lock timeout or the deadlock detector with
   its fixed refusal and writes nothing; nothing hangs. The migration's checksum is pinned; `migrate()` fails when a named
-  knowledge trigger is missing or not `ENABLE ALWAYS`. **Condition 9 / a later stage, not built in
-  stage 1a:** `verify()` fails when a trigger or its function is missing, disabled or not paired.
+  knowledge trigger is missing or not `ENABLE ALWAYS`. **Built 2026-10-25 under condition 9:**
+  `verify()` fails when a trigger or its function is missing, disabled or not paired.
   `guarded()` refuses the forbidden words,
   DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`.
-  **Later stage, not built:** the production start-up check refuses an app role that owns a
-  knowledge table or function (directly or by membership) and one that is a member of the loader
-  role, and checks knowledge-table column privileges. A zero-chunk manifest refused by `kb_load`
+  **Later stage, not built (condition 11.4 and 11.5):** the production start-up check refuses an app
+  role that owns a knowledge table or function (directly or by membership) and one that is a member
+  of the loader role, and checks knowledge-table column privileges. A zero-chunk manifest refused by `kb_load`
   before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
@@ -1485,12 +1485,14 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   (decisions 7, 11).
 - **The loader can take `LOCK TABLE`** on tables it can read (denial of service); not prevented.
 - **Default privileges for the owner role are not checked** by `db_init` or the loader check.
-- **The post-migration check looks at trigger names and `tgenabled` only** until `migrate()` and
-  `verify()` are extended (decision 10; condition 9). That extension is a **must-fix before migration
-  5 or the connector stage, whichever comes first**.
-- **`verify()` has no knowledge checks in stage 1a.** Only `migrate()` checks the nine trigger
-  names and `tgenabled` (a subset check). Trigger/function pairing, the production start-up
-  checks on knowledge objects and column privileges are condition 9 or a later stage.
+- **The catalogue check (condition 9) is narrow.** It runs in `migrate()` and at `verify()` start-up
+  only, and it does not cover constraints, columns, sequence parameters, function owner and
+  EXECUTE, or knowledge-table privileges. Those are condition 11, **MUST land before the connector
+  stage**. The pins detect database drift, not code drift (code drift is covered by the migration
+  checksum plus review).
+- **`verify()` knowledge checks are start-up only** and judge the owner by consistency with the
+  owner of `public.assessments`. Column privileges for the app and loader on `kb_*` tables are not
+  checked by `verify(least_privilege=True)` (condition 11).
 - **A zero-chunk approved version.** The database refuses to approve a version with no chunks, but
   an owner or superuser write, or a restore, can still create an APPROVED version with zero
   chunks. Later stage: the connector should raise an evidence issue for an approved governing
@@ -1505,8 +1507,12 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   on `kb_*`; `CREATE RULE ... DO INSTEAD` on `kb_*`; `CREATE TABLE ... INHERITS (kb_*)` (retrieval must
   read `FROM ONLY`); `REASSIGN OWNED BY`; `ALTER TABLE public.kb_status_events SET UNLOGGED` (a
   crash empties an unlogged table without firing the TRUNCATE guard, losing the status history);
-  `ALTER SCHEMA public OWNER TO` / `RENAME TO`; `CREATE EVENT TRIGGER`. Condition 9 closes the
-  structural ones by catalogue checks.
+  `ALTER SCHEMA public OWNER TO` / `RENAME TO`; `CREATE EVENT TRIGGER`. **Condition 9 (2026-10-25)
+  now catches in the database:** an extra trigger, a replaced function body, trigger shape, RLS and
+  policies, rules, inheritance children, UNLOGGED, `public` owner or rename, and `DROP SCHEMA public`.
+  **Partly caught:** `REASSIGN OWNED` (`verify()` judges consistency with the owner of
+  `assessments`, not identity). **Not caught:** everything in condition 11, event triggers and
+  superuser catalogue edits.
 - **Loader role attributes and memberships are checked by name only in stage 1a.** Superuser,
   membership of the owner or app role, CREATEROLE, BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role
   that holds TEMP are **not** checked by `kb_load` yet. `db_init` checks the TEMP path at install
@@ -1575,16 +1581,72 @@ citation guard are later stages.
 9. **Catalogue post-check (added 2026-10-22; MUST land before migration 5 or the connector stage,
    whichever is first).** Extend the post-check in `migrate()` and `verify()` so that: the set of
    non-internal triggers on the three `kb_*` tables equals the nine exactly, each paired with its
-   function in `public`; `md5(pg_get_functiondef(...))` of each guard function matches a pinned value;
+   function in `public`; the SHA-256 of `pg_get_functiondef(...)` of each guard function matches a pinned value (first written as MD5);
    there are no `pg_rewrite` rules on `kb_*`; `relrowsecurity` is false and there are no `pg_policy`
    rows; there are no `pg_inherits` children; `relpersistence = 'p'` on the three tables; and the
    table owners and the `public` schema owner are the expected owner role. Each check has a failure test and a mutation.
-   Until then the "pair with the function" wording of decision 10 is not built.
+   **Review outcome (2026-10-25).** Implemented in `migrate()` (owner compared with `current_user`)
+   and in `verify()` (start-up only; the expected owner is the owner of `public.assessments`).
+   Pins are SHA-256 of `pg_get_functiondef`, keyed by PostgreSQL major (16, 17); any other major
+   fails closed. **The actual run:** the SHA-256 pins and the `tgtype` values were generated on
+   2026-10-25 by `kb_pins` with `APPLY=1` on fresh scratch databases on PostgreSQL 16 (the
+   `pgvector/pgvector:pg16` image) and PostgreSQL 17, with identical output. The full live suite
+   (3881 passed, 2 skipped, 31 xfailed) and the catalogue live file (92 passed) ran on
+   **PostgreSQL 17 only**. **Requirement:** the live catalogue file
+   (`tests/integration/test_kb_catalogue_live.py`) MUST be run on PostgreSQL 16, the deployment
+   major, before the connector stage. A wrong 16 pin would fail closed (an outage, not a safety
+   failure). The owner approved only two changes: the trigger-shape fix with small hardening, and
+   switching the pins from MD5 to SHA-256. Trigger-shape checks: `tgtype`, no WHEN clause, no
+   column list, no arguments, not deferrable, no transition tables.
+   **Caught:** extra trigger, replaced function body, trigger shape, RLS and policies, rules,
+   inheritance, UNLOGGED, `public` owner or rename, `DROP SCHEMA public`. **Partly caught:**
+   `REASSIGN OWNED` (`verify()` judges consistency with the owner of `assessments`, not identity).
+   **Not caught:** see condition 11. This outcome is not an owner acceptance of anything beyond the
+   two items named.
+
+   **Operational notes.**
+   - A PostgreSQL major upgrade: `migrate()` and `verify()` refuse until that major's pins exist.
+     Generate them on a fresh scratch database with `kb_pins` and `APPLY=1`, review them against the
+     migration text, release, and only then upgrade (otherwise a full outage).
+   - Never generate pins from the database being checked.
+   - The `pgvector/pgvector:pg16` tag floats. A minor release that changes `pg_get_functiondef`
+     output would also fail closed; pin the image digest in the Docker stage.
+   - Keep the backup and restore drill on the same major.
+   - Production is at migration 3. An accidental deploy of this branch would apply migration 4 and
+     make the database forward-only; the existing "do not deploy before A1-A7" gate stands.
+   - `kb_pins` ships in the image (`COPY src`) and is harmless without `DIVESAFE_PIN_DSN`; moving it
+     to `tools/` is optional.
 10. **Loader attribute checks (added 2026-10-22; implemented in slice 1, committed `b1d636f`, and
     live-tested).** `kb_load`'s self-check tests superuser, membership of the owner or app role,
     CREATEROLE, BYPASSRLS, NOINHERIT/`SET ROLE` to a TEMP role, and replication. **Remaining gap
     (ADR 0024 A8):** the privilege checks run in separate transactions, and `withdraw` checks role
     names only.
+11. **Catalogue checks condition 9 does not make (added 2026-10-25; MUST land before the connector
+    stage).** Open; each needs a failure test and a mutation. Not detected today:
+    - **11.1** Constraints (dropped, `NOT VALID` CHECK, NOT NULL, UNIQUE, FK), including
+      `display_permitted`, `licence_reference_present`, `approver_role`, `all_sites`, the review
+      window, `status` / `hash_checked` and `UNIQUE(event_order)`. Owner: the connector-stage
+      catalogue slice.
+    - **11.2** Columns, defaults, types and generated columns. Same owner.
+    - **11.3** `kb_status_event_order_seq` parameters (INCREMENT -1, RESTART), which could make
+      "latest status" read wrongly. Same owner.
+    - **11.4** Function owner and PUBLIC EXECUTE; the app-role ownership check does not cover the
+      five knowledge functions. Owner: the `verify()` least-privilege extension.
+    - **11.5** App and loader privileges on `kb_*` tables, not checked by
+      `verify(least_privilege=True)`. Same owner.
+    - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity).
+    - **11.7** A SECURITY DEFINER wrapper owned by the owner that disables, inserts and re-enables.
+    - **11.8** Tampering between start-ups: the check runs at `migrate()` and start-up only.
+    - **11.9** An owner can drop and recreate a knowledge table with the same triggers and
+      functions. Every check passes, and the status history, including a withdrawal, is lost.
+    - Event triggers and superuser catalogue edits (out of scope).
+
+    **Optional, not decided by the owner:** run `_harden` before the first post-checks in
+    `migrate()` (they currently run under the owner role's `search_path`), and make `verify()`
+    read-only for its whole connection.
+
+    The pins detect database drift, not code drift (code drift is covered by the migration checksum
+    plus review).
 
 Still open for the owner (gating shipping: the withdrawal log's location and the
 re-acknowledgement of decision 11; the `hash_checked` answer is no longer open): the licence and `display_permitted` evidence for each source,

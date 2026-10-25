@@ -33,6 +33,14 @@ def _sql(statement: str, params: tuple[object, ...] = ()) -> None:
         conn.execute(statement, params)  # type: ignore[call-overload]
 
 
+def _sql_value(statement: str) -> str:
+    assert DSN is not None
+    with psycopg.connect(DSN) as conn:
+        row = conn.execute(statement).fetchone()  # type: ignore[call-overload]
+    assert row is not None
+    return str(row[0])
+
+
 @pytest.fixture
 def stored() -> PostgresAssessmentRepository:
     repo = _postgres()
@@ -1093,9 +1101,20 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
 ) -> None:
     assert DSN is not None
     app = PostgresAssessmentRepository(app_role_dsn)
+    # The knowledge guard (ADR 0022 condition 9) judges the kb tables and the public schema against
+    # the owner of public.assessments, so a new assessments owner must own them too, as one owner
+    # does in a real deployment. (Changing only assessments made it report 4 owner problems.)
+    kb_tables = ("kb_documents", "kb_chunks", "kb_status_events")
+    original_public_owner = _sql_value(
+        "SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace "
+        "WHERE nspname = 'public'"
+    )
     _sql("DROP ROLE IF EXISTS divesafe_plain_owner_test")
     _sql("CREATE ROLE divesafe_plain_owner_test NOLOGIN")
     _sql("ALTER TABLE assessments OWNER TO divesafe_plain_owner_test")
+    for table in kb_tables:
+        _sql(f"ALTER TABLE {table} OWNER TO divesafe_plain_owner_test")
+    _sql("ALTER SCHEMA public OWNER TO divesafe_plain_owner_test")
     try:
         assert app.verify(least_privilege=True, owner_not_superuser=True) == []
         _sql("ALTER ROLE divesafe_plain_owner_test SUPERUSER")
@@ -1104,6 +1123,10 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
         assert not any("superuser" in p for p in app.verify(least_privilege=True))
         _sql("ALTER ROLE divesafe_plain_owner_test NOSUPERUSER")
     finally:
+        _sql("ALTER ROLE divesafe_plain_owner_test NOSUPERUSER")
+        _sql(f'ALTER SCHEMA public OWNER TO "{original_public_owner}"')
+        for table in kb_tables:
+            _sql(f"ALTER TABLE {table} OWNER TO CURRENT_USER")
         _sql("ALTER TABLE assessments OWNER TO CURRENT_USER")
         _sql("DROP ROLE divesafe_plain_owner_test")
 

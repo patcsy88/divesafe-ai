@@ -1262,6 +1262,44 @@ _LOCK_CALL = (
 )
 
 
+def _allow_the_weakened_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0022 condition 9 correctly makes migrate() refuse a migration 4 whose functions differ
+    from the pinned hashes. These mutation tests apply a deliberately weakened COPY, so for that one
+    test the knowledge check is replaced by one that finds nothing. Their own assertions are
+    unchanged; the unpatched refusal is proved by
+    `test_the_weakened_lock_copy_is_refused_by_the_pin_check`."""
+    monkeypatch.setattr(migrations_module, "knowledge_problems", lambda *a, **k: [])
+
+
+def _weakened_lock_copy(function_only: bool) -> Migration:
+    original = MIGRATIONS[3]
+    if not function_only:
+        return Migration(4, original.name, original.sql.replace(_LOCK_CALL, ""))
+    start = original.sql.index("FUNCTION public.kb_chunks_insert()")
+    end = original.sql.index("$$;", start)
+    body = original.sql[start:end].replace(_LOCK_CALL, "")
+    return Migration(4, original.name, original.sql[:start] + body + original.sql[end:])
+
+
+@pytest.mark.parametrize("function_only", [False, True])
+def test_the_weakened_lock_copy_is_refused_by_the_pin_check(
+    monkeypatch: pytest.MonkeyPatch, function_only: bool
+) -> None:
+    """Condition 9 has teeth: WITHOUT the patch above, migrate() rejects the copy and rolls back."""
+    weakened = _weakened_lock_copy(function_only)
+    assert weakened.sql != MIGRATIONS[3].sql
+    monkeypatch.setattr(migrations_module, "guarded", lambda known: None)
+    with _scratch_db() as dsn:
+        with pytest.raises(MigrationError) as caught:
+            migrate(dsn, (*MIGRATIONS[:3], weakened))
+        message = str(caught.value)
+        tables = _run(dsn, "SELECT to_regclass('public.kb_chunks')")
+    assert "the knowledge guard is not intact after migrating" in message
+    assert "does not match its pinned hash" in message
+    assert "the definition of kb_chunks_insert does not match its pinned hash" in message
+    assert tables == [(None,)]  # rolled back: no knowledge table
+
+
 def test_mutation_without_the_advisory_lock_the_two_sessions_do_not_serialise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1271,6 +1309,7 @@ def test_mutation_without_the_advisory_lock_the_two_sessions_do_not_serialise(
     assert _LOCK_CALL in original.sql
     mutated = Migration(4, original.name, original.sql.replace(_LOCK_CALL, ""))
     monkeypatch.setattr(migrations_module, "guarded", lambda known: None)
+    _allow_the_weakened_copy(monkeypatch)
     with _scratch_db() as dsn:
         migrate(dsn, (*MIGRATIONS[:3], mutated))
         did = _fresh_id()
@@ -1541,6 +1580,7 @@ def test_mutation_without_the_advisory_lock_a_chunk_can_follow_the_first_event(
     )
     mutated = Migration(4, original.name, mutated_sql)
     monkeypatch.setattr(migrations_module, "guarded", lambda known: None)
+    _allow_the_weakened_copy(monkeypatch)
     with _scratch_db() as dsn:
         migrate(dsn, (*MIGRATIONS[:3], mutated))
         did = _fresh_id()

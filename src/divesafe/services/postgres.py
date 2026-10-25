@@ -31,6 +31,8 @@ from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.services.migrations import (
     GUARD_FUNCTIONS,
     GUARD_TRIGGERS,
+    KNOWLEDGE_TABLES,
+    knowledge_problems,
     migrate,
     schema_problems,
 )
@@ -325,6 +327,7 @@ class PostgresAssessmentRepository:
                     problems.append(
                         f"the {table} table does not exist (run db_init as the owner role)"
                     )
+            problems += self._knowledge_problems(conn)
             # Each guard trigger must be enabled and call its own function in `public`.
             calls = {
                 str(name): str(function)
@@ -370,6 +373,24 @@ class PostgresAssessmentRepository:
             if least_privilege:
                 problems += self._privilege_problems(conn)
         return problems
+
+    @staticmethod
+    def _knowledge_problems(conn: psycopg.Connection[Any]) -> list[str]:
+        """ADR 0022 condition 9. Read-only through SET LOCAL transaction_read_only, so it also
+        works inside a savepoint. A missing knowledge table is one problem (the schema check also
+        reports the pending migration); the detailed checks need all three."""
+        missing = [
+            f"the {table} table does not exist (run db_init as the owner role)"
+            for table in KNOWLEDGE_TABLES
+            if conn.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone() == (None,)
+        ]
+        if missing:
+            return missing
+        try:
+            with conn.transaction():
+                return knowledge_problems(conn, owner_is_current_user=False, read_only=True)
+        except psycopg.errors.InsufficientPrivilege:
+            return ["the application role cannot read the knowledge table definitions"]
 
     @staticmethod
     def _privilege_problems(conn: psycopg.Connection[Any]) -> list[str]:

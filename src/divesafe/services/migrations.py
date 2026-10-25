@@ -82,6 +82,74 @@ KNOWLEDGE_FUNCTIONS = {
     "kb_chunks_no_truncate_guard": "kb_no_truncate",
     "kb_status_events_no_truncate_guard": "kb_no_truncate",
 }
+# ADR 0022 condition 9: SHA-256 (lower-case hex) of pg_get_functiondef(oid) for each knowledge guard
+# function, pinned per PostgreSQL MAJOR version (the text pg_get_functiondef returns can change
+# between majors). Generated 2026-10-25 by `python -m divesafe.services.kb_pins` with
+# DIVESAFE_PIN_APPLY=1 on fresh scratch databases on real PostgreSQL 16 (pgvector image) and 17;
+# identical on both; generated on a fresh scratch database and confirmed by the live pin test.
+# Never take values from the database being checked. Any other major has no entry and FAILS the
+# check (fail closed). Regenerate when migration 4 changes.
+KNOWLEDGE_FUNCTION_SHA256: Mapping[int, Mapping[str, str]] = MappingProxyType(
+    {
+        16: MappingProxyType(
+            {
+                "kb_chunks_insert": (
+                    "1d93b260c9ea2bf9991f871982b44514061643b1bf3fa23b0b4068af7f3e5711"
+                ),
+                "kb_documents_insert": (
+                    "5ed6eae06b5524a62e17fe97eae7f7bc7abb0b3cd104ffcb7e882259e68db985"
+                ),
+                "kb_no_truncate": (
+                    "4894f69b62e3fe0eae57e53d76a816f8eafed92ffc0cd9812d46287d31105229"
+                ),
+                "kb_no_update_delete": (
+                    "9d0491680703bc57775b64149f44e3de0da6bbfcf42b094170cff47b80f36a47"
+                ),
+                "kb_status_events_insert": (
+                    "b2f5d9e7c4e1caf4b1cf90e2e0552998762c54d02349a631d4cb8e80674f278b"
+                ),
+            }
+        ),
+        17: MappingProxyType(
+            {
+                "kb_chunks_insert": (
+                    "1d93b260c9ea2bf9991f871982b44514061643b1bf3fa23b0b4068af7f3e5711"
+                ),
+                "kb_documents_insert": (
+                    "5ed6eae06b5524a62e17fe97eae7f7bc7abb0b3cd104ffcb7e882259e68db985"
+                ),
+                "kb_no_truncate": (
+                    "4894f69b62e3fe0eae57e53d76a816f8eafed92ffc0cd9812d46287d31105229"
+                ),
+                "kb_no_update_delete": (
+                    "9d0491680703bc57775b64149f44e3de0da6bbfcf42b094170cff47b80f36a47"
+                ),
+                "kb_status_events_insert": (
+                    "b2f5d9e7c4e1caf4b1cf90e2e0552998762c54d02349a631d4cb8e80674f278b"
+                ),
+            }
+        ),
+    }
+)
+# Expected pg_trigger.tgtype per trigger. Same provenance as above (identical on 16 and 17). These
+# are the PostgreSQL tgtype bit sums, as printed by the server, for BEFORE ROW INSERT (7), BEFORE
+# ROW UPDATE OR DELETE (27) and BEFORE STATEMENT TRUNCATE (34); no bit constants are defined here.
+# Derivation from the migration 4 CREATE TRIGGER text: *_insert_guard are BEFORE INSERT FOR EACH
+# ROW; *_append_only_guard are BEFORE UPDATE OR DELETE FOR EACH ROW; *_no_truncate_guard are BEFORE
+# TRUNCATE FOR EACH STATEMENT. A trigger without an entry FAILS the check.
+KNOWLEDGE_TRIGGER_TGTYPE: Mapping[str, int] = MappingProxyType(
+    {
+        "kb_documents_insert_guard": 7,
+        "kb_chunks_insert_guard": 7,
+        "kb_status_events_insert_guard": 7,
+        "kb_documents_append_only_guard": 27,
+        "kb_chunks_append_only_guard": 27,
+        "kb_status_events_append_only_guard": 27,
+        "kb_documents_no_truncate_guard": 34,
+        "kb_chunks_no_truncate_guard": 34,
+        "kb_status_events_no_truncate_guard": 34,
+    }
+)
 # Forbidden only in migrations after the one that creates them.
 KNOWLEDGE_NAMES = (
     *KNOWLEDGE_TRIGGERS,
@@ -453,6 +521,170 @@ ALTER TABLE public.kb_status_events ENABLE ALWAYS TRIGGER kb_status_events_no_tr
 """
 
 
+def _harden(conn: psycopg.Connection[Any], *, read_only: bool = False) -> None:
+    """Inside the caller's transaction: built-ins only on the search path, and identifiers are not
+    force-quoted (which would change pg_get_functiondef). `read_only` uses SET LOCAL
+    transaction_read_only with SET LOCAL, so it also works inside a savepoint."""
+    conn.execute("SET LOCAL search_path = pg_catalog, pg_temp")
+    conn.execute("SET LOCAL quote_all_identifiers = off")
+    if read_only:
+        conn.execute("SET LOCAL transaction_read_only = on")
+
+
+def knowledge_function_hashes(conn: psycopg.Connection[Any]) -> tuple[int, dict[str, str]]:
+    """(PostgreSQL major version, function name -> SHA-256 hex of its definition) for the five
+    knowledge functions in `public`. Read-only; used by `kb_pins` to generate the pins."""
+    _harden(conn)
+    major_row = conn.execute("SELECT pg_catalog.current_setting('server_version_num')").fetchone()
+    assert major_row is not None
+    rows = conn.execute(
+        "SELECT p.proname, pg_catalog.encode(pg_catalog.sha256("
+        "pg_catalog.convert_to(pg_catalog.pg_get_functiondef(p.oid), 'UTF8')), 'hex') "
+        "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = 'public' AND p.proname = ANY(%s::text[]) ORDER BY p.proname",
+        (sorted(set(KNOWLEDGE_FUNCTIONS.values())),),
+    ).fetchall()
+    return int(major_row[0]) // 10000, {str(r[0]): str(r[1]) for r in rows}
+
+
+def knowledge_trigger_types(conn: psycopg.Connection[Any]) -> dict[str, int]:
+    """trigger name -> pg_trigger.tgtype for the knowledge tables. Read-only; for `kb_pins`."""
+    _harden(conn)
+    rows = conn.execute(
+        "SELECT t.tgname, t.tgtype FROM pg_catalog.pg_trigger t "
+        "JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid "
+        "JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace "
+        "WHERE NOT t.tgisinternal AND s.nspname = 'public' AND c.relname = ANY(%s::text[]) "
+        "ORDER BY t.tgname",
+        (list(KNOWLEDGE_TABLES),),
+    ).fetchall()
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
+def knowledge_problems(
+    conn: psycopg.Connection[Any], *, owner_is_current_user: bool, read_only: bool = False
+) -> list[str]:
+    """ADR 0022 condition 9: a set of read-only checks on the three knowledge tables. It does NOT
+    prove they are exactly as migration 4 made them. It checks: the nine non-internal triggers
+    (names, table, function in public, ENABLE ALWAYS, trigger type and plain shape), the pinned
+    definition hash of each guard function, no rewrite rules, no row-level security or policies,
+    no inheritance, permanent tables, and the owner of the tables and of schema public.
+
+    It does NOT detect: column definitions or constraints; sequence parameters; function owner or
+    ACL; the application role's privileges on kb_* (the loader checks its own privileges in
+    kb_privileges; app-role privileges on kb_* are NOT checked by verify(), ADR 0022 condition
+    11); wholesale re-owning of everything, which `verify()` cannot see because its
+    expected owner is the owner of public.assessments; tampering that is undone before the next
+    start-up; superuser edits of the catalogue; SECURITY DEFINER wrappers. Messages are fixed text.
+    The expected owner is the role running the migration (`owner_is_current_user`, `migrate`) or
+    else the owner of public.assessments (`verify`, which may run as another role). The tables
+    must exist; the caller checks that first."""
+    _harden(conn, read_only=read_only)
+    problems: list[str] = []
+    tables = list(KNOWLEDGE_TABLES)
+    in_kb = (
+        "(SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace s "
+        "ON s.oid = c.relnamespace WHERE s.nspname = 'public' AND c.relname = ANY(%s::text[]))"
+    )
+    # (a) triggers: exactly the nine, each on its table, calling its function in public, enabled
+    # ALWAYS, with the pinned tgtype and a plain shape (no WHEN, no column list, no arguments, not
+    # deferrable, not a constraint trigger, no transition tables); and (b) the definition of the
+    # function each one actually calls matches the pin. pg_get_triggerdef is not used: it depends
+    # on search_path.
+    rows = conn.execute(
+        "SELECT c.relname, t.tgname, p.proname, n.nspname, t.tgenabled, "
+        "pg_catalog.encode(pg_catalog.sha256("
+        "pg_catalog.convert_to(pg_catalog.pg_get_functiondef(t.tgfoid), 'UTF8')), 'hex'), "
+        "t.tgtype, "
+        "(t.tgqual IS NULL AND t.tgattr::pg_catalog.text = '' AND t.tgnargs = 0 "
+        "AND NOT t.tgdeferrable AND t.tgconstraint = 0 "
+        "AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL) "
+        "FROM pg_catalog.pg_trigger t "
+        "JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid "
+        "JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+        f"WHERE NOT t.tgisinternal AND t.tgrelid IN {in_kb}",
+        (tables,),
+    ).fetchall()
+    found = [str(r[1]) for r in rows]
+    if len(found) != len(set(found)) or set(found) != set(KNOWLEDGE_TRIGGERS):
+        problems.append("the knowledge tables do not carry exactly the nine guard triggers")
+    major_row = conn.execute("SELECT pg_catalog.current_setting('server_version_num')").fetchone()
+    pins = KNOWLEDGE_FUNCTION_SHA256.get(int(major_row[0]) // 10000, {}) if major_row else {}
+    for relname, tgname, proname, nspname, enabled, digest, tgtype, plain in rows:
+        name = str(tgname)
+        if name not in KNOWLEDGE_FUNCTIONS:
+            continue
+        if str(relname) != next((t for t in KNOWLEDGE_TABLES if name.startswith(f"{t}_")), None):
+            problems.append(f"knowledge trigger '{name}' is on the wrong table")
+        function = KNOWLEDGE_FUNCTIONS[name]
+        if str(proname) != function or str(nspname) != "public":
+            problems.append(f"knowledge trigger '{name}' does not call {function} in public")
+        if str(enabled) != "A":
+            problems.append(f"knowledge trigger '{name}' is not ENABLE ALWAYS")
+        expected_type = KNOWLEDGE_TRIGGER_TGTYPE.get(name)
+        if expected_type is None:
+            problems.append(f"no pinned trigger type for knowledge trigger '{name}'")
+        elif int(tgtype) != expected_type:
+            problems.append(f"knowledge trigger '{name}' does not have its expected trigger type")
+        if plain is not True:
+            problems.append(f"knowledge trigger '{name}' does not have the expected plain shape")
+        pinned = pins.get(function)
+        if pinned is None:
+            problems.append(f"no pinned definition hash for {function} on this PostgreSQL version")
+        elif str(digest) != pinned:
+            problems.append(f"the definition of {function} does not match its pinned hash")
+    # (c) rules, (d) row security and policies, (e) inheritance
+    counts = conn.execute(
+        "SELECT (SELECT pg_catalog.count(*) FROM pg_catalog.pg_rewrite "
+        f"WHERE ev_class IN {in_kb}), "
+        f"(SELECT pg_catalog.count(*) FROM pg_catalog.pg_policy WHERE polrelid IN {in_kb}), "
+        f"(SELECT pg_catalog.count(*) FROM pg_catalog.pg_inherits "
+        f"WHERE inhparent IN {in_kb} OR inhrelid IN {in_kb})",
+        (tables, tables, tables, tables),
+    ).fetchone()
+    if counts is None or int(counts[0]) != 0:
+        problems.append("a rewrite rule exists on a knowledge table")
+    if counts is None or int(counts[1]) != 0:
+        problems.append("a row-level security policy exists on a knowledge table")
+    if counts is None or int(counts[2]) != 0:
+        problems.append("a knowledge table takes part in table inheritance")
+    # (d) row security flags, (f) persistence, (g) owners
+    expected_owner = (
+        "(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)"
+        if owner_is_current_user
+        else "(SELECT relowner FROM pg_catalog.pg_class "
+        "WHERE oid = pg_catalog.to_regclass('public.assessments'))"
+    )
+    state = conn.execute(
+        "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, c.relpersistence, "
+        f"c.relowner IS NOT DISTINCT FROM {expected_owner} AND {expected_owner} IS NOT NULL "
+        "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace "
+        "WHERE s.nspname = 'public' AND c.relname = ANY(%s::text[])",
+        (tables,),
+    ).fetchall()
+    if {str(r[0]) for r in state} != set(KNOWLEDGE_TABLES):
+        problems.append("a knowledge table could not be read")
+    for relname, rls, forced, persistence, owner_ok in state:
+        if rls is not False or forced is not False:
+            problems.append(f"row-level security is on for {relname}")
+        if str(persistence) != "p":
+            problems.append(f"{relname} is not a permanent table")
+        if owner_ok is not True:
+            problems.append(f"{relname} is not owned by the expected owner role")
+    schema_owner = conn.execute(
+        f"SELECT {expected_owner} IS NOT NULL AND (nspowner = {expected_owner} "
+        # PostgreSQL 15+ owns `public` by the built-in pg_database_owner, i.e. the database owner.
+        "OR (nspowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'pg_database_owner') "
+        "AND (SELECT datdba FROM pg_catalog.pg_database "
+        f"WHERE datname = pg_catalog.current_database()) = {expected_owner})) "
+        "FROM pg_catalog.pg_namespace WHERE nspname = 'public'"
+    ).fetchone()
+    if schema_owner is None or schema_owner[0] is not True:
+        problems.append("the public schema is not owned by the expected owner role")
+    return problems
+
+
 class MigrationError(RuntimeError):
     """The migration history and the code disagree, or a migration list is malformed. Messages
     never contain connection details."""
@@ -569,6 +801,12 @@ def migrate(
                 }
                 if not set(KNOWLEDGE_TRIGGERS) <= kb_enabled:
                     raise MigrationError("the knowledge guard is not intact after migrating")
+                kb_problems = knowledge_problems(conn, owner_is_current_user=True)
+                if kb_problems:
+                    raise MigrationError(
+                        "the knowledge guard is not intact after migrating: "
+                        + "; ".join(kb_problems)
+                    )
             return [m.version for m in pending]
     except psycopg.Error:
         raise RepositoryUnavailableError("could not apply the schema migrations") from None
