@@ -26,7 +26,7 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
   professional.
 - The browser never talks to a model provider; LLM credentials stay server-side.
 - LangGraph is not adopted: no capability need yet (checkpointing, retries, long jobs). Revisit
-  with an ADR when one appears.
+  with an ADR when one appears. See ADR 0025.
 
 - The evidence view lists only what was retrieved and says so (`evidence_note`); it also returns
   `evidence_issues` and `unevaluated_factors`. `effective_quality` is the quality an item earned

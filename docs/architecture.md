@@ -135,6 +135,10 @@ stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 
 See [docs/adr/](adr/).
 
+- Orchestration stays plain Python with the lifecycle as an explicit, testable stage graph, a
+  code-only Supervisor stage and a per-stage trace on the record; no agent framework
+  ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed).
+
 ## Rule definitions
 
 Signed-off limits are data (`domain.RuleDefinition`, ADR 0009), applied by `risk.DefinitionRule`,
