@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationErro
 
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import (
+    SUPERVISOR_RULE_PREFIX,
     AssessmentRecord,
     DataQuality,
     DiveSite,
@@ -292,13 +293,23 @@ class AssessmentView(BaseModel):
             )
         if record.llm_tightened:
             outcome_note = (
-                f"Rules alone: {record.deterministic_recommendation.value}. An unverified LLM "
-                f"proposal raised this to {record.final_recommendation.value}. "
+                f"Deterministic checks: {record.deterministic_recommendation.value}. "
+                f"An unverified LLM proposal raised this to {record.final_recommendation.value}. "
             ) + outcome_note
         if problems:
             outcome_note += " Evidence problems: " + " ".join(problems)
         if rule_problems:
             outcome_note += " Rule problems: " + " ".join(sorted(set(rule_problems)))
+        supervisor_checks = sorted(
+            {
+                r.rule_id.removeprefix(SUPERVISOR_RULE_PREFIX)
+                for r in record.rule_results
+                if r.rule_id.startswith(SUPERVISOR_RULE_PREFIX)
+            }
+        )
+        for check in supervisor_checks:
+            # Fixed wording; the check name is an enum value, never free text.
+            outcome_note += f" A supervisor check failed: {check}. The result was tightened."
         partial = sorted(
             {
                 f"{r.factor.value}: {_aspects_not_evaluated(r.rationale)}"

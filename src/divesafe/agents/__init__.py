@@ -7,6 +7,12 @@ Agents read evidence and return structured, evidence-referenced output. They nev
 
 from divesafe.agents.prompts import PROMPT_VERSION
 from divesafe.agents.runner import AgentError
-from divesafe.agents.stage import AgentStageResult, run_agent_stage
+from divesafe.agents.stage import STAGE_TIMED_OUT_ISSUE, AgentStageResult, run_agent_stage
 
-__all__ = ["PROMPT_VERSION", "AgentError", "AgentStageResult", "run_agent_stage"]
+__all__ = [
+    "PROMPT_VERSION",
+    "STAGE_TIMED_OUT_ISSUE",
+    "AgentError",
+    "AgentStageResult",
+    "run_agent_stage",
+]

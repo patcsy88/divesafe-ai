@@ -25,14 +25,18 @@
 
 ## Orchestrator
 
-The orchestrator owns the lifecycle (Observe, Retrieve, Diagnose/Reason, Assess Risk,
-Propose, Human Gate, Validate, Learn):
+The orchestrator owns the lifecycle as a stage graph (`orchestration.graph.STAGES`, ADR 0025):
+Observe, Retrieve, Assess, Reason, Rejudge, Propose, Supervise, Gate; Validate and Learn happen
+later through the human gate.
 
-1. Resolves required evidence from the rules engine's `EvidencePolicy` and calls connectors.
-2. Runs domain agents concurrently on the validated evidence.
-3. Runs the bounded scenario evaluation ([tot-design.md](tot-design.md)).
-4. Runs the rules engine, then the Risk Assessment agent, then `reconcile`.
-5. Persists an `AssessmentRecord` and **stops at the human gate**. It never marks an
+1. Observe: resolves required evidence from the rules engine's `EvidencePolicy` and calls
+   connectors. Retrieve is a placeholder until RAG stage 1.
+2. Assess: runs the rules engine; the agents receive its results.
+3. Reason: runs domain agents concurrently on the validated evidence, then the bounded scenario
+   evaluation ([tot-design.md](tot-design.md)), then the Risk Assessment agent.
+4. Rejudge: runs the rules engine again at the later clock. Propose: `reconcile`. Supervise:
+   code-only checks that can add a `supervisor.<check>` rule result and re-run `reconcile`.
+5. Gate: builds an `AssessmentRecord` and **stops at the human gate**. It never marks an
    assessment as final or acted on without a recorded `HumanDecision`.
 
 ## Failure behavior

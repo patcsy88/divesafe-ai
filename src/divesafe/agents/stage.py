@@ -30,6 +30,10 @@ from divesafe.models import LLMProvider
 
 logger = logging.getLogger(__name__)
 
+# The issue recorded when the whole stage hits its deadline. The pipeline reads it to label the
+# stage outcome; fixed text, never derived from input.
+STAGE_TIMED_OUT_ISSUE = "agent stage: timed out; no proposal was produced"
+
 
 @dataclass(frozen=True)
 class AgentStageResult:
@@ -115,7 +119,7 @@ async def run_agent_stage(
                 provider, plan, evidence, rule_results, deterministic, issues, findings, scenarios
             )
     except TimeoutError:
-        issues.append("agent stage: timed out; no proposal was produced")
+        issues.append(STAGE_TIMED_OUT_ISSUE)
         proposed, cited, explanation = None, (), ""
 
     if issues:

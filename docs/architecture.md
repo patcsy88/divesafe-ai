@@ -54,14 +54,22 @@ APPLICATION             Dive Assessment API (FastAPI) | Human decision interface
 
 ## Agentic lifecycle
 
+The run-time stages are data: `orchestration.graph.STAGES` (ADR 0025) names each stage, what it
+requires and produces, and which outcome lets the run continue. `assess_dive` walks that graph;
+tests assert its properties without running it. Stage names as stored on the record
+(`domain.StageName`): `observe`, `retrieve`, `assess`, `reason`, `rejudge`, `propose`,
+`supervise`, `gate`.
+
 | Stage | What happens | Primary components |
 | --- | --- | --- |
-| Observe | Receive the dive plan; fetch live conditions as structured evidence. | Connectors, Provenance |
-| Retrieve | Fetch site knowledge, guidance, history. | RAG, Historical data |
-| Diagnose / Reason | Specialist agents interpret evidence; bounded ToT compares scenarios. | Agents, Orchestrator |
-| Assess Risk | Rules engine (authoritative) and risk model score the plan. | Risk Rules Engine, Risk Model |
-| Propose | Agents propose a recommendation with evidence IDs, confidence, uncertainty. `reconcile` fixes the final recommendation. | Risk Assessment Agent, `reconcile` |
-| Human Gate | Human reviews evidence, risk factors and uncertainty; accepts or overrides with rationale. Nothing is final until this step. | API, Human interface |
+| Observe | Receive the dive plan; fetch live conditions as structured evidence. Failed sources become issues, never an abort. | Connectors, Provenance |
+| Retrieve | Fetch site knowledge, guidance, history. Placeholder (`not_configured`) until RAG stage 1 (ADR 0022). | RAG, Historical data |
+| Assess | Rules engine (authoritative) scores the plan; connector issues become a rule result. Must complete or the run fails. | Risk Rules Engine |
+| Reason | Specialist agents interpret evidence; bounded ToT compares scenarios; the risk agent proposes with evidence IDs. Any failure degrades to "no proposal". | Agents |
+| Rejudge | Rules engine again at the later clock, keeping every earlier result; a started window or expired rule can only add problems. Must complete. | Risk Rules Engine |
+| Propose | `reconcile` fixes the final recommendation from the deterministic result and the proposal. The only producer of `final_recommendation`. Must complete. | `reconcile` |
+| Supervise | Code-only checks (no LLM): tighten-only, severity order, citations, prompt-version pin, required categories. An invariant breach raises and stores nothing; the other checks add a `supervisor.<check>` rule result and `reconcile` runs again. Must complete. | `orchestration.supervisor` |
+| Human Gate | The record is `PENDING_HUMAN`. Human reviews evidence, risk factors and uncertainty; accepts or overrides with rationale. Nothing is final until this step. | API, Human interface |
 | Validate | Check the decision record is complete and consistent; later compare against actual conditions. | Provenance, Feedback |
 | Learn | Store actual conditions and outcomes; feed evaluation and calibration. Learning never edits rules automatically. | Feedback/Learning |
 
@@ -116,8 +124,11 @@ timezone inference. Provenance is stored in the audit record with the evidence.
 
 Each assessment persists an `AssessmentRecord` (`divesafe.domain.models`): plan, evidence,
 rule results, deterministic / proposed / final recommendation, downgrade flag, confidence,
-scenarios, explanation, model / ruleset / data versions, human decision, override rationale,
-and later actual conditions.
+scenarios, explanation, model / ruleset / data versions, the Supervise stage's verdict
+(`supervisor_verdict`, ADR 0025; `None` on older records; serialised on the record view as enum
+names and a recommendation only, no dedicated view yet), human
+decision, override rationale, and later actual conditions. `deterministic_recommendation` is
+the most severe of every rule result, including any `supervisor.<check>` result.
 
 ## Technology
 
@@ -137,7 +148,8 @@ See [docs/adr/](adr/).
 
 - Orchestration stays plain Python with the lifecycle as an explicit, testable stage graph, a
   code-only Supervisor stage and a per-stage trace on the record; no agent framework
-  ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed).
+  ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed; the graph and Supervise are
+  built, the trace is not).
 
 ## Rule definitions
 

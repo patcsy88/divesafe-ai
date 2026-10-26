@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from divesafe.domain import (
+    SUPERVISOR_RULE_PREFIX,
     DataCategory,
     DataKind,
     DataQuality,
@@ -117,8 +118,15 @@ EVIDENCE_QUALITY_PREFIX: Final = "evidence.quality"
 CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
-# Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
-RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.", "rule.")
+# Rule ids a configured rule may not use: the engine, the pipeline and the Supervise stage emit
+# these themselves.
+RESERVED_RULE_PREFIXES: Final = (
+    "assessment.",
+    "evidence.",
+    "ruleset.",
+    "rule.",
+    SUPERVISOR_RULE_PREFIX,
+)
 # A signed-off definition id may be 100 characters and is prefixed with "definition.".
 RULE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9._-]{1,128}")
 # Problems with a named rule: it failed, its review expired, or it declares no expiry.

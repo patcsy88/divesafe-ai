@@ -13,6 +13,8 @@ from divesafe.domain.conditions import (
 )
 from divesafe.domain.lineage import are_independent, can_corroborate
 from divesafe.domain.models import (
+    INVARIANT_CHECKS,
+    SUPERVISOR_RULE_PREFIX,
     ActualConditions,
     AssessmentRecord,
     DataCategory,
@@ -24,8 +26,11 @@ from divesafe.domain.models import (
     RuleResult,
     Scenario,
     ScenarioKind,
+    SupervisorCheck,
+    SupervisorVerdict,
     most_severe,
     severity,
+    supervisor_rule_id,
 )
 from divesafe.domain.observations import (
     EnvironmentalObservation,
@@ -55,6 +60,7 @@ from divesafe.domain.rule_definition import (
     WorseWhen,
 )
 from divesafe.domain.site import DiveSite, SiteConstraint
+from divesafe.domain.stages import StageName, StageOutcome
 
 Evidence = EvidenceItem
 RiskFactor = RuleResult
@@ -72,8 +78,10 @@ __all__ = [
     "RuleScope",
     "SourceCitation",
     "WorseWhen",
+    "INVARIANT_CHECKS",
     "NOT_MEASURED",
     "RANGE_CHECK",
+    "SUPERVISOR_RULE_PREFIX",
     "THRESHOLD_FACTORS",
     "UNIT_CHECK",
     "are_independent",
@@ -103,6 +111,10 @@ __all__ = [
     "Scenario",
     "ScenarioKind",
     "SiteConstraint",
+    "StageName",
+    "StageOutcome",
+    "SupervisorCheck",
+    "SupervisorVerdict",
     "ThresholdStatus",
     "TidalConditions",
     "TransformationStep",
@@ -112,5 +124,6 @@ __all__ = [
     "effective_quality",
     "observation_from_evidence",
     "severity",
+    "supervisor_rule_id",
     "unevaluated_factors",
 ]

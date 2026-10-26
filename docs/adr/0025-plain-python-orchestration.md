@@ -2,7 +2,7 @@
 
 - Status: PROPOSED (2026-10-26). Needs `risk-reviewer` and `security-reviewer` (it touches
   `orchestration`, `agents`, `domain` and `tests/safety`). Owner decision recorded after a review
-  of a CrewAI proposal. Nothing below is built; items 2 to 6 are the build order.
+  of a CrewAI proposal. Items 2 to 6 are the build order; item 2 is built (see its note).
 - Builds on ADR 0001 (hierarchy), 0007 (agent stage), 0011 (line 28: "LangGraph is not adopted"),
   0012 (old-row rule), 0016/0018 (adapters, evaluation), 0022 (RAG), 0023 (egress), 0024 (compose
   pins).
@@ -64,11 +64,13 @@ reviews before the next:
   only end `completed`; any other outcome means no record (the run fails as today).
 - **Supervise is code, not an LLM.** It writes a `SupervisorVerdict` (`passed`, `failed`: tuples
   of fixed check names; `tightened_to: Recommendation | None`; no free text). Checks:
-  `reconcile_tighten_only` (final is at least both inputs and `llm_attempted_downgrade` agrees),
+  `reconcile_tighten_only` (final is at least both inputs and `llm_attempted_downgrade` agrees;
+  a mislabelled flag is caught here too),
   `severity_monotonic` (final at least deterministic), `citations_valid` (proposal, finding and
   scenario ids are in the evidence list), `prompt_version_pinned` (`model_version` carries
   `prompts=<PROMPT_VERSION>` whenever a provider ran), `required_categories_present` (a missing
-  required category implies at least `INSUFFICIENT EVIDENCE`).
+  required category implies at least `INSUFFICIENT EVIDENCE`; presence-only, the engine still
+  judges usability).
 - **Two classes of failure.** `reconcile_tighten_only` or `severity_monotonic` failing is an
   invariant breach: raise, store nothing. The other three tighten: Supervise appends a rule result
   `supervisor.<check>` with outcome `INSUFFICIENT EVIDENCE` (the mechanism already used for
@@ -85,6 +87,33 @@ reviews before the next:
   proved by mutating the upstream check and watching Supervise fail the case. The verdict is a
   new top-level field `supervisor_verdict: SupervisorVerdict | None = None` (ADR 0012 replace
   rule; no nested field).
+- **Built (2026-10-26, branch `rag-stage-1`; tests by the test-engineer).** `orchestration/graph.py`
+  (`Stage`, `STAGES`, `next_stage`, `walk`), `domain/stages.py` (`StageName`, `StageOutcome`,
+  in `domain` because item 3 stores them), `domain.SupervisorCheck`, `domain.SupervisorVerdict`,
+  `AssessmentRecord.supervisor_verdict`, `orchestration/supervisor.py` (`supervise`,
+  `SupervisorInvariantError`), `assess_dive` walking `STAGES` through `next_stage`. Deviations
+  and details: `Retrieve` has an empty `produces` (nothing flows from it yet); `Reason` ends
+  `skipped` with no provider and `timed_out` when the agent stage reports its deadline, and
+  every outcome routes to `Rejudge`; `Supervise`'s `requires` lists `final_recommendation`,
+  `rule_results`, `deterministic`, `proposed`, `evidence`; `Gate` produces `record`. The
+  `SupervisorVerdict` validator itself refuses an invariant check in `failed`, a duplicated
+  check and a `tightened_to` with no failed check; the record validator also requires
+  `tightened_to` to equal `final_recommendation` when set. `prompt_version_pinned` is checked
+  only when a provider ran (owner decision); `citations_valid` covers proposal, finding and
+  scenario ids against the evaluated (not withheld) evidence ids;
+  `required_categories_present` is presence-only: it compares the policy's required categories
+  with the categories that have any evidence item (a stale, rejected-quality or out-of-window
+  item still counts as present; the engine's usability judgement remains authoritative) and
+  passes when the deterministic result is already at least INSUFFICIENT EVIDENCE.
+  `reconcile_tighten_only` also catches a mislabelled `llm_attempted_downgrade`. A failed
+  tightening check is shown in the API outcome note as fixed text with the check name.
+  `supervisor.` is a reserved rule prefix (`risk.engine.RESERVED_RULE_PREFIXES`). The tightening
+  notice is its own fixed text ("the supervisor tightened the result after the agent stage;
+  agent output reflects the earlier result"), added once. The "Rules alone:" label became "Deterministic checks:". No migration:
+  `supervisor_verdict` is a top-level defaulted key, which `replace()` omits for old rows
+  (ADR 0012). The field is stored but not exposed on the API view (owner decision). The one
+  existing test that pins the old label (`test_llm_forced_severity_is_attributed_not_presented_as_a_rule_result`)
+  is the test-engineer's to update.
 
 **3. A2 stage trace on the record.** `AssessmentRecord.stages: tuple[StageTrace, ...] = ()`, a
 new top-level field with a default, which ADR 0012's `replace()` rule permits for old rows.
@@ -196,6 +225,10 @@ forecast is labelled synthetic.
   verdict is the inspectable form. A failure both would refuse is still a 500 with nothing stored.
 - `Retrieve` is a placeholder; the real stage lands with RAG stage 1 (ADR 0022) and must keep
   the "context only" rule.
+- Supervise does not re-run its invariant checks after the second `reconcile`; the
+  `AssessmentRecord` validator covers that case.
+- The web "Rules alone" label (`web/app/assessments/[id]/page.tsx`) is renamed in the deferred
+  web step unless done earlier; the API note already says "Deterministic checks".
 - The stage trace records when a stage ran and what it used, not why a model said what it said;
   it is not a reasoning trace and must never become one.
 - Ablation measures this pipeline on synthetic, labelled cases; it does not measure real-world

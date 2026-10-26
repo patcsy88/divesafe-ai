@@ -236,6 +236,49 @@ class ActualConditions(_Frozen):
     observations: dict[str, Any]
 
 
+class SupervisorCheck(StrEnum):
+    """The code-only Supervise stage's checks (ADR 0025 item 2). Fixed names, no free text."""
+
+    RECONCILE_TIGHTEN_ONLY = "reconcile_tighten_only"
+    SEVERITY_MONOTONIC = "severity_monotonic"
+    CITATIONS_VALID = "citations_valid"
+    PROMPT_VERSION_PINNED = "prompt_version_pinned"
+    REQUIRED_CATEGORIES_PRESENT = "required_categories_present"
+
+
+# A breach of these is an invariant failure: the run raises and nothing is stored, so a stored
+# record can never show one of them as failed.
+INVARIANT_CHECKS: frozenset[SupervisorCheck] = frozenset(
+    {SupervisorCheck.RECONCILE_TIGHTEN_ONLY, SupervisorCheck.SEVERITY_MONOTONIC}
+)
+SUPERVISOR_RULE_PREFIX = "supervisor."
+
+
+def supervisor_rule_id(check: SupervisorCheck) -> str:
+    """The rule id Supervise appends for a failed tightening check."""
+    return f"{SUPERVISOR_RULE_PREFIX}{check.value}"
+
+
+class SupervisorVerdict(_Frozen):
+    """What the Supervise stage found. `tightened_to` is the final recommendation `reconcile`
+    produced after a failed check added its rule result, or None when nothing changed."""
+
+    passed: tuple[SupervisorCheck, ...]
+    failed: tuple[SupervisorCheck, ...] = ()
+    tightened_to: Recommendation | None = None
+
+    @model_validator(mode="after")
+    def _each_check_once(self) -> SupervisorVerdict:
+        seen = (*self.passed, *self.failed)
+        if len(seen) != len(set(seen)):
+            raise ValueError("each supervisor check appears at most once")
+        if INVARIANT_CHECKS & set(self.failed):
+            raise ValueError("an invariant check cannot be recorded as failed")
+        if self.tightened_to is not None and not self.failed:
+            raise ValueError("tightened_to requires a failed check")
+        return self
+
+
 class AssessmentRecord(_Frozen):
     """Immutable audit record of one assessment and what the human did with it.
 
@@ -309,6 +352,13 @@ class AssessmentRecord(_Frozen):
     )
     human_decision: HumanDecision | None = None
     actual_conditions: ActualConditions | None = None
+    supervisor_verdict: SupervisorVerdict | None = Field(
+        default=None,
+        description=(
+            "The code-only Supervise stage's checks (ADR 0025). None on records made before it "
+            "existed. A failed check is also a `supervisor.<check>` rule result."
+        ),
+    )
 
     @property
     def status(self) -> Literal["PENDING_HUMAN", "DECIDED"]:
@@ -381,6 +431,8 @@ class AssessmentRecord(_Frozen):
         ):
             raise ValueError("evidence issues require at least INSUFFICIENT EVIDENCE")
 
+        self._check_supervisor()
+
         if self.human_decision is not None:
             if self.human_decision.decided_at < self.created_at:
                 raise ValueError("decided_at is before the assessment was created")
@@ -396,3 +448,25 @@ class AssessmentRecord(_Frozen):
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self
+
+    def _check_supervisor(self) -> None:
+        """Every failed check is exactly one `supervisor.<check>` INSUFFICIENT EVIDENCE rule
+        result, and no such result exists without its failed check. The verdict's own validator
+        already refuses a failed invariant check."""
+        supervisor_results = [
+            r for r in self.rule_results if r.rule_id.startswith(SUPERVISOR_RULE_PREFIX)
+        ]
+        failed = () if self.supervisor_verdict is None else self.supervisor_verdict.failed
+        expected = {supervisor_rule_id(check) for check in failed}
+        found = [r.rule_id for r in supervisor_results]
+        if len(found) != len(set(found)):
+            raise ValueError("each supervisor rule result must appear once")
+        if set(found) != expected:
+            raise ValueError("supervisor rule results must match the verdict's failed checks")
+        for result in supervisor_results:
+            if result.outcome is not Recommendation.INSUFFICIENT_EVIDENCE:
+                raise ValueError("a supervisor rule result must be INSUFFICIENT EVIDENCE")
+        verdict = self.supervisor_verdict
+        tightened = None if verdict is None else verdict.tightened_to
+        if tightened is not None and tightened is not self.final_recommendation:
+            raise ValueError("tightened_to must be the final recommendation")
