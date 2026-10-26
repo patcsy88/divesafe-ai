@@ -4,6 +4,10 @@ At most 9 provider calls per assessment (5 specialists, 3 scenarios, 1 risk prop
 a timeout, token cap and strict validation, and an overall stage deadline. Every failure is
 recorded as an issue and the stage degrades to "no proposal": the deterministic result then
 stands on its own. The risk agent and the scenarios are told which specialists are missing.
+
+`run_agent_stage` takes private ablation switches (`specialists`, `scenarios`, `proposal`) for
+the evaluation harness (ADR 0025 item 4). They are not reachable from `assess_dive`, `Settings`,
+the API or the web; a skipped group is a fixed `ablation:<group>` issue and a `skipped` task.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from divesafe.domain import (
     Recommendation,
     RuleResult,
     Scenario,
+    ScenarioKind,
 )
 from divesafe.models import LLMProvider
 
@@ -38,6 +43,7 @@ STAGE_TIMED_OUT_ISSUE = "agent stage: timed out; no proposal was produced"
 
 TaskOutcomeKind = Literal["ok", "failed", "skipped"]
 RISK_TASK = "risk_assessment"
+ABLATION_ISSUE_PREFIX = "ablation:"
 
 
 @dataclass(frozen=True)
@@ -71,17 +77,14 @@ def _task_label(label: str) -> TaskOutcomeKind:
     return "failed"
 
 
-async def _stage(
+async def _run_specialists(
     provider: LLMProvider,
     plan: DivePlan,
     evidence: Sequence[EvidenceItem],
-    rule_results: Sequence[RuleResult],
-    deterministic: Recommendation,
     issues: list[str],
     findings: list[Finding],
-    scenarios_out: list[Scenario],
     tasks: list[TaskOutcome],
-) -> tuple[Recommendation | None, tuple[str, ...], str]:
+) -> None:
     outcomes = await asyncio.gather(
         *(run_specialist(provider, spec, plan, evidence) for spec in SPECIALISTS),
         return_exceptions=True,
@@ -99,16 +102,47 @@ async def _stage(
             issues.append(f"specialist:{spec.name}: rejected ({type(outcome).__name__})")
             tasks.append(TaskOutcome(spec.name, "failed"))
 
+
+async def _stage(
+    provider: LLMProvider,
+    plan: DivePlan,
+    evidence: Sequence[EvidenceItem],
+    rule_results: Sequence[RuleResult],
+    deterministic: Recommendation,
+    issues: list[str],
+    findings: list[Finding],
+    scenarios_out: list[Scenario],
+    tasks: list[TaskOutcome],
+    *,
+    with_specialists: bool = True,
+    with_scenarios: bool = True,
+    with_proposal: bool = True,
+) -> tuple[Recommendation | None, tuple[str, ...], str]:
+    if not with_specialists:
+        issues.append(f"{ABLATION_ISSUE_PREFIX}specialists")
+        tasks.extend(TaskOutcome(spec.name, "skipped") for spec in SPECIALISTS)
+    else:
+        await _run_specialists(provider, plan, evidence, issues, findings, tasks)
+
     have = {f.agent for f in findings}
     missing = [spec.name for spec in SPECIALISTS if spec.name not in have]
 
-    scenarios, scenario_issues, scenario_labels = await evaluate_scenarios_with_outcomes(
-        provider, plan, evidence, findings, rule_results, missing
-    )
-    scenarios_out.extend(scenarios)
-    issues.extend(scenario_issues)
-    tasks.extend(TaskOutcome(kind.value, _task_label(label)) for kind, label in scenario_labels)
+    scenarios: tuple[Scenario, ...] = ()
+    if not with_scenarios:
+        issues.append(f"{ABLATION_ISSUE_PREFIX}scenarios")
+        tasks.extend(TaskOutcome(kind.value, "skipped") for kind in ScenarioKind)
+    else:
+        scenarios, scenario_issues, scenario_labels = await evaluate_scenarios_with_outcomes(
+            provider, plan, evidence, findings, rule_results, missing
+        )
+        scenarios_out.extend(scenarios)
+        issues.extend(scenario_issues)
+        tasks.extend(TaskOutcome(kind.value, _task_label(label)) for kind, label in scenario_labels)
 
+    if not with_proposal:
+        issues.append(f"{ABLATION_ISSUE_PREFIX}proposal")
+        tasks.append(TaskOutcome(RISK_TASK, "skipped"))
+        return None, (), ""
     if not evidence or len(evidence) > MAX_EVIDENCE_ITEMS:
         issues.append("risk_assessment: skipped (no evidence, or too much for one call)")
         tasks.append(TaskOutcome(RISK_TASK, "skipped"))
@@ -138,10 +172,16 @@ async def run_agent_stage(
     evidence: Sequence[EvidenceItem],
     rule_results: Sequence[RuleResult],
     deterministic: Recommendation,
+    *,
+    specialists: bool = True,
+    scenarios: bool = True,
+    proposal: bool = True,
 ) -> AgentStageResult:
+    """Run the agent stage. The keyword-only switches are private ablation hooks for the
+    evaluation harness only; production callers never pass them."""
     issues: list[str] = []
     findings: list[Finding] = []
-    scenarios: list[Scenario] = []
+    scenarios_out: list[Scenario] = []
     tasks: list[TaskOutcome] = []
     version = f"{provider.name}/{provider.model}; prompts={PROMPT_VERSION}"
 
@@ -158,8 +198,11 @@ async def run_agent_stage(
                 deterministic,
                 issues,
                 findings,
-                scenarios,
+                scenarios_out,
                 tasks,
+                with_specialists=specialists,
+                with_scenarios=scenarios,
+                with_proposal=proposal,
             )
     except TimeoutError:
         issues.append(STAGE_TIMED_OUT_ISSUE)
@@ -171,7 +214,7 @@ async def run_agent_stage(
         proposed=proposed,
         proposal_evidence_ids=cited,
         findings=tuple(findings),
-        scenarios=tuple(scenarios),
+        scenarios=tuple(scenarios_out),
         explanation=explanation,
         model_version=version,
         issues=tuple(issues),
