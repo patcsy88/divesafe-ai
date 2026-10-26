@@ -4,10 +4,11 @@ identity fields can never be supplied by a client."""
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import (
@@ -16,6 +17,7 @@ from divesafe.domain import (
     DiveSite,
     EvidenceItem,
     Recommendation,
+    ScenarioKind,
     effective_quality,
 )
 from divesafe.risk import NOT_EVALUATED_MARKER
@@ -26,7 +28,10 @@ from divesafe.risk.engine import (
     RULE_PROBLEM_WORDING,
     WINDOW_STARTED_RULE,
 )
+from divesafe.services import RepositoryIntegrityError
 from divesafe.services.runs import FailureCode, PendingRun, RunState
+
+logger = logging.getLogger(__name__)
 
 DISCLAIMER = (
     "Decision support only. The final decision belongs to the diver, dive master or dive leader. "
@@ -163,9 +168,75 @@ _WITHHELD_NOTE = (
 
 _MAX_ATTRIBUTION_CHARS = 300
 
+_SELF_ESTIMATE = (
+    "The model's own uncalibrated guess about this item. It is NOT a confidence, is not "
+    "calibrated and is not a measure of dive safety. Do not read it as how safe a dive is."
+)
+
+
+class ScenarioView(BaseModel):
+    """A scenario as clients see it. Same fields and bounds as `Scenario`, but the stored
+    `confidence` is presented as `uncalibrated_self_estimate`; no field here is called
+    `confidence`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ScenarioKind
+    summary: str
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+    risk_factors: tuple[str, ...] = ()
+    conflicting_signals: tuple[str, ...] = ()
+    uncalibrated_self_estimate: float = Field(ge=0.0, le=1.0, description=_SELF_ESTIMATE)
+
+
+class FindingView(BaseModel):
+    """A finding as clients see it; see `ScenarioView`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    risk_factors: tuple[str, ...] = ()
+    conflicting_signals: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    uncalibrated_self_estimate: float | None = Field(
+        default=None, ge=0.0, le=1.0, description=_SELF_ESTIMATE
+    )
+    no_evidence: bool = False
+
+
+class AssessmentRecordView(AssessmentRecord):
+    """The audit record as clients see it. Identical to `AssessmentRecord` except that scenarios
+    and findings carry `uncalibrated_self_estimate` instead of `confidence`. The record-level
+    `confidence` (None until a documented method exists) is unchanged. Built from a valid record
+    by `of`; nothing here is stored."""
+
+    scenarios: tuple[ScenarioView, ...] = ()  # type: ignore[assignment]
+    findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
+
+    @classmethod
+    def of(cls, record: AssessmentRecord) -> AssessmentRecordView:
+        data = record.model_dump()
+        for key in ("scenarios", "findings"):
+            data[key] = [_renamed(item) for item in data[key]]
+        try:
+            return cls.model_validate(data)
+        except ValidationError:
+            # pydantic's message carries input values (model or decision text). It is neither
+            # logged nor kept: the except block only logs a fixed line and the error is raised
+            # after it, so the new exception has no __cause__ and no __context__.
+            logger.error("record could not be presented", extra={"assessment_id": record.id})
+        raise RepositoryIntegrityError("the record could not be presented")
+
+
+def _renamed(item: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in item.items() if k != "confidence"}
+    out["uncalibrated_self_estimate"] = item["confidence"]
+    return out
+
 
 class AssessmentView(BaseModel):
-    record: AssessmentRecord
+    record: AssessmentRecordView
     # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
     status: Literal["PENDING_HUMAN", "DECIDED", "DECISION_WITHHELD"]
     overrides_to_less_severe: bool | None
@@ -252,7 +323,7 @@ class AssessmentView(BaseModel):
                 "can currently return GO. More data alone will not change that."
             )
         return cls(
-            record=record,
+            record=AssessmentRecordView.of(record),
             outcome_note=outcome_note,
             agent_note=_agent_note(record),
             status_note=(

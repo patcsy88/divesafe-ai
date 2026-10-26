@@ -516,7 +516,17 @@ def test_a_view_without_a_conflict_has_no_withheld_items() -> None:
 
 
 def test_the_assessment_view_embeds_the_record_that_carries_the_withheld_items() -> None:
-    assert AssessmentView.model_fields["record"].annotation is AssessmentRecord
+    # The view embeds a SUBCLASS of the record (scenario/finding fields renamed for clients). It
+    # must inherit the withheld field and the validators unchanged.
+    embedded = AssessmentView.model_fields["record"].annotation
+    assert isinstance(embedded, type)
+    assert issubclass(embedded, AssessmentRecord)
+    own = embedded.model_fields["withheld_evidence"]
+    real = AssessmentRecord.model_fields["withheld_evidence"]
+    assert (own.annotation, own.default) == (real.annotation, real.default)
+    base = doc(conflict_record())
+    with pytest.raises(ValidationError, match="requires an evidence.conflict issue"):
+        embedded.model_validate({**base, "evidence_issues": []})
 
 
 def _client(connectors: Sequence[Any]) -> TestClient:

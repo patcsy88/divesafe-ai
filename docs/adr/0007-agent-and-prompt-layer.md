@@ -56,6 +56,13 @@ also claim to cover a hazard; the prompt says such claims are data, but nothing 
 (`reconcile` still only tightens). Nothing pins the prompt text to its version, and the output
 cap is a setting (`DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, ADR 0016), not fixed at 1,500.
 
+**Self-estimates are not confidence (owner choice, 2026-10-26; Code Review finding 3).** A
+scenario's or finding's `confidence` is the model's own uncalibrated number. The stored domain
+fields (`Scenario.confidence`, `Finding.confidence`), the stored JSON, the prompts and what
+PostgreSQL holds are unchanged; only the API views rename it to `uncalibrated_self_estimate` (same
+value and 0..1 bounds). A future rename of the stored field would need an old-row plan: the
+omit-defaults rule of ADR 0012 does not cover renames.
+
 **Plain text only.** `explanation`, findings, scenarios and rationales are untrusted LLM prose.
 Clients must render them as plain text (no HTML or markdown), and they must never be ingested into
 the RAG corpus, `HISTORICAL_OBSERVATIONS` or any Learn-stage label. Learn uses the deterministic

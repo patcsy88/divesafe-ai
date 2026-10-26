@@ -328,7 +328,12 @@ class _GoRule:
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> Any:
         from divesafe.domain import RuleResult
 
-        return RuleResult(rule_id=self.rule_id, outcome=R.GO, rationale="synthetic")
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=R.GO,
+            rationale="synthetic",
+            evidence_ids=tuple(e.id for e in evidence),  # a GO that cites nothing is flagged
+        )
 
 
 PLAN = DivePlan(

@@ -149,6 +149,13 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   INSUFFICIENT EVIDENCE; the deferred "keep the most severe variant" option must be decided before
   any validated rule ships). See [risk-model.md](risk-model.md) and ADR 0008.
 
+- **Connector HTTP limits** (2026-10-26): the total deadline and the dedicated thread pool leave
+  gaps (connect/DNS/TLS/header stalls, private socket access, no per-host thread limit, unbounded
+  queue, shared module-level pool); see
+  [data-sources.md](data-sources.md).
+- **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
+  interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
+  see [risk-model.md](risk-model.md) Known gaps.
 - **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
   Still open: a migration tool, record hashing for tamper evidence, connection pooling.
 - **Roles and authorization:** API keys identify an actor but grant no roles (a production gate;
@@ -163,10 +170,10 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   made (Ollama, `qwen3.5:9b`; and `claude-sonnet-5-5` through the OpenAI-compatible adapter, see
   evaluation-strategy.md); vendor-specific OpenAI and Anthropic adapters are not built, and
   real-model behaviour is largely unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
-- **Contradiction detection and validity-window coverage** (see [risk-model.md](risk-model.md)).
+- **Contradiction detection** (see [risk-model.md](risk-model.md)).
 - **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
-- **Per-category evidence quality policy and engine-level validity-window coverage**
-  (see risk-model.md).
+- **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
+  instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry

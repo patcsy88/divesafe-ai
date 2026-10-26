@@ -32,6 +32,7 @@ from divesafe.data import (
     UrllibFormPostJsonGetter,
     UrllibJsonGetter,
 )
+from divesafe.data.http import HTTP_POOL_CEILING, configure_http_pool, http_pool_size
 from divesafe.domain import DataCategory, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
 from divesafe.models.egress import check_egress
@@ -271,6 +272,17 @@ def build_default_state(settings: Settings) -> AppState:
                 )
             )
         )
+    pool_size = http_pool_size(len(connectors), settings.max_runs_in_flight)
+    configure_http_pool(pool_size)
+    logger.info(
+        "connector HTTP pool sized",
+        extra={
+            "http_pool_workers": pool_size,
+            "connectors": len(connectors),
+            "max_runs_in_flight": settings.max_runs_in_flight,
+            "http_pool_ceiling": HTTP_POOL_CEILING,
+        },
+    )
     if settings.environment == "production" and not settings.trusted_proxy_set():
         logger.warning(
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "

@@ -41,6 +41,7 @@ from divesafe.api.schemas import (
 from divesafe.api.state import AppState, build_default_state
 from divesafe.config import configure_logging, get_settings
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, RUN_MARGIN_SECONDS
+from divesafe.data.http import shutdown_http_pool
 from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
 from divesafe.orchestration import (
     AlreadyDecidedError,
@@ -139,6 +140,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 await runner.shutdown()  # before the provider closes, so cancelled runs end first
             except Exception:
                 logger.error("running assessments did not stop cleanly")
+            shutdown_http_pool()
             close = getattr(app_state.provider, "close", None)
             if callable(close):
                 try:

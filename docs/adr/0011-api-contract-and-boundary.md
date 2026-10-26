@@ -37,6 +37,14 @@ HTTP API, never on agents, rules or the RAG pipeline, and must not duplicate ris
   `withheld_evidence`. Old clients ignore them. The decision and actual-conditions endpoints answer
   409 with the fixed message "the assessment could not be updated; reload it" for
   `InvalidSuccessorError`.
+- **Renamed fields (2026-10-26, owner choice; Code Review finding 3).** In API views, the
+  `confidence` of a scenario or finding is now `uncalibrated_self_estimate` (same value, same 0..1
+  bounds). Its description says it is NOT a confidence and not a measure of dive safety.
+  `AssessmentView.record` is now `AssessmentRecordView`. The record-level `confidence` (`None` until
+  a documented method exists) and `confidence_note` are unchanged. Every endpoint that returns
+  `AssessmentView` changes: create (POST), GET, decision, actual conditions and the create-only
+  view. Web types needed no change. Stored domain fields, stored JSON, prompts and PostgreSQL
+  contents are unchanged. This rename breaks clients that read the old field names.
 - Third-party text (`value`, warning text) must be rendered by clients as plain text only.
 - `/v1/*` responses carry `Cache-Control: no-store`.
 

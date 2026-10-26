@@ -47,7 +47,20 @@ class _GoRule:
     citation = "test fixture (synthetic, not a real safety source)"
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
-        return RuleResult(rule_id=self.rule_id, outcome=Recommendation.GO, rationale="synthetic")
+        # A GO that cites nothing is flagged, so cite the evidence that overlaps the dive window
+        # (the hourly series also holds hours after the dive, which are not usable cover).
+        end = plan.planned_start + timedelta(minutes=plan.planned_duration_minutes)
+        cited = tuple(
+            e.id
+            for e in evidence
+            if e.valid_at <= end and (e.valid_until or e.valid_at) >= plan.planned_start
+        )
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=Recommendation.GO,
+            rationale="synthetic",
+            evidence_ids=cited,
+        )
 
 
 def _payload(name: str) -> Any:
@@ -110,9 +123,11 @@ def test_outage_of_the_warning_source_fails_closed() -> None:
 def test_stale_connector_data_fails_closed() -> None:
     evidence = _gather(MARINE, WARNINGS)
     later = NOW + timedelta(hours=2)
-    assert _engine(LIVE).assess(PLAN, evidence.items, later).recommendation == (
-        Recommendation.INSUFFICIENT_EVIDENCE
-    )
+    assessment = _engine(LIVE).assess(PLAN, evidence.items, later)
+    assert assessment.recommendation == Recommendation.INSUFFICIENT_EVIDENCE
+    # The freshness check itself produced it, not only the citation guard.
+    required = [r for r in assessment.rule_results if r.rule_id.startswith("evidence.required.")]
+    assert required
 
 
 # --- ADR 0005: warnings need human reading --------------------------------------------------

@@ -42,7 +42,13 @@ class _Rule:
             raise RuntimeError("boom")
         if self._outcome is None:
             return None
-        return RuleResult(rule_id=self.rule_id, outcome=self._outcome, rationale="fixed")
+        # Cites the evidence supplied: the engine flags a GO or CAUTION that cites nothing.
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=self._outcome,
+            rationale="fixed",
+            evidence_ids=tuple(e.id for e in evidence),
+        )
 
 
 def _engine(*rules: _Rule, required: frozenset[DataCategory] = frozenset()) -> RiskRulesEngine:
@@ -67,7 +73,8 @@ def test_rules_that_do_not_apply_are_not_go(plan: DivePlan, now: datetime) -> No
 
 
 def test_go_requires_an_explicit_go_rule(plan: DivePlan, now: datetime) -> None:
-    assert _engine(_Rule("a", R.GO)).assess(plan, [], now).recommendation == R.GO
+    supplied = [make_evidence(WAVES)]  # the GO rule cites it; a GO citing nothing is flagged
+    assert _engine(_Rule("a", R.GO)).assess(plan, supplied, now).recommendation == R.GO
 
 
 # --- M2: freshness -----------------------------------------------------------------------

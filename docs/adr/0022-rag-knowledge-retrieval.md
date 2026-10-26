@@ -91,8 +91,9 @@ The engine already treats knowledge in fixed ways that this ADR relies on:
   `historical_observations` from that exemption for knowledge.
 - `INTERIM_REQUIRED_CATEGORIES` holds none of those categories.
 - The `site_constraint` placeholder reads `site_information` and `local_guidance` and returns
-  INSUFFICIENT EVIDENCE, so it cannot return GO or CAUTION. It cites knowledge ids; the citation
-  guard in decision 8 only looks at GO and CAUTION results, so it is unaffected.
+  INSUFFICIENT EVIDENCE, so it cannot return GO or CAUTION. It cites knowledge ids; the knowledge
+  half of the citation guard in decision 8 (not built yet) will only look at GO and CAUTION
+  results, so it will not affect this placeholder.
 
 Today GO and CAUTION are unreachable anyway (no signed limits; `degraded_may_support_go` is
 false). The reviews found that several guarantees above hold only by accident of the current
@@ -431,7 +432,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    produce with no provider; with an agent stage and egress basis `declared_local` the knowledge
    items can still lead an agent to *tighten* the result by proposal (never relax it), so the
    "knowledge changes nothing" safety test runs against the deterministic result / with no provider.
-   - **A citation-guard rule in the engine, independent of `degraded_may_support_go`:** a GO or
+   - **A citation-guard rule in the engine, independent of `degraded_may_support_go`** (the
+      "cites nothing" half is built, 2026-10-26; the knowledge half is **not built yet**): a GO or
      CAUTION that cites nothing, or cites **any** KNOWLEDGE item, becomes INSUFFICIENT EVIDENCE
      (stricter than "only", because no rule may read knowledge text, so a knowledge citation on a
      GO or CAUTION is suspect either way). The rule has an engine-reserved rule id and fixed API
@@ -472,7 +474,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      - **To change when the citation guard lands:** `tests/agent/scripted_llm.py` (`_GoRule`
        cites nothing, so it would be turned into INSUFFICIENT EVIDENCE; it must cite a usable
        synthetic item), and `docs/risk-model.md` (the bullet "A `GO` that cites nothing" at about
-       lines 240-241 says an empty citation passes the guard; it must say it is now refused).
+       lines 240-241 said an empty citation passes the guard; it now says it is refused).
+        **Status (2026-10-26): the empty-citation part has landed** (a `GO` or `CAUTION` citing
+        nothing is flagged `CITES_UNUSABLE`, giving INSUFFICIENT EVIDENCE). **The
+        knowledge-citation part is still open and is NOT built:** `risk/engine.py` has no
+        knowledge-citation guard today (KNOWLEDGE items appear only in the window-exemption table),
+        so a `GO` or `CAUTION` citing a knowledge item passes the guard. It is not yet flagged; it
+        will be when decision 8 lands.
 9. **Trusted prompt wording, outside the untrusted block, whenever a knowledge item or a
    withheld one exists, and the absence line below whenever the knowledge connector returned zero
    items or raised a note or issue** (as `tide_note` does for tides, ADR 0021), wired into specialists, ToT,

@@ -52,12 +52,14 @@ class _Go:
     rule_id = "synthetic.go"
     citation = "test fixture (synthetic, not a real safety source)"
 
-    def __init__(self, cites: tuple[str, ...] = ()) -> None:
+    def __init__(self, cites: tuple[str, ...] | None = None) -> None:
+        # None: cite every item supplied in the test (the engine requires a GO to cite evidence).
         self._cites = cites
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
+        cites = tuple(e.id for e in evidence) if self._cites is None else self._cites
         return RuleResult(
-            rule_id=self.rule_id, outcome=R.GO, rationale="synthetic", evidence_ids=self._cites
+            rule_id=self.rule_id, outcome=R.GO, rationale="synthetic", evidence_ids=cites
         )
 
 

@@ -151,8 +151,9 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   share data, and production refuses to start. The API reports `storage` on `/health`.
 - **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
   0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty
-  required set; unrequired-but-absent data, contradictory data and window coverage remain open
-  (see above).
+  required set; unrequired-but-absent data and contradictory data remain open, as does the gap
+  between instants: two instants days apart still count as covering the window, and a hole between
+  instants is not detected (ADR 0008). Interval coverage is fixed (2026-10-26).
 
 ### Agent output (ADR 0007)
 
@@ -161,7 +162,10 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   `agent_issues`.
 - `explanation`, `findings` and `scenarios` are LLM-generated and unverified. The API labels
   them. Specialist and scenario `confidence` values are uncalibrated self-estimates and are not
-  the record `confidence`, which stays `None`.
+  the record `confidence`, which stays `None` (with `confidence_note`, unchanged). Since
+  2026-10-26 (owner choice, Code Review finding 3) the API shows them to clients as
+  `uncalibrated_self_estimate`, whose description says it is NOT a confidence and not a measure of
+  dive safety; see ADR 0011 and ADR 0007.
 - Known gap: nothing checks a reply for invented hazards, invented reassurances or dropped
   caveats. A reply that is well formed but wrong in these ways is accepted (ADR 0016; pinned by an
   offline test that is explicitly not coverage).
@@ -184,7 +188,7 @@ exempt only for their own categories and only if they have not ended before the 
 An observation cannot be valid after it was retrieved. Degraded evidence can make a category
 sufficient but cannot support `GO` or `CAUTION` unless `degraded_may_support_go=True`, which the
 default and the production configuration do not set, and validated evidence must itself cover the
-window. A `GO` or `CAUTION` that cites stale or unaccepted evidence is downgraded. Rules still
+window. A `GO` or `CAUTION` that cites stale or unaccepted evidence, or nothing, is downgraded. Rules still
 receive all evidence so hazard rules are never blinded.
 
 ## Reserved rule ids
@@ -230,6 +234,26 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 
 ## Known gaps (tracked, not yet implemented)
 
+**Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
+ignores intervals whose `valid_until` is before the window start, so such an interval no longer
+stops the chain), and a `GO` or `CAUTION` citing no evidence (now flagged `CITES_UNUSABLE`, so the
+result is `INSUFFICIENT EVIDENCE` with the rationale "The rule cites no evidence."). A `GO` or
+`CAUTION` citing a knowledge item is not yet flagged (ADR 0022 decision 8).
+
+**Reported by the 23 Oct 2026 Code Review, still open (not yet verified or fixed):**
+
+- The `kb_privileges` sequence check passes when the object is missing (`kb_privileges.py` ~277,
+  `COALESCE` gives false); a live test is needed first.
+- The GO explanation is shown only for the interim ruleset (`api/schemas.py` ~241).
+- No connection pooling for PostgreSQL (`postgres.py` ~297).
+
+**Known gap (not owner-approved): a recorded decision can be reported as an error.** On
+`POST /decision` the decision is stored before the response view is built. If
+`AssessmentRecordView.of` ever fails (view/domain drift), the client gets a 500 "internal error" for
+a decision that WAS recorded; a replay and a GET return the same 500; and the app handler logs it
+as "storage integrity failure". Decisions are write-once, so nothing unsafe follows, but the decider
+cannot confirm the decision was saved.
+
 - **MET daily marine ranges (2026-10-16):** `MetApiMarineConnector` items are DEGRADED daily
   ranges under `value["ranges"]`. The engine counts a +08:00 day as covering the dive window, so
   they can make wind and waves "present" when the hourly source is missing; the result stays
@@ -267,8 +291,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
     different variable (wave height without swell period) or another grid cell still satisfies the
     category. `grid_distance_km` is recorded but not limited. A reviewed required-variable and
     location rule is needed.
-  - *A `GO` that cites nothing* passes the citation guard (an empty citation is a subset of any
-    pool). Real rules must cite evidence; consider enforcing it when the first real rule lands.
+  - *A `GO` or `CAUTION` that cites nothing* is now refused (fixed 2026-10-26): the engine flags it
+    `CITES_UNUSABLE` and the result is `INSUFFICIENT EVIDENCE` ("The rule cites no evidence."). A
+    future rule based only on the dive plan (no evidence) that returns `GO` or `CAUTION` would
+    therefore be `INSUFFICIENT EVIDENCE`: it fails closed, and such a rule must cite evidence.
   - *Per-category resolution and kind policy:* model currents at about 8 km are accepted as
     DEGRADED evidence; whether that is good enough for `GO` is the owner decision
     `degraded_may_support_go` (default `False`).

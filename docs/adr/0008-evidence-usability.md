@@ -80,7 +80,7 @@ and recorded in this ADR, together with the compensating controls.
 
 - **Per category, not per variable or location:** a covering item with a different variable or
   grid cell satisfies the category. A reviewed required-variable and location rule is needed.
-- **A GO citing nothing** passes the citation guard; real rules must cite evidence.
+- **A GO or CAUTION citing nothing** is now refused (fixed 2026-10-26: flagged `CITES_UNUSABLE`, so the result is INSUFFICIENT EVIDENCE); real rules must cite evidence. A citation of a knowledge item is not yet flagged (ADR 0022 decision 8).
 - **Duplicate evidence ids** are reported as INSUFFICIENT EVIDENCE (`evidence.duplicate_ids`);
   since 2026-10-25 that rule can fire only for direct engine callers.
   Update (2026-10-25, owner decision): `gather_evidence` and `build_evidence_set` no longer raise on
