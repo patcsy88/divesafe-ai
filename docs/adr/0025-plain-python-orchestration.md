@@ -136,6 +136,63 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   set from the size of the fixed code list (for example the number of distinct codes a stage can
   emit), decided at item 3 with the reviewers, not a safety threshold.
 - The API view and the web timeline are deferred; the stored field comes first.
+- **Built (2026-10-26, branch `rag-stage-1`; tests by the test-engineer).** `domain/stages.py`
+  holds `StageTrace`, `STAGE_ORDER` (the graph refuses to load if `STAGES` disagrees),
+  `ISSUE_CODE_PATTERN` (`^[a-z]+\.[a-z_]+(:[a-z0-9_\-]{1,40})?$`, 80 characters), `issue_code`,
+  `bound_issues`, `TRACE_ISSUE_KINDS` and the bounds; `AssessmentRecord.stages` is the last,
+  defaulted, top-level field (no migration: `_without_new_defaults` omits it for old rows). The
+  record checks one trace per stage, `STAGE_ORDER` order, the `next_stage` chain (`None` only on
+  the last) and every trace id against the kept evidence (so withheld ids are refused). Final
+  code list, `<stage>.<kind>[:<qualifier>]`: observe `connector_failed:<connector>`,
+  `connector_timed_out:<connector>`, `connector_issue:<connector>`, `evidence_conflict`,
+  `no_evidence`; retrieve `not_configured`; assess `connector_issues_rule`,
+  `unevaluated_factors`; reason `skipped_no_provider`, `timed_out`,
+  `specialist_failed:<specialist>`, `scenario_failed:<kind>`, `proposal_failed`,
+  `proposal_skipped`; rejudge `window_started`, `result_changed`, `rules_added` (Rejudge
+  appended a rule result, even if the most severe outcome stayed); propose
+  `llm_attempted_downgrade`; supervise `tightened:<check>`, `llm_attempted_downgrade` (the
+  second `reconcile`, after a tightening, discarded the proposal when the first had not); any
+  stage `overflow` (also written when a stage's evidence ids exceed `MAX_EVIDENCE_ITEMS`).
+  Qualifiers are code-registered names only, checked with `fullmatch`; a name that fails the
+  qualifier pattern is written as `unnamed_<n>`, n the 1-based position among that stage's
+  non-matching names (capped at `MAX_CONNECTORS`), so distinct bad names stay distinct
+  (`domain.unnamed_qualifier`; a test asserts every registered connector name matches the
+  pattern). The record cross-checks the trace against itself: the observe trace's ids equal the
+  kept evidence ids; `supervise.tightened:<check>` codes equal `supervisor_verdict.failed`; a
+  downgrade code exists exactly when `llm_attempted_downgrade` is set (each only when that
+  stage's trace exists; fixed messages, fail closed). The codes come from
+  structured sources added for this: `EvidenceSet.connector_outcomes`
+  (`ConnectorOutcome(name, ok | issues | failed | timed_out)`, the timeout label from the error
+  class prefix `gather_evidence` itself sets) and `EvidenceSet.conflicts`;
+  `AgentStageResult.task_outcomes` (`TaskOutcome(task, ok | failed | timed_out | skipped)` per
+  specialist, scenario kind and `risk_assessment`, from `evaluate_scenarios_with_outcomes`);
+  rule ids, the reconciliation flag and the verdict. Nothing reads `evidence_issues` or
+  `agent_issues`. Bound: `MAX_STAGE_ISSUES = 3 * MAX_CONNECTORS + 2 = 26` with
+  `MAX_CONNECTORS = 8` (six connectors registrable today, rounded up to a power of two; a
+  capacity bound, not a safety threshold). Observe is the widest stage (three codes per
+  connector plus two); per-stage maxima from the enumerated list: observe 26, retrieve 1,
+  assess 2, reason 10 (2 outcome codes + 3 specialists + 3 kinds + 2 proposal codes), rejudge 3,
+  propose 1, supervise 6, gate 0, so `overflow` is reachable only through a future change. Dedup
+  precedes the count; beyond the bound the first 25 are kept and `overflow` is last.
+  `MAX_EVIDENCE_ITEMS` (120) moved to `domain/stages.py`; `agents.runner` imports it. Timing:
+  `started_at`/`finished_at` are coarse bounds, not per-stage measurements: the pipeline reads
+  its clock once, in Rejudge (`run.completed`), so stages up to Rejudge are stamped `now` and
+  the later stages that later time; with no clock every entry has
+  `started_at == finished_at == now`. The trace does not read the clock itself (a test's
+  single-shot clock would be consumed). `StageTrace.duration_ms` (default 0) is the stage's own
+  wall time from `time.monotonic`, and the log line carries the same value. "Never aborts" holds
+  by construction: no reachable input makes `StageTrace` raise (codes come from `issue_code`
+  over fixed labels, ids from the kept evidence, bounds applied before construction); a bug
+  there would be a fail-closed 500 with nothing stored, never a weaker record. On the waves-only
+  scripted fixture the `weather` specialist reports `no_evidence` (a valid finding), so it never
+  registers `specialist_failed` there; the specialist codes are exercised by failing a specialist
+  that has evidence. `evidence_ids`: observe = kept ids; assess and rejudge =
+  rule-result ids present in the evidence; reason = finding, scenario and proposal ids present
+  in the evidence; others empty. The gate's own trace is taken before the record is built and
+  ends the chain with `next_stage=None`. A stopped run stores nothing. Each stage logs
+  `stage finished` with name, outcome, `duration_ms` and the issue count only.
+  `AssessmentRecordView` inherits `stages` (serialised as plain strings and timestamps; no
+  dedicated view, per the owner decision below); the web typecheck is unaffected.
 
 **4. C5 adversarial set, C2 ablation harness, E2 authority map.** In `tests/evaluation`:
 - Adversarial false-GO temptations, each with a scripted `FakeProvider` and a labelled synthetic
@@ -211,8 +268,9 @@ forecast is labelled synthetic.
 
 - Supervise tightens by appending a `supervisor.<check>` rule result and calling `reconcile`
   again; `reconcile`'s signature is unchanged.
-- `supervisor_verdict` and `stages` are stored in items 2 and 3 but not exposed on the API view
-  until the stage-trace view and the web timeline step.
+- `supervisor_verdict` and `stages` are stored in items 2 and 3 but get no dedicated API view
+  until the stage-trace view and the web timeline step (both fields are inherited by the record
+  view as stored).
 - `prompt_version_pinned` reads the `model_version` string until the typed `egress_basis` and
   `model_host` record fields (ADR 0022/0023) exist; then it moves to those fields.
 - The item 6 live run uses the same declared egress basis and rules as the runs recorded in
@@ -231,6 +289,9 @@ forecast is labelled synthetic.
   web step unless done earlier; the API note already says "Deterministic checks".
 - The stage trace records when a stage ran and what it used, not why a model said what it said;
   it is not a reasoning trace and must never become one.
+- Trace timestamps are coarse: `started_at`/`finished_at` are the run's `now` and the one later
+  clock reading taken in Rejudge, not per-stage measurements; `duration_ms` (monotonic, per
+  stage) is the only per-stage timing and is likewise what the log line reports.
 - Ablation measures this pipeline on synthetic, labelled cases; it does not measure real-world
   safety or a model's reliability (evaluation-strategy.md "Limits").
 - The cross-examination round can still add noise or hostile-text-derived questions; the

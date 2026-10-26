@@ -10,14 +10,17 @@ getting nothing. `STAGES` decides which stage follows which; this module only su
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from divesafe.agents import STAGE_TIMED_OUT_ISSUE, run_agent_stage
+from divesafe.agents import RISK_TASK, STAGE_TIMED_OUT_ISSUE, TaskOutcome, run_agent_stage
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, DiveSite
 from divesafe.domain import (
+    MAX_EVIDENCE_ITEMS,
+    OVERFLOW,
     AssessmentRecord,
     DivePlan,
     Finding,
@@ -25,10 +28,15 @@ from divesafe.domain import (
     RiskFactorKind,
     RuleResult,
     Scenario,
+    ScenarioKind,
     StageName,
     StageOutcome,
+    StageTrace,
     SupervisorVerdict,
+    bound_issues,
+    issue_code,
     most_severe,
+    unnamed_qualifier,
 )
 from divesafe.models import LLMProvider
 from divesafe.orchestration.graph import STAGES, next_stage
@@ -46,6 +54,7 @@ _SUPERVISOR_NOTICE = (
     "the supervisor tightened the result after the agent stage; agent output reflects the "
     "earlier result"
 )
+_CONNECTOR_ISSUES_RULE = "evidence.connector_issues"
 
 
 class InvalidPlanError(ValueError):
@@ -97,6 +106,13 @@ class _Run:
     reconciled: Reconciliation | None = None
     verdict: SupervisorVerdict | None = None
     record: AssessmentRecord | None = None
+    # Structured facts for the stage trace (ADR 0025 item 3); never read from issue strings.
+    task_outcomes: tuple[TaskOutcome, ...] = ()
+    rejudge_changed: bool = False
+    rejudge_rules_added: bool = False
+    propose_downgrade: bool = False
+    gate_began: float = 0.0
+    traces: list[StageTrace] = field(default_factory=list)
 
     @property
     def evidence_set(self) -> EvidenceSet:
@@ -134,7 +150,7 @@ async def _assess(run: _Run) -> StageOutcome:
     if evidence.issues:
         run.rule_results.append(
             RuleResult(
-                rule_id="evidence.connector_issues",
+                rule_id=_CONNECTOR_ISSUES_RULE,
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale="; ".join(evidence.issues),
             )
@@ -160,6 +176,7 @@ async def _reason(run: _Run) -> StageOutcome:
     run.explanation, run.model_version = stage.explanation, stage.model_version
     run.findings, run.agent_issues = stage.findings, stage.issues
     run.proposal_ids = stage.proposal_evidence_ids
+    run.task_outcomes = stage.task_outcomes
     if STAGE_TIMED_OUT_ISSUE in stage.issues:
         return StageOutcome.TIMED_OUT
     return StageOutcome.COMPLETED
@@ -174,6 +191,7 @@ async def _rejudge(run: _Run) -> StageOutcome:
         return StageOutcome.COMPLETED
     run.completed = max(run.now, run.clock())
     if run.completed > run.now or run.plan.planned_start <= run.completed:
+        before = len(run.rule_results)
         later = run.engine.assess(run.plan, run.evidence_set.items, run.completed)
         run.rule_results.extend(r for r in later.rule_results if r not in run.rule_results)
         if run.plan.planned_start <= run.completed:
@@ -187,9 +205,11 @@ async def _rejudge(run: _Run) -> StageOutcome:
         run.unevaluated = tuple(
             sorted(set(run.unevaluated) | set(later.unevaluated_factors), key=lambda f: f.value)
         )
+        run.rejudge_rules_added = len(run.rule_results) > before
         again = most_severe(tuple(r.outcome for r in run.rule_results))
         if again is not run.deterministic:
             run.agent_issues = (*run.agent_issues, _REJUDGED_NOTICE)
+            run.rejudge_changed = True
         run.deterministic = again
     return StageOutcome.COMPLETED
 
@@ -208,6 +228,7 @@ def _reconcile(run: _Run) -> None:
 
 async def _propose(run: _Run) -> StageOutcome:
     _reconcile(run)
+    run.propose_downgrade = run.reconciliation.llm_attempted_downgrade
     return StageOutcome.COMPLETED
 
 
@@ -244,6 +265,9 @@ async def _gate(run: _Run) -> StageOutcome:
     evidence = run.evidence_set
     reconciled = run.reconciliation
     assert run.completed is not None  # set by Rejudge, required by the graph
+    # The gate's own trace is taken here, before the record exists, so the record holds every
+    # executed stage including this one; nothing runs after the gate.
+    _record_trace(run, StageName.GATE, StageOutcome.COMPLETED, None, _tick(run), run.gate_began)
     run.record = AssessmentRecord(
         id=run.assessment_id,
         created_at=run.completed,
@@ -269,8 +293,139 @@ async def _gate(run: _Run) -> StageOutcome:
         created_by=run.created_by,
         assigned_decider=run.assigned_decider,
         supervisor_verdict=run.verdict,
+        stages=tuple(run.traces),
     )
     return StageOutcome.COMPLETED
+
+
+# --- the stage trace (ADR 0025 item 3) ----------------------------------------------------------
+# Codes come only from `issue_code` over structured facts: connector and task outcome labels,
+# rule ids, the reconciliation flag, the verdict. Never from `evidence_issues` or `agent_issues`.
+
+
+def _tick(run: _Run) -> datetime:
+    """The trace's time: the run reads its clock exactly once, in Rejudge (`run.completed`), so
+    stages up to Rejudge are stamped `now` and later stages that later time; with no clock every
+    entry has `started_at == finished_at == now`. The trace never reads the clock itself."""
+    return run.completed if run.completed is not None else run.now
+
+
+def _present_ids(run: _Run, ids: Sequence[str]) -> tuple[tuple[str, ...], bool]:
+    """Cited ids that are in the kept evidence (so never a withheld id), in evidence order and
+    cut at the record's per-stage bound; the flag says whether anything was cut."""
+    wanted = set(ids)
+    ordered = [item.id for item in run.evidence_set.items if item.id in wanted]
+    return tuple(ordered[:MAX_EVIDENCE_ITEMS]), len(ordered) > MAX_EVIDENCE_ITEMS
+
+
+def _trace_evidence_ids(run: _Run, name: StageName) -> tuple[tuple[str, ...], bool]:
+    if run.evidence is None:
+        return (), False
+    if name is StageName.OBSERVE:
+        return _present_ids(run, [item.id for item in run.evidence.items])
+    if name in (StageName.ASSESS, StageName.REJUDGE):
+        return _present_ids(run, [i for r in run.rule_results for i in r.evidence_ids])
+    if name is StageName.REASON:
+        cited = [i for f in run.findings for i in f.evidence_ids]
+        cited += [i for s in run.scenarios for i in s.evidence_ids]
+        cited += list(run.proposal_ids)
+        return _present_ids(run, cited)
+    return (), False
+
+
+def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]:
+    codes: list[str] = []
+    if name is StageName.OBSERVE and run.evidence is not None:
+        unnamed: list[str] = []
+        for connector in run.evidence.connector_outcomes:
+            qualifier = unnamed_qualifier(connector.name, unnamed)
+            if connector.outcome == "failed":
+                codes.append(issue_code(name, "connector_failed", qualifier))
+            elif connector.outcome == "timed_out":
+                codes.append(issue_code(name, "connector_timed_out", qualifier))
+            elif connector.outcome == "issues":
+                codes.append(issue_code(name, "connector_issue", qualifier))
+        if run.evidence.conflicts:
+            codes.append(issue_code(name, "evidence_conflict"))
+        if not run.evidence.items:
+            codes.append(issue_code(name, "no_evidence"))
+    elif name is StageName.RETRIEVE and outcome is StageOutcome.NOT_CONFIGURED:
+        codes.append(issue_code(name, "not_configured"))
+    elif name is StageName.ASSESS:
+        if any(r.rule_id == _CONNECTOR_ISSUES_RULE for r in run.rule_results):
+            codes.append(issue_code(name, "connector_issues_rule"))
+        if run.unevaluated:
+            codes.append(issue_code(name, "unevaluated_factors"))
+    elif name is StageName.REASON:
+        if outcome is StageOutcome.SKIPPED:
+            codes.append(issue_code(name, "skipped_no_provider"))
+        if outcome is StageOutcome.TIMED_OUT:
+            codes.append(issue_code(name, "timed_out"))
+        scenario_kinds = {kind.value for kind in ScenarioKind}
+        for task in run.task_outcomes:
+            if task.outcome == "ok":
+                continue
+            if task.task == RISK_TASK:
+                kind = "proposal_skipped" if task.outcome == "skipped" else "proposal_failed"
+                codes.append(issue_code(name, kind))
+            elif task.task in scenario_kinds:
+                codes.append(issue_code(name, "scenario_failed", task.task))
+            else:
+                codes.append(issue_code(name, "specialist_failed", task.task))
+    elif name is StageName.REJUDGE:
+        if any(r.rule_id == WINDOW_STARTED_RULE for r in run.rule_results):
+            codes.append(issue_code(name, "window_started"))
+        if run.rejudge_changed:
+            codes.append(issue_code(name, "result_changed"))
+        if run.rejudge_rules_added:
+            codes.append(issue_code(name, "rules_added"))
+    elif name is StageName.PROPOSE:
+        if run.reconciled is not None and run.reconciled.llm_attempted_downgrade:
+            codes.append(issue_code(name, "llm_attempted_downgrade"))
+    elif name is StageName.SUPERVISE and run.verdict is not None:
+        codes.extend(issue_code(name, "tightened", check.value) for check in run.verdict.failed)
+        if run.reconciliation.llm_attempted_downgrade and not run.propose_downgrade:
+            codes.append(issue_code(name, "llm_attempted_downgrade"))
+    return codes
+
+
+def _record_trace(
+    run: _Run,
+    name: StageName,
+    outcome: StageOutcome,
+    following: StageName | None,
+    started: datetime,
+    began: float,
+) -> None:
+    finished = _tick(run)
+    duration_ms = max(0, int((time.monotonic() - began) * 1000))
+    evidence_ids, cut = _trace_evidence_ids(run, name)
+    codes = _trace_codes(run, name, outcome)
+    if cut:
+        codes.append(issue_code(name, OVERFLOW))
+    issues = bound_issues(codes, name)
+    run.traces.append(
+        StageTrace(
+            name=name,
+            outcome=outcome,
+            next_stage=following,
+            started_at=started,
+            finished_at=finished,
+            evidence_ids=evidence_ids,
+            issues=issues,
+            duration_ms=duration_ms,
+        )
+    )
+    logger.info(
+        "stage finished",
+        extra={
+            "assessment_id": run.assessment_id,
+            "stage": name.value,
+            "outcome": outcome.value,
+            "duration_ms": duration_ms,
+            "issues": len(issues),
+        },
+    )
 
 
 # One unit of work per stage, keyed by the graph's names. The graph, not this table, decides
@@ -345,8 +500,13 @@ async def assess_dive(
         if current in visited or len(visited) >= len(STAGES):
             raise RuntimeError("the stage graph revisited a stage; the assessment was stopped")
         visited.append(current)
+        started, began = _tick(run), time.monotonic()
+        run.gate_began = began
         outcome = await STAGE_WORK[current](run)
-        current = next_stage(current, outcome)
+        following = next_stage(current, outcome)
+        if current is not StageName.GATE:
+            _record_trace(run, current, outcome, following, started, began)
+        current = following
     if run.record is None:
         # Unreachable while every engine stage either completes or raises; kept so a graph edit
         # that lets a stage end early can never yield a record it did not build.

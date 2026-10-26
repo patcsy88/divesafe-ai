@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Literal
 
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
@@ -18,11 +19,26 @@ from divesafe.domain import DataCategory, EvidenceItem
 
 logger = logging.getLogger(__name__)
 
+# The fixed prefix `gather_evidence` gives a timed-out connector's error (a class name).
+_TIMEOUT_CLASS = "TimeoutError:"
+
 
 class DuplicateEvidenceError(ValueError):
     """Two different evidence items claimed the same id. Kept exported for compatibility;
     `build_evidence_set` no longer raises it (a conflict drops the items and adds an issue, so the
     run gets more cautious instead of failing). Nothing in the package raises it now."""
+
+
+ConnectorOutcomeKind = Literal["ok", "issues", "failed", "timed_out"]
+
+
+@dataclass(frozen=True)
+class ConnectorOutcome:
+    """How one connector ended, as a fixed label: the structured source for the stage trace,
+    so nothing ever parses `issues`. `name` is the connector's registered name."""
+
+    name: str
+    outcome: ConnectorOutcomeKind
 
 
 @dataclass(frozen=True)
@@ -33,6 +49,13 @@ class EvidenceSet:
     # Items dropped because two different items shared an id. For the audit record only: they are
     # never evaluated, cited, or passed to the engine, the agents or a prompt.
     withheld: tuple[EvidenceItem, ...] = ()
+    # One per connector, in call order. Defaulted so callers that build a set by hand still work.
+    connector_outcomes: tuple[ConnectorOutcome, ...] = ()
+
+    @property
+    def conflicts(self) -> int:
+        """Ids withheld because different items shared them."""
+        return len({i.id for i in self.withheld})
 
     def by_category(self, category: DataCategory) -> tuple[EvidenceItem, ...]:
         return tuple(i for i in self.items if i.category == category)
@@ -85,6 +108,22 @@ def build_evidence_set(
     return EvidenceSet(ordered, tuple(issues), versions, held)
 
 
+def connector_outcomes(
+    results: Sequence[tuple[str, FetchResult | None, str | None]],
+) -> tuple[ConnectorOutcome, ...]:
+    """One fixed label per connector from the same triples `build_evidence_set` merges. The
+    timeout label comes from the class-name prefix `gather_evidence` itself sets; nothing here
+    reads a message meant for people."""
+    labels: list[ConnectorOutcome] = []
+    for name, result, error in results:
+        if result is None:
+            timed_out = error is not None and error.startswith(_TIMEOUT_CLASS)
+            labels.append(ConnectorOutcome(name, "timed_out" if timed_out else "failed"))
+        else:
+            labels.append(ConnectorOutcome(name, "issues" if result.issues else "ok"))
+    return tuple(labels)
+
+
 async def gather_evidence(
     connectors: Sequence[Connector],
     site: DiveSite,
@@ -107,9 +146,10 @@ async def gather_evidence(
             return connector.name, result, None
         except TimeoutError:
             logger.warning("connector timed out", extra={"connector": connector.name})
-            return connector.name, None, "TimeoutError: no answer within the time allowed"
+            return connector.name, None, f"{_TIMEOUT_CLASS} no answer within the time allowed"
         except ConnectorError as exc:
             logger.warning("connector failed", extra={"connector": connector.name, "site": site.id})
             return connector.name, None, f"{type(exc).__name__}: {exc}"
 
-    return build_evidence_set(await asyncio.gather(*(run(c) for c in connectors)))
+    results = await asyncio.gather(*(run(c) for c in connectors))
+    return replace(build_evidence_set(results), connector_outcomes=connector_outcomes(results))

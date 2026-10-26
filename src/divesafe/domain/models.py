@@ -20,6 +20,7 @@ from divesafe.domain.provenance import (
     TransformationStep,
 )
 from divesafe.domain.risk_types import THRESHOLD_FACTORS, RiskFactorKind, ThresholdStatus
+from divesafe.domain.stages import MAX_EVIDENCE_ITEMS, STAGE_ORDER, StageName, StageTrace
 
 
 class Recommendation(StrEnum):
@@ -359,6 +360,17 @@ class AssessmentRecord(_Frozen):
             "existed. A failed check is also a `supervisor.<check>` rule result."
         ),
     )
+    stages: tuple[StageTrace, ...] = Field(
+        default=(),
+        description=(
+            "One entry per executed stage, in graph order (ADR 0025 item 3): outcome, "
+            "evidence ids used and fixed issue codes. Empty on records made before it existed. "
+            "Not a reasoning trace. started_at/finished_at are coarse bounds (the run's now and "
+            "one later clock reading taken in Rejudge), not per-stage measurements; duration_ms "
+            "is the stage's own monotonic wall time."
+        ),
+        max_length=len(STAGE_ORDER),
+    )
 
     @property
     def status(self) -> Literal["PENDING_HUMAN", "DECIDED"]:
@@ -401,6 +413,7 @@ class AssessmentRecord(_Frozen):
         cited |= {i for s in self.scenarios for i in s.evidence_ids}
         cited |= {i for f in self.findings for i in f.evidence_ids}
         cited |= set(self.proposal_evidence_ids)
+        cited |= {i for t in self.stages for i in t.evidence_ids}
         if self.proposal_evidence_ids and self.proposed_recommendation is None:
             raise ValueError("proposal_evidence_ids require a proposal")
         unknown = cited - set(ids)
@@ -432,6 +445,7 @@ class AssessmentRecord(_Frozen):
             raise ValueError("evidence issues require at least INSUFFICIENT EVIDENCE")
 
         self._check_supervisor()
+        self._check_stages()
 
         if self.human_decision is not None:
             if self.human_decision.decided_at < self.created_at:
@@ -448,6 +462,48 @@ class AssessmentRecord(_Frozen):
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self
+
+    def _check_stages(self) -> None:
+        """At most one trace per stage, in graph order, each pointing at the next entry (None
+        only on the last). Evidence ids are checked with the other cited ids above, which also
+        keeps withheld ids out (they may not appear in the evidence)."""
+        names = [t.name for t in self.stages]
+        if len(names) != len(set(names)):
+            raise ValueError("at most one stage trace per stage")
+        positions = [STAGE_ORDER.index(n) for n in names]
+        if positions != sorted(positions):
+            raise ValueError("stage traces must be in graph order")
+        expected = [*(t.name for t in self.stages[1:]), None]
+        if [t.next_stage for t in self.stages] != expected[: len(self.stages)]:
+            raise ValueError("each stage trace must name the following entry as next_stage")
+        by_name = {t.name: t for t in self.stages}
+        observe = by_name.get(StageName.OBSERVE)
+        if observe is not None:
+            kept = tuple(e.id for e in self.evidence)[:MAX_EVIDENCE_ITEMS]
+            if observe.evidence_ids != kept:
+                raise ValueError("the observe trace must list the record's kept evidence ids")
+        supervise = by_name.get(StageName.SUPERVISE)
+        if supervise is not None:
+            tightened = {
+                code.partition(":")[2]
+                for code in supervise.issues
+                if code.startswith("supervise.tightened:")
+            }
+            failed = set() if self.supervisor_verdict is None else self.supervisor_verdict.failed
+            if tightened != {check.value for check in failed}:
+                raise ValueError("supervise.tightened codes must match the verdict's failed checks")
+        propose = by_name.get(StageName.PROPOSE)
+        if propose is not None:
+            downgrade_codes = {
+                "propose.llm_attempted_downgrade",
+                "supervise.llm_attempted_downgrade",
+            }
+            later = supervise.issues if supervise is not None else ()
+            flagged = bool(downgrade_codes & {*propose.issues, *later})
+            if flagged != self.llm_attempted_downgrade:
+                raise ValueError(
+                    "a downgrade code must appear exactly when a downgrade was flagged"
+                )
 
     def _check_supervisor(self) -> None:
         """Every failed check is exactly one `supervisor.<check>` INSUFFICIENT EVIDENCE rule

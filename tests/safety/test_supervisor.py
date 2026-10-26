@@ -33,6 +33,7 @@ from divesafe.domain import (
     DataCategory,
     Recommendation,
     RuleResult,
+    StageTrace,
     SupervisorCheck,
     SupervisorVerdict,
     severity,
@@ -332,6 +333,20 @@ def refuses(document: dict[str, Any], fragment: str) -> bool:
     return False
 
 
+def with_supervise_trace(
+    stages: list[dict[str, Any]], failed: tuple[C, ...], *, downgrade: bool = False
+) -> list[dict[str, Any]]:
+    """The supervise trace entry rewritten to agree with a hand-edited verdict (ADR 0025 item
+    3 cross-checks): one `supervise.tightened:<check>` per failed check, plus the downgrade
+    code when the proposal was discarded by the second reconcile only."""
+    codes = [f"supervise.tightened:{c.value}" for c in failed]
+    if downgrade:
+        codes.append("supervise.llm_attempted_downgrade")
+    return [
+        {**entry, "issues": codes} if entry["name"] == "supervise" else entry for entry in stages
+    ]
+
+
 def test_record_refuses_a_failed_check_without_its_supervisor_rule_result() -> None:
     base = passing_record()
     verdict = {
@@ -403,6 +418,7 @@ def test_record_refuses_tightened_to_that_is_not_the_final_recommendation() -> N
         **base,
         "supervisor_verdict": verdict,
         "rule_results": [*base["rule_results"], supervisor_result(C.CITATIONS_VALID)],
+        "stages": with_supervise_trace(base["stages"], (C.CITATIONS_VALID,)),
     }
     assert refuses(document, "tightened_to must be the final recommendation")
     # Control: the same document with the matching `tightened_to` is accepted.
@@ -808,6 +824,14 @@ def _record_with_failed_check(check: C) -> AssessmentRecord:
             "final_recommendation": R.INSUFFICIENT_EVIDENCE,
             "llm_attempted_downgrade": True,
             "supervisor_verdict": verdict,
+            # The trace must agree: the check's tightened code, and the downgrade code on the
+            # supervise entry because the first reconcile (GO vs CAUTION) had not flagged one.
+            "stages": tuple(
+                StageTrace.model_validate(entry)
+                for entry in with_supervise_trace(
+                    [t.model_dump(mode="json") for t in base.stages], (check,), downgrade=True
+                )
+            ),
         }
     )
 
@@ -851,6 +875,14 @@ def test_the_api_outcome_note_lists_several_failed_checks_in_sorted_order() -> N
                 ),
             ),
             "supervisor_verdict": verdict,
+            "stages": tuple(
+                StageTrace.model_validate(entry)
+                for entry in with_supervise_trace(
+                    [t.model_dump(mode="json") for t in record.stages],
+                    TIGHTENING_CHECKS,
+                    downgrade=True,
+                )
+            ),
         }
     )
     note = AssessmentView.of(AssessmentRecord.model_validate(more.model_dump())).outcome_note

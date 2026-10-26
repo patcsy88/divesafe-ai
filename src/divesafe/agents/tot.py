@@ -93,10 +93,28 @@ async def evaluate_scenarios(
     rule_results: Sequence[RuleResult],
     missing: Sequence[str] = (),
 ) -> tuple[tuple[Scenario, ...], tuple[str, ...]]:
+    scenarios, issues, _ = await evaluate_scenarios_with_outcomes(
+        provider, plan, evidence, findings, rule_results, missing
+    )
+    return scenarios, issues
+
+
+async def evaluate_scenarios_with_outcomes(
+    provider: LLMProvider,
+    plan: DivePlan,
+    evidence: Sequence[EvidenceItem],
+    findings: Sequence[Finding],
+    rule_results: Sequence[RuleResult],
+    missing: Sequence[str] = (),
+) -> tuple[tuple[Scenario, ...], tuple[str, ...], tuple[tuple[ScenarioKind, str], ...]]:
+    """`evaluate_scenarios` plus one fixed label per kind ("ok", "failed", "skipped") so the
+    stage trace never has to read the issue strings. Same calls, same issues."""
     if not evidence:
-        return (), ("scenarios: skipped because there is no evidence",)
+        issue = "scenarios: skipped because there is no evidence"
+        return (), (issue,), tuple((k, "skipped") for k in KINDS)
     if len(evidence) > MAX_EVIDENCE_ITEMS:
-        return (), ("scenarios: skipped because there is too much evidence for one call",)
+        issue = "scenarios: skipped because there is too much evidence for one call"
+        return (), (issue,), tuple((k, "skipped") for k in KINDS)
 
     results = await asyncio.gather(
         *(_one(provider, k, plan, evidence, findings, rule_results, missing) for k in KINDS),
@@ -104,13 +122,17 @@ async def evaluate_scenarios(
     )
     scenarios: list[Scenario] = []
     issues: list[str] = []
+    labels: list[tuple[ScenarioKind, str]] = []
     for kind, result in zip(KINDS, results, strict=True):
         if isinstance(result, Scenario):
             scenarios.append(result)
+            labels.append((kind, "ok"))
         elif isinstance(result, AgentError):
             issues.append(str(result))
+            labels.append((kind, "failed"))
         elif isinstance(result, BaseException) and not isinstance(result, Exception):
             raise result  # cancellation and interpreter exits must propagate
         else:
             issues.append(f"scenario:{kind.value}: rejected ({type(result).__name__})")
-    return tuple(scenarios), tuple(issues)
+            labels.append((kind, "failed"))
+    return tuple(scenarios), tuple(issues), tuple(labels)

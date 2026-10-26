@@ -15,6 +15,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from divesafe.agents.prompts import SYSTEM_PROMPT
+from divesafe.domain import MAX_EVIDENCE_ITEMS as _MAX_EVIDENCE_ITEMS
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
 from divesafe.models.llm import TokenLimitError
 
@@ -22,7 +23,7 @@ CALL_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_TOKENS_CEILING = 8000
 MAX_OUTPUT_CHARS = 20_000
-MAX_EVIDENCE_ITEMS = 120
+MAX_EVIDENCE_ITEMS = _MAX_EVIDENCE_ITEMS  # one source: the record's per-stage bound
 MAX_PROMPT_CHARS = 200_000
 STAGE_TIMEOUT_SECONDS = 150.0
 

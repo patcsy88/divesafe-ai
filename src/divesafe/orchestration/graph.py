@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from divesafe.domain import StageName, StageOutcome
+from divesafe.domain import STAGE_ORDER, StageName, StageOutcome
 
 Router = Callable[[StageOutcome], StageName | None]
 
@@ -108,6 +108,9 @@ STAGES: Final[tuple[Stage, ...]] = (
     ),
 )
 
+# The record validates trace order against `domain.STAGE_ORDER`; the graph must agree with it.
+if tuple(stage.name for stage in STAGES) != STAGE_ORDER:
+    raise RuntimeError("the stage graph does not follow domain.STAGE_ORDER")
 _BY_NAME: Final[Mapping[StageName, Stage]] = {stage.name: stage for stage in STAGES}
 if len(_BY_NAME) != len(STAGES) or len(_BY_NAME) != len(StageName):
     raise RuntimeError("STAGES must hold exactly one stage per StageName")

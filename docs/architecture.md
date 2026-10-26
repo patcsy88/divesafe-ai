@@ -126,7 +126,10 @@ Each assessment persists an `AssessmentRecord` (`divesafe.domain.models`): plan,
 rule results, deterministic / proposed / final recommendation, downgrade flag, confidence,
 scenarios, explanation, model / ruleset / data versions, the Supervise stage's verdict
 (`supervisor_verdict`, ADR 0025; `None` on older records; serialised on the record view as enum
-names and a recommendation only, no dedicated view yet), human
+names and a recommendation only, no dedicated view yet), the per-stage trace (`stages`, ADR 0025
+item 3: one `StageTrace` per executed stage in graph order with outcome, `next_stage`, timing,
+the evidence ids the stage used and fixed issue codes such as `observe.connector_failed:<name>`;
+empty on older records; never prompts, model text or provider error text), human
 decision, override rationale, and later actual conditions. `deterministic_recommendation` is
 the most severe of every rule result, including any `supervisor.<check>` result.
 
@@ -148,8 +151,8 @@ See [docs/adr/](adr/).
 
 - Orchestration stays plain Python with the lifecycle as an explicit, testable stage graph, a
   code-only Supervisor stage and a per-stage trace on the record; no agent framework
-  ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed; the graph and Supervise are
-  built, the trace is not).
+  ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed; the graph, Supervise and the
+  trace are built).
 
 ## Rule definitions
 
