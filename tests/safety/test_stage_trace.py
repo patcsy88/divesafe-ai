@@ -391,6 +391,8 @@ def every_code() -> dict[StageName, list[str]]:
         "specialist": [s.name for s in SPECIALISTS],
         "scenario kind": [k.value for k in ScenarioKind],
         "supervisor check": [c.value for c in SupervisorCheck],
+        # every agent task: each specialist, each scenario kind and the risk proposal
+        "task": [*(s.name for s in SPECIALISTS), *(k.value for k in ScenarioKind), RISK_TASK],
     }
     out: dict[StageName, list[str]] = {}
     for stage, kinds in TRACE_ISSUE_KINDS.items():
@@ -417,13 +419,26 @@ def test_every_kind_produces_a_code_matching_the_pattern_and_storable() -> None:
 def test_every_stage_has_kinds_and_the_qualifier_meanings_are_the_registered_ones() -> None:
     assert set(TRACE_ISSUE_KINDS) == set(STAGE_ORDER)
     meanings = {m for kinds in TRACE_ISSUE_KINDS.values() for m in kinds.values() if m}
-    assert meanings == {"connector", "specialist", "scenario kind", "supervisor check"}
+    assert meanings == {"connector", "specialist", "scenario kind", "supervisor check", "task"}
+    # A skipped task is one kind with a task qualifier; the old per-task skipped kind is gone.
+    assert "proposal_skipped" not in TRACE_ISSUE_KINDS[N.REASON]
+    assert TRACE_ISSUE_KINDS[N.REASON]["task_skipped"] == "task"
+    assert set(TRACE_ISSUE_KINDS[N.REASON]) == {
+        "skipped_no_provider",
+        "timed_out",
+        "specialist_failed",
+        "scenario_failed",
+        "proposal_failed",
+        "task_skipped",
+    }
 
 
 def test_the_enumerated_maximum_per_stage_fits_the_bound_so_overflow_is_unreachable() -> None:
     maxima = {stage: len(codes) - 1 for stage, codes in every_code().items()}  # minus overflow
     assert maxima[N.OBSERVE] == 3 * MAX_CONNECTORS + 2
-    assert maxima[N.REASON] == 2 + len(SPECIALISTS) + len(ScenarioKind) + 2
+    tasks = len(SPECIALISTS) + len(ScenarioKind) + 1
+    assert maxima[N.REASON] == 2 + len(SPECIALISTS) + len(ScenarioKind) + 1 + tasks
+    assert maxima[N.REASON] <= MAX_STAGE_ISSUES
     assert maxima[N.REJUDGE] == 3
     assert maxima[N.SUPERVISE] == len(SupervisorCheck) + 1
     assert max(maxima.values()) <= MAX_STAGE_ISSUES
@@ -838,6 +853,85 @@ def test_task_outcomes_mark_the_proposal_skipped_with_no_evidence() -> None:
     outcomes = {t.task: t.outcome for t in stage.task_outcomes}
     assert outcomes[RISK_TASK] == "skipped"
     assert all(outcomes[k.value] == "skipped" for k in ScenarioKind)
+
+
+# --- 10. Skipped tasks are traced as `task_skipped`, never as a failure ------------------------
+
+ALL_TASKS = (*(s.name for s in SPECIALISTS), *(k.value for k in ScenarioKind), RISK_TASK)
+FAILURE_KINDS = ("reason.specialist_failed", "reason.scenario_failed", "reason.proposal_failed")
+
+
+def _ablated(monkeypatch: pytest.MonkeyPatch, **switches: bool) -> AssessmentRecord:
+    """Run the pipeline with run_agent_stage's private ablation switches off, through a
+    test-only seam: the pipeline module's name, not assess_dive's signature."""
+    real = pipeline_module.run_agent_stage
+
+    async def ablated(*args: Any, **kwargs: Any) -> Any:
+        return await real(*args, **kwargs, **switches)
+
+    monkeypatch.setattr(pipeline_module, "run_agent_stage", ablated)
+    return sl.run_pipeline(sl.fake())
+
+
+def test_every_task_switched_off_is_traced_as_task_skipped_and_never_as_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _ablated(monkeypatch, specialists=False, scenarios=False, proposal=False)
+    reason = next(t for t in record.stages if t.name is N.REASON)
+    assert reason.outcome is O.COMPLETED
+    assert set(reason.issues) == {f"reason.task_skipped:{task}" for task in ALL_TASKS}
+    assert len(reason.issues) == len(ALL_TASKS)
+    assert not any(code.startswith(FAILURE_KINDS) for code in reason.issues)
+    assert record.proposed_recommendation is None and record.findings == ()
+    assert record.scenarios == ()
+
+
+@pytest.mark.parametrize(
+    ("switch", "skipped"),
+    [
+        ("specialists", tuple(s.name for s in SPECIALISTS)),
+        ("scenarios", tuple(k.value for k in ScenarioKind)),
+        ("proposal", (RISK_TASK,)),
+    ],
+)
+def test_one_switch_off_skips_exactly_its_own_tasks(
+    monkeypatch: pytest.MonkeyPatch, switch: str, skipped: tuple[str, ...]
+) -> None:
+    record = _ablated(monkeypatch, **{switch: False})
+    reason = next(t for t in record.stages if t.name is N.REASON)
+    traced_skips = {
+        c.partition(":")[2] for c in reason.issues if c.startswith("reason.task_skipped:")
+    }
+    assert set(skipped) <= traced_skips
+    assert not any(code.startswith(FAILURE_KINDS) for code in reason.issues)
+    # Tasks that ran and succeeded leave no code at all.
+    for task in ALL_TASKS:
+        if task not in traced_skips:
+            assert not any(task in code for code in reason.issues)
+
+
+def test_a_task_skipped_for_lack_of_evidence_is_also_task_skipped_not_failed() -> None:
+    """The proposal and scenarios skip when there is no evidence: same code as an ablation."""
+    record = _assess([_Failing()], sl.fake())
+    reason = next(t for t in record.stages if t.name is N.REASON)
+    assert f"reason.task_skipped:{RISK_TASK}" in reason.issues
+    assert all(f"reason.task_skipped:{k.value}" in reason.issues for k in ScenarioKind)
+    assert not any(code.startswith(FAILURE_KINDS) for code in reason.issues)
+
+
+def test_task_skipped_codes_are_fixed_and_a_failed_task_is_still_a_failure() -> None:
+    for task in ALL_TASKS:
+        assert issue_code(N.REASON, "task_skipped", task) == f"reason.task_skipped:{task}"
+    assert issue_code(N.REASON, "task_skipped", f"bad {MARKER}") == "reason.task_skipped:unnamed"
+    with pytest.raises(ValueError, match="not an issue kind"):
+        issue_code(N.REASON, "proposal_skipped")
+    with pytest.raises(ValidationError):
+        trace(name=N.REASON, next_stage=N.REJUDGE, issues=("reason.proposal_skipped",))
+    # Control: a task that ran and was rejected is still traced as failed, not skipped.
+    provider = sl.FakeProvider(sl.scripted(overrides={"risk_assessment": "garbage"}))
+    reason = next(t for t in sl.run_pipeline(provider).stages if t.name is N.REASON)
+    assert "reason.proposal_failed" in reason.issues
+    assert f"reason.task_skipped:{RISK_TASK}" not in reason.issues
 
 
 def test_evaluate_scenarios_returns_what_the_outcome_variant_does_minus_the_labels() -> None:

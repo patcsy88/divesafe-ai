@@ -154,6 +154,8 @@ See [docs/adr/](adr/).
   ([ADR 0025](adr/0025-plain-python-orchestration.md), proposed; the graph, Supervise and the
   trace are built).
 
+- Who may write what, and which test proves it: [authority-map.md](authority-map.md).
+
 ## Rule definitions
 
 Signed-off limits are data (`domain.RuleDefinition`, ADR 0009), applied by `risk.DefinitionRule`,

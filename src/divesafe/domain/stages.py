@@ -81,7 +81,9 @@ TRACE_ISSUE_KINDS: Final[Mapping[StageName, Mapping[str, str | None]]] = {
         "specialist_failed": "specialist",
         "scenario_failed": "scenario kind",
         "proposal_failed": None,
-        "proposal_skipped": None,
+        # A task that did not run and did not fail (no evidence for the call, or an ablation
+        # switch): the qualifier is a specialist name, a scenario kind or `risk_assessment`.
+        "task_skipped": "task",
     },
     StageName.REJUDGE: {"window_started": None, "result_changed": None, "rules_added": None},
     StageName.PROPOSE: {"llm_attempted_downgrade": None},

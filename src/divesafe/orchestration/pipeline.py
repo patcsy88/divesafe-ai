@@ -365,9 +365,10 @@ def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]
         for task in run.task_outcomes:
             if task.outcome == "ok":
                 continue
-            if task.task == RISK_TASK:
-                kind = "proposal_skipped" if task.outcome == "skipped" else "proposal_failed"
-                codes.append(issue_code(name, kind))
+            if task.outcome == "skipped":
+                codes.append(issue_code(name, "task_skipped", task.task))
+            elif task.task == RISK_TASK:
+                codes.append(issue_code(name, "proposal_failed"))
             elif task.task in scenario_kinds:
                 codes.append(issue_code(name, "scenario_failed", task.task))
             else:

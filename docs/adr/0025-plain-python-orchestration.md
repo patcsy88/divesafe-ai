@@ -148,7 +148,9 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   `no_evidence`; retrieve `not_configured`; assess `connector_issues_rule`,
   `unevaluated_factors`; reason `skipped_no_provider`, `timed_out`,
   `specialist_failed:<specialist>`, `scenario_failed:<kind>`, `proposal_failed`,
-  `proposal_skipped`; rejudge `window_started`, `result_changed`, `rules_added` (Rejudge
+  `task_skipped:<task>` (a specialist, scenario kind or `risk_assessment` that did not run and
+  did not fail: no evidence for the call, or an item 4 ablation switch; it replaced
+  `proposal_skipped`, and a skipped task is never traced as a failure); rejudge `window_started`, `result_changed`, `rules_added` (Rejudge
   appended a rule result, even if the most severe outcome stayed); propose
   `llm_attempted_downgrade`; supervise `tightened:<check>`, `llm_attempted_downgrade` (the
   second `reconcile`, after a tightening, discarded the proposal when the first had not); any
@@ -171,7 +173,8 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   `MAX_CONNECTORS = 8` (six connectors registrable today, rounded up to a power of two; a
   capacity bound, not a safety threshold). Observe is the widest stage (three codes per
   connector plus two); per-stage maxima from the enumerated list: observe 26, retrieve 1,
-  assess 2, reason 10 (2 outcome codes + 3 specialists + 3 kinds + 2 proposal codes), rejudge 3,
+  assess 2, reason 20 (2 outcome codes + 5 specialists + 3 kinds + 1 proposal code + 9
+  `task_skipped` qualifiers), rejudge 3,
   propose 1, supervise 6, gate 0, so `overflow` is reachable only through a future change. Dedup
   precedes the count; beyond the bound the first 25 are kept and `overflow` is last.
   `MAX_EVIDENCE_ITEMS` (120) moved to `domain/stages.py`; `agents.runner` imports it. Timing:
@@ -207,7 +210,7 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   once item 5 exists). The flags are **not** passed through `assess_dive`, not in `Settings` and
   not in the API; `cross_examination` is the only stage switch `Settings` may set. A safety test
   checks the pipeline's call passes no ablation flag, plus a text-scan test in the style of ADR
-  0023 decision 8. A skipped stage shows `skipped` in the trace and records a fixed agent issue.
+  0023 decision 8. With a task switched off, the Reason stage is still traced as completed; each skipped task shows as the fixed code `reason.task_skipped:<qualifier>` (the task name) and records a fixed agent issue. Only a run with no provider traces Reason itself as `skipped` (`reason.skipped_no_provider`).
   Per variant the report gives false-GO (must be 0; gated offline), abstention correctness,
   citation validity, provider call count (against the fixed cap), latency and run-to-run variance
   over repeated offline runs. Live model numbers are reported, never gated; the offline harness
@@ -298,5 +301,11 @@ forecast is labelled synthetic.
   authority design bounds that to added caution, as for the first round (ADR 0007).
 - The per-stage issue bound and the `stage_timeout + call_timeout` derivation are proposals for
   the reviewers, not validated limits.
+- Duplicate JSON keys are accepted by the prompt layer: `json.loads` keeps the last value, so a
+  model reply with a repeated key is validated on that value. No test yet. Not owner-approved.
+- The AST guard that checks the pipeline passes no ablation switch does not cover indirect
+  routes: `functools.partial`, `getattr`, `globals`, `sys.modules` or `exec`.
+- The ablation switch patch is a module-global patch and is not safe across threads; run
+  ablation single-threaded.
 - Framework claims in the table are unverified vendor documentation; a later ADR that proposes a
   framework must verify them before relying on them.

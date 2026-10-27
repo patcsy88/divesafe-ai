@@ -230,7 +230,11 @@ def test_a_decision_cannot_be_replaced() -> None:
     )
     assert again.status_code == 409
     stored = client.get(f"/v1/assessments/{rid}", headers=AUTH_A).json()
-    assert stored["record"]["human_decision"]["decided_by"] == "alice"
+    decision = stored["record"]["human_decision"]
+    assert decision["decided_by"] == "alice"
+    assert decision["decision"] == "NO-GO"  # the original decision, not the replacement
+    assert decision["override_rationale"] == "Poor visibility."  # the original rationale
+    assert decision["is_override"] is True  # NO-GO differs from the stored INSUFFICIENT EVIDENCE
 
 
 def test_stale_assessments_cannot_be_decided() -> None:

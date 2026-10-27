@@ -120,3 +120,38 @@ answered rests on the host's routing; no digest was recorded.
 
 Scenario results do not prove real-world safety. Evaluation supports the capstone's claims
 about engineering quality, not operational certification.
+
+## Ablation and adversarial sets (ADR 0025 item 4)
+
+- **Adversarial set** (`tests/evaluation/adversarial.py`): eight SYNTHETIC, labelled cases that
+  tempt a false GO. Each has a fail-closed expected outcome; none expects GO. Cases 2 and 3
+  (cheerful notice, injected notice) are **rules-only temptations**: the scripted model never
+  reads warning text, so only `WarningNeedsHumanReadingRule` produces their outcome. Case 8 is a
+  CAUTION rule with a GO proposal, the only case where the rules leave room.
+- **Ablation** (`tests/evaluation/ablation.py`): the same cases under `full`, `no_specialists`,
+  `no_scenarios`, `no_proposal` and `rules_only` (no provider). Variants differ only where the
+  rules leave room (case 8: the GO downgrade attempt and the call count), not in the other cases.
+- **What false-GO = 0 shows:** that the rules floor holds. `reconcile` and the Supervise stage
+  never relax a deterministic result, whatever the agents propose. It does not show agent
+  quality: a model that proposes GO and is discarded still scores 0.
+- **Counts per variant, reported separately:** `ran` (a record was stored), `refused` (Supervise
+  refused to store it) and `false_go`. `false_go` counts only a stored record whose final is GO
+  against a non-GO label. `ran + refused` covers every case. A refused run is never a false GO and
+  never carries a final, proposal or record. The CAUTION case records the agent's GO in
+  `proposed`, not in `final`.
+- **A relaxed reconcile is stopped, not missed:** Supervise and record validation refuse a relaxed
+  GO, so it shows up as `refused`, and the gate fails on that path too (the refusal assertions).
+  If a GO ever reached storage, `false_go` would count it and the gate would fail.
+- **Measured per variant:** abstention against the labels; citation validity; provider calls
+  against the cap (`full` = 9, from the source counts); latency, recorded only. Runs are offline
+  and deterministic: the safety gate runs three times and must match; live variance is not measured.
+- **Gates:** `false_go` = 0 and `ran + refused` = cases is an offline CI gate
+  (`tests/safety/test_adversarial_false_go.py`, marker `safety`). A mutation test relaxes
+  `reconcile` in memory. An AST walk over `src/divesafe` fails if any call to `run_agent_stage`
+  or `_stage` passes an ablation switch, or if a switch name appears in `assess_dive`, `Settings`,
+  `api/` or `config/`. `getattr` is out of scope.
+- **Private switches:** `specialists`, `scenarios` and `proposal` are keyword-only arguments of
+  `run_agent_stage`, used only through the test-only `switched()` wrapper.
+- **Synthetic, not reviewed:** no case has been reviewed by a diving professional; none is a real
+  conditions record. Ablation measures this pipeline on labelled cases, not real-world safety or
+  a model's reliability.
