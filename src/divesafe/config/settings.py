@@ -29,6 +29,23 @@ def _require_tls(dsn: str) -> None:
 # The longest the connectors may take together (their own per-request timeout is below this).
 CONNECTOR_BUDGET_SECONDS = 30.0
 RUN_MARGIN_SECONDS = 30.0
+# The agent stage's model-call cap without cross-examination (5 specialists, 3 scenarios, 1
+# proposal) and with it (one more specialist round). Structural counts, not safety limits.
+AGENT_CALL_CAP = 9
+CROSS_EXAMINATION_CALL_CAP = 14
+AGENT_STAGE_CEILING_SECONDS = 1800.0
+
+
+def agent_stage_budget(
+    stage_seconds: float, call_seconds: float, *, cross_examination: bool
+) -> tuple[int, float]:
+    """(maximum model calls, agent stage deadline in seconds). Off returns the inputs unchanged.
+    On adds one parallel call wave (`call_seconds`) to the stage deadline, capped at the settings
+    ceiling. Used wherever the call cap or the run deadline is derived (ADR 0025 item 5)."""
+    if not cross_examination:
+        return AGENT_CALL_CAP, stage_seconds
+    stage = min(stage_seconds + call_seconds, AGENT_STAGE_CEILING_SECONDS)
+    return CROSS_EXAMINATION_CALL_CAP, stage
 
 
 class Settings(BaseSettings):
@@ -73,6 +90,10 @@ class Settings(BaseSettings):
     llm_max_concurrent_calls: int = Field(default=4, ge=1, le=8)
     # Output tokens per call. A reasoning model spends part of it thinking, so it may need more.
     llm_max_output_tokens: int = Field(default=1500, ge=256, le=8000)
+    # ADR 0025 item 5: a second, bounded round of specialist calls. Off by default. Read by the
+    # caller only; it is not a parameter of `assess_dive`, not in the API request. When on, the
+    # call cap and the run deadline change (see `agent_stage_budget`).
+    agent_cross_examination: bool = False
 
     # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
     # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.
@@ -100,7 +121,12 @@ class Settings(BaseSettings):
     def effective_run_deadline_seconds(self) -> float:
         if self.run_deadline_seconds is not None:
             return self.run_deadline_seconds
-        return self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+        _, stage = agent_stage_budget(
+            self.llm_stage_timeout_seconds,
+            self.llm_call_timeout_seconds,
+            cross_examination=self.agent_cross_examination,
+        )
+        return stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
 
     def llm_allowed_host_set(self) -> frozenset[str]:
         return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
@@ -171,10 +197,14 @@ class Settings(BaseSettings):
             )
         if self.max_runs_per_actor > self.max_runs_in_flight:
             raise ValueError("DIVESAFE_MAX_RUNS_PER_ACTOR cannot exceed the in-flight cap")
+        _, stage = agent_stage_budget(
+            self.llm_stage_timeout_seconds,
+            self.llm_call_timeout_seconds,
+            cross_examination=self.agent_cross_examination,
+        )
         if (
             self.run_deadline_seconds is not None
-            and self.run_deadline_seconds
-            < self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+            and self.run_deadline_seconds < stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
         ):
             raise ValueError(
                 "DIVESAFE_RUN_DEADLINE_SECONDS must cover the LLM stage timeout plus the "

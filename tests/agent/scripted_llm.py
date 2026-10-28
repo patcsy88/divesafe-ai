@@ -73,7 +73,16 @@ def scripted(
             reply = overrides[task]
             return reply(request) if callable(reply) else reply
         ids = allowed_ids(request)[:2]
-        if task.startswith("specialist:"):
+        if task.startswith("cross_examination:"):
+            # ADR 0025 item 5: a second-round FindingOutput, a question only, citing allowed ids.
+            body = {
+                "summary": f"{task} peer question.",
+                "risk_factors": [],
+                "conflicting_signals": ["peer reading to check against the evidence"],
+                "evidence_ids": ids,
+                "confidence": 0.4,
+            }
+        elif task.startswith("specialist:"):
             body: dict[str, Any] = {
                 "summary": f"{task} reading of the cited evidence.",
                 "risk_factors": ["example risk factor"],

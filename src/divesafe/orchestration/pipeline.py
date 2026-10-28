@@ -11,12 +11,21 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from divesafe.agents import RISK_TASK, STAGE_TIMED_OUT_ISSUE, TaskOutcome, run_agent_stage
-from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
+from divesafe.agents import (
+    RISK_TASK,
+    STAGE_TIMED_OUT_ISSUE,
+    AgentStageResult,
+    TaskOutcome,
+    cross_examination_token,
+    run_agent_stage,
+)
+from divesafe.agents.runner import call_timeout, stage_timeout
+from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, agent_stage_budget
 from divesafe.data import Connector, DiveSite
 from divesafe.domain import (
     MAX_EVIDENCE_ITEMS,
@@ -73,6 +82,14 @@ class UnsafeConfigurationError(ValueError):
     """The pipeline was configured in a way that could yield a result on no evidence."""
 
 
+@dataclass(frozen=True)
+class RunOptions:
+    """Per-run switches set by the server from its settings, never from a request. Off by
+    default; `assess_dive` with no options behaves exactly as before (ADR 0025 item 5)."""
+
+    cross_examination: bool = False
+
+
 @dataclass
 class _Run:
     """What one walk through the graph has produced so far. Mutable, local to one assessment."""
@@ -113,6 +130,10 @@ class _Run:
     propose_downgrade: bool = False
     gate_began: float = 0.0
     traces: list[StageTrace] = field(default_factory=list)
+    # ADR 0025 item 5: set from RunOptions; the second-round findings feed the record only.
+    cross_examination: bool = False
+    cross_findings: tuple[Finding, ...] = ()
+    cross_ran: bool = False
 
     @property
     def evidence_set(self) -> EvidenceSet:
@@ -171,15 +192,51 @@ async def _reason(run: _Run) -> StageOutcome:
         run.rule_results,
         run.deterministic,
     )
-    stage = await run_agent_stage(provider, plan, evidence.items, rule_results, deterministic)
+    if run.cross_examination:
+        budget_timeout = agent_stage_budget(
+            stage_timeout(provider), call_timeout(provider), cross_examination=True
+        )[1]
+        stage = await run_agent_stage(
+            provider,
+            plan,
+            evidence.items,
+            rule_results,
+            deterministic,
+            cross_examination=True,
+            cross_examination_timeout=budget_timeout,
+        )
+    else:
+        stage = await run_agent_stage(provider, plan, evidence.items, rule_results, deterministic)
     run.proposed, run.scenarios = stage.proposed, stage.scenarios
     run.explanation, run.model_version = stage.explanation, stage.model_version
+    if run.cross_examination:
+        run.model_version = f"{run.model_version}{cross_examination_token(True)}"
+        run.cross_findings = stage.cross_examination_findings
+        run.cross_ran = True
+        _log_cross_examination(run, stage)
     run.findings, run.agent_issues = stage.findings, stage.issues
     run.proposal_ids = stage.proposal_evidence_ids
     run.task_outcomes = stage.task_outcomes
     if STAGE_TIMED_OUT_ISSUE in stage.issues:
         return StageOutcome.TIMED_OUT
     return StageOutcome.COMPLETED
+
+
+def _log_cross_examination(run: _Run, stage: AgentStageResult) -> None:
+    """Counts and fixed labels only: never a prompt, a peer finding or model text."""
+    counts = Counter(outcome.outcome for outcome in stage.cross_examination_outcomes)
+    logger.info(
+        "cross examination round finished",
+        extra={
+            "assessment_id": run.assessment_id,
+            "findings": len(stage.cross_examination_findings),
+            "ok": counts.get("ok", 0),
+            "failed": counts.get("failed", 0),
+            "timed_out": counts.get("timed_out", 0),
+            "skipped": counts.get("skipped", 0),
+            "rejected": counts.get("rejected", 0),
+        },
+    )
 
 
 async def _rejudge(run: _Run) -> StageOutcome:
@@ -238,7 +295,9 @@ async def _supervise(run: _Run) -> StageOutcome:
     supervision = supervise(
         reconciled=run.reconciliation,
         proposal_evidence_ids=run.proposal_ids,
-        finding_evidence_ids=(i for f in run.findings for i in f.evidence_ids),
+        finding_evidence_ids=(
+            i for f in (*run.findings, *run.cross_findings) for i in f.evidence_ids
+        ),
         scenario_evidence_ids=(i for s in run.scenarios for i in s.evidence_ids),
         evidence_ids=(item.id for item in evidence.items),
         model_version=run.model_version,
@@ -283,6 +342,7 @@ async def _gate(run: _Run) -> StageOutcome:
         evidence_issues=evidence.issues,
         unevaluated_factors=run.unevaluated,
         findings=run.findings,
+        cross_examination_findings=run.cross_findings,
         proposal_evidence_ids=run.proposal_ids,
         scenarios=run.scenarios,
         explanation=run.explanation,
@@ -326,7 +386,7 @@ def _trace_evidence_ids(run: _Run, name: StageName) -> tuple[tuple[str, ...], bo
     if name in (StageName.ASSESS, StageName.REJUDGE):
         return _present_ids(run, [i for r in run.rule_results for i in r.evidence_ids])
     if name is StageName.REASON:
-        cited = [i for f in run.findings for i in f.evidence_ids]
+        cited = [i for f in (*run.findings, *run.cross_findings) for i in f.evidence_ids]
         cited += [i for s in run.scenarios for i in s.evidence_ids]
         cited += list(run.proposal_ids)
         return _present_ids(run, cited)
@@ -361,6 +421,8 @@ def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]
             codes.append(issue_code(name, "skipped_no_provider"))
         if outcome is StageOutcome.TIMED_OUT:
             codes.append(issue_code(name, "timed_out"))
+        if run.cross_ran:
+            codes.append(issue_code(name, "cross_examination_on"))
         scenario_kinds = {kind.value for kind in ScenarioKind}
         for task in run.task_outcomes:
             if task.outcome == "ok":
@@ -462,6 +524,7 @@ async def assess_dive(
     assigned_decider: str | None = None,
     clock: Callable[[], datetime] | None = None,
     connector_timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
+    options: RunOptions | None = None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
@@ -492,6 +555,7 @@ async def assess_dive(
         scenarios=scenarios,
         explanation=explanation,
         model_version=model_version,
+        cross_examination=options is not None and options.cross_examination,
     )
     current: StageName | None = STAGES[0].name
     visited: list[StageName] = []

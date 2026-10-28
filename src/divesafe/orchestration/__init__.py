@@ -16,6 +16,7 @@ from divesafe.orchestration.human_gate import (
 )
 from divesafe.orchestration.pipeline import (
     InvalidPlanError,
+    RunOptions,
     SiteMismatchError,
     StartPassedError,
     UnsafeConfigurationError,
@@ -52,6 +53,7 @@ __all__ = [
     "SiteMismatchError",
     "StartPassedError",
     "UnsafeConfigurationError",
+    "RunOptions",
     "assess_dive",
     "decide",
     "report_actual_conditions",

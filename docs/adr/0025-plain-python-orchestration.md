@@ -206,8 +206,8 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   every variant.
 - Ablation is built instead of the three-variant A/B/C comparison (none exists; nothing is
   deleted). The same pipeline runs with stages switched off by keyword-only flags on
-  `run_agent_stage`, default all on (`specialists`, `scenarios`, `proposal`; `cross_examination`
-  once item 5 exists). The flags are **not** passed through `assess_dive`, not in `Settings` and
+  `run_agent_stage`, default on (`specialists`, `scenarios`, `proposal`). `cross_examination`
+  (item 5) is the one exception: it defaults off. The flags are **not** passed through `assess_dive`, not in `Settings` and
   not in the API; `cross_examination` is the only stage switch `Settings` may set. A safety test
   checks the pipeline's call passes no ablation flag, plus a text-scan test in the style of ADR
   0023 decision 8. With a task switched off, the Reason stage is still traced as completed; each skipped task shows as the fixed code `reason.task_skipped:<qualifier>` (the task name) and records a fixed agent issue. Only a run with no provider traces Reason itself as `skipped` (`reason.skipped_no_provider`).
@@ -228,7 +228,9 @@ settings pin changed and an owner decision). When on: the call cap rises from 9 
 the stage timeout is derived as `stage_timeout + call_timeout` (one more parallel wave), capped
 at or below the settings ceiling (`llm_stage_timeout_seconds` le=1800), and flows into the
 run-deadline checks (`settings.py` lines 103 and 166-182) and the run lease; a timeout only means
-no second-round finding. The flag's state is recorded as a fixed `cross_examination=on` token in
+no second-round finding. Egress when on: 14 provider calls per assessment instead of 9; the extra
+calls send peer findings to the same provider, so the ADR 0022 and ADR 0023 egress basis covers
+them too. The flag's state is recorded as a fixed `cross_examination=on` token in
 `model_version` and in the trace.
 - Inputs: each peer finding goes inside the `<untrusted_data>` block with code-set `source_agent`
   and `llm_generated: true` markers; self-estimates are dropped through `agent_view`; a total
@@ -243,6 +245,15 @@ no second-round finding. The flag's state is recorded as a fixed `cross_examinat
   between specialists may still steer the proposal, which `reconcile` bounds); cannot add evidence
   ids outside the evidence list; over-long replies are refused, never trimmed or repaired; the
   fixed cap holds with the flag on and off; flag off makes exactly today's calls.
+- **Built (2026-10-28, branch `rag-stage-1`; tests by the test-engineer; risk and security
+  re-reviewed, no blockers).** Round two runs in `agents/cross_examination.py` behind the flag
+  (`Settings.agent_cross_examination`, default off) and reaches `assess_dive` only through
+  `RunOptions` at the API edge. Round-two findings carry a fixed summary, never model text; a
+  reply with `risk_factors` is refused. Each call is bounded by its own call timeout; the stage
+  deadline bounds the round. Measured provider calls: agent level 9 off, 14 on; through
+  `assess_dive` 8 off, 12 on on the existing fixture (no site-intelligence evidence, so that
+  specialist is skipped) and 9 off, 14 on on a synthetic five-category fixture. Known gap: round-one and round-two `conflicting_signals`
+  text is model output with no wording screen (the same exposure as round one).
 
 **6. C3 recorded-trace replay.** One difficult live run (a missing required source plus
 conflicting forecasts) is recorded as labelled fixtures: provider replies and connector payloads,

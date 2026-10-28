@@ -214,12 +214,16 @@ class AssessmentRecordView(AssessmentRecord):
 
     scenarios: tuple[ScenarioView, ...] = ()  # type: ignore[assignment]
     findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
+    cross_examination_findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentRecordView:
         data = record.model_dump()
         for key in ("scenarios", "findings"):
             data[key] = [_renamed(item) for item in data[key]]
+        data["cross_examination_findings"] = [
+            _renamed(item) for item in data["cross_examination_findings"]
+        ]
         try:
             return cls.model_validate(data)
         except ValidationError:

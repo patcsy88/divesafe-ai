@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from divesafe import __version__
-from divesafe.agents.runner import stage_timeout
+from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
 from divesafe.api.runner import RunManager
@@ -40,13 +40,18 @@ from divesafe.api.schemas import (
 )
 from divesafe.api.state import AppState, build_default_state
 from divesafe.config import configure_logging, get_settings
-from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, RUN_MARGIN_SECONDS
+from divesafe.config.settings import (
+    CONNECTOR_BUDGET_SECONDS,
+    RUN_MARGIN_SECONDS,
+    agent_stage_budget,
+)
 from divesafe.data.http import shutdown_http_pool
 from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
 from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
     NotAssignedDeciderError,
+    RunOptions,
     assess_dive,
     check_assigned,
     decide,
@@ -119,7 +124,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.warning("DIVESAFE_DECISION_MAX_AGE_MINUTES is unset: decisions have no age limit")
 
     if app_state.provider is not None:
-        needed = stage_timeout(app_state.provider) + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+        _, stage = agent_stage_budget(
+            stage_timeout(app_state.provider),
+            call_timeout(app_state.provider),
+            cross_examination=settings.agent_cross_examination,
+        )
+        needed = stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
         if app_state.runs.deadline.total_seconds() < needed:
             raise RuntimeError(
                 "the run deadline is shorter than the model provider's stage timeout plus the "
@@ -396,6 +406,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                     now=clock(),
                     provider=app_state.provider,
                     clock=clock,
+                    options=RunOptions(cross_examination=settings.agent_cross_examination),
                 )
 
             try:

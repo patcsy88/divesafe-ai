@@ -84,6 +84,10 @@ TRACE_ISSUE_KINDS: Final[Mapping[StageName, Mapping[str, str | None]]] = {
         # A task that did not run and did not fail (no evidence for the call, or an ablation
         # switch): the qualifier is a specialist name, a scenario kind or `risk_assessment`.
         "task_skipped": "task",
+        # Emitted only when cross-examination is on (ADR 0025 item 5). Reason's maximum is
+        # 2 outcome codes + 5 specialists + 3 scenario kinds + 1 proposal + 9 task_skipped
+        # qualifiers + 1 cross-examination code = 21, which stays within MAX_STAGE_ISSUES (26).
+        "cross_examination_on": None,
     },
     StageName.REJUDGE: {"window_started": None, "result_changed": None, "rules_added": None},
     StageName.PROPOSE: {"llm_attempted_downgrade": None},

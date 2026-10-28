@@ -36,6 +36,7 @@ from divesafe.api import schemas as schemas_module
 from divesafe.api.auth import KeyEntry, Role
 from divesafe.api.schemas import AssessmentRecordView, AssessmentView, FindingView, ScenarioView
 from divesafe.domain import AssessmentRecord
+from divesafe.orchestration import RunOptions
 from divesafe.services import RepositoryIntegrityError
 from divesafe.services.postgres import _same, _storable
 
@@ -49,14 +50,18 @@ FINDING_VALUES = (0.7, 0.0, 1.0, 0.25)
 def varied_record() -> AssessmentRecord:
     """A real pipeline record whose estimates are all different, including 0.0 and 1.0, plus a
     finding with no estimate (None) and a no_evidence finding."""
-    base = run_pipeline(fake())
+    base = run_pipeline(fake(), options=RunOptions(cross_examination=True))
     data = json.loads(base.model_dump_json())
     for item, value in zip(data["scenarios"], SCENARIO_VALUES, strict=True):
         item["confidence"] = value
     plain = [f for f in data["findings"] if not f["no_evidence"]]
-    for item, value in zip(plain, FINDING_VALUES, strict=False):
+    for item, value in zip(plain, FINDING_VALUES, strict=True):
         item["confidence"] = value
     plain[-1]["confidence"] = None  # an evidence-backed finding that gave no estimate
+    # Round-two findings carry estimates too, so a dropped rename on them is caught (ADR 0025 #5).
+    # One value per round-two finding (the pipeline gives four here), including None and 0.0.
+    for item, value in zip(data["cross_examination_findings"], (0.3, None, 0.8, 0.0), strict=True):
+        item["confidence"] = value
     return AssessmentRecord.model_validate(data)
 
 
@@ -88,7 +93,8 @@ def view_misses(body: dict[str, Any], stored: AssessmentRecord, where: str) -> l
     record = body.get("record")
     if not isinstance(record, dict):
         return [f"{where}: no record"]
-    for key, items in (("scenarios", stored.scenarios), ("findings", stored.findings)):
+    cross = ("cross_examination_findings", stored.cross_examination_findings)
+    for key, items in (("scenarios", stored.scenarios), ("findings", stored.findings), cross):
         got = record.get(key)
         if not isinstance(got, list) or len(got) != len(items):
             bad.append(f"{where}: {key} do not match the record")
@@ -196,6 +202,7 @@ def test_the_fixture_has_every_case_it_needs() -> None:
     assert {0.0, 1.0, None} <= set(values)
     assert any(f.no_evidence for f in record.findings)
     assert len({v for v in values if v is not None}) >= 3
+    assert len(record.cross_examination_findings) >= 2  # the round-two rename needs data
 
 
 def test_of_and_withheld_show_the_self_estimate_and_no_nested_confidence() -> None:
@@ -261,7 +268,14 @@ def test_the_openapi_document_has_one_confidence_property_the_record_level_one()
     )
     assert "confidence" in view_props
     assert "scenarios" in view_props and "findings" in view_props
-    refs = json.dumps([view_props["scenarios"], view_props["findings"]])
+    assert "cross_examination_findings" in view_props
+    refs = json.dumps(
+        [
+            view_props["scenarios"],
+            view_props["findings"],
+            view_props["cross_examination_findings"],
+        ]
+    )
     assert "ScenarioView" in refs and "FindingView" in refs
     assert '#/components/schemas/Scenario"' not in refs
     assert '#/components/schemas/Finding"' not in refs

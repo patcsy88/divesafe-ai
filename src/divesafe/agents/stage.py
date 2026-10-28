@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from divesafe.agents.cross_examination import CrossOutcome, run_cross_examination
 from divesafe.agents.prompts import PROMPT_VERSION
 from divesafe.agents.risk_agent import propose
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, stage_timeout
@@ -67,6 +68,10 @@ class AgentStageResult:
     # One per task that ran or was skipped; a task cut off by the stage deadline is absent (the
     # stage-level timeout issue covers it).
     task_outcomes: tuple[TaskOutcome, ...] = ()
+    # ADR 0025 item 5, empty unless the cross-examination round ran. Second-round findings feed the
+    # proposal only; they are never passed to the scenarios.
+    cross_examination_findings: tuple[Finding, ...] = ()
+    cross_examination_outcomes: tuple[CrossOutcome, ...] = ()
 
 
 def _task_label(label: str) -> TaskOutcomeKind:
@@ -117,6 +122,10 @@ async def _stage(
     with_specialists: bool = True,
     with_scenarios: bool = True,
     with_proposal: bool = True,
+    cross_examination: bool = False,
+    cross_out: list[Finding] | None = None,
+    cross_outcomes: list[CrossOutcome] | None = None,
+    cross_timeout: float = 0.0,
 ) -> tuple[Recommendation | None, tuple[str, ...], str]:
     if not with_specialists:
         issues.append(f"{ABLATION_ISSUE_PREFIX}specialists")
@@ -126,6 +135,19 @@ async def _stage(
 
     have = {f.agent for f in findings}
     missing = [spec.name for spec in SPECIALISTS if spec.name not in have]
+
+    # Round two (ADR 0025 item 5): one call per specialist after round one. Its findings are added
+    # to the proposal's input only; the scenarios below keep round one alone.
+    proposal_findings: list[Finding] = list(findings)
+    if cross_examination and with_specialists and findings and cross_out is not None:
+        added, outcomes, cross_issues = await run_cross_examination(
+            provider, plan, evidence, findings, cross_timeout
+        )
+        cross_out.extend(added)
+        if cross_outcomes is not None:
+            cross_outcomes.extend(outcomes)
+        issues.extend(cross_issues)
+        proposal_findings.extend(added)
 
     scenarios: tuple[Scenario, ...] = ()
     if not with_scenarios:
@@ -149,7 +171,14 @@ async def _stage(
         return None, (), ""
     try:
         proposal = await propose(
-            provider, plan, evidence, findings, scenarios, rule_results, deterministic, missing
+            provider,
+            plan,
+            evidence,
+            proposal_findings,
+            scenarios,
+            rule_results,
+            deterministic,
+            missing,
         )
     except AgentError as exc:
         issues.append(str(exc))
@@ -176,20 +205,35 @@ async def run_agent_stage(
     specialists: bool = True,
     scenarios: bool = True,
     proposal: bool = True,
+    cross_examination: bool = False,
+    cross_examination_timeout: float | None = None,
 ) -> AgentStageResult:
     """Run the agent stage. The keyword-only switches are private ablation hooks for the
-    evaluation harness only; production callers never pass them."""
+    evaluation harness only; production callers never pass them. `cross_examination` turns on the
+    second round (ADR 0025 item 5); the caller supplies its timeout from the stage budget, and the
+    round never runs longer than the stage deadline."""
     issues: list[str] = []
     findings: list[Finding] = []
     scenarios_out: list[Scenario] = []
     tasks: list[TaskOutcome] = []
+    cross_out: list[Finding] = []
+    cross_outcomes: list[CrossOutcome] = []
     version = f"{provider.name}/{provider.model}; prompts={PROMPT_VERSION}"
+
+    # Off: the outer deadline is today's stage timeout, exactly. On with a budget: the outer
+    # deadline is that budget (ADR 0025 item 5) and is the only bound on round two. Each round-two
+    # call has its own call timeout inside `call_structured`, so a slow call times out alone.
+    stage_seconds = stage_timeout(provider)
+    round_two = stage_seconds
+    if cross_examination and cross_examination_timeout is not None:
+        stage_seconds = cross_examination_timeout
+        round_two = cross_examination_timeout
 
     proposed: Recommendation | None = None
     cited: tuple[str, ...] = ()
     explanation = ""
     try:
-        async with asyncio.timeout(stage_timeout(provider)):
+        async with asyncio.timeout(stage_seconds):
             proposed, cited, explanation = await _stage(
                 provider,
                 plan,
@@ -203,6 +247,10 @@ async def run_agent_stage(
                 with_specialists=specialists,
                 with_scenarios=scenarios,
                 with_proposal=proposal,
+                cross_examination=cross_examination,
+                cross_out=cross_out,
+                cross_outcomes=cross_outcomes,
+                cross_timeout=round_two,
             )
     except TimeoutError:
         issues.append(STAGE_TIMED_OUT_ISSUE)
@@ -219,4 +267,6 @@ async def run_agent_stage(
         model_version=version,
         issues=tuple(issues),
         task_outcomes=tuple(tasks),
+        cross_examination_findings=tuple(cross_out),
+        cross_examination_outcomes=tuple(cross_outcomes),
     )

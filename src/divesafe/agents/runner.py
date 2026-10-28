@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -73,8 +73,16 @@ _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 T = TypeVar("T", bound=BaseModel)
 
 
+AgentErrorKind = Literal["failed", "timed_out", "rejected", "skipped"]
+
+
 class AgentError(Exception):
-    """An agent call failed or its output was rejected."""
+    """An agent call failed or its output was rejected. `kind` is a fixed label the callers may
+    branch on; the message text is never used for that."""
+
+    def __init__(self, message: str, *, kind: AgentErrorKind = "failed") -> None:
+        super().__init__(message)
+        self.kind: AgentErrorKind = kind
 
 
 def _json_text(raw: str) -> str:
@@ -93,7 +101,7 @@ async def call_structured(
     timeout: float | None = None,
 ) -> T:
     if len(user_message) > MAX_PROMPT_CHARS:
-        raise AgentError(f"{task}: prompt too large")
+        raise AgentError(f"{task}: prompt too large", kind="rejected")
     request = LLMRequest(
         messages=(
             ChatMessage(role="system", content=SYSTEM_PROMPT),
@@ -109,21 +117,25 @@ async def call_structured(
             timeout=timeout if timeout is not None else call_timeout(provider),
         )
     except TimeoutError:
-        raise AgentError(f"{task}: provider timed out") from None
+        raise AgentError(f"{task}: provider timed out", kind="timed_out") from None
     except TokenLimitError:
         raise AgentError(f"{task}: output stopped at the token limit") from None
     except Exception as exc:  # provider adapters may raise anything; never chain their text
         raise AgentError(f"{task}: provider error ({type(exc).__name__})") from None
 
     if len(response.text) > MAX_OUTPUT_CHARS:
-        raise AgentError(f"{task}: output too long")
+        raise AgentError(f"{task}: output too long", kind="rejected")
     try:
         parsed = output.model_validate(json.loads(_json_text(response.text)))
     except (json.JSONDecodeError, ValidationError, RecursionError) as exc:
-        raise AgentError(f"{task}: output rejected (not valid for the schema)") from exc
+        raise AgentError(
+            f"{task}: output rejected (not valid for the schema)", kind="rejected"
+        ) from exc
 
     cited: tuple[str, ...] = getattr(parsed, "evidence_ids", ())
     unknown = set(cited) - allowed_ids
     if unknown:
-        raise AgentError(f"{task}: output cites {len(unknown)} unknown evidence id(s)")
+        raise AgentError(
+            f"{task}: output cites {len(unknown)} unknown evidence id(s)", kind="rejected"
+        )
     return parsed

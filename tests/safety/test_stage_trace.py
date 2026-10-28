@@ -430,6 +430,7 @@ def test_every_stage_has_kinds_and_the_qualifier_meanings_are_the_registered_one
         "scenario_failed",
         "proposal_failed",
         "task_skipped",
+        "cross_examination_on",
     }
 
 
@@ -437,7 +438,8 @@ def test_the_enumerated_maximum_per_stage_fits_the_bound_so_overflow_is_unreacha
     maxima = {stage: len(codes) - 1 for stage, codes in every_code().items()}  # minus overflow
     assert maxima[N.OBSERVE] == 3 * MAX_CONNECTORS + 2
     tasks = len(SPECIALISTS) + len(ScenarioKind) + 1
-    assert maxima[N.REASON] == 2 + len(SPECIALISTS) + len(ScenarioKind) + 1 + tasks
+    # The +1 is the cross_examination_on code (a Reason kind with no qualifier, one per run).
+    assert maxima[N.REASON] == 2 + len(SPECIALISTS) + len(ScenarioKind) + 1 + tasks + 1
     assert maxima[N.REASON] <= MAX_STAGE_ISSUES
     assert maxima[N.REJUDGE] == 3
     assert maxima[N.SUPERVISE] == len(SupervisorCheck) + 1

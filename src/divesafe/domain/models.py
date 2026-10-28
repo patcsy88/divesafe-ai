@@ -324,6 +324,13 @@ class AssessmentRecord(_Frozen):
         ),
     )
     findings: tuple[Finding, ...] = ()
+    cross_examination_findings: tuple[Finding, ...] = Field(
+        default=(),
+        description=(
+            "Second-round specialist findings (ADR 0025 item 5), only when cross-examination is "
+            "on. They feed the proposal and never the scenarios; each cites evidence ids only."
+        ),
+    )
     scenarios: tuple[Scenario, ...] = ()
     proposal_evidence_ids: tuple[str, ...] = Field(
         default=(), description="Evidence the LLM proposal cited. Empty when there is no proposal."
@@ -412,6 +419,7 @@ class AssessmentRecord(_Frozen):
         cited = {i for r in self.rule_results for i in r.evidence_ids}
         cited |= {i for s in self.scenarios for i in s.evidence_ids}
         cited |= {i for f in self.findings for i in f.evidence_ids}
+        cited |= {i for f in self.cross_examination_findings for i in f.evidence_ids}
         cited |= set(self.proposal_evidence_ids)
         cited |= {i for t in self.stages for i in t.evidence_ids}
         if self.proposal_evidence_ids and self.proposed_recommendation is None:

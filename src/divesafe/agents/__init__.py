@@ -5,6 +5,7 @@ Agents read evidence and return structured, evidence-referenced output. They nev
 `divesafe.risk.reconcile`. Design: docs/agent-design.md and docs/tot-design.md.
 """
 
+from divesafe.agents.cross_examination import CrossOutcome, cross_examination_token
 from divesafe.agents.prompts import PROMPT_VERSION
 from divesafe.agents.runner import AgentError
 from divesafe.agents.stage import (
@@ -21,6 +22,8 @@ __all__ = [
     "STAGE_TIMED_OUT_ISSUE",
     "AgentError",
     "ABLATION_ISSUE_PREFIX",
+    "CrossOutcome",
+    "cross_examination_token",
     "AgentStageResult",
     "RISK_TASK",
     "TaskOutcome",
