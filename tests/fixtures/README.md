@@ -14,6 +14,7 @@ run offline; they must not be treated as current conditions.
 | `data_gov_my_forecast_tioman_recorded_2026-10-11.json` | data.gov.my Weather API (MET Malaysia) 7-day forecast, `Rc024` Pulau Tioman, `limit=100` | 2026-10-11 | Unmodified; 7 daily rows (2026-10-11 to 2026-10-17). |
 | `met_api_marine_tioman_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/data`, `FORECAST`/`MARINE`, `LOCATION:499` (TIOMAN waters), today only | 2026-10-16 | Unmodified; 7 daily values. Contains no token. |
 | `met_api_locations_waters_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/locations?locationcategoryid=WATERS` | 2026-10-16 | Unmodified; 30 waters zones, none with coordinates. |
+| `item6/item6_trace_run5_recorded_2026-10-29.json` | ADR 0025 item 6 live capture (run 5), `my-pahang-pulau-tioman`, planned 2026-10-30 03:00 UTC, 60 min; five connector payloads (data.gov.my, MET Malaysia marine, Open-Meteo marine and wind) and eight model replies | 2026-10-29 | Recorded live through the loopback model server; owner-approved fixture. Outcome `PENDING_HUMAN`, `INSUFFICIENT EVIDENCE`. Two specialist replies were rejected after return (see stage trace). Scrubbed by `tests/evaluation/item6_scrub.py`; not current conditions. |
 
 Edge cases (nulls, wrong units, missing hours, truncation) are built in tests by mutating these
 files in code and are labelled synthetic there.
