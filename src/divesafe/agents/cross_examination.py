@@ -22,7 +22,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from divesafe.agents.prompts import agent_view, build_user_message, evidence_payload
+from divesafe.agents.prompts import (
+    agent_view,
+    build_user_message,
+    evidence_payload,
+    warning_note,
+)
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import FindingOutput
 from divesafe.agents.specialists import SPECIALISTS, SpecialistSpec, relevant_evidence
@@ -111,6 +116,7 @@ async def cross_examine_one(
             "Add only questions or conflicting signals that the peers' findings raise against "
             "the evidence. You cannot change your own earlier finding. Do not recommend GO, "
             "CAUTION or NO-GO. Cite only evidence ids in ALLOWED_EVIDENCE_IDS."
+            + warning_note(evidence)
         ),
         plan=plan,
         allowed_ids=sorted(allowed),

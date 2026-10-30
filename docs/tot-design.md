@@ -52,6 +52,14 @@ assigned by code; an invalid scenario is dropped and reported; stored fields are
 `Scenario` only. The "scenario C is more severe than the rules" guardrail needs no code: scenarios
 have no severity and only feed the risk agent, whose proposal `reconcile` can only tighten.
 
+Warning applicability (prompt `2026-10-30.1`): whenever a marine warning item is present, the
+scenario, risk and cross-examination prompts carry trusted wording, outside the untrusted block,
+that a human must read the warning and that no scenario, the favourable one included, may
+conclude a warning applies or does not apply. The deteriorating branch may still describe what
+would follow if a human finds a warning applies, as a condition to check. Added after an ADR 0025 item 6 live run in which the favourable scenario did
+so. Tested in `tests/safety/test_warning_applicability_prompt.py`. Nothing checks that a reply
+obeys; `WarningNeedsHumanReadingRule` and `reconcile` protect the outcome regardless.
+
 ## Guardrails
 
 Implemented: `Scenario.evidence_ids` must be non-empty and `AssessmentRecord` rejects cited IDs

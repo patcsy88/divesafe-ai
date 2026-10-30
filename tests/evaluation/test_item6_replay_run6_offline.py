@@ -179,6 +179,15 @@ def test_a_human_must_read_the_warnings_whatever_the_scenarios_say() -> None:
     assert set(results[0].evidence_ids) == warning_ids
 
 
+def test_the_recorded_replies_predate_the_current_prompts() -> None:
+    # The replay stamps the record with today's PROMPT_VERSION, but the replies came from the
+    # version recorded in the fixture. A passing replay is no evidence that today's prompts work.
+    from divesafe.agents.prompts import PROMPT_VERSION
+
+    assert _fixture()["result"]["prompt_version"] == "2026-10-17.2"
+    assert PROMPT_VERSION != "2026-10-17.2"
+
+
 # ---- failure tests ------------------------------------------------------------------------------
 
 

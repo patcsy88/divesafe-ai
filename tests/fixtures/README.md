@@ -25,9 +25,11 @@ no test treats their wording as correct, and none should.
   a site; a human must read it (`WarningNeedsHumanReadingRule`). In run 6, the
   `scenario:favourable` summary nonetheless concludes the warnings do not apply because they name
   other areas. That is a judgement the model was not asked to make, and it contradicts the same
-  reply's own risk factor (applicability undetermined). It is not verified whether Pulau Tioman
-  falls inside an area a warning names. The scenario prompt has no rule against stating
-  applicability (the specialist prompt has one); this reply is an example of that gap. Scenario
+  reply's own risk factor (applicability undetermined). Whether Pulau Tioman falls inside an area
+  a warning names is not settled here, and is the human's reading in any case. At capture time
+  (prompt `2026-10-17.2`) the scenario prompt had no rule against stating applicability (the
+  specialist prompt had one); this reply is an example of that gap. Prompt `2026-10-30.1` adds
+  the ban to the scenario and risk prompts, so these recorded replies predate it. Scenario
   text cannot relax the outcome: rules and the supervisor never read it, and the risk agent that
   does read it can only keep or tighten the result through `reconcile`.
 - **`confidence`.** Each reply's `confidence` is the model's own uncalibrated estimate. It is not

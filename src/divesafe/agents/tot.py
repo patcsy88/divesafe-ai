@@ -17,6 +17,7 @@ from divesafe.agents.prompts import (
     evidence_payload,
     missing_note,
     tide_note,
+    warning_note,
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import ScenarioOutput
@@ -55,6 +56,7 @@ async def _one(
             "Summarise concisely with evidence ids. Do not decide whether the dive is safe."
             + missing_note(missing)
             + tide_note(evidence)
+            + warning_note(evidence)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

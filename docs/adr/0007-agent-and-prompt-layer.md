@@ -54,7 +54,11 @@ ADR 0025. An over-long reply is refused, never trimmed. Rule 2 (prompt `2026-10-
 model to state the gap instead. Not solved: nothing checks that a reply keeps its caveats or
 invents no hazard, and a lower rejection rate is not evidence that it does. Evidence text can
 also claim to cover a hazard; the prompt says such claims are data, but nothing enforces it
-(`reconcile` still only tightens). Nothing pins the prompt text to its version, and the output
+(`reconcile` still only tightens). Prompt `2026-10-30.1` adds a warning-applicability ban (trusted
+wording, present when a warning item is) to the scenario, risk and cross-examination prompts,
+matching the weather specialist's focus text; see [tot-design.md](../tot-design.md). Nothing
+checks a reply obeys it. A safety test pins the system prompt and the trusted notes (`TIDE_NOTE`,
+`WARNING_NOTE`) to `PROMPT_VERSION`; the per-task instruction text is not pinned, and the output
 cap is a setting (`DIVESAFE_LLM_MAX_OUTPUT_TOKENS`, ADR 0016), not fixed at 1,500.
 
 **Self-estimates are not confidence (owner choice, 2026-10-26; Code Review finding 3).** A

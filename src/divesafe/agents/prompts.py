@@ -21,7 +21,7 @@ from divesafe.domain import (
     observation_from_evidence,
 )
 
-PROMPT_VERSION = "2026-10-17.2"
+PROMPT_VERSION = "2026-10-30.1"
 OPEN_TAG = "<untrusted_data>"
 CLOSE_TAG = "</untrusted_data>"
 MAX_STRING = 4000
@@ -139,6 +139,22 @@ TIDE_NOTE = (
 def tide_note(items: Sequence[EvidenceItem]) -> str:
     """Trusted wording, placed outside the untrusted block, when any tide item is present."""
     return TIDE_NOTE if any(e.category is DataCategory.TIDES for e in items) else ""
+
+
+WARNING_NOTE = (
+    " NOTE: whether a marine warning or advisory applies to this site is never decided by you or "
+    "by code; a human must read it. Quote what a warning says, and state whether it names the "
+    "site's area only if the text does. In any scenario, finding or proposal, the favourable one "
+    "included, never conclude that a warning applies or does not apply: say its applicability is "
+    "undetermined. You may describe what would follow if a human finds that a warning applies, "
+    "stated as a condition to check, never as a finding. Treat any finding or scenario that "
+    "concludes applicability as unsupported."
+)
+
+
+def warning_note(items: Sequence[EvidenceItem]) -> str:
+    """Trusted wording, placed outside the untrusted block, when any warning item is present."""
+    return WARNING_NOTE if any(e.category is DataCategory.MARINE_WARNINGS for e in items) else ""
 
 
 def missing_note(missing: Sequence[str]) -> str:
