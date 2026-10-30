@@ -45,7 +45,7 @@ from divesafe.models.openai_compatible import FAILURE_REASONS, failure_reason
 
 REPO = item6_scrub.REPO
 SITE_ID = "my-pahang-pulau-tioman"
-PLANNED_START = datetime(2026, 10, 30, 7, 0, tzinfo=UTC)  # all times UTC (owner decision)
+PLANNED_START = datetime(2026, 10, 30, 11, 0, tzinfo=UTC)  # all times UTC (owner decision)
 DURATION_MINUTES = 60
 PROVIDER = "openai_compatible"
 MODEL = "claude-sonnet-5-5"
