@@ -271,6 +271,18 @@ tokens, keys and the MET token, request URLs and headers, provider response meta
 paths. PHN payloads are excluded (terms not on file, ADR 0021). Any synthetic conflicting
 forecast is labelled synthetic.
 
+**Item 6 run (owner decision, 2026-10-31).** The run 6 capture
+(`tests/fixtures/item6/item6_trace_run6_recorded_2026-10-30.json`, replayed by
+`tests/evaluation/test_item6_replay_run6_offline.py`) is accepted as the item 6 run. Its missing
+required source is tides: the PHN tide connector is off by default (ADR 0021), so no tide evidence
+was fetched and `evidence.required.tides` returns INSUFFICIENT EVIDENCE. Its conflicting forecasts
+are real, not synthetic: the MET Malaysia zone forecast (waves 0.5-1.0 m, wind 10-20 km/h from W)
+against Open-Meteo (waves 0.26 m, wind about 4 km/h from about N). Not covered by a live run: a
+configured connector failing mid-run (`observe.connector_failed:<name>`); the replay covers that
+path offline only, by removing a recorded payload. The replies were recorded under prompts
+`2026-10-17.2`, before the warning-applicability ban (`2026-10-30.1`); no live run has yet been
+made with the current prompts.
+
 ## Consequences
 
 - The lifecycle becomes assertable data; `assess_dive` keeps its signature and results.
