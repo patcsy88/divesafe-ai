@@ -433,6 +433,10 @@ def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]
                 codes.append(issue_code(name, "proposal_failed"))
             elif task.task in scenario_kinds:
                 codes.append(issue_code(name, "scenario_failed", task.task))
+            elif task.reason in ("schema", "too_long"):
+                codes.append(issue_code(name, "specialist_schema_rejected", task.task))
+            elif task.reason == "unknown_evidence_id":
+                codes.append(issue_code(name, "specialist_evidence_rejected", task.task))
             else:
                 codes.append(issue_code(name, "specialist_failed", task.task))
     elif name is StageName.REJUDGE:

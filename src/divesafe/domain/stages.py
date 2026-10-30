@@ -79,6 +79,11 @@ TRACE_ISSUE_KINDS: Final[Mapping[StageName, Mapping[str, str | None]]] = {
         "skipped_no_provider": None,
         "timed_out": None,
         "specialist_failed": "specialist",
+        # A specialist output the agent layer rejected, with the fixed reason: its shape (schema
+        # or oversize) or an evidence id it cites that the call did not see. A specialist task
+        # emits at most one of these and `specialist_failed` and `task_skipped`.
+        "specialist_schema_rejected": "specialist",
+        "specialist_evidence_rejected": "specialist",
         "scenario_failed": "scenario kind",
         "proposal_failed": None,
         # A task that did not run and did not fail (no evidence for the call, or an ablation

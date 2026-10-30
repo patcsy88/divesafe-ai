@@ -45,15 +45,19 @@ STAGE_TIMED_OUT_ISSUE = "agent stage: timed out; no proposal was produced"
 TaskOutcomeKind = Literal["ok", "failed", "skipped"]
 RISK_TASK = "risk_assessment"
 ABLATION_ISSUE_PREFIX = "ablation:"
+# Fixed reasons a rejected task may carry (from `AgentError.label`); anything else records "".
+REJECTION_REASONS = frozenset({"schema", "unknown_evidence_id", "too_long"})
 
 
 @dataclass(frozen=True)
 class TaskOutcome:
     """How one agent task ended, as a fixed label: the structured source for the stage trace.
-    `task` is a specialist name, a scenario kind or `risk_assessment`, all set in code."""
+    `task` is a specialist name, a scenario kind or `risk_assessment`, all set in code. `reason`
+    is a fixed rejection label from `REJECTION_REASONS`, or empty; never message text."""
 
     task: str
     outcome: TaskOutcomeKind
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,13 @@ class AgentStageResult:
     # proposal only; they are never passed to the scenarios.
     cross_examination_findings: tuple[Finding, ...] = ()
     cross_examination_outcomes: tuple[CrossOutcome, ...] = ()
+
+
+def _rejection_reason(error: AgentError) -> str:
+    """The fixed reason for a rejected output, or "" for any other failure."""
+    if error.kind == "rejected" and error.label in REJECTION_REASONS:
+        return error.label
+    return ""
 
 
 def _task_label(label: str) -> TaskOutcomeKind:
@@ -100,7 +111,7 @@ async def _run_specialists(
             tasks.append(TaskOutcome(spec.name, "ok"))
         elif isinstance(outcome, AgentError):
             issues.append(str(outcome))
-            tasks.append(TaskOutcome(spec.name, "failed"))
+            tasks.append(TaskOutcome(spec.name, "failed", reason=_rejection_reason(outcome)))
         elif isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
             raise outcome
         else:

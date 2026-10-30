@@ -147,7 +147,10 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   `connector_timed_out:<connector>`, `connector_issue:<connector>`, `evidence_conflict`,
   `no_evidence`; retrieve `not_configured`; assess `connector_issues_rule`,
   `unevaluated_factors`; reason `skipped_no_provider`, `timed_out`,
-  `specialist_failed:<specialist>`, `scenario_failed:<kind>`, `proposal_failed`,
+  `specialist_failed:<specialist>`, `specialist_schema_rejected:<specialist>` and
+  `specialist_evidence_rejected:<specialist>` (a specialist output rejected after return, with its
+  fixed reason; a specialist task emits at most one of these, `specialist_failed` or
+  `task_skipped`), `scenario_failed:<kind>`, `proposal_failed`,
   `task_skipped:<task>` (a specialist, scenario kind or `risk_assessment` that did not run and
   did not fail: no evidence for the call, or an item 4 ablation switch; it replaced
   `proposal_skipped`, and a skipped task is never traced as a failure); rejudge `window_started`, `result_changed`, `rules_added` (Rejudge
@@ -173,8 +176,10 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
   `MAX_CONNECTORS = 8` (six connectors registrable today, rounded up to a power of two; a
   capacity bound, not a safety threshold). Observe is the widest stage (three codes per
   connector plus two); per-stage maxima from the enumerated list: observe 26, retrieve 1,
-  assess 2, reason 20 (2 outcome codes + 5 specialists + 3 kinds + 1 proposal code + 9
-  `task_skipped` qualifiers), rejudge 3,
+  assess 2, reason 21 (2 outcome codes + 5 specialists + 3 kinds + 1 proposal code + 9
+  `task_skipped` qualifiers + 1 cross-examination code; each specialist counts once, since a
+  specialist task emits at most one of its four codes; the product of kinds and names is 31 and
+  is not reachable), rejudge 3,
   propose 1, supervise 6, gate 0, so `overflow` is reachable only through a future change. Dedup
   precedes the count; beyond the bound the first 25 are kept and `overflow` is last.
   `MAX_EVIDENCE_ITEMS` (120) moved to `domain/stages.py`; `agents.runner` imports it. Timing:

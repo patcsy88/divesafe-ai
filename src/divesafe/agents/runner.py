@@ -78,11 +78,13 @@ AgentErrorKind = Literal["failed", "timed_out", "rejected", "skipped"]
 
 class AgentError(Exception):
     """An agent call failed or its output was rejected. `kind` is a fixed label the callers may
-    branch on; the message text is never used for that."""
+    branch on; the message text is never used for that. `label` is a fixed reason for a
+    rejection (`schema`, `unknown_evidence_id`, `too_long`); empty when there is none."""
 
-    def __init__(self, message: str, *, kind: AgentErrorKind = "failed") -> None:
+    def __init__(self, message: str, *, kind: AgentErrorKind = "failed", label: str = "") -> None:
         super().__init__(message)
         self.kind: AgentErrorKind = kind
+        self.label: str = label
 
 
 def _json_text(raw: str) -> str:
@@ -124,18 +126,22 @@ async def call_structured(
         raise AgentError(f"{task}: provider error ({type(exc).__name__})") from None
 
     if len(response.text) > MAX_OUTPUT_CHARS:
-        raise AgentError(f"{task}: output too long", kind="rejected")
+        raise AgentError(f"{task}: output too long", kind="rejected", label="too_long")
     try:
         parsed = output.model_validate(json.loads(_json_text(response.text)))
     except (json.JSONDecodeError, ValidationError, RecursionError) as exc:
         raise AgentError(
-            f"{task}: output rejected (not valid for the schema)", kind="rejected"
+            f"{task}: output rejected (not valid for the schema)",
+            kind="rejected",
+            label="schema",
         ) from exc
 
     cited: tuple[str, ...] = getattr(parsed, "evidence_ids", ())
     unknown = set(cited) - allowed_ids
     if unknown:
         raise AgentError(
-            f"{task}: output cites {len(unknown)} unknown evidence id(s)", kind="rejected"
+            f"{task}: output cites {len(unknown)} unknown evidence id(s)",
+            kind="rejected",
+            label="unknown_evidence_id",
         )
     return parsed

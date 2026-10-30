@@ -62,6 +62,7 @@ from divesafe.domain.stages import (
     issue_code,
     unnamed_qualifier,
 )
+from divesafe.models import LLMRequest
 from divesafe.orchestration import pipeline as pipeline_module
 from divesafe.orchestration.graph import STAGES
 from divesafe.risk import EvidencePolicy, RiskRulesEngine
@@ -427,6 +428,8 @@ def test_every_stage_has_kinds_and_the_qualifier_meanings_are_the_registered_one
         "skipped_no_provider",
         "timed_out",
         "specialist_failed",
+        "specialist_schema_rejected",
+        "specialist_evidence_rejected",
         "scenario_failed",
         "proposal_failed",
         "task_skipped",
@@ -438,12 +441,26 @@ def test_the_enumerated_maximum_per_stage_fits_the_bound_so_overflow_is_unreacha
     maxima = {stage: len(codes) - 1 for stage, codes in every_code().items()}  # minus overflow
     assert maxima[N.OBSERVE] == 3 * MAX_CONNECTORS + 2
     tasks = len(SPECIALISTS) + len(ScenarioKind) + 1
-    # The +1 is the cross_examination_on code (a Reason kind with no qualifier, one per run).
-    assert maxima[N.REASON] == 2 + len(SPECIALISTS) + len(ScenarioKind) + 1 + tasks + 1
-    assert maxima[N.REASON] <= MAX_STAGE_ISSUES
+    # Reason's product of kinds and names counts each specialist under all four specialist
+    # kinds. A specialist task emits at most one of them (one TaskOutcome per specialist), so the
+    # reachable maximum counts each specialist once. The bound is checked on the reachable count.
+    exclusive_specialist_extra = 2 * len(SPECIALISTS)  # schema_rejected and evidence_rejected
+    assert maxima[N.REASON] == 31
+    assert maxima[N.REASON] - exclusive_specialist_extra == (
+        2  # skipped_no_provider, timed_out
+        + len(SPECIALISTS)  # one of the specialist codes per specialist
+        + len(ScenarioKind)  # scenario_failed
+        + 1  # proposal_failed
+        + tasks  # task_skipped, one per task
+        + 1  # cross_examination_on
+    )
+    reachable_reason = maxima[N.REASON] - exclusive_specialist_extra
+    assert reachable_reason == 21
     assert maxima[N.REJUDGE] == 3
     assert maxima[N.SUPERVISE] == len(SupervisorCheck) + 1
-    assert max(maxima.values()) <= MAX_STAGE_ISSUES
+    reachable = {stage: count for stage, count in maxima.items() if stage is not N.REASON}
+    reachable[N.REASON] = reachable_reason
+    assert max(reachable.values()) <= MAX_STAGE_ISSUES
     assert maxima[N.OBSERVE] == MAX_STAGE_ISSUES  # the bound is set from the widest stage
     # A single Observe run emits at most one code per connector, so the practical maximum is
     # even lower; the `overflow` branch is only reachable by a future change.
@@ -567,8 +584,9 @@ def test_connector_and_provider_text_never_reaches_the_trace() -> None:
         f"observe.connector_failed:{UNNAMED_QUALIFIER}_1",  # the bad name is never written
     )
     assert codes_of(record)[N.ASSESS] == ("assess.connector_issues_rule",)
+    # The reply is not JSON, so it is a schema rejection: a fixed code, never the reply text.
     assert codes_of(record)[N.REASON] == (
-        "reason.specialist_failed:ocean_conditions",
+        "reason.specialist_schema_rejected:ocean_conditions",
         "reason.scenario_failed:marginal",
         "reason.proposal_failed",
     )
@@ -860,7 +878,13 @@ def test_task_outcomes_mark_the_proposal_skipped_with_no_evidence() -> None:
 # --- 10. Skipped tasks are traced as `task_skipped`, never as a failure ------------------------
 
 ALL_TASKS = (*(s.name for s in SPECIALISTS), *(k.value for k in ScenarioKind), RISK_TASK)
-FAILURE_KINDS = ("reason.specialist_failed", "reason.scenario_failed", "reason.proposal_failed")
+FAILURE_KINDS = (
+    "reason.specialist_failed",
+    "reason.specialist_schema_rejected",
+    "reason.specialist_evidence_rejected",
+    "reason.scenario_failed",
+    "reason.proposal_failed",
+)
 
 
 def _ablated(monkeypatch: pytest.MonkeyPatch, **switches: bool) -> AssessmentRecord:
@@ -1250,3 +1274,68 @@ def test_task_outcome_kinds_have_no_timed_out_label() -> None:
     assert set(get_args(TaskOutcomeKind)) == {"ok", "failed", "skipped"}
     with pytest.raises(ValueError, match="not an issue kind"):
         issue_code(N.REASON, "specialist_timed_out", "weather")
+
+
+# --- 11. A rejected specialist is traced with its fixed reason, never with reply text ---------
+
+_UNSEEN_ID = "ghost-evidence-not-in-the-call"
+
+
+def _reason_codes(record: AssessmentRecord) -> tuple[str, ...]:
+    return codes_of(record)[N.REASON]
+
+
+def test_a_specialist_reply_that_is_not_json_is_traced_as_schema_rejected() -> None:
+    provider = sl.FakeProvider(sl.scripted(overrides={"specialist:ocean_conditions": "garbage"}))
+    record = _assess([_WithIssue()], provider)
+    codes = _reason_codes(record)
+    assert "reason.specialist_schema_rejected:ocean_conditions" in codes
+    assert "reason.specialist_failed:ocean_conditions" not in codes
+
+
+def test_a_specialist_reply_citing_an_unseen_evidence_id_is_traced_as_evidence_rejected() -> None:
+    def cites_unseen(request: LLMRequest) -> str:
+        return json.dumps(
+            {
+                "summary": "reading",
+                "risk_factors": [],
+                "conflicting_signals": [],
+                "evidence_ids": [_UNSEEN_ID],
+                "confidence": 0.5,
+            }
+        )
+
+    provider = sl.FakeProvider(sl.scripted(overrides={"specialist:ocean_conditions": cites_unseen}))
+    record = _assess([_WithIssue()], provider)
+    codes = _reason_codes(record)
+    assert "reason.specialist_evidence_rejected:ocean_conditions" in codes
+    assert "reason.specialist_schema_rejected:ocean_conditions" not in codes
+    assert _UNSEEN_ID not in stages_json(record)
+
+
+def test_a_specialist_task_emits_at_most_one_specialist_code() -> None:
+    provider = sl.FakeProvider(sl.scripted(overrides={"specialist:ocean_conditions": "garbage"}))
+    record = _assess([_WithIssue()], provider)
+    for specialist in SPECIALISTS:
+        emitted = [c for c in _reason_codes(record) if c.endswith(f":{specialist.name}")]
+        assert len(emitted) <= 1, emitted
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"specialist:ocean_conditions": "garbage"},
+        {"specialist:tide_current": "garbage"},
+    ],
+    ids=["all_ok", "schema_rejected", "other_rejected"],
+)
+def test_each_specialist_has_exactly_one_task_outcome(overrides: dict[str, str]) -> None:
+    provider = sl.FakeProvider(sl.scripted(overrides=overrides))
+    record = _assess([_WithIssue()], provider)
+    reason = next(t for t in record.stages if t.name is N.REASON)
+    per_specialist = [
+        c for c in reason.issues if c.split(":", 1)[-1] in {s.name for s in SPECIALISTS}
+    ]
+    for specialist in SPECIALISTS:
+        assert sum(1 for c in per_specialist if c.endswith(f":{specialist.name}")) <= 1
