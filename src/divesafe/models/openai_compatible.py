@@ -54,12 +54,63 @@ _SCHEMA_NAME = "divesafe_output"
 Transport = Callable[[str, bytes, float], bytes]
 
 
+FAILURE_REASONS: frozenset[str] = frozenset(
+    {
+        "unreachable",
+        "read_timeout",
+        "connection_error",
+        "http_error",
+        "deadline",
+        "too_large",
+        "slots_full",
+        "closed",
+        "bad_event_json",
+        "error_event",
+        "no_done_marker",
+        "data_after_done",
+        "event_line",
+        "tool_or_refusal",
+        "bad_shape",
+        "empty_stream",
+        "token_limit",
+        "unclassified",
+    }
+)
+
+
 class OpenAICompatibleError(RuntimeError):
-    """The server was unreachable or returned something unusable. Messages are fixed strings."""
+    """The server was unreachable or returned something unusable. Messages are fixed strings.
+
+    `reason` is a fixed label from FAILURE_REASONS, for the recorder. It carries no message text.
+    """
+
+    reason: str
+
+    def __init__(self, *args: object, reason: str = "unclassified") -> None:
+        super().__init__(*args)
+        self.reason = reason
 
 
 class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
     """The reply stopped at the output-token limit."""
+
+    def __init__(self) -> None:
+        TokenLimitError.__init__(self)
+        self.reason = "token_limit"
+
+
+def failure_reason(exc: BaseException) -> str:
+    """The fixed failure label for `exc`, or "unclassified" if it has none."""
+    if isinstance(exc, OpenAICompatibleError):
+        reason = vars(exc).get("reason", "unclassified")
+        if type(reason) is str and reason in FAILURE_REASONS:
+            return next(label for label in FAILURE_REASONS if label == reason)
+    return "unclassified"
+
+
+def _refuse(reason: str) -> OpenAICompatibleError:
+    """A fresh refusal with the fixed shape message and the given label."""
+    return OpenAICompatibleError("the model response was not in the expected shape", reason=reason)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -98,35 +149,50 @@ def _post(
         url, data=body, headers=headers, method="POST"
     )
     if not slots.acquire(timeout=timeout):
-        raise OpenAICompatibleError("too many model calls are already in flight")
+        raise OpenAICompatibleError(
+            "too many model calls are already in flight", reason="slots_full"
+        )
     try:
         if time.monotonic() >= deadline:
-            raise OpenAICompatibleError("the model call exceeded its total deadline")
+            raise OpenAICompatibleError(
+                "the model call exceeded its total deadline", reason="deadline"
+            )
         chunks: list[bytes] = []
         size = 0
         with opener.open(request, timeout=socket_timeout) as response:
             while True:
                 if time.monotonic() > deadline:
-                    raise OpenAICompatibleError("the model call exceeded its total deadline")
+                    raise OpenAICompatibleError(
+                        "the model call exceeded its total deadline", reason="deadline"
+                    )
                 chunk: bytes = response.read1(min(_CHUNK, MAX_RESPONSE_BYTES + 1 - size))
                 if not chunk:
                     break
                 chunks.append(chunk)
                 size += len(chunk)
                 if size > MAX_RESPONSE_BYTES:
-                    raise OpenAICompatibleError("the model response was too large")
+                    raise OpenAICompatibleError(
+                        "the model response was too large", reason="too_large"
+                    )
     except OpenAICompatibleError:
         raise
     except NotOnThisMachineError:
-        raise OpenAICompatibleError("the model server is not on this machine") from None
+        raise OpenAICompatibleError(
+            "the model server is not on this machine", reason="unreachable"
+        ) from None
     except urllib.error.HTTPError as exc:
         exc.close()
         raise OpenAICompatibleError(
-            "the model server could not be reached or refused the request"
+            "the model server could not be reached or refused the request", reason="http_error"
         ) from None
-    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
+    except TimeoutError:
         raise OpenAICompatibleError(
-            "the model server could not be reached or refused the request"
+            "the model server could not be reached or refused the request", reason="read_timeout"
+        ) from None
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
+        raise OpenAICompatibleError(
+            "the model server could not be reached or refused the request",
+            reason="connection_error",
         ) from None
     finally:
         slots.release()
@@ -135,21 +201,24 @@ def _post(
 
 def join_sse(raw: bytes) -> str:
     """Join the streamed `data:` events into the reply text, or refuse the whole reply."""
-    bad = OpenAICompatibleError("the model response was not in the expected shape")
     try:
         lines = re.split(r"\r\n|\r|\n", raw.decode("utf-8"))
     except UnicodeDecodeError:
-        raise bad from None
+        raise _refuse("bad_shape") from None
     if not lines or len(lines) > MAX_STREAM_LINES:
-        raise bad
+        raise _refuse("bad_shape")
     parts: list[str] = []
     finished = False
     done = False
+    seen_data = False
     for line in lines:
         if not line.strip() or line.startswith(":"):  # blank or keep-alive comment
             continue
-        if done or not line.startswith("data:"):
-            raise bad  # something follows [DONE], or an unknown field
+        if not line.startswith("data:"):
+            raise _refuse("event_line")  # an unknown field
+        if done:
+            raise _refuse("data_after_done")  # a data line after [DONE]
+        seen_data = True
         payload = line[5:].strip()
         if payload == "[DONE]":
             done = True
@@ -157,36 +226,39 @@ def join_sse(raw: bytes) -> str:
         try:
             event = json.loads(payload)
         except (ValueError, RecursionError):
-            raise bad from None
-        if not isinstance(event, dict) or "error" in event:
-            raise bad
+            raise _refuse("bad_event_json") from None
+        if not isinstance(event, dict):
+            raise _refuse("bad_shape")
+        if "error" in event:
+            raise _refuse("error_event")
         choices = event.get("choices")
         if not isinstance(choices, list) or len(choices) > 1:
-            raise bad
+            raise _refuse("bad_shape")
         if not choices:
             continue  # a usage-only event
         choice = choices[0]
         if not isinstance(choice, dict) or finished or choice.get("index", 0) != 0:
-            raise bad
+            raise _refuse("bad_shape")
         delta = choice.get("delta")
         if not isinstance(delta, dict):
-            raise bad
+            raise _refuse("bad_shape")
         if any(delta.get(k) for k in ("tool_calls", "function_call", "refusal")):
-            raise bad  # a reply that asks for a tool or refuses is not a plain answer
+            # a reply that asks for a tool or refuses is not a plain answer
+            raise _refuse("tool_or_refusal")
         content = delta.get("content")
         if content is not None:
             if not isinstance(content, str):
-                raise bad
+                raise _refuse("bad_shape")
             parts.append(content)
         reason = choice.get("finish_reason")
         if reason is not None:
             if reason == "length":
                 raise OpenAICompatibleTokenLimitError
             if reason != "stop":
-                raise bad
+                raise _refuse("bad_shape")
             finished = True
     if not (finished and done):
-        raise bad
+        raise _refuse("no_done_marker" if seen_data else "empty_stream")
     return "".join(parts)
 
 
@@ -285,7 +357,7 @@ class OpenAICompatibleProvider:
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         if self._closed:
-            raise OpenAICompatibleError("the model provider is closed")
+            raise OpenAICompatibleError("the model provider is closed", reason="closed")
         body = self._body(request)
         raw = await asyncio.get_running_loop().run_in_executor(
             self._executor, self._transport, self._url, body, self._deadline

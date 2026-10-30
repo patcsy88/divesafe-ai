@@ -44,5 +44,6 @@ def egress_gate(
     )
     try:
         return check_egress(provider, settings)
-    except RuntimeError as exc:
-        pytest.skip(str(exc))
+    except RuntimeError:
+        # F5: a fixed refusal. The exception text can echo configuration, so it is not used.
+        pytest.skip("egress refused: the LLM server is not declared (see ADR 0023)")

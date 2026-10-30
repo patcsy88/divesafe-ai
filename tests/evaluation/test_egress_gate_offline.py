@@ -25,10 +25,13 @@ def _remote() -> OpenAICompatibleProvider:
     )
 
 
+FIXED_REFUSAL = "egress refused: the LLM server is not declared"
+
+
 def test_an_undeclared_loopback_server_is_skipped() -> None:
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_loopback(), allow_external=False, server_is_local=False)
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(
             OllamaProvider("m", "http://localhost:11434"),
             allow_external=False,
@@ -45,9 +48,9 @@ def test_a_declared_or_opted_in_loopback_server_runs_and_reports_why() -> None:
 
 
 def test_a_remote_server_needs_the_opt_in_and_refuses_the_declaration() -> None:
-    with pytest.raises(pytest.skip.Exception, match="off-machine"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_remote(), allow_external=False, server_is_local=False)
-    with pytest.raises(pytest.skip.Exception, match="not on this machine"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_remote(), allow_external=False, server_is_local=True)
     assert (
         egress_gate(_remote(), allow_external=True, server_is_local=False)

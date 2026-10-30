@@ -304,7 +304,9 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
     monkeypatch.setattr(live, "ALLOW_EXTERNAL", "false")
     monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
+    with pytest.raises(
+        pytest.skip.Exception, match="egress refused: the LLM server is not declared"
+    ):
         live._setup()
 
     def basis() -> str:
