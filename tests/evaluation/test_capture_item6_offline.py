@@ -44,7 +44,7 @@ def test_the_planned_run_is_the_item_6_plan() -> None:
     plan = cap.build_plan().describe()
     assert plan == {
         "site_id": "my-pahang-pulau-tioman",
-        "planned_start_utc": "2026-10-30T03:00:00+00:00",
+        "planned_start_utc": "2026-10-30T07:00:00+00:00",
         "duration_minutes": 60,
         "provider": "openai_compatible",
         "model": "claude-sonnet-5-5",
