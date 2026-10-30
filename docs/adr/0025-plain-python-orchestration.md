@@ -227,7 +227,7 @@ unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name
 specialist that sees the other specialists' findings and may only **add** findings or raise
 questions; it never deletes, softens or changes its own first-round finding (round one is kept as
 is; round two is validated independently). Questions go in the existing `conflicting_signals`
-tuple of `FindingOutput` (max 10 `ShortText`); no new output field. Behind
+tuple of `FindingOutput` (max 10 `ShortText`, which is 500 characters; raised from 300 after the item 6 runs 5 and 6 rejected a 302-character item, while the prompt's rule 8 still asks for 200); no new output field. Behind
 `DIVESAFE_AGENT_CROSS_EXAMINATION` (default false; turning it on in production needs the ADR 0024
 settings pin changed and an owner decision). When on: the call cap rises from 9 to a fixed 14;
 the stage timeout is derived as `stage_timeout + call_timeout` (one more parallel wave), capped

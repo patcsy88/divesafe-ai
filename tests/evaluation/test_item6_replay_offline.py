@@ -221,15 +221,11 @@ def test_the_trace_codes_match_the_recorded_stage_codes_as_they_now_are() -> Non
     assert _codes_of(record, "retrieve") == ["retrieve.not_configured"]
     # Assess: the factors without a validated limit are reported as not evaluated, as recorded.
     assert _codes_of(record, "assess") == ["assess.unevaluated_factors"]
-    # Reason. The fixture was recorded BEFORE the specialist rejection codes existed: its stage
-    # issues say `reason.specialist_failed:ocean_conditions` and
-    # `reason.specialist_failed:tide_current`. A schema rejection now has the code
-    # `reason.specialist_schema_rejected:<task>`, so the current codes are asserted. The committed
-    # fixture is not edited.
-    assert _codes_of(record, "reason") == [
-        "reason.specialist_schema_rejected:ocean_conditions",
-        "reason.specialist_schema_rejected:tide_current",
-    ]
+    # Reason. The fixture was recorded with the schema short-text limit at 300. Its two rejected
+    # replies (a 302-character item on ocean conditions and one on tide current) validate at the
+    # current 500-character limit (ADR 0025 item 6), so the Reason stage now has no issues. The
+    # committed fixture is not edited; its trace reflects the old limit.
+    assert _codes_of(record, "reason") == []
     # Rejudge: the replay pins the clock to the planned start, so the window counts as started
     # (WINDOW_STARTED_RULE). The recorded run had no such code: its clock was earlier than the
     # planned start. The difference comes from the pinned clock, not from a fault in the replay.

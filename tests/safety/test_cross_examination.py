@@ -432,8 +432,8 @@ def test_over_cap_peer_input_skips_the_call_and_never_trims() -> None:
     """Round-one findings near the field maxima make the peer JSON for weather exceed the cap.
     The weather round-two call must be skipped and not made; nothing is trimmed."""
     base = scripted()
-    bulky_risks = [("r" * 300) for _ in range(10)]
-    bulky_signals = [("s" * 300) for _ in range(10)]
+    bulky_risks = [("r" * 500) for _ in range(10)]
+    bulky_signals = [("s" * 500) for _ in range(10)]
 
     def bulky(request: LLMRequest) -> str:
         task = task_of(request)

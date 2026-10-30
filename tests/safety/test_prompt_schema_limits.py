@@ -148,7 +148,7 @@ MUTATIONS = [
     pytest.param(
         "every rationale at most 1500", "every rationale at most 2001", id="rationale-above"
     ),
-    pytest.param("uncertainty at most 200", "uncertainty at most 301", id="short-text-above"),
+    pytest.param("uncertainty at most 200", "uncertainty at most 501", id="short-text-above"),
     pytest.param("at \nmost 6 risk factors", "at \nmost 11 risk factors", id="risk-factors-above"),
     pytest.param("6 conflicting signals", "11 conflicting signals", id="conflicting-signals-above"),
     pytest.param("6 uncertainties", "11 uncertainties", id="uncertainties-above"),
@@ -178,3 +178,29 @@ def test_a_wording_change_that_hides_the_numbers_fails_the_parse(old: str, new: 
     mutant = mutated_module(prompts, (old, new))
     with pytest.raises(AssertionError, match="cannot parse the length limits of rule 8"):
         misses(mutant.SYSTEM_PROMPT)
+
+
+# --- the short-text boundary (ADR 0025 item 6: runs 5 and 6 rejected a 302-character item) -----
+
+
+def test_a_short_text_item_of_302_characters_is_accepted() -> None:
+    body = {
+        "summary": "s",
+        "conflicting_signals": ["c" * 302],
+        "evidence_ids": ["e1"],
+        "confidence": 0.5,
+    }
+    assert schemas.FindingOutput.model_validate(body).conflicting_signals == ("c" * 302,)
+
+
+def test_a_short_text_item_above_the_schema_limit_is_rejected() -> None:
+    from pydantic import ValidationError
+
+    body = {
+        "summary": "s",
+        "conflicting_signals": ["c" * (string_max(schemas.ShortText) + 1)],
+        "evidence_ids": ["e1"],
+        "confidence": 0.5,
+    }
+    with pytest.raises(ValidationError):
+        schemas.FindingOutput.model_validate(body)
