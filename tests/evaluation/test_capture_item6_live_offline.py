@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -986,3 +986,96 @@ def test_a_recorder_that_swallowed_cancellation_would_be_caught_by_the_caller(
 
     with pytest.raises(TimeoutError):
         asyncio.run(run())
+
+
+# ---- captured_at_utc: the instant `now` was read for the assessment (ADR 0025 item 6) ----------
+
+TOP_LEVEL_KEYS = frozenset(
+    {
+        "item",
+        "site_id",
+        "planned_start_utc",
+        "duration_minutes",
+        "synthetic",
+        "replies",
+        "call_codes",
+        "connector_payloads",
+        "result",
+        cap.CAPTURED_KEY,
+    }
+)
+
+
+def _injected_now() -> datetime:
+    return datetime(2026, 10, 1, 12, 30, 15, 123456, tzinfo=UTC)
+
+
+def _run_with_injected_clock(
+    monkeypatch: pytest.MonkeyPatch, clock: Any
+) -> tuple[list[datetime], dict[str, Any]]:
+    """One assessment with an injected clock. Returns the `now` the assessment used (the spy on
+    `assess_dive`) and the document built from the run's summary. Nothing is connected to."""
+    from tests.agent.scripted_llm import engine as scripted_engine
+
+    import divesafe.orchestration as orch
+
+    seen_now: list[datetime] = []
+    real = orch.assess_dive
+
+    async def spy(**kwargs: Any) -> Any:
+        seen_now.append(kwargs["now"])
+        return await real(**kwargs)
+
+    monkeypatch.setattr(orch, "assess_dive", spy)
+    state = _fake_state([], "{}")
+    state.engine = scripted_engine(with_warning_rule=False)
+    rec = cap.Recorder()
+    summary = asyncio.run(
+        cap.run_live_assessment(state=state, recorder=rec, clock=clock, sleep=lambda _s: None)
+    )
+    return seen_now, cap.assemble_document(rec, summary)
+
+
+def test_captured_at_utc_is_the_now_the_assessment_used(
+    no_network: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The written field is the same instant `now` the assessment received, as +00:00 ISO 8601.
+    seen_now, doc = _run_with_injected_clock(monkeypatch, _injected_now)
+    assert seen_now == [_injected_now()]
+    assert doc[cap.CAPTURED_KEY] == "2026-10-01T12:30:15.123456+00:00"
+    assert doc[cap.CAPTURED_KEY] == seen_now[0].isoformat()
+    path = cap.write_capture(tmp_path / "out", "item6_capture.json", doc)
+    text = path.read_text(encoding="utf-8")
+    assert json.loads(text)[cap.CAPTURED_KEY] == "2026-10-01T12:30:15.123456+00:00"
+    assert item6_scrub.scan_text(text) == []
+
+
+def test_the_written_file_has_exactly_the_agreed_top_level_keys(
+    no_network: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Adds one top-level key, captured_at_utc, and no other. Nothing is added inside `result`.
+    _seen, doc = _run_with_injected_clock(monkeypatch, _injected_now)
+    path = cap.write_capture(tmp_path / "out", "item6_capture.json", doc)
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert set(written) == TOP_LEVEL_KEYS
+    assert cap.CAPTURED_KEY not in written["result"]
+
+
+def test_a_naive_capture_time_is_refused_before_any_assessment(
+    no_network: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A naive datetime has no UTC meaning. It is refused with a fixed message, and assess_dive is
+    # never reached, so no connector or provider is called for it.
+    naive = datetime(2026, 10, 1, 12, 30)  # noqa: DTZ001  (the point of the test)
+    with pytest.raises(cap.CaptureRefused, match="not a UTC datetime"):
+        _run_with_injected_clock(monkeypatch, lambda: naive)
+
+
+def test_a_non_utc_capture_time_is_refused_before_any_assessment(
+    no_network: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An offset of +08:00 is a real time but not UTC: refused, not converted, so the file never
+    # carries a value other than the UTC instant the assessment used.
+    kuala_lumpur = datetime(2026, 10, 1, 20, 30, tzinfo=timezone(timedelta(hours=8)))
+    with pytest.raises(cap.CaptureRefused, match="not a UTC datetime"):
+        _run_with_injected_clock(monkeypatch, lambda: kuala_lumpur)

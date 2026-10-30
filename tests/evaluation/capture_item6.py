@@ -394,9 +394,27 @@ def build_live_connectors(
     return kept
 
 
+CAPTURED_KEY = "captured_at_utc"
+
+
+def captured_at_utc(now: datetime) -> str:
+    """`now` as ISO 8601 in UTC (`+00:00`). A naive datetime, or one with any non-zero offset, is
+    refused with a fixed message, as `live_clock` refuses a bad reading: the capture time is UTC or
+    nothing."""
+    # `tzinfo != UTC` refuses a named zone with a zero offset in winter (such as Europe/London) as
+    # well as naive and offset values; `timezone(timedelta(0))` equals UTC and is accepted.
+    if now.tzinfo is None or now.tzinfo != UTC:
+        raise CaptureRefused("refused: the capture time is not a UTC datetime")
+    return now.isoformat()
+
+
 def assemble_document(recorder: Recorder, record_summary: Mapping[str, Any]) -> dict[str, Any]:
-    """The only shape that is written. Everything here was already kept by the recorder."""
-    return {
+    """The only shape that is written. Everything here was already kept by the recorder. The
+    capture time is carried in the summary under `CAPTURED_KEY` and lifted to the top level here, so
+    it is never written inside `result`."""
+    summary = dict(record_summary)
+    captured = summary.pop(CAPTURED_KEY, None)
+    document: dict[str, Any] = {
         "item": "ADR 0025 item 6",
         "site_id": SITE_ID,
         "planned_start_utc": PLANNED_START.isoformat(),
@@ -405,8 +423,12 @@ def assemble_document(recorder: Recorder, record_summary: Mapping[str, Any]) -> 
         "replies": dict(recorder.replies),
         "call_codes": dict(recorder.call_codes),
         "connector_payloads": {k: v for k, v in recorder.connector_payloads.items()},
-        "result": dict(record_summary),
+        "result": summary,
     }
+    if captured is not None:
+        # The instant `now` was read for this assessment (the same reading, never a second one).
+        document[CAPTURED_KEY] = captured
+    return document
 
 
 def configured_secret_values(settings: Settings) -> dict[str, str]:
@@ -509,6 +531,9 @@ async def run_live_assessment(
         list(state.connectors), recorder, clock=lambda: clock().timestamp(), sleep=sleep
     )
     now = clock()
+    # Refused before anything else reads the connectors or the provider: a naive or non-UTC reading
+    # never reaches the assessment.
+    captured = captured_at_utc(now)
     if now >= PLANNED_START:
         raise CaptureRefused("refused: the planned start is not after the real UTC time")
     record = await assess_dive(
@@ -524,6 +549,7 @@ async def run_live_assessment(
     )
     # Fixed codes and labels only: no reply text, no issue wording from a connector or a model.
     return {
+        CAPTURED_KEY: captured,
         "final_recommendation": record.final_recommendation.value,
         "status": record.status,
         "deterministic_recommendation": record.deterministic_recommendation.value,
