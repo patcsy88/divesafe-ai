@@ -4,9 +4,10 @@ The reply is streamed, so a proxy with an idle timeout does not cut off a slow a
 
 Never logs a request (it holds the whole prompt). Errors carry no prompt, response or URL
 content. Redirects are refused. A non-loopback server is treated as external, because the prompt
-leaves this machine. A loopback address does not show the prompt stays here (ADR 0023). Plain
-http to a remote host is refused unless that exact hostname is in
-`DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`; the prompt is then unencrypted on the network.
+leaves this machine. A loopback address does not show the prompt stays here (ADR 0023). A remote
+host is refused unless that exact hostname is in `DIVESAFE_LLM_ALLOWED_HOSTS`. Plain http to a
+remote host is also refused unless the hostname is in `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`; the
+prompt is then unencrypted on the network.
 """
 
 from __future__ import annotations
@@ -202,6 +203,7 @@ class OllamaProvider:
         transport: Transport | None = None,
         think: bool | None = False,
         plain_http_hosts: frozenset[str] = frozenset(),
+        allowed_hosts: frozenset[str] = frozenset(),
         call_timeout_seconds: float = 60.0,
         stage_timeout_seconds: float = 150.0,
         first_byte_timeout_seconds: float = SOCKET_TIMEOUT_SECONDS,
@@ -228,6 +230,8 @@ class OllamaProvider:
         loopback = is_loopback(host)
         if parsed.scheme == "http" and not loopback and host not in plain_http_hosts:
             raise ValueError("a remote Ollama server must use https")
+        if not loopback and host not in allowed_hosts:
+            raise ValueError("the Ollama server host is not in DIVESAFE_LLM_ALLOWED_HOSTS")
         self.model = model.strip()
         self._think = think
         self.external = not loopback
@@ -295,6 +299,7 @@ def _factory(settings: Settings) -> OllamaProvider:
         settings.llm_model or "",
         base,
         plain_http_hosts=settings.plain_http_host_set(),
+        allowed_hosts=settings.llm_allowed_host_set(),
         call_timeout_seconds=settings.llm_call_timeout_seconds,
         stage_timeout_seconds=settings.llm_stage_timeout_seconds,
         first_byte_timeout_seconds=settings.llm_first_byte_timeout_seconds,

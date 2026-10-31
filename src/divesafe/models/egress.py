@@ -27,10 +27,15 @@ def check_egress(provider: LLMProvider, settings: Settings) -> EgressBasis:
     A remote server needs DIVESAFE_ALLOW_EXTERNAL_LLM. A loopback address does not show where a
     server sends the prompt, so it needs either that opt-in or the declaration
     DIVESAFE_LLM_SERVER_IS_LOCAL, an operator statement the software cannot check. The declaration
-    is refused for a remote server. The exact `FakeProvider` class runs scripted replies in tests
-    and is exempt; a subclass is not."""
+    is refused for a remote server, and the two flags together are refused. The exact
+    `FakeProvider` class runs scripted replies in tests and is exempt; a subclass is not."""
     if type(provider) is FakeProvider:
         return "none"
+    # `Settings` refuses this pair too, but `model_copy` and `model_construct` skip its validators.
+    if settings.llm_server_is_local and settings.allow_external_llm:
+        raise RuntimeError(
+            "DIVESAFE_LLM_SERVER_IS_LOCAL and DIVESAFE_ALLOW_EXTERNAL_LLM contradict each other"
+        )
     if provider.external:
         if settings.llm_server_is_local:
             raise RuntimeError(

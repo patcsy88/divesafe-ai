@@ -95,8 +95,8 @@ class Settings(BaseSettings):
     # call cap and the run deadline change (see `agent_stage_budget`).
     agent_cross_examination: bool = False
 
-    # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
-    # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.
+    # Comma-separated exact hostnames of the non-loopback servers the openai_compatible and ollama
+    # providers may call (ADR 0018). Empty: only a loopback server is allowed.
     llm_allowed_hosts: str | None = None
 
     @field_validator("loader_db_role")

@@ -435,3 +435,106 @@ def test_the_fake_provider_still_turns_the_agent_stage_off_outside_production() 
     above would no longer be the whole story."""
     for environment in ("development", "test"):
         assert build_provider(Settings(environment=environment)) is None  # type: ignore[arg-type]
+
+
+def test_check_egress_refuses_both_flags_even_when_settings_validation_was_skipped() -> None:
+    """`model_construct` and `model_copy` skip the `Settings` validators, so the gate checks the
+    pair itself: both flags set must never read as `declared_local`."""
+    both = Settings.model_construct(llm_server_is_local=True, allow_external_llm=True)
+    for external in (False, True):
+        with pytest.raises(RuntimeError, match="contradict"):
+            check_egress(_Stub(external), both)
+    with pytest.raises(RuntimeError, match="contradict"):
+        check_egress(OllamaProvider("m", "http://localhost:11434"), both)
+    copied = _settings(llm_server_is_local=True).model_copy(update={"allow_external_llm": True})
+    with pytest.raises(RuntimeError, match="contradict"):
+        check_egress(_Stub(False), copied)
+
+
+def test_a_remote_ollama_host_must_be_listed_even_with_the_external_opt_in() -> None:
+    """The opt-in says the operator accepts data leaving the machine; the allow-list says where to.
+    A mistyped or unlisted https host must not receive the prompt (AGENTS.md section 12)."""
+    url = "https://ollama.example.org"
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OllamaProvider("m", url)
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OllamaProvider("m", url, allowed_hosts=frozenset({"other.example.org"}))
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OllamaProvider(
+            "m", "https://evil.ollama.example.org", allowed_hosts=frozenset({"ollama.example.org"})
+        )
+    # plain-http listing does not stand in for the allow-list
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OllamaProvider(
+            "m", "http://ollama.example.org", plain_http_hosts=frozenset({"ollama.example.org"})
+        )
+    settings = _settings(
+        llm_provider="ollama", llm_model="m", llm_base_url=url, allow_external_llm=True
+    )
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        build_provider(settings)
+    listed = settings.model_copy(update={"llm_allowed_hosts": "ollama.example.org"})
+    assert build_provider(listed) is not None
+    # a loopback server needs no listing
+    assert OllamaProvider("m", "http://localhost:11434").external is False
+
+
+def test_the_live_runs_refuse_an_output_directory_inside_the_repository_before_sending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live tests hold raw model replies. A directory inside the repository must fail the run
+    before any prompt leaves, in both live tests."""
+    from tests.evaluation.capture_item6 import REPO, CaptureRefused
+
+    live = _live_tide_setup(
+        monkeypatch, REPO / "tests", basis_flags=("true", "false"), acknowledged=True
+    )
+
+    def must_not_be_called(*_args: object) -> None:
+        raise AssertionError("a prompt was sent")
+
+    monkeypatch.setattr(live, "run_tide_check", must_not_be_called)  # type: ignore[attr-defined]
+    monkeypatch.setattr(live, "evaluate", must_not_be_called)  # type: ignore[attr-defined]
+    with pytest.raises(CaptureRefused, match="inside the repository"):
+        live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(REPO / "tests")  # type: ignore[attr-defined]
+    with pytest.raises(CaptureRefused, match="inside the repository"):
+        live.test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(REPO / "tests")  # type: ignore[attr-defined]
+
+
+def test_every_raw_record_the_live_runs_write_is_for_the_owner_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import stat
+    from types import SimpleNamespace
+
+    out = tmp_path / "records"
+    live = _live_tide_setup(monkeypatch, out, basis_flags=("true", "false"), acknowledged=False)
+    monkeypatch.setattr(live, "run_tide_check", lambda _p: None)  # type: ignore[attr-defined]
+    with pytest.raises(pytest.skip.Exception):
+        live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path)  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(live, "ACCEPT_PHN_TERMS_OPEN", True)  # type: ignore[attr-defined]
+    ran = SimpleNamespace(
+        findings=("f",), scenarios=(), proposed_recommendation=None, model_dump_json=lambda: "{}"
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        live,
+        "run_tide_check",
+        lambda _p: SimpleNamespace(hits=[], record=ran, stayed_insufficient=True),
+    )
+    live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path)  # type: ignore[attr-defined]
+
+    report = SimpleNamespace(
+        summary=lambda: {},
+        cases=[],
+        proposals_obtained=1,
+        under_severe_errors=0,
+        rule_outcome_accuracy=1.0,
+    )
+    monkeypatch.setattr(live, "evaluate", lambda _make: report)  # type: ignore[attr-defined]
+    live.test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(tmp_path)  # type: ignore[attr-defined]
+
+    files = sorted(out.glob("*.json"))
+    assert len(files) == 3
+    for path in files:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path.name

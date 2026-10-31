@@ -170,6 +170,14 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   INSUFFICIENT EVIDENCE; the deferred "keep the most severe variant" option must be decided before
   any validated rule ships). See [risk-model.md](risk-model.md) and ADR 0008.
 
+- **Ruleset loader:** it accepts VALIDATED definitions now (`api/state.py`). Only process control
+  stops a ruleset shipping before the evidence-id conflict decision above; no code guard exists.
+- **`kb_screen` id-screen gaps:** 9 strict xfails in `tests/safety/test_kb_screen.py` (`_fold`
+  bypasses) must be closed or accepted before Retrieve puts knowledge into prompts.
+- **ADR 0025 is still proposed** although the graph, Supervise and trace are built; it needs
+  risk-reviewer and security-reviewer acceptance.
+- **Evaluation citation metric:** `_citations_valid` (`tests/evaluation/ablation.py`) skips
+  `cross_examination_findings`. Low impact: the record validator already refuses unknown ids.
 - **Connector HTTP limits** (2026-10-26): the total deadline and the dedicated thread pool leave
   gaps (connect/DNS/TLS/header stalls, private socket access, no per-host thread limit, unbounded
   queue, shared module-level pool); see

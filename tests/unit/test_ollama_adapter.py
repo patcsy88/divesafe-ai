@@ -96,7 +96,8 @@ def test_an_unexpected_response_shape_is_refused_without_echoing_it(reply: bytes
     ],
 )
 def test_only_a_loopback_server_counts_as_local(url: str, external: bool) -> None:
-    assert OllamaProvider("m", url).external is external
+    listed = frozenset({"ollama.example.org"})
+    assert OllamaProvider("m", url, allowed_hosts=listed).external is external
 
 
 @pytest.mark.parametrize(
@@ -115,11 +116,12 @@ def test_only_a_loopback_server_counts_as_local(url: str, external: bool) -> Non
 )
 def test_unsafe_base_urls_are_refused(url: str) -> None:
     with pytest.raises(ValueError):
-        OllamaProvider("m", url)
+        OllamaProvider("m", url, allowed_hosts=frozenset({"ollama.example.org", "10.0.0.5"}))
 
 
 def test_a_lookalike_hostname_is_not_loopback() -> None:
-    assert OllamaProvider("m", "https://localhost.evil.example").external is True
+    listed = frozenset({"localhost.evil.example"})
+    assert OllamaProvider("m", "https://localhost.evil.example", allowed_hosts=listed).external
     with pytest.raises(ValueError):
         OllamaProvider("m", "http://localhost.evil.example")
 
@@ -139,6 +141,7 @@ def test_the_factory_reads_the_settings() -> None:
             llm_provider="ollama",
             llm_model="m",
             llm_base_url="https://o.example.org",  # type: ignore[arg-type]
+            llm_allowed_hosts="o.example.org",
         )
     )
     assert remote.external is True
@@ -149,6 +152,7 @@ def test_a_remote_server_needs_the_external_opt_in() -> None:
         llm_provider="ollama",
         llm_model="m",
         llm_base_url="https://o.example.org",  # type: ignore[arg-type]
+        llm_allowed_hosts="o.example.org",
     )
     with pytest.raises(RuntimeError, match="off-machine"):
         build_provider(settings)
@@ -202,7 +206,8 @@ def test_plain_http_to_a_remote_host_needs_that_exact_hostname_listed() -> None:
             "http://evil.ollama.example.org",
             plain_http_hosts=frozenset({"ollama.example.org"}),
         )
-    allowed = OllamaProvider("m", url, plain_http_hosts=frozenset({"ollama.example.org"}))
+    host = frozenset({"ollama.example.org"})
+    allowed = OllamaProvider("m", url, plain_http_hosts=host, allowed_hosts=host)
     assert allowed.external is True
 
 
@@ -212,6 +217,7 @@ def test_the_plain_http_list_comes_from_settings_and_is_still_external() -> None
         llm_model="m",
         llm_base_url="http://ollama.example.org:11434",  # type: ignore[arg-type]
         ollama_plain_http_hosts=" Ollama.Example.org ,",
+        llm_allowed_hosts="ollama.example.org",
     )
     provider = create_provider(settings)
     assert provider.external is True

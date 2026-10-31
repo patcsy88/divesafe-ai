@@ -174,6 +174,7 @@ def test_ollama_verifies_certificates_for_loopback_and_remote_https(
     for url in ("https://127.0.0.1:1", "https://ollama.invalid"):
         seen.clear()
         with pytest.raises(OllamaError):
-            asyncio.run(OllamaProvider("m", url).complete(request))
+            listed = frozenset({"ollama.invalid"})
+            asyncio.run(OllamaProvider("m", url, allowed_hosts=listed).complete(request))
         assert seen
         assert all(c.verify_mode == ssl.CERT_REQUIRED and c.check_hostname for c in seen)

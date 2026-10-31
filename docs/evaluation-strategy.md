@@ -4,7 +4,7 @@
 
 | Layer | Location | What it proves | Gate |
 | --- | --- | --- | --- |
-| Safety invariants | `tests/safety` | Hierarchy, severity order, insufficient-evidence handling | Must pass; never skipped |
+| Safety invariants | `tests/safety` | Hierarchy, severity order, insufficient-evidence handling | Must pass; never skipped (known gaps are strict xfails) |
 | Unit | `tests/unit` | Domain, config, engine, providers | CI |
 | Agent | `tests/agent` | Agent behavior with scripted `FakeProvider` output | CI |
 | Integration | `tests/integration` | Database/pgvector, connectors (recorded fixtures) | CI where services exist |
@@ -12,21 +12,34 @@
 
 ## Safety evaluation (highest priority)
 
-- **Adversarial proposals:** an LLM/agent proposal less severe than the rules result never
-  lowers the final result (property tests over all severity pairs already exist).
-- **Prompt injection:** retrieved text and connector payloads containing instructions do not
-  change behavior.
-- **Evidence gaps:** removing any required category yields `INSUFFICIENT EVIDENCE`.
-- **Provider swap:** same deterministic inputs give the same final recommendation across providers.
-- **Contradiction:** conflicting sources lower confidence and are surfaced, never silently resolved.
+Status of each item is stated; "planned" means nothing builds or measures it yet.
+
+- **Adversarial proposals (built):** an LLM/agent proposal less severe than the rules result never
+  lowers the final result (tests over every severity pair; the adversarial set and its
+  `false_go == 0` check, see below).
+- **Prompt injection (partly built):** the offline harness screens replies for five fixed marker
+  phrases in two injected scenarios. The adversarial set's hostile notice is a rules-only case (the
+  scripted model never reads it), so model behaviour under injection is unmeasured offline. A
+  string match is not a test that behaviour is unchanged; a model can echo an attack in other words.
+- **Evidence gaps (built for the rules):** removing a required category yields
+  `INSUFFICIENT EVIDENCE` in the rules engine; tests in `tests/safety` cover it.
+- **Provider swap (planned):** the final recommendation depends on the deterministic result and a
+  tighten-only reconcile, but no test runs the same inputs across real providers and compares them.
+  Model output is nondeterministic even at temperature 0.
+- **Contradiction (planned):** contradiction detection is not built and `confidence` is `None`.
+  What exists is that conflicting evidence ids are kept visible as withheld (ADR 0008); see the
+  evidence-id conflict gap in `architecture.md` Known gaps.
 
 ## Quality evaluation
 
 - **Scenario set:** curated, provenance-labelled cases (site, plan, evidence snapshot, expected
-  rule outcome), reviewed by a qualified diving professional. Synthetic cases are labelled synthetic.
+  rule outcome). The target is review by a qualified diving professional; **no case has been
+  reviewed yet.** Every current case is synthetic and labelled synthetic, so the results say
+  nothing about real-world safety.
 - **Metrics:**
   - rule-outcome accuracy on the scenario set (deterministic; should be exact);
-  - citation validity: share of claims whose cited evidence supports them;
+  - citation validity: today, whether every cited id exists in the record (built). Whether the
+    cited evidence supports the claim is not checked and needs a human-rated sample (planned);
   - confidence calibration against outcomes (reliability curves) once data exists;
   - conservative-error rate: cases where the final recommendation was less severe than the reference;
   - abstention quality: correct use of `INSUFFICIENT EVIDENCE`;
@@ -45,7 +58,7 @@
 ## Reproducibility
 
 Each evaluation run records the ruleset, model, prompt, data and code versions; LLM
-evaluations use temperature 0 where supported and store raw outputs.
+evaluations use temperature 0 where supported and store the assessment records (no raw text is kept for a refused reply).
 
 ## Live runs recorded
 
