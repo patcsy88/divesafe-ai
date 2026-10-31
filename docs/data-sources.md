@@ -340,6 +340,16 @@ request at data.gov.my/data-request; (2) until answered, nothing is built.
 
 **TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. The owner withdrew this route on 2026-10-17 ("Ignore TICON"); [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) is kept as a record only.
 
+**Decided 2026-10-31 (owner): WorldTides and Tideschart not pursued.** WorldTides' terms
+(re-read, updated 2026-10-26) still bar use where anyone could come to harm, including
+safety-critical operations, and use as the only source for life-safety decisions. They also
+limit each request to one user. A display-only panel was considered and not pursued.
+Tideschart (`tideschart.com`, Terms of Use updated 2026-10-22, read with the owner's go-ahead)
+has no API or data licence and bars reproducing or copying any part of the site, so the only
+route would be scraping. Its predictions blend several national and global models with its own,
+so no source or station can be traced, and its methodology page says to use official tide tables
+from the national hydrographic office instead. Neither source gives tidal streams.
+
 **PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording is still not on file.
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
