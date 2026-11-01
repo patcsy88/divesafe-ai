@@ -170,8 +170,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   INSUFFICIENT EVIDENCE; the deferred "keep the most severe variant" option must be decided before
   any validated rule ships). See [risk-model.md](risk-model.md) and ADR 0008.
 
-- **Ruleset loader:** it accepts VALIDATED definitions now (`api/state.py`). Only process control
-  stops a ruleset shipping before the evidence-id conflict decision above; no code guard exists.
+- **Ruleset loader:** `build_engine` (`api/state.py`) refuses a ruleset with VALIDATED definitions
+  at start-up unless `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP=true`, while the evidence-id conflict
+  decision above is open. Remove the guard when that decision is made.
 - **`kb_screen` id-screen gaps:** 9 strict xfails in `tests/safety/test_kb_screen.py` (`_fold`
   bypasses) must be closed or accepted before Retrieve puts knowledge into prompts.
 - **ADR 0025 is still proposed** although the graph, Supervise and trace are built; it needs

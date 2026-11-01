@@ -157,6 +157,13 @@ def check_settings_match_guard(environ: Mapping[str, str] | None = None) -> None
             )
 
 
+def _close(provider: Any) -> None:
+    """Release a real adapter's worker threads; the scripted fake has nothing to release."""
+    close = getattr(provider, "close", None)
+    if callable(close):
+        close()
+
+
 def offline_egress_basis(settings: Settings) -> EgressBasis:
     """The egress gate, offline. Builds a provider object without any connection; never calls it.
     The base URL is never printed."""
@@ -183,6 +190,8 @@ def offline_egress_basis(settings: Settings) -> EgressBasis:
         raise CaptureRefused(
             f"refused: the egress check stopped ({type(exc).__name__}); see ADR 0023"
         ) from None
+    finally:
+        _close(provider)
 
 
 def run_dry(settings: Settings) -> dict[str, Any]:
@@ -713,14 +722,17 @@ def run_live(environ: Mapping[str, str]) -> Path:
     if parts.provider is None:
         raise CaptureRefused("refused: no provider is configured (DIVESAFE_LLM_PROVIDER)")
     recorder = Recorder()
-    summary = asyncio.run(
-        run_live_assessment(
-            state=parts,
-            recorder=recorder,
-            clock=live_clock(),
-            sleep=asyncio.sleep,
+    try:
+        summary = asyncio.run(
+            run_live_assessment(
+                state=parts,
+                recorder=recorder,
+                clock=live_clock(),
+                sleep=asyncio.sleep,
+            )
         )
-    )
+    finally:
+        _close(parts.provider)
     document = assemble_document(recorder, summary)
     return write_capture(directory, "item6_capture.json", document, settings)
 

@@ -152,6 +152,9 @@ class Settings(BaseSettings):
     ruleset_path: Path | None = None
     # Optional pin: the app refuses to start if the ruleset file's SHA-256 differs from this.
     ruleset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # While the evidence-id conflict gap is open (a conflict can hide the most severe variant,
+    # ADR 0008), loading signed-off definitions is refused unless the operator accepts the gap.
+    accept_evidence_conflict_gap: bool = False
     decision_max_age_minutes: int | None = Field(default=None, gt=0)
 
     auth_mode: Literal["api_key", "dev"] = "api_key"

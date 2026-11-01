@@ -123,7 +123,9 @@ def test_a_definition_listing_unrepresentable_conditions_is_refused() -> None:
 
 
 def _settings(path: Path | None = None) -> Settings:
-    return Settings(evidence_max_age_minutes=60, ruleset_path=path)
+    return Settings(
+        evidence_max_age_minutes=60, ruleset_path=path, accept_evidence_conflict_gap=True
+    )
 
 
 def _write(tmp_path: Path, text: str) -> Path:
@@ -338,7 +340,12 @@ def test_unreadable_or_corrupt_files_stop_startup_with_a_fixed_message(tmp_path:
 def test_the_pinned_hash_must_match_or_startup_fails(tmp_path: Path) -> None:
     path = _write(tmp_path, _file(tioman()))
     digest = load_ruleset_bytes(path.read_bytes(), NOW).sha256
-    ok = Settings(evidence_max_age_minutes=60, ruleset_path=path, ruleset_sha256=digest)
+    ok = Settings(
+        evidence_max_age_minutes=60,
+        ruleset_path=path,
+        ruleset_sha256=digest,
+        accept_evidence_conflict_gap=True,
+    )
     assert build_engine(ok, now=NOW) is not None
     wrong = Settings(evidence_max_age_minutes=60, ruleset_path=path, ruleset_sha256="0" * 64)
     with pytest.raises(RuntimeError, match="does not match"):
