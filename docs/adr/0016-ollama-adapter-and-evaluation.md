@@ -1,6 +1,13 @@
 # ADR 0016: Ollama adapter and the evaluation harness
 
-Status: accepted
+Status: accepted; the Ollama adapter was removed on 2026-11-03 (see Amendment). The evaluation harness remains.
+
+## Amendment 2026-11-03: Ollama adapter removed
+
+Owner decision: `divesafe.models.ollama`, the `ollama` provider value, `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`
+and the plain-http production check are gone. The shared limits and budget checks moved to
+`divesafe.models.limits` and are used by the OpenAI-compatible adapter (ADR 0018). The text below is
+kept as history. `DIVESAFE_LLM_ALLOWED_HOSTS` stays: the OpenAI-compatible adapter uses it.
 
 ## Context
 

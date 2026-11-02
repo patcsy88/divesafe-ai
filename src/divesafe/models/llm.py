@@ -1,6 +1,6 @@
 """Provider-neutral LLM interface.
 
-Agents depend only on `LLMProvider`. Concrete adapters (OpenAI, Anthropic, Ollama or any
+Agents depend only on `LLMProvider`. Concrete adapters (OpenAI, Anthropic, or any
 compatible server) are added later behind `register_provider`, so no vendor SDK is imported
 here and the application is never hard-wired to one vendor.
 """

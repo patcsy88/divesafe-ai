@@ -16,12 +16,12 @@ def _settings(**kwargs: object) -> Settings:
 
 
 def test_production_refuses_non_durable_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(llm_module._REGISTRY, "ollama", lambda s: FakeProvider())
+    monkeypatch.setitem(llm_module._REGISTRY, "openai_compatible", lambda s: FakeProvider())
     monkeypatch.setattr(
         "divesafe.api.app.get_settings",
         lambda: _settings(
             environment="production",
-            llm_provider="ollama",
+            llm_provider="openai_compatible",
             api_key_hashes=_KEYS,
         ),
     )

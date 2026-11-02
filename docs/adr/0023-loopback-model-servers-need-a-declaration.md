@@ -10,6 +10,11 @@ of the gap recorded in ADR 0022 decision 15. **ADR 0022 requires typed record fi
 and `model_host` (not a string in `model_version`); they are not yet built**, and using the basis
 in the knowledge filter is not done either.
 
+> Amendment 2026-11-03: the Ollama adapter was removed (ADR 0016 amendment). Every mention of Ollama
+> below, including "both adapters", the Ollama tests and mutations, is history. The OpenAI-compatible
+> adapter keeps the peer check; `tests/unit/test_loopback_peer.py` and `tests/safety/test_llm_egress_declaration.py`
+> cover it.
+
 ## Context
 
 `LLMProvider.external` was true only when the model server's host was not loopback. AGENTS

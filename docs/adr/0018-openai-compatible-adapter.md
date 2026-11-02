@@ -79,9 +79,8 @@ host and setting the opt-in is the operator's explicit acceptance.
   the call budget (a watchdog that closes the connection would fix it). The agent stage still ends
   on time and the result stays deterministic.
 - The allow-list ignores the port: any port on a listed host is allowed. `DIVESAFE_LLM_ALLOWED_HOSTS`
-  now applies to the Ollama adapter too: a non-loopback Ollama host must be listed, on top of
-  https (or the plain-http list) and the external opt-in. Before that change Ollama needed only the
-  opt-in, so a mistyped https host would have received the prompt.
+  applies to this adapter only: a non-loopback host must be listed, on top of https and the
+  external opt-in. (It briefly covered the Ollama adapter too, until that adapter was removed.)
 - The response `Content-Type` is not checked.
 - The allow-list is checked at construction. DNS can still point a listed name anywhere; this is
   the same trust as for any hostname allow-list.

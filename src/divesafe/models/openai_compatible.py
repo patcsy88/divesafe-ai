@@ -32,19 +32,19 @@ from typing import Any
 from pydantic import SecretStr
 
 from divesafe.config.settings import Settings
+from divesafe.models.limits import (
+    MAX_RESPONSE_BYTES,
+    MAX_STREAM_LINES,
+    SOCKET_TIMEOUT_SECONDS,
+    check_budgets,
+    check_output_tokens,
+)
 from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
 from divesafe.models.loopback import (
     LoopbackHTTPHandler,
     LoopbackHTTPSHandler,
     NotOnThisMachineError,
     is_loopback,
-)
-from divesafe.models.ollama import (
-    MAX_RESPONSE_BYTES,
-    MAX_STREAM_LINES,
-    SOCKET_TIMEOUT_SECONDS,
-    check_budgets,
-    check_output_tokens,
 )
 
 _CHUNK = 64 * 1024

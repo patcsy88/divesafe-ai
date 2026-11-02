@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # Knowledge loader role (ADR 0022 decision 11). Only `db_init` reads it; unset skips its grants.
     loader_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
-    llm_provider: Literal["openai", "anthropic", "ollama", "openai_compatible", "fake"] = "fake"
+    llm_provider: Literal["openai", "anthropic", "openai_compatible", "fake"] = "fake"
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
     llm_base_url: AnyHttpUrl | None = None
@@ -79,9 +79,6 @@ class Settings(BaseSettings):
     # can forward everything to a hosted model. Never inferred from the URL, and it cannot be
     # combined with DIVESAFE_ALLOW_EXTERNAL_LLM or used with a non-loopback server.
     llm_server_is_local: bool = False
-    # Comma-separated exact hostnames of non-loopback Ollama servers that may be used over plain
-    # http (ADR 0016). The prompt then crosses the network unencrypted. Empty: https is required.
-    ollama_plain_http_hosts: str | None = None
     # Time budgets for a slow self-hosted model (ADR 0016). The defaults are the original values.
     # One call, the whole agent stage, the wait for a server's first byte, and parallel calls.
     llm_call_timeout_seconds: float = Field(default=60.0, gt=0, le=600, allow_inf_nan=False)
@@ -95,8 +92,8 @@ class Settings(BaseSettings):
     # call cap and the run deadline change (see `agent_stage_budget`).
     agent_cross_examination: bool = False
 
-    # Comma-separated exact hostnames of the non-loopback servers the openai_compatible and ollama
-    # providers may call (ADR 0018). Empty: only a loopback server is allowed.
+    # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
+    # may call (ADR 0018). Empty: only a loopback server is allowed.
     llm_allowed_hosts: str | None = None
 
     @field_validator("loader_db_role")
@@ -114,9 +111,6 @@ class Settings(BaseSettings):
         if self.loader_db_role is not None and self.loader_db_role == self.app_db_role:
             raise ValueError("DIVESAFE_LOADER_DB_ROLE is not an acceptable role name")
         return self
-
-    def plain_http_host_set(self) -> frozenset[str]:
-        return _host_set(self.ollama_plain_http_hosts, "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS")
 
     def effective_run_deadline_seconds(self) -> float:
         if self.run_deadline_seconds is not None:
@@ -220,9 +214,6 @@ class Settings(BaseSettings):
                 "other; set only one"
             )
         self.llm_allowed_host_set()
-        plain_hosts = self.plain_http_host_set()
-        if self.environment == "production" and plain_hosts:
-            raise ValueError("plain-http Ollama hosts cannot be used in production")
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":

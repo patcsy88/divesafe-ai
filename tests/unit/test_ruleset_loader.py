@@ -393,13 +393,13 @@ def test_production_requires_a_pinned_ruleset(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="pinned"):
         Settings(
             environment="production",
-            llm_provider="ollama",
+            llm_provider="openai_compatible",
             ruleset_path=path,
             api_key_hashes=_KEYS,  # type: ignore[arg-type]
         )
     Settings(
         environment="production",
-        llm_provider="ollama",
+        llm_provider="openai_compatible",
         ruleset_path=path,
         ruleset_sha256="a" * 64,
         api_key_hashes=_KEYS,  # type: ignore[arg-type]

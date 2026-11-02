@@ -1,11 +1,10 @@
 """Live evaluation against a real model server. Skipped unless you opt in:
 
-    DIVESAFE_EVAL_OLLAMA_MODEL=<model> .venv/bin/pytest tests/evaluation/test_evaluation_live.py -s
+    DIVESAFE_EVAL_MODEL=<model> .venv/bin/pytest tests/evaluation/test_evaluation_live.py -s
 
-Set DIVESAFE_EVAL_PROVIDER=openai_compatible to use the OpenAI-compatible adapter (ADR 0018) with
-DIVESAFE_EVAL_MODEL, DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a
-remote server DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). A remote
-Ollama server also needs DIVESAFE_LLM_ALLOWED_HOSTS. Set
+It uses the OpenAI-compatible adapter (ADR 0018) with DIVESAFE_EVAL_MODEL,
+DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a remote server
+DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). Set
 DIVESAFE_EVAL_OUT to a directory outside the repository: it holds raw model replies, and
 .gitignore covers the default file names only as a backstop. The tide check also needs
 DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true unless the server is declared local; when it is skipped
@@ -40,10 +39,9 @@ from tests.evaluation.tide_check import run_tide_check
 
 from divesafe.agents import PROMPT_VERSION
 from divesafe.config import Settings
-from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
-PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "ollama")
+PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "openai_compatible")
 # Read at import, before the per-test environment isolation in tests/conftest.py removes it.
 ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") or "false"
 SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
@@ -51,12 +49,10 @@ SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
 # (ADR 0021), so the check runs only against a server declared local, or with this acknowledgement.
 # Deliberately strict: only the exact text "true" counts, so any other value leaves it off.
 ACCEPT_PHN_TERMS_OPEN = os.environ.get("DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN") == "true"
-MODEL = os.environ.get("DIVESAFE_EVAL_MODEL") or os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
+MODEL = os.environ.get("DIVESAFE_EVAL_MODEL")
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(
-        MODEL is None, reason="DIVESAFE_EVAL_MODEL (or DIVESAFE_EVAL_OLLAMA_MODEL) not set"
-    ),
+    pytest.mark.skipif(MODEL is None, reason="DIVESAFE_EVAL_MODEL not set"),
 ]
 
 
@@ -72,16 +68,13 @@ def _sha() -> str:
 
 def _host() -> str:
     """The model server's host name only: no scheme, path, port or credentials."""
-    if PROVIDER == "ollama":
-        url = os.environ.get("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
-    else:
-        url = os.environ.get("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+    url = os.environ.get("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
     return urlparse(url).hostname or "unknown"
 
 
-def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatibleProvider], str]:
+def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
     assert MODEL is not None
-    assert PROVIDER in ("ollama", "openai_compatible"), "DIVESAFE_EVAL_PROVIDER is not known"
+    assert PROVIDER == "openai_compatible", "DIVESAFE_EVAL_PROVIDER is not known"
     env = os.environ.get
     budgets = Settings(
         _env_file=None,
@@ -90,7 +83,6 @@ def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatiblePr
         llm_first_byte_timeout_seconds=env("DIVESAFE_EVAL_FIRST_BYTE", "15"),  # type: ignore[arg-type]
         llm_max_concurrent_calls=env("DIVESAFE_EVAL_CONCURRENCY", "4"),  # type: ignore[arg-type]
         llm_max_output_tokens=env("DIVESAFE_EVAL_MAX_OUTPUT_TOKENS", "1500"),  # type: ignore[arg-type]
-        ollama_plain_http_hosts=env("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS"),
         llm_allowed_hosts=env("DIVESAFE_EVAL_ALLOWED_HOSTS"),
     )
     options: dict[str, object] = {
@@ -101,19 +93,12 @@ def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatiblePr
         "max_output_tokens": budgets.llm_max_output_tokens,
     }
     options["allowed_hosts"] = budgets.llm_allowed_host_set()
-    if PROVIDER == "ollama":
-        base = env("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
-        options["plain_http_hosts"] = budgets.plain_http_host_set()
+    base = env("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+    key = env("DIVESAFE_EVAL_API_KEY")
+    options["api_key"] = SecretStr(key) if key else None
 
-        def make() -> OllamaProvider | OpenAICompatibleProvider:
-            return OllamaProvider(MODEL, base, **options)  # type: ignore[arg-type]
-    else:
-        base = env("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
-        key = env("DIVESAFE_EVAL_API_KEY")
-        options["api_key"] = SecretStr(key) if key else None
-
-        def make() -> OllamaProvider | OpenAICompatibleProvider:
-            return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
+    def make() -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
 
     basis = egress_gate(make(), allow_external=ALLOW_EXTERNAL, server_is_local=SERVER_IS_LOCAL)
     return budgets, make, basis

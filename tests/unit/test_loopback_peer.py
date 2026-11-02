@@ -1,4 +1,4 @@
-"""The peer-address check shared by the self-hosted adapters (ADR 0023), over http and https."""
+"""The peer-address check used by the self-hosted adapter (ADR 0023), over http and https."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from divesafe.models import loopback as lb
-from divesafe.models.ollama import OllamaError, OllamaProvider
 
 pytestmark = pytest.mark.safety
 
@@ -65,19 +64,22 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def test_ollama_sends_nothing_if_the_peer_is_not_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_compatible_adapter_sends_nothing_if_the_peer_is_not_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import asyncio
 
     from divesafe.models import ChatMessage, LLMRequest
+    from divesafe.models.openai_compatible import OpenAICompatibleError, OpenAICompatibleProvider
 
     _Handler.seen = []
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        provider = OllamaProvider("m", f"http://127.0.0.1:{httpd.server_address[1]}")
+        provider = OpenAICompatibleProvider("m", f"http://127.0.0.1:{httpd.server_address[1]}/v1")
         monkeypatch.setattr(lb, "is_loopback", lambda h: False)
         request = LLMRequest(messages=(ChatMessage(role="user", content="SECRET-PROMPT"),))
-        with pytest.raises(OllamaError, match="not on this machine"):
+        with pytest.raises(OpenAICompatibleError, match="not on this machine"):
             asyncio.run(provider.complete(request))
         assert _Handler.seen == []
     finally:
@@ -90,19 +92,6 @@ def _fail_the_peer_check(monkeypatch: pytest.MonkeyPatch) -> None:
         raise lb.NotOnThisMachineError
 
     monkeypatch.setattr(lb.LoopbackSecureConnection, "connect", refuse)
-
-
-def test_a_loopback_https_url_goes_through_the_peer_check_in_ollama(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    from divesafe.models import ChatMessage, LLMRequest
-
-    _fail_the_peer_check(monkeypatch)
-    request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
-    with pytest.raises(OllamaError, match="not on this machine"):
-        asyncio.run(OllamaProvider("m", "https://127.0.0.1:1").complete(request))
 
 
 def test_a_loopback_https_url_goes_through_the_peer_check_in_the_compatible_adapter(
@@ -151,30 +140,3 @@ def test_a_scoped_ipv6_peer_is_judged_without_its_scope() -> None:
     conn.sock = sock
     lb._require_loopback_peer(conn)
     sock.close()
-
-
-def test_ollama_verifies_certificates_for_loopback_and_remote_https(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-    import ssl
-
-    from divesafe.models import ChatMessage, LLMRequest
-    from divesafe.models import ollama as mod
-
-    seen: list[ssl.SSLContext] = []
-    real_build = mod.urllib.request.build_opener
-
-    def recording(*handlers: Any) -> Any:
-        seen.extend(h._context for h in handlers if hasattr(h, "_context"))
-        return real_build(*handlers)
-
-    monkeypatch.setattr(mod.urllib.request, "build_opener", recording)
-    request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
-    for url in ("https://127.0.0.1:1", "https://ollama.invalid"):
-        seen.clear()
-        with pytest.raises(OllamaError):
-            listed = frozenset({"ollama.invalid"})
-            asyncio.run(OllamaProvider("m", url, allowed_hosts=listed).complete(request))
-        assert seen
-        assert all(c.verify_mode == ssl.CERT_REQUIRED and c.check_hostname for c in seen)

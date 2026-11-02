@@ -195,9 +195,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
   No request-size or per-client rate limits beyond the provider-limit guard.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
-  egress flag exist (ADR 0007). An Ollama adapter and an offline-tested evaluation harness exist
-  (ADR 0016) and an OpenAI-compatible one (ADR 0018). Small live runs on a synthetic set have been
-  made (Ollama, `qwen3.5:9b`; and `claude-sonnet-5-5` through the OpenAI-compatible adapter, see
+  egress flag exist (ADR 0007). An offline-tested evaluation harness (ADR 0016) and an OpenAI-compatible
+  adapter (ADR 0018) exist; the Ollama adapter was removed (ADR 0016 amendment). Small live runs on
+  a synthetic set were made (Ollama `qwen3.5:9b` before its removal; and `claude-sonnet-5-5` through the OpenAI-compatible adapter, see
   evaluation-strategy.md); vendor-specific OpenAI and Anthropic adapters are not built, and
   real-model behaviour is largely unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
 - **Contradiction detection** (see [risk-model.md](risk-model.md)).

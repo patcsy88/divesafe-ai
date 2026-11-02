@@ -110,7 +110,7 @@ def test_dev_mode_grants_every_role_and_api_key_mode_only_the_configured_ones() 
 
 def test_dev_mode_is_refused_in_production() -> None:
     with pytest.raises(ValueError):
-        Settings(environment="production", auth_mode="dev", llm_provider="ollama")
+        Settings(environment="production", auth_mode="dev", llm_provider="openai_compatible")
 
 
 @pytest.mark.parametrize(

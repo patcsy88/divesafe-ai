@@ -400,21 +400,13 @@ def test_more_than_the_line_cap_of_harmless_lines_is_refused() -> None:
         join_sse(body)
 
 
-def test_the_output_token_cap_comes_from_settings_for_both_adapters() -> None:
-    from divesafe.models.ollama import OllamaProvider
-
+def test_the_output_token_cap_comes_from_settings() -> None:
     s = _settings(llm_base_url="http://localhost:8000/v1", llm_max_output_tokens=4000)
     assert create_provider(s).max_output_tokens == 4000  # type: ignore[attr-defined]
     assert _settings(llm_base_url="http://localhost:8000/v1").llm_max_output_tokens == 1500
-    assert (
-        OllamaProvider("m", "http://localhost:11434", max_output_tokens=3000).max_output_tokens
-        == 3000
-    )
     for bad in (0, -1, 8001, True, 1.5):
         with pytest.raises(ValueError):
             OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=bad)  # type: ignore[arg-type]
-        with pytest.raises(ValueError):
-            OllamaProvider("m", "http://localhost:11434", max_output_tokens=bad)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("bad", [0, 255, 8001])
@@ -423,22 +415,18 @@ def test_the_settings_bound_the_output_token_cap(bad: int) -> None:
         Settings(llm_max_output_tokens=bad)
 
 
-def test_a_closed_provider_refuses_new_calls_for_both_adapters() -> None:
+def test_a_closed_provider_refuses_new_calls() -> None:
     import asyncio
 
     from divesafe.models import ChatMessage, LLMRequest
-    from divesafe.models.ollama import OllamaError, OllamaProvider
     from divesafe.models.openai_compatible import OpenAICompatibleError
 
     request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
-    for provider, error in (
-        (OpenAICompatibleProvider("m", "http://localhost:8000/v1"), OpenAICompatibleError),
-        (OllamaProvider("m", "http://localhost:11434"), OllamaError),
-    ):
-        provider.close()
-        with pytest.raises(error, match="closed"):
-            asyncio.run(provider.complete(request))
-        provider.close()  # closing twice is harmless
+    provider = OpenAICompatibleProvider("m", "http://localhost:8000/v1")
+    provider.close()
+    with pytest.raises(OpenAICompatibleError, match="closed"):
+        asyncio.run(provider.complete(request))
+    provider.close()  # closing twice is harmless
 
 
 def test_close_shuts_the_executor_and_cancels_a_queued_call() -> None:

@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
 
 from divesafe.models.egress import EgressBasis
-from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 pytestmark = pytest.mark.safety
@@ -31,12 +30,6 @@ FIXED_REFUSAL = "egress refused: the LLM server is not declared"
 def test_an_undeclared_loopback_server_is_skipped() -> None:
     with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_loopback(), allow_external=False, server_is_local=False)
-    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
-        egress_gate(
-            OllamaProvider("m", "http://localhost:11434"),
-            allow_external=False,
-            server_is_local=False,
-        )
 
 
 def test_a_declared_or_opted_in_loopback_server_runs_and_reports_why() -> None:
