@@ -1670,3 +1670,10 @@ Still open for the owner (gating shipping: the withdrawal log's location and the
 re-acknowledgement of decision 11; the `hash_checked` answer is no longer open): the licence and `display_permitted` evidence for each source,
 where the private approval record lives, and whether production should refuse to start when the
 knowledge connector is not configured once a corpus exists.
+
+**Owner decision (2026-11-03): the `_fold` id-screen gaps are accepted.** The 9 strict xfails in
+`tests/safety/test_kb_screen.py` stay as recorded gaps: punctuation between the letters of `kb:`
+and a connector prefix that is dropped, spaced with punctuation or percent-encoded are not
+recognised. Stripping punctuation would flag ordinary prose, and decision 9 makes the id screen a
+screen, not a control. Citations are still checked against real evidence ids and retrieved text
+stays untrusted and delimited. Revisit if Retrieve is widened or the screen is promoted to a control.

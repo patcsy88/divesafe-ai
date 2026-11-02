@@ -173,8 +173,12 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Ruleset loader:** `build_engine` (`api/state.py`) refuses a ruleset with VALIDATED definitions
   at start-up unless `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP=true`, while the evidence-id conflict
   decision above is open. Remove the guard when that decision is made.
-- **`kb_screen` id-screen gaps:** 9 strict xfails in `tests/safety/test_kb_screen.py` (`_fold`
-  bypasses) must be closed or accepted before Retrieve puts knowledge into prompts.
+- **`kb_screen` id-screen gaps (accepted by the owner, 2026-11-03):** 9 strict xfails in
+  `tests/safety/test_kb_screen.py` (`_fold` bypasses: punctuation inside `kb:` and a connector
+  prefix dropped, spaced or percent-encoded). The id screen is a screen, not a control
+  (ADR 0022 decision 9). Closing it would flag ordinary prose ("Dock B:" folds to `kb:`), so the
+  gap stays; the xfails stay strict so closing it later turns them red. Retrieved text remains
+  untrusted and delimited, and citations are checked against real evidence ids.
 - **ADR 0025 is still proposed** although the graph, Supervise and trace are built; it needs
   risk-reviewer and security-reviewer acceptance.
 - **Evaluation citation metric:** `_citations_valid` (`tests/evaluation/ablation.py`) skips
