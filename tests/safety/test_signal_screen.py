@@ -153,3 +153,15 @@ def test_the_screen_stays_linear_on_adversarial_input() -> None:
     ]
     for text in hostile:
         mark_flagged((text * 20,))
+
+
+def test_a_record_names_the_screen_version_that_marked_it() -> None:
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.agents.signal_screen import SCREEN_TOKEN, SCREEN_VERSION
+
+    record = run_pipeline(fake())
+    assert record.model_version is not None
+    assert f"; signal_screen={SCREEN_VERSION}" == SCREEN_TOKEN
+    assert record.model_version.endswith(SCREEN_TOKEN)
+    assert run_pipeline(None).model_version is None

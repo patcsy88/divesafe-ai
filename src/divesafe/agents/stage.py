@@ -22,6 +22,7 @@ from divesafe.agents.cross_examination import CrossOutcome, run_cross_examinatio
 from divesafe.agents.prompts import PROMPT_VERSION
 from divesafe.agents.risk_agent import propose
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, stage_timeout
+from divesafe.agents.signal_screen import SCREEN_TOKEN
 from divesafe.agents.specialists import SPECIALISTS, run_specialist
 from divesafe.agents.tot import evaluate_scenarios_with_outcomes
 from divesafe.domain import (
@@ -229,7 +230,7 @@ async def run_agent_stage(
     tasks: list[TaskOutcome] = []
     cross_out: list[Finding] = []
     cross_outcomes: list[CrossOutcome] = []
-    version = f"{provider.name}/{provider.model}; prompts={PROMPT_VERSION}"
+    version = f"{provider.name}/{provider.model}; prompts={PROMPT_VERSION}{SCREEN_TOKEN}"
 
     # Off: the outer deadline is today's stage timeout, exactly. On with a budget: the outer
     # deadline is that budget (ADR 0025 item 5) and is the only bound on round two. Each round-two

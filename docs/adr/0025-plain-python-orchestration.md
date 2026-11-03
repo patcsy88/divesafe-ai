@@ -360,8 +360,8 @@ made with the current prompts.
   (summaries, risk factors, explanation) is not screened, and risk factors are not shown on the
   page. Real evidence ids (from the call's allowed ids) are not flagged as id lookalikes; an
   invented id or `time:0900` is. Hidden characters are removed on display; the stored text keeps
-  them. Gaps: the record does not say which screen version marked it (records before 2026-11-03
-  are unscreened; the page says so), the flag lives in the text rather than in a field, and a NUL
+  them. `model_version` carries `signal_screen=<n>` (`SCREEN_VERSION`; raise it when the rules change);
+  records without it were never screened and the page says so. Gaps: the flag lives in the text rather than in a field, and a NUL
   character in a signal makes the record unstorable (422, fails closed, not repaired).
   `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
   round two), the prefix rule and the screen itself.

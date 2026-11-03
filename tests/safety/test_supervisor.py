@@ -25,6 +25,7 @@ from pydantic import ValidationError, model_validator
 from tests.agent import scripted_llm as sl
 
 from divesafe.agents import PROMPT_VERSION
+from divesafe.agents.signal_screen import SCREEN_TOKEN
 from divesafe.api.schemas import AssessmentView
 from divesafe.domain import (
     INVARIANT_CHECKS,
@@ -443,7 +444,7 @@ def test_the_scripted_run_passes_all_five_checks_with_no_tightening() -> None:
     assert verdict.failed == ()
     assert verdict.tightened_to is None
     assert not any(r.rule_id.startswith("supervisor.") for r in record.rule_results)
-    assert record.model_version == PINNED
+    assert record.model_version == PINNED + SCREEN_TOKEN
 
 
 def test_a_run_without_a_provider_passes_all_five_checks() -> None:

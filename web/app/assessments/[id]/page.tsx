@@ -272,6 +272,10 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             FLAGGED. It misses wording, and records made before 2026-11-03 were not screened. An
             unmarked line has not been checked or endorsed. None of it changes the result; you
             decide on safety.
+          
+            {r.model_version?.includes("; signal_screen=")
+              ? " This record was made with the wording screen."
+              : " This record was made before the wording screen existed and was not screened."}
           </p>
           <ul>
             {r.findings.flatMap((f, i) =>

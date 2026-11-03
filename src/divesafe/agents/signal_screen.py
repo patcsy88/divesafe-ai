@@ -15,6 +15,10 @@ from __future__ import annotations
 import re
 import unicodedata
 
+# Recorded in `model_version` ("signal_screen=<n>") so a record shows which screen marked it.
+# Raise it when the rules change; records without the token were never screened.
+SCREEN_VERSION = 1
+SCREEN_TOKEN = f"; signal_screen={SCREEN_VERSION}"
 FLAG_PREFIX = "[FLAGGED WORDING - read with care] "
 
 _PHRASES = re.compile(

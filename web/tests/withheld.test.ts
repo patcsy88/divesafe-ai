@@ -129,6 +129,8 @@ test("the decision page lists model-written conflicting signals as plain text un
   assert.match(src, /records made before 2026-11-03 were not screened/);
   assert.match(src, /has not been checked or endorsed/);
   assert.match(src, /\(second round\)/);
+  assert.match(src, /was not screened/);
+  assert.match(src, /; signal_screen=/);
   assert.match(src, /plain\(c\)/);
   assert.match(src, /r\.cross_examination_findings/);
 });

@@ -46,6 +46,7 @@ export interface AssessmentRecord {
   explanation: string;
   agent_issues: string[];
   ruleset_version: string;
+  model_version: string | null;
   created_by: string | null;
   assigned_decider: string | null;
   actual_conditions: {
