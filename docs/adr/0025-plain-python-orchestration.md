@@ -314,8 +314,8 @@ made with the current prompts.
   verdict is the inspectable form. A failure both would refuse is still a 500 with nothing stored.
 - `Retrieve` is a placeholder; the real stage lands with RAG stage 1 (ADR 0022) and must keep
   the "context only" rule.
-- Supervise does not re-run its invariant checks after the second `reconcile`; the
-  `AssessmentRecord` validator covers that case.
+- Supervise's invariant checks now also run on the second `reconcile` (fixed 2026-11-03, see
+  below); the `AssessmentRecord` validator remains a further check.
 - The web "Rules alone" label (`web/app/assessments/[id]/page.tsx`) is renamed in the deferred
   web step unless done earlier; the API note already says "Deterministic checks".
 - The stage trace records when a stage ran and what it used, not why a model said what it said;
@@ -353,3 +353,9 @@ made with the current prompts.
 - The two item 6 fixtures show that a hosted model sat behind a loopback proxy
   (`model_version`, `egress_basis`); no host, port, URL or key. The fixtures README lacks licence
   notes for the bundled Open-Meteo, MET Malaysia and data.gov.my payloads.
+- The second `reconcile` after a tightening is re-checked (2026-11-03): the pipeline calls
+  `check_invariants` on it, so the stored reconciliation is the one that was checked
+  (`tests/safety/test_supervisor.py`, mutation-checked). The tighten-only check still accepts a
+  final stricter than `most_severe(rules, proposal)`; that fails closed at the record validator.
+- The OpenAI-compatible stream parser refuses an event with a repeated key (`bad_event_json`;
+  `tests/unit/test_openai_compatible_adapter.py`, marked `safety`, mutation-checked).

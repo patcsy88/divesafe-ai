@@ -501,6 +501,28 @@ def test_non_json_data_is_labelled_bad_event_json() -> None:
     assert _reason_of(raw) == "bad_event_json"
 
 
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "event",
+    [
+        # The last `finish_reason` would win and hide a token-limit stop.
+        '{"choices": [{"index": 0, "delta": {"content": "hi"},'
+        ' "finish_reason": "length", "finish_reason": "stop"}]}',
+        # The first `content` would be silently dropped.
+        '{"choices": [{"index": 0, "delta": {"content": "a", "content": "b"}}]}',
+        '{"choices": [], "choices": [{"index": 0, "delta": {"content": "x"}}]}',
+    ],
+)
+def test_an_event_that_repeats_a_key_is_labelled_bad_event_json(event: str) -> None:
+    from divesafe.models.openai_compatible import OpenAICompatibleError
+
+    raw = f"data: {event}\n\ndata: [DONE]\n\n".encode()
+    assert _reason_of(raw) == "bad_event_json"
+    with pytest.raises(OpenAICompatibleError) as caught:
+        join_sse(raw)
+    assert event not in str(caught.value)
+
+
 def test_a_tool_call_delta_is_labelled_tool_or_refusal() -> None:
     chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"id": "t"}]}}]}
     raw = f"data: {json.dumps(chunk)}\n\n".encode() + _event(None, "stop").encode()

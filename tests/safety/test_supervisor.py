@@ -972,3 +972,39 @@ def test_empty_rule_results_agree_with_a_fail_closed_reconcile() -> None:
     """No rule results means INSUFFICIENT EVIDENCE, the same as the pipeline computes."""
     reconciled = reconcile(R.INSUFFICIENT_EVIDENCE, None)
     assert set(INVARIANT_CHECKS) <= set(run_checks(reconciled=reconciled, rule_results=()).passed)
+
+
+def test_the_reconcile_after_a_tightening_is_checked_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first `reconcile` is honest and a check fails; the second one (run after the
+    tightening) relaxes the result. The stored reconciliation must be the checked one."""
+    calls: list[int] = []
+
+    def second_call_relaxes(deterministic: R, proposed: R | None) -> Reconciliation:
+        calls.append(1)
+        if len(calls) == 1:
+            return reconcile(deterministic, proposed)
+        return Reconciliation(R.GO, R.GO, proposed, False)
+
+    original = pipeline_module.STAGE_WORK[pipeline_module.StageName.REASON]
+
+    async def unpinned(run: Any) -> Any:
+        outcome = await original(run)
+        run.model_version = "fake/fake-model"  # no prompt pin: a tightening check fails
+        return outcome
+
+    gate_ran: list[bool] = []
+    original_gate = pipeline_module.STAGE_WORK[pipeline_module.StageName.GATE]
+
+    async def gate(run: Any) -> Any:
+        gate_ran.append(True)
+        return await original_gate(run)
+
+    monkeypatch.setitem(pipeline_module.STAGE_WORK, pipeline_module.StageName.REASON, unpinned)
+    monkeypatch.setitem(pipeline_module.STAGE_WORK, pipeline_module.StageName.GATE, gate)
+    monkeypatch.setattr(pipeline_module, "reconcile", second_call_relaxes)
+    with pytest.raises(SupervisorInvariantError):
+        sl.run_pipeline(sl.fake(recommendation="CAUTION"), warnings=[], with_warning_rule=False)
+    assert len(calls) >= 2
+    assert gate_ran == []  # nothing was recorded

@@ -108,6 +108,13 @@ def failure_reason(exc: BaseException) -> str:
     return "unclassified"
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """An event that repeats a key is ambiguous (the last `finish_reason` would win)."""
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
 def _refuse(reason: str) -> OpenAICompatibleError:
     """A fresh refusal with the fixed shape message and the given label."""
     return OpenAICompatibleError("the model response was not in the expected shape", reason=reason)
@@ -224,7 +231,7 @@ def join_sse(raw: bytes) -> str:
             done = True
             continue
         try:
-            event = json.loads(payload)
+            event = json.loads(payload, object_pairs_hook=_no_duplicate_keys)
         except (ValueError, RecursionError):
             raise _refuse("bad_event_json") from None
         if not isinstance(event, dict):

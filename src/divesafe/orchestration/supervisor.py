@@ -88,6 +88,19 @@ def _tighten_only(
     return reconciled.llm_attempted_downgrade == expected_downgrade
 
 
+def check_invariants(
+    reconciled: Reconciliation, rule_results: Iterable[RuleResult], proposed: Recommendation | None
+) -> None:
+    """Raise `SupervisorInvariantError` unless `reconciled` is a tighten-only, severity-ordered
+    result of the given rule results and proposal. The pipeline calls it again after a
+    tightening, so the stored reconciliation is the one that was checked."""
+    rule_outcomes = tuple(r.outcome for r in rule_results)
+    if not _tighten_only(reconciled, rule_outcomes, proposed):
+        raise SupervisorInvariantError()
+    if severity(reconciled.final) < severity(most_severe(rule_outcomes)):
+        raise SupervisorInvariantError()
+
+
 def supervise(
     *,
     reconciled: Reconciliation,
@@ -107,15 +120,9 @@ def supervise(
     `evidence_ids` are the ids of the evaluated evidence only (withheld items are not citable).
     `missing_required_categories` are the policy's required categories with no evidence item.
     """
-    rule_outcomes = tuple(r.outcome for r in rule_results)
-    results: dict[SupervisorCheck, bool] = {
-        SupervisorCheck.RECONCILE_TIGHTEN_ONLY: _tighten_only(reconciled, rule_outcomes, proposed),
-        SupervisorCheck.SEVERITY_MONOTONIC: (
-            severity(reconciled.final) >= severity(most_severe(rule_outcomes))
-        ),
-    }
-    if any(not results[check] for check in INVARIANT_CHECKS):
-        raise SupervisorInvariantError()
+    rule_results = tuple(rule_results)
+    check_invariants(reconciled, rule_results, proposed)
+    results: dict[SupervisorCheck, bool] = {check: True for check in INVARIANT_CHECKS}
 
     known = set(evidence_ids)
     cited = set(proposal_evidence_ids) | set(finding_evidence_ids) | set(scenario_evidence_ids)

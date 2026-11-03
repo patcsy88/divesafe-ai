@@ -97,3 +97,24 @@ def test_a_fenced_reply_with_a_repeated_key_is_refused() -> None:
         _call('```json\n{"agent": "a", "agent": "b", "summary": "s", "no_evidence": true}\n```')
     assert caught.value.kind == "rejected"
     assert caught.value.label == "schema"
+
+
+def test_a_risk_proposal_that_repeats_the_recommendation_is_refused() -> None:
+    from divesafe.agents.schemas import ProposalOutput
+
+    text = (
+        '{"recommendation": "NO-GO", "rationale": "r", "evidence_ids": ["e"],'
+        ' "recommendation": "GO"}'
+    )
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(
+            call_structured(
+                _Reply(text),  # type: ignore[arg-type]
+                task="t",
+                user_message="x",
+                output=ProposalOutput,
+                allowed_ids=frozenset({"e"}),
+            )
+        )
+    assert caught.value.kind == "rejected"
+    assert caught.value.label == "schema"

@@ -49,7 +49,7 @@ from divesafe.domain import (
 )
 from divesafe.models import LLMProvider
 from divesafe.orchestration.graph import STAGES, next_stage
-from divesafe.orchestration.supervisor import supervise
+from divesafe.orchestration.supervisor import check_invariants, supervise
 from divesafe.risk import Reconciliation, RiskRulesEngine, reconcile
 from divesafe.risk.engine import WINDOW_STARTED_RULE
 from divesafe.services import EvidenceSet, gather_evidence
@@ -312,6 +312,7 @@ async def _supervise(run: _Run) -> StageOutcome:
         run.rule_results.extend(supervision.rule_results)
         run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
         _reconcile(run)
+        check_invariants(run.reconciliation, run.rule_results, run.proposed)
         if run.reconciliation.final is not before:
             tightened_to = run.reconciliation.final
             if _SUPERVISOR_NOTICE not in run.agent_issues:
