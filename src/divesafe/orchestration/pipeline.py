@@ -294,6 +294,8 @@ async def _supervise(run: _Run) -> StageOutcome:
     present = {item.category for item in evidence.items}
     supervision = supervise(
         reconciled=run.reconciliation,
+        rule_results=run.rule_results,
+        proposed=run.proposed,
         proposal_evidence_ids=run.proposal_ids,
         finding_evidence_ids=(
             i for f in (*run.findings, *run.cross_findings) for i in f.evidence_ids

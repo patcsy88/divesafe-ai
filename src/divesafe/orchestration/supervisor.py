@@ -22,6 +22,7 @@ from divesafe.domain import (
     Recommendation,
     RuleResult,
     SupervisorCheck,
+    most_severe,
     severity,
     supervisor_rule_id,
 )
@@ -63,7 +64,17 @@ class Supervision:
     rule_results: tuple[RuleResult, ...]
 
 
-def _tighten_only(reconciled: Reconciliation) -> bool:
+def _tighten_only(
+    reconciled: Reconciliation,
+    rule_outcomes: tuple[Recommendation, ...],
+    proposal: Recommendation | None,
+) -> bool:
+    # The inputs `reconcile` was given are checked against what the pipeline holds, not against
+    # what `reconcile` reports back: a faulty `reconcile` could lower both together.
+    if reconciled.deterministic is not most_severe(rule_outcomes):
+        return False
+    if reconciled.proposed is not proposal:
+        return False
     final, deterministic, proposed = (
         reconciled.final,
         reconciled.deterministic,
@@ -80,6 +91,8 @@ def _tighten_only(reconciled: Reconciliation) -> bool:
 def supervise(
     *,
     reconciled: Reconciliation,
+    rule_results: Iterable[RuleResult],
+    proposed: Recommendation | None,
     proposal_evidence_ids: Iterable[str],
     finding_evidence_ids: Iterable[str],
     scenario_evidence_ids: Iterable[str],
@@ -90,13 +103,15 @@ def supervise(
 ) -> Supervision:
     """Run the five checks. Pure: no I/O, no clock, no model.
 
+    `rule_results` and `proposed` are the pipeline's own values, not `reconcile`'s report of them.
     `evidence_ids` are the ids of the evaluated evidence only (withheld items are not citable).
     `missing_required_categories` are the policy's required categories with no evidence item.
     """
+    rule_outcomes = tuple(r.outcome for r in rule_results)
     results: dict[SupervisorCheck, bool] = {
-        SupervisorCheck.RECONCILE_TIGHTEN_ONLY: _tighten_only(reconciled),
+        SupervisorCheck.RECONCILE_TIGHTEN_ONLY: _tighten_only(reconciled, rule_outcomes, proposed),
         SupervisorCheck.SEVERITY_MONOTONIC: (
-            severity(reconciled.final) >= severity(reconciled.deterministic)
+            severity(reconciled.final) >= severity(most_severe(rule_outcomes))
         ),
     }
     if any(not results[check] for check in INVARIANT_CHECKS):
@@ -115,7 +130,7 @@ def supervise(
 
     passed = tuple(check for check in SupervisorCheck if results[check])
     failed = tuple(check for check in SupervisorCheck if not results[check])
-    rule_results = tuple(
+    added = tuple(
         RuleResult(
             rule_id=supervisor_rule_id(check),
             outcome=Recommendation.INSUFFICIENT_EVIDENCE,
@@ -123,4 +138,4 @@ def supervise(
         )
         for check in failed
     )
-    return Supervision(passed=passed, failed=failed, rule_results=rule_results)
+    return Supervision(passed=passed, failed=failed, rule_results=added)

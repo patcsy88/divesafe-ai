@@ -329,20 +329,20 @@ made with the current prompts.
   authority design bounds that to added caution, as for the first round (ADR 0007).
 - The per-stage issue bound and the `stage_timeout + call_timeout` derivation are proposals for
   the reviewers, not validated limits.
-- Duplicate JSON keys are accepted by the prompt layer: `json.loads` keeps the last value, so a
-  model reply with a repeated key is validated on that value. No test yet. Not owner-approved.
+- Duplicate JSON keys in a model reply are refused (fixed 2026-11-03, owner): `call_structured`
+  parses with a hook that rejects a repeated key, and the call fails with the `schema` label.
+  `tests/safety/test_duplicate_json_keys.py`, mutation-checked.
 - The AST guard that checks the pipeline passes no ablation switch does not cover indirect
   routes: `functools.partial`, `getattr`, `globals`, `sys.modules` or `exec`.
 - The ablation switch patch is a module-global patch and is not safe across threads; run
   ablation single-threaded.
 - Framework claims in the table are unverified vendor documentation; a later ADR that proposes a
   framework must verify them before relying on them.
-- **Supervise's tighten-only check compares `reconcile`'s output with itself** (risk review,
-  2026-11-03). `severity_monotonic` and `reconcile_tighten_only` use the values `reconcile`
-  returns, not the pipeline's own rule results and proposal, so a faulty `reconcile` that also
-  reports a lowered deterministic result passes Supervise. The record validator still refuses it
-  (a 500, nothing stored). Fix: pass `run.rule_results` and `run.proposed` into `supervise`, treat a
-  mismatch as an invariant breach and add mutation tests.
+- **Supervise's tighten-only check (fixed 2026-11-03).** It used to compare `reconcile`'s output
+  with itself (risk review). `supervise` now takes the pipeline's own `rule_results` and
+  `proposed`; `reconciled.deterministic` must equal the most severe rule outcome and
+  `reconciled.proposed` must be the proposal, or the invariant error is raised. Mutation-checked
+  in `tests/safety/test_supervisor.py`.
 - The graph's `produces` for Supervise lists only `supervisor_verdict`, though it also rewrites
   `rule_results`, `deterministic`, the reconciliation and `agent_issues`.
 - A crash in Reason outside the per-task handlers stops the run (fails closed) instead of

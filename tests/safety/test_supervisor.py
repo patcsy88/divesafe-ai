@@ -73,6 +73,12 @@ def run_checks(**overrides: Any) -> Any:
         "missing_required_categories": (),
     }
     arguments.update(overrides)
+    reconciled = arguments["reconciled"]
+    # By default the pipeline's own values agree with what `reconcile` reported.
+    arguments.setdefault(
+        "rule_results", (RuleResult(rule_id="r", outcome=reconciled.deterministic, rationale="x"),)
+    )
+    arguments.setdefault("proposed", reconciled.proposed)
     return supervise(**arguments)
 
 
@@ -639,6 +645,40 @@ def test_a_reconcile_that_mislabels_the_downgrade_flag_raises(
         sl.run_pipeline(sl.fake(recommendation="GO"))
 
 
+def test_a_reconcile_that_lowers_its_own_report_of_the_rules_raises_in_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a comparison with the pipeline's own rule results sees this: `reconcile` reports
+    GO for every field, so it is consistent with itself."""
+    gate_ran: list[bool] = []
+    original_gate = pipeline_module.STAGE_WORK[pipeline_module.StageName.GATE]
+
+    def lowering_reconcile(deterministic: R, proposed: R | None) -> Reconciliation:
+        return Reconciliation(R.GO, R.GO, None, False)
+
+    async def gate(run: Any) -> Any:
+        gate_ran.append(True)
+        return await original_gate(run)
+
+    monkeypatch.setattr(pipeline_module, "reconcile", lowering_reconcile)
+    monkeypatch.setitem(pipeline_module.STAGE_WORK, pipeline_module.StageName.GATE, gate)
+    with pytest.raises(SupervisorInvariantError):
+        sl.run_pipeline(sl.fake(recommendation="NO-GO"))  # rules: INSUFFICIENT EVIDENCE
+    assert gate_ran == []
+
+
+def test_a_reconcile_that_drops_the_proposal_raises_in_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dropping_reconcile(deterministic: R, proposed: R | None) -> Reconciliation:
+        real = reconcile(deterministic, proposed)
+        return Reconciliation(real.final, real.deterministic, None, False)
+
+    monkeypatch.setattr(pipeline_module, "reconcile", dropping_reconcile)
+    with pytest.raises(SupervisorInvariantError):
+        sl.run_pipeline(sl.fake(recommendation="NO-GO"))
+
+
 def test_supervise_is_code_only_and_never_calls_the_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -891,3 +931,44 @@ def test_the_api_outcome_note_lists_several_failed_checks_in_sorted_order() -> N
     ]
     assert positions == sorted(positions)
     assert note.count("A supervisor check failed") == len(TIGHTENING_CHECKS)
+
+
+def test_a_reconcile_that_lowers_the_rules_and_its_report_together_is_caught() -> None:
+    """Rules say NO-GO; a faulty `reconcile` returns GO for all three fields. Checked against
+    itself that looks consistent; checked against the pipeline's own rule results it is a breach."""
+    lowered = Reconciliation(R.GO, R.GO, None, False)
+    with pytest.raises(SupervisorInvariantError):
+        run_checks(
+            reconciled=lowered,
+            rule_results=(RuleResult(rule_id="r", outcome=R.NO_GO, rationale="x"),),
+            proposed=None,
+        )
+
+
+def test_a_reconcile_that_drops_a_stricter_proposal_is_caught() -> None:
+    """Rules say GO, the model proposed NO-GO; `reconcile` reports GO and no proposal."""
+    dropped = Reconciliation(R.GO, R.GO, None, False)
+    with pytest.raises(SupervisorInvariantError):
+        run_checks(
+            reconciled=dropped,
+            rule_results=(RuleResult(rule_id="r", outcome=R.GO, rationale="x"),),
+            proposed=R.NO_GO,
+        )
+
+
+def test_a_reconcile_that_misreports_the_deterministic_result_alone_is_caught() -> None:
+    """The final is right (NO-GO) but `reconcile` reports the rules as GO: only the comparison
+    with the pipeline's own rule results sees it."""
+    misreported = Reconciliation(R.NO_GO, R.GO, None, False)
+    with pytest.raises(SupervisorInvariantError):
+        run_checks(
+            reconciled=misreported,
+            rule_results=(RuleResult(rule_id="r", outcome=R.NO_GO, rationale="x"),),
+            proposed=None,
+        )
+
+
+def test_empty_rule_results_agree_with_a_fail_closed_reconcile() -> None:
+    """No rule results means INSUFFICIENT EVIDENCE, the same as the pipeline computes."""
+    reconciled = reconcile(R.INSUFFICIENT_EVIDENCE, None)
+    assert set(INVARIANT_CHECKS) <= set(run_checks(reconciled=reconciled, rule_results=()).passed)

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -68,7 +67,7 @@ def output_tokens(provider: object) -> int:
     return min(value, MAX_OUTPUT_TOKENS_CEILING)
 
 
-_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+_FENCE = "```"
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -87,10 +86,20 @@ class AgentError(Exception):
         self.label: str = label
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """A reply that repeats a key is ambiguous; it is refused, never resolved to the last value."""
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
 def _json_text(raw: str) -> str:
     text = raw.strip()
-    fenced = _FENCE.match(text)
-    return fenced.group(1) if fenced else text
+    # String handling, not a regex: overlapping whitespace repeats can backtrack for minutes.
+    if len(text) >= 2 * len(_FENCE) and text.startswith(_FENCE) and text.endswith(_FENCE):
+        inner = text[len(_FENCE) : -len(_FENCE)]
+        return inner.removeprefix("json").strip()
+    return text
 
 
 async def call_structured(
@@ -128,13 +137,15 @@ async def call_structured(
     if len(response.text) > MAX_OUTPUT_CHARS:
         raise AgentError(f"{task}: output too long", kind="rejected", label="too_long")
     try:
-        parsed = output.model_validate(json.loads(_json_text(response.text)))
-    except (json.JSONDecodeError, ValidationError, RecursionError) as exc:
+        parsed = output.model_validate(
+            json.loads(_json_text(response.text), object_pairs_hook=_no_duplicate_keys)
+        )
+    except (json.JSONDecodeError, ValueError, ValidationError, RecursionError):
         raise AgentError(
             f"{task}: output rejected (not valid for the schema)",
             kind="rejected",
             label="schema",
-        ) from exc
+        ) from None
 
     cited: tuple[str, ...] = getattr(parsed, "evidence_ids", ())
     unknown = set(cited) - allowed_ids
