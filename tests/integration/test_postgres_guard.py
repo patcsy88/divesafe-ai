@@ -1378,9 +1378,12 @@ def test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_give
     from tests.agent.scripted_llm import fake, run_pipeline
 
     from divesafe.domain import AssessmentRecord
+    from divesafe.orchestration import RunOptions
 
-    pending = run_pipeline(fake()).model_copy(update={"id": "r1"})
-    assert pending.findings and pending.scenarios
+    pending = run_pipeline(fake(), options=RunOptions(cross_examination=True)).model_copy(
+        update={"id": "r1"}
+    )
+    assert pending.findings and pending.scenarios and pending.cross_examination_findings
     repo = _postgres()
     repo.create(pending)
     old = json.loads(pending.model_dump_json())

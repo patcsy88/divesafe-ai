@@ -61,9 +61,11 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
   row's successor and refused by the trigger, so old pending rows would become undecidable. Since
   2026-11-03 the keys listed in `_NESTED_NEW_DEFAULTS` (`flagged_signals` in `findings`,
   `cross_examination_findings` and `scenarios`) are left out for stored items that lack them; any
-  other nested field still needs its own entry. It
-  fails closed (HTTP 409, "the assessment could not be updated; reload it"). A migration or an
-  upcasting plan is needed before any nested field is added. Changing an existing field's default
+  other nested field still needs its own entry
+  (proof: `test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_given_actuals`,
+  run against a real PostgreSQL). Without an entry the update fails closed (HTTP 409, "the
+  assessment could not be updated; reload it"). A migration or an upcasting plan is needed before
+  any further nested field is added. Changing an existing field's default
   silently changes what old rows mean.
 - No connection pool, backups, or replication. An ambiguous commit failure (network drop after the
   server committed) is reported as an error although the write may exist; a retry then conflicts.

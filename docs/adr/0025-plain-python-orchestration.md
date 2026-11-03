@@ -372,7 +372,8 @@ made with the current prompts.
   note per flagged line. It is a nested field, so `PostgresAssessmentRepository.replace` leaves
   the key out of an old row's successor items (`_NESTED_NEW_DEFAULTS`; a real-database test
   proves an old row can still be decided and given actual conditions). Later prompts do not see
-  the field (`agent_view`). Gaps: records made earlier have no field, and a NUL
+  the field (`agent_view`). Gaps: nothing checks that a flagged position's text starts with the prefix (only code sets the
+  field; `FLAG_PREFIX` would have to move into `domain`), records made earlier have no field, and a NUL
   character in a signal makes the record unstorable (422, fails closed, not repaired).
   `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
   round two), the prefix rule and the screen itself.

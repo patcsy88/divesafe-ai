@@ -125,6 +125,41 @@ def real_misses(mod: Any) -> list[str]:
         bad.append("old row, non-default withheld items: dropped")
     if AssessmentRecord.model_validate_json(json.dumps(fn(clean, old))) != clean:
         bad.append("the omitted key does not load as the default")
+    bad += nested_misses(fn)
+    return bad
+
+
+NESTED_LISTS = ("findings", "cross_examination_findings", "scenarios")
+
+
+def nested_misses(fn: Callable[[Any, Any], dict[str, Any]]) -> list[str]:
+    """`flagged_signals` inside stored items (ADR 0012): left out when the stored item lacks it."""
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.orchestration import RunOptions
+
+    record = run_pipeline(fake(), options=RunOptions(cross_examination=True))
+    if not (record.findings and record.scenarios and record.cross_examination_findings):
+        return ["the control record lacks a list the function covers"]
+    bad: list[str] = []
+    full = doc(record)
+    old = json.loads(json.dumps(full))
+    for name in NESTED_LISTS:
+        for item in old[name]:
+            item.pop("flagged_signals")
+    got = fn(record, old)
+    for name in NESTED_LISTS:
+        if any("flagged_signals" in i for i in got[name]):
+            bad.append(f"old items in {name}: the default flagged_signals key was added")
+    if fn(record, full) != full:
+        bad.append("new items: the present flagged_signals key was dropped")
+    mixed = json.loads(json.dumps(old))
+    mixed["findings"][0]["flagged_signals"] = []
+    kept = fn(record, mixed)
+    if "flagged_signals" not in kept["findings"][0]:
+        bad.append("a stored item that has the key lost it")
+    if any("flagged_signals" in i for i in kept["findings"][1:]):
+        bad.append("items without the key gained it in a mixed row")
     return bad
 
 
@@ -157,6 +192,18 @@ WRITE_EDITS = [
             "        if name not in data or field.is_required():\n",
         ),
         id="present-key-dropped",
+    ),
+    pytest.param(
+        ("                del item[key]\n", "                pass\n"), id="nested-not-omitted"
+    ),
+    pytest.param(("and key not in old", "and True"), id="nested-present-key-dropped"),
+    pytest.param(('    "findings": "flagged_signals",\n', ""), id="nested-findings-entry-removed"),
+    pytest.param(
+        ('    "cross_examination_findings": "flagged_signals",\n', ""),
+        id="nested-second-round-entry-removed",
+    ),
+    pytest.param(
+        ('    "scenarios": "flagged_signals",\n', ""), id="nested-scenarios-entry-removed"
     ),
     pytest.param(
         (
@@ -670,22 +717,13 @@ def test_an_old_row_successor_gains_no_nested_flagged_signals_key() -> None:
     (the append-only trigger would refuse the update). Items that have it keep it."""
     from tests.agent.scripted_llm import fake, run_pipeline
 
-    record = run_pipeline(fake())
-    assert record.findings and record.scenarios
-    full = doc(record)
-    old = json.loads(json.dumps(full))
-    for name in ("findings", "cross_examination_findings", "scenarios"):
+    from divesafe.orchestration import RunOptions
+
+    assert nested_misses(_without_new_defaults) == []
+    record = run_pipeline(fake(), options=RunOptions(cross_examination=True))
+    old = doc(record)
+    for name in NESTED_LISTS:
         for item in old[name]:
             item.pop("flagged_signals")
     intended = _without_new_defaults(record, old)
-    for name in ("findings", "cross_examination_findings", "scenarios"):
-        assert all("flagged_signals" not in i for i in intended[name])
     assert AssessmentRecord.model_validate_json(json.dumps(intended)) == record
-    # a row that already has the key keeps it
-    assert _without_new_defaults(record, full) == full
-    # one item with the key and others without: only the missing ones are left out
-    mixed = json.loads(json.dumps(old))
-    mixed["findings"][0]["flagged_signals"] = []
-    kept = _without_new_defaults(record, mixed)
-    assert "flagged_signals" in kept["findings"][0]
-    assert all("flagged_signals" not in i for i in kept["findings"][1:])
