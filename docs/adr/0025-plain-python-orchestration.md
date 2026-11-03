@@ -1,8 +1,8 @@
 # ADR 0025: Plain-Python orchestration with an explicit stage graph
 
-- Status: PROPOSED (2026-10-26). Needs `risk-reviewer` and `security-reviewer` (it touches
-  `orchestration`, `agents`, `domain` and `tests/safety`). Owner decision recorded after a review
-  of a CrewAI proposal. Items 2 to 6 are the build order; item 2 is built (see its note).
+- Status: ACCEPTED (owner, 2026-11-03). Proposed 2026-10-26 after a review of a CrewAI proposal.
+  `risk-reviewer` and `security-reviewer` reviewed the built code on 2026-11-03 and found no
+  blockers; their remaining findings are in Known gaps. Items 2 to 6 are built.
 - Builds on ADR 0001 (hierarchy), 0007 (agent stage), 0011 (line 28: "LangGraph is not adopted"),
   0012 (old-row rule), 0016/0018 (adapters, evaluation), 0022 (RAG), 0023 (egress), 0024 (compose
   pins).
@@ -111,7 +111,7 @@ reviews before the next:
   notice is its own fixed text ("the supervisor tightened the result after the agent stage;
   agent output reflects the earlier result"), added once. The "Rules alone:" label became "Deterministic checks:". No migration:
   `supervisor_verdict` is a top-level defaulted key, which `replace()` omits for old rows
-  (ADR 0012). The field is stored but not exposed on the API view (owner decision). The one
+  (ADR 0012). The field is stored and inherited by the API record view as enum names and a recommendation only, with no dedicated view (owner decision). The one
   existing test that pins the old label (`test_llm_forced_severity_is_attributed_not_presented_as_a_rule_result`)
   is the test-engineer's to update.
 
@@ -337,3 +337,19 @@ made with the current prompts.
   ablation single-threaded.
 - Framework claims in the table are unverified vendor documentation; a later ADR that proposes a
   framework must verify them before relying on them.
+- **Supervise's tighten-only check compares `reconcile`'s output with itself** (risk review,
+  2026-11-03). `severity_monotonic` and `reconcile_tighten_only` use the values `reconcile`
+  returns, not the pipeline's own rule results and proposal, so a faulty `reconcile` that also
+  reports a lowered deterministic result passes Supervise. The record validator still refuses it
+  (a 500, nothing stored). Fix: pass `run.rule_results` and `run.proposed` into `supervise`, treat a
+  mismatch as an invariant breach and add mutation tests.
+- The graph's `produces` for Supervise lists only `supervisor_verdict`, though it also rewrites
+  `rule_results`, `deterministic`, the reconciliation and `agent_issues`.
+- A crash in Reason outside the per-task handlers stops the run (fails closed) instead of
+  degrading to "no proposal".
+- Nothing tests that routing ignores the trace (authority-map row).
+- `conflicting_signals` is unscreened model text shown to the human: needs a wording screen or an
+  owner decision before cross-examination is switched on in production.
+- The two item 6 fixtures show that a hosted model sat behind a loopback proxy
+  (`model_version`, `egress_basis`); no host, port, URL or key. The fixtures README lacks licence
+  notes for the bundled Open-Meteo, MET Malaysia and data.gov.my payloads.

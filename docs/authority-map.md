@@ -26,6 +26,6 @@ exist. "no test yet" means no test proves the row today; it is a known gap, not 
 
 - A lower layer may keep or tighten a higher layer's result, never relax it (AGENTS.md section 5).
 - "May write" names the only component allowed to produce that value; a second writer is a defect.
-- ADR 0025 is still `proposed`. This table follows the code as of the `rag-stage-1` branch.
+- ADR 0025 is accepted (2026-11-03). This table follows the code as of the `rag-stage-1` branch.
 - A new row needs a test that fails when the boundary is crossed (AGENTS.md section 4), not only a
   happy-path test.

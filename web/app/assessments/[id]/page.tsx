@@ -97,7 +97,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <p>{plain(view.outcome_note)}</p>
         {view.agent_note && <p>{plain(view.agent_note)}</p>}
         <dl>
-          <dt>Rules alone</dt>
+          <dt>Deterministic checks</dt>
           <dd>{labelFor(r.deterministic_recommendation)}</dd>
           {r.proposed_recommendation && (
             <>
@@ -151,7 +151,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <DecisionForm
             id={r.id}
             system={r.final_recommendation}
-            context={`Rules alone: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
+            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
           />
         </>
       )}
