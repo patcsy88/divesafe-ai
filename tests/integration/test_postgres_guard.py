@@ -1370,3 +1370,51 @@ def test_a_successor_that_changes_another_field_is_still_refused_on_a_new_shape_
     with pytest.raises(InvalidSuccessorError):
         repo.replace(record, changed)  # emptying withheld_evidence is a change, not a default
     assert repo.get("r1") == record
+
+
+def test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_given_actuals() -> None:
+    """ADR 0012 "not solved" case: a nested defaulted field. Old items lack `flagged_signals`.
+    The record must really hold findings and scenarios, or the test proves nothing."""
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.domain import AssessmentRecord
+
+    pending = run_pipeline(fake()).model_copy(update={"id": "r1"})
+    assert pending.findings and pending.scenarios
+    repo = _postgres()
+    repo.create(pending)
+    old = json.loads(pending.model_dump_json())
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        for item in old[name]:
+            item.pop("flagged_signals")
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    from datetime import timedelta
+
+    from divesafe.domain import ActualConditions, HumanDecision
+
+    decision = HumanDecision(
+        decided_by="alice",
+        decision=pending.final_recommendation,
+        decided_at=pending.created_at + timedelta(minutes=5),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "human_decision": decision.model_dump()}
+    )
+    repo.replace(pending, decided)
+    actual = ActualConditions(
+        reported_at=pending.created_at + timedelta(hours=2),
+        reported_by="a",
+        observations={"v": 1},
+    )
+    done = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+    repo.replace(decided, done)
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert stored["findings"] and stored["scenarios"]
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        assert all("flagged_signals" not in i for i in stored[name])
+    assert repo.get("r1") == done

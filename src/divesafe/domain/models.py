@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StrictInt, StringConstraints, model_validator
 
 from divesafe.domain.base import Frozen as _Frozen
 from divesafe.domain.provenance import (
@@ -181,7 +181,7 @@ class Scenario(_Frozen):
     evidence_ids: tuple[str, ...] = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
-    flagged_signals: tuple[int, ...] = Field(
+    flagged_signals: tuple[StrictInt, ...] = Field(
         default=(),
         description="Positions in conflicting_signals the code's wording screen flagged.",
     )
@@ -207,7 +207,7 @@ class Finding(_Frozen):
     summary: str = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
-    flagged_signals: tuple[int, ...] = Field(
+    flagged_signals: tuple[StrictInt, ...] = Field(
         default=(),
         description="Positions in conflicting_signals the code's wording screen flagged.",
     )

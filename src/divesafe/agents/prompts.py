@@ -123,9 +123,14 @@ def evidence_payload(items: Sequence[EvidenceItem]) -> list[dict[str, Any]]:
 
 def agent_view(items: Sequence[Any]) -> list[dict[str, Any]]:
     """Findings or scenarios for a later prompt, without the uncalibrated self-confidence so a
-    model does not anchor on another model's number."""
+    model does not anchor on another model's number, and without the code-set wording flags."""
     return [
-        {k: v for k, v in i.model_dump(mode="json").items() if k != "confidence"} for i in items
+        {
+            k: v
+            for k, v in i.model_dump(mode="json").items()
+            if k != "confidence" and k != "flagged_signals"
+        }
+        for i in items
     ]
 
 

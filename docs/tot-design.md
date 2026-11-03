@@ -23,7 +23,8 @@ visible to the human. It is a structured comparison tool, **not** a safety deter
 Input: validated `EvidenceItem`s, forecast uncertainty and data freshness, and agent
 findings. Output per scenario (`divesafe.domain.Scenario`):
 
-- `summary` (short), `evidence_ids`, `risk_factors`, `conflicting_signals`, `confidence`.
+- `summary` (short), `evidence_ids`, `risk_factors`, `conflicting_signals`, `confidence`. The code (never the model) also sets
+  `flagged_signals`, the positions of lines its wording screen flagged (ADR 0025).
 
 Only these concise summaries and references are stored or shown. The model's private
 reasoning trace is not requested, stored or exposed.

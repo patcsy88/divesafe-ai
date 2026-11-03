@@ -57,8 +57,11 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
   the loaded model. Verified live on PostgreSQL 17: an old-shape row was decided, then actual
   conditions were reported, and no new key was written. ADR 0015's "never disable the triggers"
   still holds.
-- **Not solved (replace):** a defaulted field added *inside a nested value* is written into an old
-  row's successor and refused by the trigger, so old pending rows would become undecidable. It
+- **Partly solved (replace):** a defaulted field added *inside a nested value* is written into an old
+  row's successor and refused by the trigger, so old pending rows would become undecidable. Since
+  2026-11-03 the keys listed in `_NESTED_NEW_DEFAULTS` (`flagged_signals` in `findings`,
+  `cross_examination_findings` and `scenarios`) are left out for stored items that lack them; any
+  other nested field still needs its own entry. It
   fails closed (HTTP 409, "the assessment could not be updated; reload it"). A migration or an
   upcasting plan is needed before any nested field is added. Changing an existing field's default
   silently changes what old rows mean.

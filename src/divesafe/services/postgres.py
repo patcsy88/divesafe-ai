@@ -261,16 +261,45 @@ def _same(a: Any, b: Any) -> bool:
     return bool(a == b)
 
 
+# Defaulted keys added inside the items of a top-level list (ADR 0012: each needs its own plan).
+_NESTED_NEW_DEFAULTS = {
+    "findings": "flagged_signals",
+    "cross_examination_findings": "flagged_signals",
+    "scenarios": "flagged_signals",
+}
+
+
+def _without_new_nested_defaults(data: dict[str, Any], stored: dict[str, Any]) -> None:
+    """For the lists above: when a stored item lacks the key and the successor holds the empty
+    default, leave the key out so the append-only trigger sees the item unchanged."""
+    for name, key in _NESTED_NEW_DEFAULTS.items():
+        old_items, new_items = stored.get(name), data.get(name)
+        if not isinstance(old_items, list) or not isinstance(new_items, list):
+            continue
+        if len(old_items) != len(new_items):
+            continue
+        for old, item in zip(old_items, new_items, strict=True):
+            if (
+                isinstance(old, dict)
+                and isinstance(item, dict)
+                and key not in old
+                and _same(item.get(key), [])
+            ):
+                del item[key]
+
+
 def _without_new_defaults(new: AssessmentRecord, stored: Any) -> dict[str, Any]:
     """The successor's JSON, minus top-level keys the stored row does not have whose value is the
     model default. A row written before a field existed lacks its key, and the append-only
     trigger refuses any other change to the record, so adding the default key would refuse every
-    update. Keys present in the stored row are always kept. Only TOP-LEVEL keys are handled:
-    defaults nested inside other values are not (a nested field added later needs its own plan).
+    update. Keys present in the stored row are always kept. Top-level keys are handled
+    generally; nested ones only for the lists in `_NESTED_NEW_DEFAULTS` (a nested field added later
+    needs its own entry).
     The omitted key still loads as the same default, which the read-back checks."""
     data: dict[str, Any] = json.loads(new.model_dump_json())
     if not isinstance(stored, dict):
         return data
+    _without_new_nested_defaults(data, stored)
     for name, field in AssessmentRecord.model_fields.items():
         if name in stored or name not in data or field.is_required():
             continue

@@ -117,8 +117,9 @@ reviews before the next:
 
 **3. A2 stage trace on the record.** `AssessmentRecord.stages: tuple[StageTrace, ...] = ()`, a
 new top-level field with a default, which ADR 0012's `replace()` rule permits for old rows.
-**No nested field is added**: `Finding`, `Scenario`, `RuleResult` and `EvidenceItem` are
-unchanged. `StageTrace` holds `name` and `next_stage` (from the fixed stage-name list),
+**No nested field was added by this item**: `Finding`, `Scenario`, `RuleResult` and `EvidenceItem`
+were unchanged. (Later, 2026-11-03, `flagged_signals` was added inside `Finding` and `Scenario`;
+see Known gaps and ADR 0012.) `StageTrace` holds `name` and `next_stage` (from the fixed stage-name list),
 `started_at`, `finished_at`, `evidence_ids`, `outcome` (fixed enum: `completed`, `skipped`,
 `timed_out`, `failed`, `not_configured`) and `issues`. Rules:
 - `issues` are codes from one fixed enumerated list, each formed from stage name, connector or
@@ -368,7 +369,10 @@ made with the current prompts.
   records without it were never screened and the page says so. Owner decision 2026-11-03: the flag is also stored out of band, as `flagged_signals` (positions in
   `conflicting_signals`, set by code only, validated against the signal count, not part of any model
   reply schema); the text prefix stays for clients that ignore the field, and the page adds a
-  note per flagged line. Gaps: records made earlier have no field, and a NUL
+  note per flagged line. It is a nested field, so `PostgresAssessmentRepository.replace` leaves
+  the key out of an old row's successor items (`_NESTED_NEW_DEFAULTS`; a real-database test
+  proves an old row can still be decided and given actual conditions). Later prompts do not see
+  the field (`agent_view`). Gaps: records made earlier have no field, and a NUL
   character in a signal makes the record unstorable (422, fails closed, not repaired).
   `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
   round two), the prefix rule and the screen itself.

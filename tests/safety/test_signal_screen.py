@@ -191,23 +191,82 @@ def test_the_flag_reaches_every_stored_item_and_never_comes_from_the_model() -> 
     for item in (*result.findings, *result.scenarios):
         assert item.flagged_signals == (1,)
 
-    # a model reply that tries to write the field is refused (extra="forbid")
+
+def test_a_model_reply_cannot_write_the_flag_field() -> None:
     import asyncio
 
     from divesafe.agents.runner import AgentError, call_structured
-    from divesafe.agents.schemas import FindingOutput
+    from divesafe.agents.schemas import FindingOutput, ProposalOutput, ScenarioOutput
 
-    body = {"summary": "s", "conflicting_signals": ["x"], "flagged_signals": [], "evidence_ids": []}
-    with pytest.raises(AgentError):
-        asyncio.run(
+    for output in (FindingOutput, ScenarioOutput, ProposalOutput):
+        assert "flagged_signals" not in output.model_fields
+
+    good = {
+        "summary": "s",
+        "conflicting_signals": ["x"],
+        "evidence_ids": ["e1"],
+        "confidence": 0.4,
+    }
+
+    def call(body: dict[str, Any]) -> Any:
+        return asyncio.run(
             call_structured(
                 FakeProvider(lambda r: json.dumps(body)),
                 task="t",
                 user_message="m",
                 output=FindingOutput,
-                allowed_ids=frozenset(),
+                allowed_ids=frozenset({"e1"}),
             )
         )
+
+    assert call(good).conflicting_signals == ("x",)  # the control: the same body is accepted
+    with pytest.raises(AgentError) as caught:
+        call({**good, "flagged_signals": [0]})
+    assert caught.value.label == "schema"
+
+
+def test_flags_are_not_shown_to_later_prompts() -> None:
+    from divesafe.agents.prompts import agent_view
+    from divesafe.domain import Finding
+
+    item = Finding(
+        agent="a",
+        summary="s",
+        evidence_ids=("e",),
+        conflicting_signals=(FLAG_PREFIX + "x",),
+        flagged_signals=(0,),
+        confidence=0.5,
+    )
+    assert "flagged_signals" not in agent_view([item])[0]
+    assert "confidence" not in agent_view([item])[0]
+
+
+def test_stored_items_without_the_field_load_with_none_flagged() -> None:
+    from divesafe.domain import Finding, Scenario, ScenarioKind
+
+    finding = Finding.model_validate(
+        {"agent": "a", "summary": "s", "evidence_ids": ["e"], "conflicting_signals": ["x"]}
+    )
+    scenario = Scenario.model_validate(
+        {"kind": ScenarioKind.MARGINAL, "summary": "s", "evidence_ids": ["e"], "confidence": 0.5}
+    )
+    assert finding.flagged_signals == () and scenario.flagged_signals == ()
+
+
+def test_a_flag_position_must_be_a_real_integer() -> None:
+    from divesafe.domain import Finding
+
+    for bad in (True, "0", 0.0):
+        with pytest.raises(ValueError):
+            Finding.model_validate(
+                {
+                    "agent": "a",
+                    "summary": "s",
+                    "evidence_ids": ["e"],
+                    "conflicting_signals": ["x"],
+                    "flagged_signals": [bad],
+                }
+            )
 
 
 def test_a_flag_position_outside_the_signals_is_refused_by_the_record() -> None:

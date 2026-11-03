@@ -663,3 +663,29 @@ def test_mutation_of_the_409_mapping_is_caught(edit: tuple[str, str]) -> None:
     mutant = mutated_module(app_module, edit)
     found = gate_misses(mutant)
     assert found != []
+
+
+def test_an_old_row_successor_gains_no_nested_flagged_signals_key() -> None:
+    """Items stored before `flagged_signals` existed lack the key; the successor must not add it
+    (the append-only trigger would refuse the update). Items that have it keep it."""
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    record = run_pipeline(fake())
+    assert record.findings and record.scenarios
+    full = doc(record)
+    old = json.loads(json.dumps(full))
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        for item in old[name]:
+            item.pop("flagged_signals")
+    intended = _without_new_defaults(record, old)
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        assert all("flagged_signals" not in i for i in intended[name])
+    assert AssessmentRecord.model_validate_json(json.dumps(intended)) == record
+    # a row that already has the key keeps it
+    assert _without_new_defaults(record, full) == full
+    # one item with the key and others without: only the missing ones are left out
+    mixed = json.loads(json.dumps(old))
+    mixed["findings"][0]["flagged_signals"] = []
+    kept = _without_new_defaults(record, mixed)
+    assert "flagged_signals" in kept["findings"][0]
+    assert all("flagged_signals" not in i for i in kept["findings"][1:])
