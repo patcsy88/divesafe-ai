@@ -41,6 +41,7 @@ export interface AssessmentRecord {
   unevaluated_factors: string[];
   evidence_issues: string[];
   findings: Finding[];
+  cross_examination_findings: Finding[];
   scenarios: ScenarioItem[];
   explanation: string;
   agent_issues: string[];

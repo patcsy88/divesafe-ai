@@ -262,6 +262,43 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         </section>
       )}
 
+      {[...r.findings, ...r.cross_examination_findings, ...r.scenarios].some(
+        (x) => x.conflicting_signals.length > 0,
+      ) && (
+        <section className="card ai">
+          <h2>Questions and conflicting signals (model-written)</h2>
+          <p className="hint">
+            Written by an AI model and not verified. An automatic wording screen marks some lines
+            FLAGGED. It misses wording, and records made before 2026-11-03 were not screened. An
+            unmarked line has not been checked or endorsed. None of it changes the result; you
+            decide on safety.
+          </p>
+          <ul>
+            {r.findings.flatMap((f, i) =>
+              f.conflicting_signals.map((c, j) => (
+                <li key={`c-${i}-${j}`}>
+                  <strong>{plain(f.agent)}:</strong> {plain(c)}
+                </li>
+              )),
+            )}
+            {r.cross_examination_findings.flatMap((f, i) =>
+              f.conflicting_signals.map((c, j) => (
+                <li key={`x-${i}-${j}`}>
+                  <strong>{plain(f.agent)} (second round):</strong> {plain(c)}
+                </li>
+              )),
+            )}
+            {r.scenarios.flatMap((s, i) =>
+              s.conflicting_signals.map((c, j) => (
+                <li key={`sc-${i}-${j}`}>
+                  <strong>{plain(s.kind)}:</strong> {plain(c)}
+                </li>
+              )),
+            )}
+          </ul>
+        </section>
+      )}
+
       {r.agent_issues.length > 0 && (
         <section className="card warn">
           <h2>Model calls that failed</h2>

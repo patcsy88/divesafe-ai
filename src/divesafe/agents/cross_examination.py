@@ -30,6 +30,7 @@ from divesafe.agents.prompts import (
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import FindingOutput
+from divesafe.agents.signal_screen import mark_flagged
 from divesafe.agents.specialists import SPECIALISTS, SpecialistSpec, relevant_evidence
 from divesafe.domain import DivePlan, EvidenceItem, Finding
 from divesafe.models import LLMProvider
@@ -141,7 +142,7 @@ async def cross_examine_one(
         # The model's summary text is never stored or shown; only the code-set one below is.
         summary=ROUND_TWO_SUMMARY,
         risk_factors=(),
-        conflicting_signals=out.conflicting_signals,
+        conflicting_signals=mark_flagged(out.conflicting_signals, frozenset(allowed)),
         evidence_ids=out.evidence_ids,
         confidence=None,
     )

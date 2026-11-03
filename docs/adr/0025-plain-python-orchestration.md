@@ -242,7 +242,7 @@ them too. The flag's state is recorded as a fixed `cross_examination=on` token i
   size cap is applied before neutralising and an over-cap input skips the call (never trims);
   each call may cite only ids in the evidence list (its own categories' plus ids the peers cited);
   exactly one round, never recursive.
-- Second-round findings feed the proposal only, not the scenarios, so ToT's input is unchanged
+- Second-round findings feed the proposal only, not the scenarios (ToT does receive round-one signals, now marked by the wording screen)
   (ADR 0007 bounds stay as they are). Stored in a new top-level tuple
   `cross_examination_findings: tuple[Finding, ...] = ()` (no field added to `Finding`, ADR 0012),
   included in the record's cited-id check.
@@ -348,8 +348,23 @@ made with the current prompts.
 - A crash in Reason outside the per-task handlers stops the run (fails closed) instead of
   degrading to "no proposal".
 - Nothing tests that routing ignores the trace (authority-map row).
-- `conflicting_signals` is unscreened model text shown to the human: needs a wording screen or an
-  owner decision before cross-examination is switched on in production.
+- `conflicting_signals` wording screen (owner decision 2026-11-03: keep, mark, show):
+  `agents/signal_screen.py` flags signals (round one, scenarios and round two) that read as an
+  assurance, a recommendation or instruction, a claim of system origin, an evidence-id lookalike,
+  a mixed-script word or hold control, hidden or filler characters; separators are stripped to
+  catch "safe_to_dive". A flagged signal is kept unchanged behind a fixed prefix
+  (`[FLAGGED WORDING - read with care]`), never dropped or repaired; a model-written prefix is
+  marked again so the code's marker is outermost. The decision page lists every signal under a
+  model-written heading. A screen, not a control: it can miss wording (synonyms, other languages,
+  other confusable scripts), and no signal can relax the result. The other model text on the page
+  (summaries, risk factors, explanation) is not screened, and risk factors are not shown on the
+  page. Real evidence ids (from the call's allowed ids) are not flagged as id lookalikes; an
+  invented id or `time:0900` is. Hidden characters are removed on display; the stored text keeps
+  them. Gaps: the record does not say which screen version marked it (records before 2026-11-03
+  are unscreened; the page says so), the flag lives in the text rather than in a field, and a NUL
+  character in a signal makes the record unstorable (422, fails closed, not repaired).
+  `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
+  round two), the prefix rule and the screen itself.
 - The two item 6 fixtures show that a hosted model sat behind a loopback proxy
   (`model_version`, `egress_basis`); no host, port, URL or key. The fixtures README lacks licence
   notes for the bundled Open-Meteo, MET Malaysia and data.gov.my payloads.

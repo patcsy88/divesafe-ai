@@ -21,6 +21,7 @@ from divesafe.agents.prompts import (
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import ScenarioOutput
+from divesafe.agents.signal_screen import mark_flagged
 from divesafe.domain import DivePlan, EvidenceItem, Finding, RuleResult, Scenario, ScenarioKind
 from divesafe.models import LLMProvider
 
@@ -82,7 +83,9 @@ async def _one(
         summary=out.summary,
         evidence_ids=out.evidence_ids,
         risk_factors=out.risk_factors,
-        conflicting_signals=out.conflicting_signals,
+        conflicting_signals=mark_flagged(
+            out.conflicting_signals, frozenset(e.id for e in evidence)
+        ),
         confidence=out.confidence,
     )
 

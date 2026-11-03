@@ -120,3 +120,15 @@ test("an evidence reply about another assessment, or without an id, is refused",
   reply({ assessment_id: ID, evidence: [] });
   assert.equal((await getEvidence("k-12345678", ID)).assessment_id, ID);
 });
+
+test("the decision page lists model-written conflicting signals as plain text under a model heading", () => {
+  const src = read("../app/assessments/[id]/page.tsx");
+  assert.match(src, /Questions and conflicting signals \(model-written\)/);
+  assert.match(src, /marks some lines\s+FLAGGED/);
+  assert.match(src, /It misses wording/);
+  assert.match(src, /records made before 2026-11-03 were not screened/);
+  assert.match(src, /has not been checked or endorsed/);
+  assert.match(src, /\(second round\)/);
+  assert.match(src, /plain\(c\)/);
+  assert.match(src, /r\.cross_examination_findings/);
+});
