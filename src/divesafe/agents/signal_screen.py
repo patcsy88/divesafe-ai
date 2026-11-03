@@ -97,6 +97,15 @@ def reads_as_flagged(value: str, known_ids: frozenset[str] = frozenset()) -> boo
     return any(phrase in compact for phrase in _COMPACT)
 
 
+def screen(
+    signals: tuple[str, ...], known_ids: frozenset[str] = frozenset()
+) -> tuple[tuple[str, ...], tuple[int, ...]]:
+    """The marked signals and, set by code only, the positions of the flagged ones. The model
+    cannot write the positions: they are not part of any reply schema."""
+    marked = mark_flagged(signals, known_ids)
+    return marked, tuple(i for i, (a, b) in enumerate(zip(signals, marked, strict=True)) if a != b)
+
+
 def mark_flagged(
     signals: tuple[str, ...], known_ids: frozenset[str] = frozenset()
 ) -> tuple[str, ...]:

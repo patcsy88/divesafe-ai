@@ -365,7 +365,10 @@ made with the current prompts.
   page. Real evidence ids (from the call's allowed ids) are not flagged as id lookalikes; an
   invented id or `time:0900` is. Hidden characters are removed on display; the stored text keeps
   them. `model_version` carries `signal_screen=<n>` (`SCREEN_VERSION`; raise it when the rules change);
-  records without it were never screened and the page says so. Gaps: the flag lives in the text rather than in a field, and a NUL
+  records without it were never screened and the page says so. Owner decision 2026-11-03: the flag is also stored out of band, as `flagged_signals` (positions in
+  `conflicting_signals`, set by code only, validated against the signal count, not part of any model
+  reply schema); the text prefix stays for clients that ignore the field, and the page adds a
+  note per flagged line. Gaps: records made earlier have no field, and a NUL
   character in a signal makes the record unstorable (422, fails closed, not repaired).
   `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
   round two), the prefix rule and the screen itself.

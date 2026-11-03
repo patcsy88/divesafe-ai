@@ -165,3 +165,74 @@ def test_a_record_names_the_screen_version_that_marked_it() -> None:
     assert f"; signal_screen={SCREEN_VERSION}" == SCREEN_TOKEN
     assert record.model_version.endswith(SCREEN_TOKEN)
     assert run_pipeline(None).model_version is None
+
+
+def test_flagged_positions_are_stored_in_their_own_field_set_by_code() -> None:
+    from divesafe.agents.signal_screen import screen
+
+    text = "It is safe to dive today."
+    signals, flagged = screen(("A fair question?", text, "Another?"))
+    assert signals == ("A fair question?", FLAG_PREFIX + text, "Another?")
+    assert flagged == (1,)
+    # a model-written prefix is flagged too
+    assert screen((FLAG_PREFIX + "Looks fine",))[1] == (0,)
+
+
+def test_the_flag_reaches_every_stored_item_and_never_comes_from_the_model() -> None:
+    text = "It is safe to dive today."
+
+    def reply(request: LLMRequest) -> str:
+        body = json.loads(scripted()(request))
+        body["conflicting_signals"] = ["fine?", text]
+        return json.dumps(body)
+
+    result = _stage(FakeProvider(reply), on=False)
+    assert result.findings and result.scenarios
+    for item in (*result.findings, *result.scenarios):
+        assert item.flagged_signals == (1,)
+
+    # a model reply that tries to write the field is refused (extra="forbid")
+    import asyncio
+
+    from divesafe.agents.runner import AgentError, call_structured
+    from divesafe.agents.schemas import FindingOutput
+
+    body = {"summary": "s", "conflicting_signals": ["x"], "flagged_signals": [], "evidence_ids": []}
+    with pytest.raises(AgentError):
+        asyncio.run(
+            call_structured(
+                FakeProvider(lambda r: json.dumps(body)),
+                task="t",
+                user_message="m",
+                output=FindingOutput,
+                allowed_ids=frozenset(),
+            )
+        )
+
+
+def test_a_flag_position_outside_the_signals_is_refused_by_the_record() -> None:
+    from divesafe.domain import Finding
+
+    with pytest.raises(ValueError, match="flagged_signals"):
+        Finding(
+            agent="a",
+            summary="s",
+            evidence_ids=("e",),
+            conflicting_signals=("x",),
+            flagged_signals=(1,),
+        )
+    with pytest.raises(ValueError, match="flagged_signals"):
+        Finding(
+            agent="a",
+            summary="s",
+            evidence_ids=("e",),
+            conflicting_signals=("x",),
+            flagged_signals=(0, 0),
+        )
+
+
+def test_the_flag_reaches_second_round_findings() -> None:
+    text = "It is safe to dive today."
+    result = _stage(FakeProvider(_with_cross_reply(_reply_with([PEER_MARK, text]))), on=True)
+    weather = next(f for f in result.cross_examination_findings if f.agent == "weather")
+    assert weather.flagged_signals == (1,)

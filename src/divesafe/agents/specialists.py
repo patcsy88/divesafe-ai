@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from divesafe.agents.prompts import build_user_message, evidence_payload, tide_note
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import FindingOutput
-from divesafe.agents.signal_screen import mark_flagged
+from divesafe.agents.signal_screen import screen
 from divesafe.domain import DataCategory, DivePlan, EvidenceItem, Finding
 from divesafe.models import LLMProvider
 
@@ -100,11 +100,13 @@ async def run_specialist(
         output=FindingOutput,
         allowed_ids=frozenset(e.id for e in items),
     )
+    signals, flagged = screen(out.conflicting_signals, frozenset(e.id for e in items))
     return Finding(
         agent=spec.name,
         summary=out.summary,
         risk_factors=out.risk_factors,
-        conflicting_signals=mark_flagged(out.conflicting_signals, frozenset(e.id for e in items)),
+        conflicting_signals=signals,
+        flagged_signals=flagged,
         evidence_ids=out.evidence_ids,
         confidence=out.confidence,
     )

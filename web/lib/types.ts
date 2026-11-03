@@ -15,6 +15,7 @@ export interface Finding {
   summary: string;
   risk_factors: string[];
   conflicting_signals: string[];
+  flagged_signals?: number[];
 }
 
 export interface ScenarioItem {
@@ -22,6 +23,7 @@ export interface ScenarioItem {
   summary: string;
   risk_factors: string[];
   conflicting_signals: string[];
+  flagged_signals?: number[];
 }
 
 export interface AssessmentRecord {

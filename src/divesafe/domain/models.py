@@ -168,6 +168,11 @@ class ScenarioKind(StrEnum):
     DETERIORATING = "deteriorating"
 
 
+def _check_flagged_positions(flagged: tuple[int, ...], signals: tuple[str, ...]) -> None:
+    if len(set(flagged)) != len(flagged) or any(not 0 <= i < len(signals) for i in flagged):
+        raise ValueError("flagged_signals must be distinct positions within conflicting_signals")
+
+
 class Scenario(_Frozen):
     """One bounded Tree-of-Thought branch. A summary with references, not a reasoning trace."""
 
@@ -176,6 +181,10 @@ class Scenario(_Frozen):
     evidence_ids: tuple[str, ...] = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = Field(
+        default=(),
+        description="Positions in conflicting_signals the code's wording screen flagged.",
+    )
     confidence: float = Field(
         ge=0.0,
         le=1.0,
@@ -185,6 +194,11 @@ class Scenario(_Frozen):
         ),
     )
 
+    @model_validator(mode="after")
+    def _flags_within_signals(self) -> Scenario:
+        _check_flagged_positions(self.flagged_signals, self.conflicting_signals)
+        return self
+
 
 class Finding(_Frozen):
     """One specialist agent's evidence-referenced reading of its domain. Not a recommendation."""
@@ -193,6 +207,10 @@ class Finding(_Frozen):
     summary: str = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = Field(
+        default=(),
+        description="Positions in conflicting_signals the code's wording screen flagged.",
+    )
     evidence_ids: tuple[str, ...] = ()
     confidence: float | None = Field(
         default=None,
@@ -204,6 +222,7 @@ class Finding(_Frozen):
 
     @model_validator(mode="after")
     def _evidence_matches_flag(self) -> Finding:
+        _check_flagged_positions(self.flagged_signals, self.conflicting_signals)
         if self.no_evidence and (self.evidence_ids or self.confidence is not None):
             raise ValueError("a no-evidence finding cannot cite evidence or claim confidence")
         if not self.no_evidence and not self.evidence_ids:

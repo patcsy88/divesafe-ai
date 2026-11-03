@@ -282,6 +282,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
               f.conflicting_signals.map((c, j) => (
                 <li key={`c-${i}-${j}`}>
                   <strong>{plain(f.agent)}:</strong> {plain(c)}
+                  {f.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
                 </li>
               )),
             )}
@@ -289,6 +290,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
               f.conflicting_signals.map((c, j) => (
                 <li key={`x-${i}-${j}`}>
                   <strong>{plain(f.agent)} (second round):</strong> {plain(c)}
+                  {f.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
                 </li>
               )),
             )}
@@ -296,6 +298,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
               s.conflicting_signals.map((c, j) => (
                 <li key={`sc-${i}-${j}`}>
                   <strong>{plain(s.kind)}:</strong> {plain(c)}
+                  {s.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
                 </li>
               )),
             )}

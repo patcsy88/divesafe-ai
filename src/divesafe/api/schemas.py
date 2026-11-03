@@ -187,6 +187,7 @@ class ScenarioView(BaseModel):
     evidence_ids: tuple[str, ...] = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = ()
     uncalibrated_self_estimate: float = Field(ge=0.0, le=1.0, description=_SELF_ESTIMATE)
 
 
@@ -199,6 +200,7 @@ class FindingView(BaseModel):
     summary: str = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     uncalibrated_self_estimate: float | None = Field(
         default=None, ge=0.0, le=1.0, description=_SELF_ESTIMATE
