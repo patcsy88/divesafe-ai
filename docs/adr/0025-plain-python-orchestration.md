@@ -348,6 +348,10 @@ made with the current prompts.
   in Reason outside the per-task handlers stops the run and stores nothing; that is kept as the
   fail-closed behaviour, the docs now say so, and a test pins it. Routing reads only a stage name
   and its outcome; a test shows that adding trace-like issues does not change the path.
+  `requires` and `produces` cover the authority-relevant names, not every field (Supervise also
+  rewrites `explanation` and `agent_issues` and reads the findings, scenarios and `model_version`).
+  A bug in Reason's own code stops the run and so also loses the deterministic result; it fails
+  closed and visibly (the API marks the run FAILED).
 - `conflicting_signals` wording screen (owner decision 2026-11-03: keep, mark, show):
   `agents/signal_screen.py` flags signals (round one, scenarios and round two) that read as an
   assurance, a recommendation or instruction, a claim of system origin, an evidence-id lookalike,

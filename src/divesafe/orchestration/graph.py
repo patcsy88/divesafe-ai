@@ -70,8 +70,9 @@ STAGES: Final[tuple[Stage, ...]] = (
         produces=("rule_results", "deterministic"),
         route=_only_completed(StageName.REASON),
     ),
-    # The agent stage. A failed task, a rejected reply or a deadline degrade to "no proposal" and
-    # the run goes on; an unexpected crash outside those handlers stops the run (fails closed).
+    # The agent stage. A failed or rejected risk task, or the stage deadline, means no proposal; a
+    # failed specialist or scenario is dropped and reported; the run goes on. An unexpected crash
+    # outside those handlers stops the run (fails closed).
     Stage(
         name=StageName.REASON,
         requires=("plan", "evidence", "rule_results", "deterministic"),

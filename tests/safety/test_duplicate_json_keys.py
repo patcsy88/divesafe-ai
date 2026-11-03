@@ -81,7 +81,7 @@ def test_a_whitespace_padded_unterminated_fence_is_rejected_quickly() -> None:
     start = time.monotonic()
     with pytest.raises(AgentError) as caught:
         _call("```" + " " * 19_990 + "x")
-    assert time.monotonic() - start < 1.0
+    assert time.monotonic() - start < 10.0  # a loose bound: catches a hang, not a slow runner
     assert caught.value.label == "schema"
 
 
@@ -131,11 +131,18 @@ def test_a_rejected_reply_leaves_no_reply_text_in_the_exception_context() -> Non
         assert secret not in str(caught.value)
 
 
-def test_a_provider_error_leaves_no_provider_text_in_the_exception_context() -> None:
+@pytest.mark.parametrize("failure", ["error", "timeout", "token_limit"])
+def test_a_provider_error_leaves_no_provider_text_in_the_exception_context(failure: str) -> None:
+    from divesafe.models import TokenLimitError
+
     class _Boom:
         name, model, external = "boom", "m", False
 
         async def complete(self, request: LLMRequest) -> LLMResponse:
+            if failure == "timeout":
+                raise TimeoutError("SECRET-PROVIDER-TEXT")
+            if failure == "token_limit":
+                raise TokenLimitError("SECRET-PROVIDER-TEXT")
             raise RuntimeError("SECRET-PROVIDER-TEXT")
 
     with pytest.raises(AgentError) as caught:

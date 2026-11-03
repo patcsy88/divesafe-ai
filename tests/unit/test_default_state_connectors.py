@@ -62,7 +62,11 @@ def test_a_leftover_ollama_variable_is_warned_about_by_name_count_only(
         _state(monkeypatch, token=None, phn=None)
     hits = [r for r in caplog.records if "Ollama adapter was removed" in r.getMessage()]
     assert len(hits) == 1
-    assert "SECRET-VALUE" not in caplog.text
+    assert hits[0].count == 1  # type: ignore[attr-defined]
+    from divesafe.config.logging import JsonFormatter
+
+    line = JsonFormatter().format(hits[0])
+    assert "SECRET-VALUE" not in line and "DIVESAFE_OLLAMA_MODEL" not in line
 
 
 def test_no_ollama_warning_without_a_leftover_variable(

@@ -23,6 +23,7 @@ import pytest
 from tests.agent import scripted_llm as sl
 
 from divesafe.domain import StageName, StageOutcome
+from divesafe.domain.stages import issue_code
 from divesafe.orchestration import pipeline as pipeline_module
 from divesafe.orchestration.graph import STAGES, next_stage, stage, walk
 
@@ -392,13 +393,20 @@ def test_routing_reads_only_the_stage_and_its_outcome_never_the_trace(
     assert list(inspect.signature(next_stage).parameters) == ["name", "outcome"]
     assert all(list(inspect.signature(s.route).parameters) == ["outcome"] for s in STAGES)
 
-    def path_with(trace_issues: tuple[str, ...]) -> list[tuple[StageName, StageName | None]]:
+    from divesafe.agents import STAGE_TIMED_OUT_ISSUE
+
+    real_trace = pipeline_module._record_trace  # captured once, before any patch
+
+    def path_with(extra: tuple[str, ...]) -> list[tuple[StageName, StageName | None]]:
         routed: list[tuple[StageName, StageName | None]] = []
-        real_trace = pipeline_module._record_trace
 
         def noisy_trace(run: Any, name: Any, outcome: Any, following: Any, *rest: Any) -> None:
             real_trace(run, name, outcome, following, *rest)
-            run.agent_issues = (*run.agent_issues, *trace_issues)
+            if extra:
+                run.agent_issues = (*run.agent_issues, *extra)
+                last = run.traces[-1]
+                code = issue_code(last.name, "overflow")
+                run.traces[-1] = last.model_copy(update={"issues": (*last.issues, code)})
 
         def recording_next(name: StageName, outcome: StageOutcome) -> StageName | None:
             following = next_stage(name, outcome)
@@ -410,4 +418,5 @@ def test_routing_reads_only_the_stage_and_its_outcome_never_the_trace(
         sl.run_pipeline(sl.fake())
         return routed
 
-    assert path_with(()) == path_with(("assess.failed", "reason.timed_out", "gate.failed"))
+    noise = ("assess.failed", "reason.timed_out", "gate.failed", STAGE_TIMED_OUT_ISSUE)
+    assert path_with(()) == path_with(noise)

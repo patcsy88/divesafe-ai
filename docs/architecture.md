@@ -179,12 +179,11 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   (ADR 0022 decision 9). Closing it would flag ordinary prose ("Dock B:" folds to `kb:`), so the
   gap stays; the xfails stay strict so closing it later turns them red. Retrieved text remains
   untrusted and delimited, and citations are checked against real evidence ids.
-- **ADR 0025 open findings** (accepted 2026-11-03; Supervise's self-comparison and duplicate
-  JSON keys in model replies are fixed): the graph's `produces` for Supervise is incomplete, a
-  crash in Reason stops the run (fails closed). `conflicting_signals` are wording-screened and
+- **ADR 0025 open findings** (accepted 2026-11-03; Supervise's self-comparison, duplicate JSON
+  keys, Supervise's `produces` and the citation metric are fixed): a crash in Reason outside the
+  per-task handlers stops the run and stores nothing (fails closed; a bug in Reason's own code
+  also loses the deterministic result, visibly). `conflicting_signals` are wording-screened and
   marked, not dropped; other model text on the page is not screened. See the ADR's Known gaps.
-- **Evaluation citation metric:** `_citations_valid` (`tests/evaluation/ablation.py`) skips
-  `cross_examination_findings`. Low impact: the record validator already refuses unknown ids.
 - **Connector HTTP limits** (2026-10-26): the total deadline and the dedicated thread pool leave
   gaps (connect/DNS/TLS/header stalls, private socket access, no per-host thread limit, unbounded
   queue, shared module-level pool); see

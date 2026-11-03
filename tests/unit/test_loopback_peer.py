@@ -115,6 +115,7 @@ def test_a_loopback_https_url_goes_through_the_peer_check_in_the_compatible_adap
         ("::1", True),
         ("localhost", True),
         ("::ffff:127.0.0.1", True),
+        ("::ffff:7f00:1", True),  # the form pydantic normalises the URL host to
         ("::ffff:10.0.0.5", False),
         ("10.0.0.5", False),
         ("0.0.0.0", False),
