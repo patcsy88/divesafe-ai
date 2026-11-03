@@ -118,3 +118,31 @@ def test_a_risk_proposal_that_repeats_the_recommendation_is_refused() -> None:
         )
     assert caught.value.kind == "rejected"
     assert caught.value.label == "schema"
+
+
+def test_a_rejected_reply_leaves_no_reply_text_in_the_exception_context() -> None:
+    """The error is raised outside the `except`, so `__context__` cannot carry model text."""
+    secret = "SECRET-REPLY-TEXT"
+    for text in (f'{{"summary": "{secret}", "summary": "b"}}', f"not json {secret}"):
+        with pytest.raises(AgentError) as caught:
+            _call(text)
+        assert caught.value.__context__ is None
+        assert caught.value.__cause__ is None
+        assert secret not in str(caught.value)
+
+
+def test_a_provider_error_leaves_no_provider_text_in_the_exception_context() -> None:
+    class _Boom:
+        name, model, external = "boom", "m", False
+
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            raise RuntimeError("SECRET-PROVIDER-TEXT")
+
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(
+            call_structured(
+                _Boom(), task="t", user_message="m", output=Finding, allowed_ids=frozenset()
+            )
+        )
+    assert caught.value.__context__ is None
+    assert "SECRET" not in str(caught.value)

@@ -122,25 +122,33 @@ async def call_structured(
         max_output_tokens=output_tokens(provider),
         json_schema=output.model_json_schema(),
     )
+    # The errors below are raised outside their `except` blocks, so `__context__` never holds a
+    # provider's or a model's text.
+    failure: AgentError | None = None
     try:
         response = await asyncio.wait_for(
             provider.complete(request),
             timeout=timeout if timeout is not None else call_timeout(provider),
         )
     except TimeoutError:
-        raise AgentError(f"{task}: provider timed out", kind="timed_out") from None
+        failure = AgentError(f"{task}: provider timed out", kind="timed_out")
     except TokenLimitError:
-        raise AgentError(f"{task}: output stopped at the token limit") from None
+        failure = AgentError(f"{task}: output stopped at the token limit")
     except Exception as exc:  # provider adapters may raise anything; never chain their text
-        raise AgentError(f"{task}: provider error ({type(exc).__name__})") from None
+        failure = AgentError(f"{task}: provider error ({type(exc).__name__})")
+    if failure is not None:
+        raise failure from None
 
     if len(response.text) > MAX_OUTPUT_CHARS:
         raise AgentError(f"{task}: output too long", kind="rejected", label="too_long")
+    parsed: T | None = None
     try:
         parsed = output.model_validate(
             json.loads(_json_text(response.text), object_pairs_hook=_no_duplicate_keys)
         )
     except (json.JSONDecodeError, ValueError, ValidationError, RecursionError):
+        parsed = None
+    if parsed is None:
         raise AgentError(
             f"{task}: output rejected (not valid for the schema)",
             kind="rejected",

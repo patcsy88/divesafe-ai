@@ -52,3 +52,24 @@ def test_no_other_connector_shares_the_phn_getter(monkeypatch: pytest.MonkeyPatc
     assert all(g is not phn_getter for g in others)
     assert all(not isinstance(getattr(g, "_inner", None), UrllibFormPostJsonGetter) for g in others)
     assert any(isinstance(getattr(g, "_inner", None), UrllibJsonGetter) for g in others)
+
+
+def test_a_leftover_ollama_variable_is_warned_about_by_name_count_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("DIVESAFE_OLLAMA_MODEL", "SECRET-VALUE")
+    with caplog.at_level("WARNING", logger="divesafe.api.state"):
+        _state(monkeypatch, token=None, phn=None)
+    hits = [r for r in caplog.records if "Ollama adapter was removed" in r.getMessage()]
+    assert len(hits) == 1
+    assert "SECRET-VALUE" not in caplog.text
+
+
+def test_no_ollama_warning_without_a_leftover_variable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    for key in [k for k in __import__("os").environ if k.startswith("DIVESAFE_OLLAMA_")]:
+        monkeypatch.delenv(key)
+    with caplog.at_level("WARNING", logger="divesafe.api.state"):
+        _state(monkeypatch, token=None, phn=None)
+    assert not [r for r in caplog.records if "Ollama" in r.getMessage()]

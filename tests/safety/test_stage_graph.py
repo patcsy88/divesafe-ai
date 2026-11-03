@@ -145,7 +145,8 @@ def test_propose_is_the_only_producer_of_final_recommendation() -> None:
     producers = [s.name for s in STAGES if "final_recommendation" in s.produces]
     assert producers == [N.PROPOSE]
     assert "final_recommendation" in stage(N.SUPERVISE).requires  # consumed, never produced
-    assert stage(N.SUPERVISE).produces == ("supervisor_verdict",)
+    assert "final_recommendation" not in stage(N.SUPERVISE).produces
+    assert stage(N.SUPERVISE).produces == ("supervisor_verdict", "rule_results", "deterministic")
 
 
 # --- the pipeline walks this graph --------------------------------------------------------------
@@ -367,3 +368,46 @@ def test_a_reason_stage_that_completes_is_not_labelled_timed_out(
     monkeypatch.setattr(pipeline_module, "next_stage", recording_next)
     sl.run_pipeline(sl.fake())
     assert dict(routed)[N.REASON] is O.COMPLETED
+
+
+def test_a_crash_in_the_agent_stage_stops_the_run_and_stores_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fails closed (ADR 0025 Known gaps): an unexpected crash in Reason is not turned into
+    "no proposal"; the run stops and no record exists."""
+
+    async def crash(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(pipeline_module, "run_agent_stage", crash)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        sl.run_pipeline(sl.fake())
+
+
+def test_routing_reads_only_the_stage_and_its_outcome_never_the_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspect
+
+    assert list(inspect.signature(next_stage).parameters) == ["name", "outcome"]
+    assert all(list(inspect.signature(s.route).parameters) == ["outcome"] for s in STAGES)
+
+    def path_with(trace_issues: tuple[str, ...]) -> list[tuple[StageName, StageName | None]]:
+        routed: list[tuple[StageName, StageName | None]] = []
+        real_trace = pipeline_module._record_trace
+
+        def noisy_trace(run: Any, name: Any, outcome: Any, following: Any, *rest: Any) -> None:
+            real_trace(run, name, outcome, following, *rest)
+            run.agent_issues = (*run.agent_issues, *trace_issues)
+
+        def recording_next(name: StageName, outcome: StageOutcome) -> StageName | None:
+            following = next_stage(name, outcome)
+            routed.append((name, following))
+            return following
+
+        monkeypatch.setattr(pipeline_module, "_record_trace", noisy_trace)
+        monkeypatch.setattr(pipeline_module, "next_stage", recording_next)
+        sl.run_pipeline(sl.fake())
+        return routed
+
+    assert path_with(()) == path_with(("assess.failed", "reason.timed_out", "gate.failed"))

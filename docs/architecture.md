@@ -65,7 +65,7 @@ tests assert its properties without running it. Stage names as stored on the rec
 | Observe | Receive the dive plan; fetch live conditions as structured evidence. Failed sources become issues, never an abort. | Connectors, Provenance |
 | Retrieve | Fetch site knowledge, guidance, history. Placeholder (`not_configured`) until RAG stage 1 (ADR 0022). | RAG, Historical data |
 | Assess | Rules engine (authoritative) scores the plan; connector issues become a rule result. Must complete or the run fails. | Risk Rules Engine |
-| Reason | Specialist agents interpret evidence; bounded ToT compares scenarios; the risk agent proposes with evidence IDs. Any failure degrades to "no proposal". | Agents |
+| Reason | Specialist agents interpret evidence; bounded ToT compares scenarios; the risk agent proposes with evidence IDs. A failed or rejected task, or a deadline, degrades to "no proposal"; an unexpected crash stops the run (fails closed). | Agents |
 | Rejudge | Rules engine again at the later clock, keeping every earlier result; a started window or expired rule can only add problems. Must complete. | Risk Rules Engine |
 | Propose | `reconcile` fixes the final recommendation from the deterministic result and the proposal. The only producer of `final_recommendation`. Must complete. | `reconcile` |
 | Supervise | Code-only checks (no LLM): tighten-only, severity order, citations, prompt-version pin, required categories. An invariant breach raises and stores nothing; the other checks add a `supervisor.<check>` rule result and `reconcile` runs again. Must complete. | `orchestration.supervisor` |

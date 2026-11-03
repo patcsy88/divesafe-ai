@@ -244,7 +244,10 @@ def join_sse(raw: bytes) -> str:
         if not choices:
             continue  # a usage-only event
         choice = choices[0]
-        if not isinstance(choice, dict) or finished or choice.get("index", 0) != 0:
+        if not isinstance(choice, dict) or finished:
+            raise _refuse("bad_shape")
+        index = choice.get("index", 0)
+        if type(index) is not int or index != 0:  # not False, 0.0 or a string
             raise _refuse("bad_shape")
         delta = choice.get("delta")
         if not isinstance(delta, dict):

@@ -70,7 +70,8 @@ STAGES: Final[tuple[Stage, ...]] = (
         produces=("rule_results", "deterministic"),
         route=_only_completed(StageName.REASON),
     ),
-    # The agent stage. It degrades to "no proposal" on any failure and the run goes on.
+    # The agent stage. A failed task, a rejected reply or a deadline degrade to "no proposal" and
+    # the run goes on; an unexpected crash outside those handlers stops the run (fails closed).
     Stage(
         name=StageName.REASON,
         requires=("plan", "evidence", "rule_results", "deterministic"),
@@ -96,7 +97,7 @@ STAGES: Final[tuple[Stage, ...]] = (
     Stage(
         name=StageName.SUPERVISE,
         requires=("final_recommendation", "rule_results", "deterministic", "proposed", "evidence"),
-        produces=("supervisor_verdict",),
+        produces=("supervisor_verdict", "rule_results", "deterministic"),
         route=_only_completed(StageName.GATE),
     ),
     # The record is PENDING_HUMAN. Nothing runs after it.

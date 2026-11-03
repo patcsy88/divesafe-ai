@@ -343,11 +343,11 @@ made with the current prompts.
   `proposed`; `reconciled.deterministic` must equal the most severe rule outcome and
   `reconciled.proposed` must be the proposal, or the invariant error is raised. Mutation-checked
   in `tests/safety/test_supervisor.py`.
-- The graph's `produces` for Supervise lists only `supervisor_verdict`, though it also rewrites
-  `rule_results`, `deterministic`, the reconciliation and `agent_issues`.
-- A crash in Reason outside the per-task handlers stops the run (fails closed) instead of
-  degrading to "no proposal".
-- Nothing tests that routing ignores the trace (authority-map row).
+- **Fixed 2026-11-03 (owner asked for the ADR 0025 gaps):** the graph's `produces` for Supervise
+  now also lists `rule_results` and `deterministic` (`tests/safety/test_stage_graph.py`). A crash
+  in Reason outside the per-task handlers stops the run and stores nothing; that is kept as the
+  fail-closed behaviour, the docs now say so, and a test pins it. Routing reads only a stage name
+  and its outcome; a test shows that adding trace-like issues does not change the path.
 - `conflicting_signals` wording screen (owner decision 2026-11-03: keep, mark, show):
   `agents/signal_screen.py` flags signals (round one, scenarios and round two) that read as an
   assurance, a recommendation or instruction, a claim of system origin, an evidence-id lookalike,
@@ -366,8 +366,9 @@ made with the current prompts.
   `tests/safety/test_signal_screen.py`, mutation-checked at each call site (specialists, ToT,
   round two), the prefix rule and the screen itself.
 - The two item 6 fixtures show that a hosted model sat behind a loopback proxy
-  (`model_version`, `egress_basis`); no host, port, URL or key. The fixtures README lacks licence
-  notes for the bundled Open-Meteo, MET Malaysia and data.gov.my payloads.
+  (`model_version`, `egress_basis`); no host, port, URL or key. The owner confirmed (2026-11-03) they
+  may stay; the fixtures README records that the licence terms of the bundled payloads are the
+  owner's to check.
 - The second `reconcile` after a tightening is re-checked (2026-11-03): the pipeline calls
   `check_invariants` on it, so the stored reconciliation is the one that was checked
   (`tests/safety/test_supervisor.py`, mutation-checked). The tighten-only check still accepts a

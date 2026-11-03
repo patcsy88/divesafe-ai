@@ -611,3 +611,18 @@ def test_only_the_supervisor_invariant_is_recorded_as_refused(
     monkeypatch.setattr(pipeline_module, "supervise", other_failure)
     with pytest.raises(RuntimeError, match="unrelated failure"):
         run_variant(_case("caution_rule_go_proposal"), "full")
+
+
+def test_the_citation_metric_counts_second_round_findings() -> None:
+    """`_citations_valid` must look at cross_examination_findings too; the record validator
+    refuses unknown ids, so a built record is mutated here only to prove the metric sees them."""
+    from tests.agent.scripted_llm import fake, run_pipeline
+    from tests.evaluation.ablation import _citations_valid
+
+    from divesafe.domain import Finding
+
+    record = run_pipeline(fake())
+    assert _citations_valid(record)
+    bad = Finding(agent="weather", summary="s", evidence_ids=("ev-not-in-record",))
+    broken = record.model_copy(update={"cross_examination_findings": (bad,)})
+    assert not _citations_valid(broken)

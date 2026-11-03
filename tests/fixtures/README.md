@@ -40,3 +40,8 @@ no test treats their wording as correct, and none should.
 
 Edge cases (nulls, wrong units, missing hours, truncation) are built in tests by mutating these
 files in code and are labelled synthetic there.
+
+**Licences and provenance (owner, 2026-11-03).** The owner has confirmed that the two `item6/`
+fixtures may stay although they show a hosted model sat behind a loopback proxy (`model_version`,
+`egress_basis`; no host, port, URL or key). The licence and terms of use of the bundled Open-Meteo,
+MET Malaysia and data.gov.my payloads are the owner's to check; this repository does not assert them.

@@ -244,6 +244,12 @@ def build_default_state(settings: Settings) -> AppState:
         )
     if settings.environment == "production":
         refuse_loader_credentials(os.environ)
+    leftover = sorted(k for k in os.environ if k.startswith("DIVESAFE_OLLAMA_"))
+    if leftover:
+        logger.warning(
+            "DIVESAFE_OLLAMA_* variables are set but the Ollama adapter was removed; ignored",
+            extra={"count": len(leftover)},
+        )
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     connectors: list[Connector] = [
         OpenMeteoMarineConnector(getter),

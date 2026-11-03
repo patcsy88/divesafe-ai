@@ -780,3 +780,10 @@ def test_an_http_error_is_labelled_http_error_with_the_fixed_message_and_no_chai
     assert "SERVER-DETAIL" not in str(error)
     assert error.__cause__ is None
     assert error.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("index", ["false", "0.0", '"0"', "1", "null", "[]"])
+def test_a_choice_index_that_is_not_the_integer_zero_is_refused(index: str) -> None:
+    chunk = f'{{"choices": [{{"index": {index}, "delta": {{"content": "x"}}}}]}}'
+    raw = f"data: {chunk}\n\n".encode() + _event(None, "stop").encode() + b"data: [DONE]\n\n"
+    assert _reason_of(raw) == "bad_shape"

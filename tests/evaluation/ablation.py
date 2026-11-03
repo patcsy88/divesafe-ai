@@ -68,7 +68,9 @@ def switched(flags: dict[str, bool]) -> Iterator[None]:
 def _citations_valid(record: AssessmentRecord) -> bool:
     known = {e.id for e in record.evidence}
     cited = set(record.proposal_evidence_ids)
-    cited |= {i for f in record.findings for i in f.evidence_ids}
+    cited |= {
+        i for f in (*record.findings, *record.cross_examination_findings) for i in f.evidence_ids
+    }
     cited |= {i for s in record.scenarios for i in s.evidence_ids}
     return cited <= known
 
