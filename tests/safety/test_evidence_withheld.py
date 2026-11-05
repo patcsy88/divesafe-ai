@@ -607,10 +607,11 @@ def test_the_storage_checks_accept_a_record_with_withheld_items_and_an_old_one()
     wire = json.loads(record.model_dump_json())
     assert _same(wire, json.loads(record.model_dump_json()))
     assert AssessmentRecord.model_validate_json(json.dumps(wire)) == record
-    old = doc(clean_record())
+    clean = clean_record()  # once: the stage trace holds a real duration_ms, which varies per run
+    old = doc(clean)
     del old["withheld_evidence"]
     _storable(old)
-    assert AssessmentRecord.model_validate_json(json.dumps(old)) == clean_record()
+    assert AssessmentRecord.model_validate_json(json.dumps(old)) == clean
 
 
 @pytest.mark.parametrize("bad", ["a\x00b", float("nan"), float("inf")])
