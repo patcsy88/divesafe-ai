@@ -61,3 +61,5 @@
 - No single-flight de-duplication of identical create requests; the connector cache and the
   Open-Meteo quota guard still protect the upstream.
 - No key rotation, expiry or revocation beyond editing the configuration and restarting.
+- ADR 0026 adds a fourth role, `overrider` (a less severe human outcome). It does not imply any other
+  role; an `overrider` key must also be a `decider` and a `viewer`, or start-up is refused.

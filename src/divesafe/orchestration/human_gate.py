@@ -42,6 +42,7 @@ def decide(
     decision: Recommendation,
     decided_at: datetime,
     rationale: str | None = None,
+    key_id: str | None = None,
 ) -> AssessmentRecord:
     check_assigned(record, decided_by)
     if record.human_decision is not None:
@@ -52,6 +53,12 @@ def decide(
         decided_at=decided_at,
         is_override=decision != record.final_recommendation,
         override_rationale=rationale,
+        key_id=key_id or None,
+        decided_by_creator=(
+            None
+            if record.created_by is None
+            else record.created_by.strip().casefold() == decided_by.strip().casefold()
+        ),
     )
     return _revalidated(record, human_decision=human.model_dump())
 

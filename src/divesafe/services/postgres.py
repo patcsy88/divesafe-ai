@@ -269,9 +269,24 @@ _NESTED_NEW_DEFAULTS = {
 }
 
 
+# Defaulted keys added inside the write-once `human_decision` (ADR 0026). A decision made before
+# they existed must come back unchanged when actual conditions are added later.
+_DECISION_NEW_DEFAULTS = ("key_id", "decided_by_creator")
+
+
+def _without_new_decision_defaults(data: dict[str, Any], stored: dict[str, Any]) -> None:
+    old, new = stored.get("human_decision"), data.get("human_decision")
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return
+    for key in _DECISION_NEW_DEFAULTS:
+        if key not in old and new.get(key) is None:
+            new.pop(key, None)
+
+
 def _without_new_nested_defaults(data: dict[str, Any], stored: dict[str, Any]) -> None:
     """For the lists above: when a stored item lacks the key and the successor holds the empty
     default, leave the key out so the append-only trigger sees the item unchanged."""
+    _without_new_decision_defaults(data, stored)
     for name, key in _NESTED_NEW_DEFAULTS.items():
         old_items, new_items = stored.get(name), data.get(name)
         if not isinstance(old_items, list) or not isinstance(new_items, list):

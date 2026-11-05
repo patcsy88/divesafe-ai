@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ACTOR = 100
+DEV_KEY_ID = "dev"
 _REFUSED = "nothing was recorded; an assessment without a recorded decision is still pending. "
 
 
@@ -38,12 +39,18 @@ class Role(StrEnum):
     VIEWER = "viewer"  # read assessments, evidence and sites
     ASSESSOR = "assessor"  # create assessments
     DECIDER = "decider"  # record the human decision and actual conditions
+    OVERRIDER = (
+        "overrider"  # as a decider, choose a LESS severe outcome than the system's (ADR 0026)
+    )
 
 
 @dataclass(frozen=True)
 class Principal:
     actor: str
     roles: frozenset[Role] = frozenset()
+    # A non-secret label of the key used (first 12 hex characters of its sha256, ADR 0026), or
+    # "dev". Empty only for a principal built by hand.
+    key_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,10 @@ class Authenticator(Protocol):
     def canonical_decider(self, actor: str) -> str | None:
         """The configured name of `actor` if they are a known key holder who may decide."""
         ...
+
+
+def key_id_of(digest: str) -> str:
+    return digest[:12]
 
 
 def _actor(value: str) -> str | None:
@@ -79,7 +90,7 @@ class ApiKeyAuthenticator:
         for known, entry in self._hashes.items():  # no early exit: constant-ish time
             if hmac.compare_digest(known, digest):
                 match = entry
-        return Principal(match.actor, match.roles) if match else None
+        return Principal(match.actor, match.roles, key_id_of(digest)) if match else None
 
     def canonical_decider(self, actor: str) -> str | None:
         wanted = actor.strip().casefold()
@@ -94,7 +105,7 @@ class DevAuthenticator:
 
     def authenticate(self, request: Request) -> Principal | None:
         actor = _actor(request.headers.get("x-dev-actor", ""))
-        return Principal(actor, frozenset(Role)) if actor else None
+        return Principal(actor, frozenset(Role), DEV_KEY_ID) if actor else None
 
     def canonical_decider(self, actor: str) -> str | None:
         return _actor(actor)
@@ -137,6 +148,8 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
         role_set = frozenset(Role(r) for r in roles)
         if Role.DECIDER in role_set and Role.VIEWER not in role_set:
             raise ValueError("a decider key must also be a viewer: a decision needs the evidence")
+        if Role.OVERRIDER in role_set and not {Role.DECIDER, Role.VIEWER} <= role_set:
+            raise ValueError("an overrider key must also be a decider and a viewer")
         entries[digest] = KeyEntry(actor, role_set)
     names = [e.actor.casefold() for e in entries.values()]
     if len(set(names)) != len(names):

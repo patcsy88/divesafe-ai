@@ -192,10 +192,11 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   see [risk-model.md](risk-model.md) Known gaps.
 - **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
   Still open: a migration tool, record hashing for tamper evidence, connection pooling.
-- **Roles and authorization:** API keys identify an actor but grant no roles (a production gate;
-  see ADR 0006). Who may override,
-  and whether a less severe override needs stronger authority, is not enforced. Key rotation and
-  revocation are manual (edit the configured hashes).
+- **Roles and authorization:** keys carry explicit roles (ADR 0013); a less severe human outcome
+  needs `overrider` (ADR 0026, built) and each decision records its `key_id` and
+  `decided_by_creator`. Not built yet (ADR 0026 Part B): an `admin` role to reassign a pending
+  assessment, and `groups` to scope reads. Key rotation and revocation are manual (edit the
+  configured hashes).
 - **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
   No request-size or per-client rate limits beyond the provider-limit guard.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the

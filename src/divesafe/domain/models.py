@@ -240,6 +240,10 @@ class HumanDecision(_Frozen):
     decided_at: AwareDatetime
     is_override: bool
     override_rationale: str | None = None
+    # Set by code, never by a caller (ADR 0026). None = not recorded (a decision made before
+    # these fields existed). `key_id` is a non-secret label of the key used, or "dev".
+    key_id: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{12}|dev)$")
+    decided_by_creator: bool | None = None
 
     @model_validator(mode="after")
     def _require_rationale_for_override(self) -> HumanDecision:

@@ -62,6 +62,8 @@ export interface AssessmentRecord {
     decided_at: string;
     is_override: boolean;
     override_rationale: string | null;
+    key_id?: string | null;
+    decided_by_creator?: boolean | null;
   } | null;
 }
 

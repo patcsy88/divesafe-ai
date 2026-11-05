@@ -121,6 +121,22 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <dl>
             <dt>Decided by</dt>
             <dd>{plain(decision.decided_by)}</dd>
+            <dt>Decided by the requester</dt>
+            <dd>
+              {plain(
+                decision.decided_by_creator === true
+                  ? "Yes: the person who requested this assessment also made this decision"
+                  : decision.decided_by_creator === false
+                    ? "No"
+                    : "Not recorded",
+              )}
+            </dd>
+            {typeof decision.key_id === "string" && decision.key_id && (
+              <>
+                <dt>Key used</dt>
+                <dd>{plain(decision.key_id)}</dd>
+              </>
+            )}
             <dt>Decision</dt>
             <dd>{labelFor(decision.decision)}</dd>
             <dt>Override of the system</dt>

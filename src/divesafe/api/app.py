@@ -46,7 +46,7 @@ from divesafe.config.settings import (
     agent_stage_budget,
 )
 from divesafe.data.http import shutdown_http_pool
-from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
+from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan, severity
 from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
@@ -80,6 +80,11 @@ logger = logging.getLogger(__name__)
 _NOT_UPDATABLE = "the assessment could not be updated; reload it"
 _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
+)
+
+_NOT_OVERRIDER = (
+    "nothing was recorded; choosing a less severe outcome than the system's needs the overrider "
+    "role, and the assessment is still pending"
 )
 
 AssessmentId = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
@@ -507,6 +512,15 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if same_decision(record):
                 return replay(record)
             raise HTTPException(status_code=409, detail="this assessment already has a decision")
+        if (
+            severity(body.decision) < severity(record.final_recommendation)
+            and Role.OVERRIDER not in principal.roles
+        ):
+            logger.warning(
+                "decision refused: a less severe outcome needs the overrider role",
+                extra={"assessment_id": assessment_id, "actor": principal.actor},
+            )
+            raise HTTPException(status_code=403, detail=_NOT_OVERRIDER)
         now = app_state.clock()
         max_age = app_state.decision_max_age
         if max_age is not None and now - record.created_at > max_age:
@@ -522,6 +536,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 decision=body.decision,
                 decided_at=now,
                 rationale=body.rationale,
+                key_id=principal.key_id,
             )
             app_state.repository.replace(record, updated)
         except NotAssignedDeciderError as exc:

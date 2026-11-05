@@ -1421,3 +1421,45 @@ def test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_give
     for name in ("findings", "cross_examination_findings", "scenarios"):
         assert all("flagged_signals" not in i for i in stored[name])
     assert repo.get("r1") == done
+
+
+def test_an_old_shape_decided_row_can_still_be_given_actual_conditions() -> None:
+    """ADR 0026: `key_id` and `decided_by_creator` are new keys inside the write-once decision. A
+    decision stored before they existed must come back unchanged when actuals are added."""
+    from datetime import timedelta
+
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.domain import ActualConditions, AssessmentRecord, HumanDecision
+
+    pending = run_pipeline(fake()).model_copy(update={"id": "r1"})
+    repo = _postgres()
+    repo.create(pending)
+    decision = HumanDecision(
+        decided_by="alice",
+        decision=pending.final_recommendation,
+        decided_at=pending.created_at + timedelta(minutes=5),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "human_decision": decision.model_dump()}
+    )
+    repo.replace(pending, decided)
+    old = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    del old["human_decision"]["key_id"], old["human_decision"]["decided_by_creator"]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    actual = ActualConditions(
+        reported_at=pending.created_at + timedelta(hours=2),
+        reported_by="alice",
+        observations={"v": 1},
+    )
+    done = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+    repo.replace(decided, done)
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert "key_id" not in stored["human_decision"]
+    assert "decided_by_creator" not in stored["human_decision"]
+    assert repo.get("r1") == done

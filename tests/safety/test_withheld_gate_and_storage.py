@@ -129,6 +129,53 @@ def real_misses(mod: Any) -> list[str]:
     return bad
 
 
+def decision_misses(fn: Callable[[Any, Any], dict[str, Any]]) -> list[str]:
+    """`key_id` and `decided_by_creator` inside the write-once human decision (ADR 0026)."""
+    from datetime import timedelta
+
+    from divesafe.domain import HumanDecision
+
+    clean = clean_record()
+    decision = HumanDecision(
+        decided_by="alice",
+        decision=clean.final_recommendation,
+        decided_at=clean.created_at + timedelta(minutes=1),
+        is_override=False,
+        key_id="0123456789ab",
+        decided_by_creator=False,
+    )
+    record = AssessmentRecord.model_validate(
+        {**clean.model_dump(), "human_decision": decision.model_dump()}
+    )
+    bad: list[str] = []
+    full = doc(record)
+    old = json.loads(json.dumps(full))
+    del old["human_decision"]["key_id"], old["human_decision"]["decided_by_creator"]
+    bare = AssessmentRecord.model_validate(
+        {
+            **record.model_dump(),
+            "human_decision": {**decision.model_dump(), "key_id": None, "decided_by_creator": None},
+        }
+    )
+    got = fn(bare, old)
+    for key in ("key_id", "decided_by_creator"):
+        if key in got["human_decision"]:
+            bad.append(f"an old decision gained the default {key} key")
+    changed = fn(record, old)  # stored without the keys, successor holds real values
+    if changed["human_decision"].get("key_id") != "0123456789ab":
+        bad.append("a real key_id was silently dropped instead of reaching the guard")
+    kept = fn(record, full)
+    if kept["human_decision"].get("key_id") != "0123456789ab":
+        bad.append("a stored key_id was dropped")
+    if kept["human_decision"].get("decided_by_creator") is not False:
+        bad.append("a stored decided_by_creator=false was dropped")
+    return bad
+
+
+def test_an_old_decision_successor_gains_no_key_id_or_creator_flag() -> None:
+    assert decision_misses(_without_new_defaults) == []
+
+
 NESTED_LISTS = ("findings", "cross_examination_findings", "scenarios")
 
 
@@ -206,6 +253,21 @@ WRITE_EDITS = [
         ('    "scenarios": "flagged_signals",\n', ""), id="nested-scenarios-entry-removed"
     ),
     pytest.param(
+        ("    _without_new_decision_defaults(data, stored)\n", ""),
+        id="decision-defaults-not-omitted",
+    ),
+    pytest.param(
+        ("        if key not in old and new.get(key) is None:\n", "        if key not in old:\n"),
+        id="decision-present-value-dropped",
+    ),
+    pytest.param(
+        (
+            '_DECISION_NEW_DEFAULTS = ("key_id", "decided_by_creator")',
+            '_DECISION_NEW_DEFAULTS = ("key_id",)',
+        ),
+        id="decision-creator-flag-not-covered",
+    ),
+    pytest.param(
         (
             "        if name in stored or name not in data or field.is_required():\n",
             "        if name in stored or name not in data or field.is_required() or True:\n",
@@ -222,6 +284,7 @@ def test_mutation_of_without_new_defaults_is_caught(
     mutant = mutated_module(postgres_module, edit)
     try:
         found = real_misses(mutant)  # before the stand-in patch replaces AssessmentRecord
+        found += decision_misses(mutant._without_new_defaults)
         found += standin_misses(mutant, monkeypatch)
     except Exception as exc:  # noqa: BLE001
         pytest.fail(f"the mutant crashed instead of being refused: {type(exc).__name__}")
