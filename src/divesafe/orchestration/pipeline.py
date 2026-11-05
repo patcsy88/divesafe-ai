@@ -9,6 +9,7 @@ getting nothing. `STAGES` decides which stage follows which; this module only su
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import Counter
@@ -182,8 +183,12 @@ async def _assess(run: _Run) -> StageOutcome:
             )
         )
     run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
+    # Up to 64 engine runs of plain blocking code: off the event loop, so health checks and other
+    # requests are not stalled.
     run.rule_results.extend(
-        variant_results(engine, plan, evidence.items, evidence.variants, now, run.deterministic)
+        await asyncio.to_thread(
+            variant_results, engine, plan, evidence.items, evidence.variants, now, run.deterministic
+        )
     )
     run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
     run.unevaluated = assessment.unevaluated_factors
@@ -260,18 +265,16 @@ async def _rejudge(run: _Run) -> StageOutcome:
         before = len(run.rule_results)
         later = run.engine.assess(run.plan, run.evidence_set.items, run.completed)
         run.rule_results.extend(r for r in later.rule_results if r not in run.rule_results)
-        run.rule_results.extend(
-            r
-            for r in variant_results(
-                run.engine,
-                run.plan,
-                run.evidence_set.items,
-                run.evidence_set.variants,
-                run.completed,
-                most_severe(tuple(x.outcome for x in run.rule_results)),
-            )
-            if r not in run.rule_results
+        extra = await asyncio.to_thread(
+            variant_results,
+            run.engine,
+            run.plan,
+            run.evidence_set.items,
+            run.evidence_set.variants,
+            run.completed,
+            most_severe(tuple(x.outcome for x in run.rule_results)),
         )
+        run.rule_results.extend(r for r in extra if r not in run.rule_results)
         if run.plan.planned_start <= run.completed:
             run.rule_results.append(
                 RuleResult(

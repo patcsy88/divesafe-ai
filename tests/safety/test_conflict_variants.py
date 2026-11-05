@@ -315,8 +315,10 @@ def test_mutation_of_the_variant_search_is_caught(edit: tuple[str, str]) -> None
 
 ASSESS_CALL = (
     "    run.rule_results.extend(\n"
-    "        variant_results("
-    "engine, plan, evidence.items, evidence.variants, now, run.deterministic)\n"
+    "        await asyncio.to_thread(\n"
+    "            variant_results, engine, plan, evidence.items, evidence.variants, now, "
+    "run.deterministic\n"
+    "        )\n"
     "    )\n"
 )
 
@@ -487,3 +489,56 @@ def test_a_danger_in_a_later_group_is_found_and_kept_items_stay_in_every_run() -
 )
 def test_mutation_of_which_items_each_run_gets_is_caught(edit: tuple[str, str]) -> None:
     assert _later_group_and_kept_items(mutated_module(cv, edit)) != []
+
+
+def _threads_used(pipeline: Any) -> tuple[int, set[int]]:
+    import threading
+
+    from divesafe.data import TIOMAN_ISLAND
+
+    engine = no_go_engine()
+    real = engine.assess
+    seen: list[int] = []
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    engine.assess = spy  # type: ignore[method-assign]
+
+    async def run() -> int:
+        await pipeline.assess_dive(
+            assessment_id="t-1",
+            plan=_plan(),
+            site=TIOMAN_ISLAND,
+            connectors=sources({0: [SAFE, SAFE + 0.1], 1: [SAFE]}),
+            engine=engine,
+            now=NOW,
+        )
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(run())
+    return loop_thread, set(seen)
+
+
+def test_the_variant_search_runs_off_the_event_loop_thread() -> None:
+    from divesafe.orchestration import pipeline as pipeline_module
+
+    loop_thread, used = _threads_used(pipeline_module)
+    assert used - {loop_thread}  # at least one engine run (the variants) left the loop thread
+
+
+def test_mutation_running_the_search_on_the_loop_thread_is_caught() -> None:
+    from divesafe.orchestration import pipeline as pipeline_module
+
+    mutant = mutated_module(
+        pipeline_module,
+        (
+            "await asyncio.to_thread(\n            variant_results, engine, plan, evidence.items, "
+            "evidence.variants, now, run.deterministic\n        )",
+            "variant_results(engine, plan, evidence.items, evidence.variants, now, "
+            "run.deterministic)",
+        ),
+    )
+    loop_thread, used = _threads_used(mutant)
+    assert not (used - {loop_thread})
