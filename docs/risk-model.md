@@ -131,7 +131,7 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 
 - **Authentication (interim):** the API takes the actor from an API key (or, in development
   only, a header) and never from the request body ([ADR 0006](adr/0006-api-auth-and-repository.md)).
-  Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013).
+  Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013), and only the current assigned decider; an `admin` key (which cannot also be a decider) can change who that is (ADR 0026).
   Roles do not say who is *qualified* to decide; that is an operator decision when issuing keys.
   Each assessment names one assigned decider (ADR 0014); only that actor can decide it or report
   actual conditions, so another decider cannot lock it. A record with no assignee cannot be decided. `decide()` itself trusts its caller, so it must only be reachable through the API.
