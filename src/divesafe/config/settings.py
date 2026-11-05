@@ -215,6 +215,8 @@ class Settings(BaseSettings):
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("dev authentication cannot be used in production")
+        if self.auth_mode == "dev" and self.database_url is not None:
+            raise ValueError("dev authentication cannot be used with durable storage")
         keys = (
             "".join(self.api_key_hashes.get_secret_value().split()) if self.api_key_hashes else ""
         )

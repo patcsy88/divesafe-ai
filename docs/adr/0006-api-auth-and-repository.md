@@ -59,8 +59,8 @@ minimum interval per host; a request that would break it fails closed as a conne
    (GET by id currently relies on unguessable 128-bit ids only).
 3. Per-client and per-IP throttling and a repository size cap (the provider-limit guard protects
    upstream quotas, not the server). Terminate TLS and apply security headers at a proxy.
-4. Dev authentication is only blocked when `DIVESAFE_ENVIRONMENT=production`; set the
-   environment explicitly in every deployment. API keys must be random 256-bit values. The
+4. Dev authentication is refused in production and whenever a database is configured (ADR 0026).
+   Set the environment explicitly in every deployment. API keys must be random 256-bit values. The
    decision record captures which key was used (`key_id`, ADR 0026).
 5. Free text (`rationale`, `observations`) is untrusted audit data; it must be delimited and not
    sent to an LLM provider unless needed.
