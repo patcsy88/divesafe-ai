@@ -27,8 +27,8 @@ Status of each item is stated; "planned" means nothing builds or measures it yet
   tighten-only reconcile, but no test runs the same inputs across real providers and compares them.
   Model output is nondeterministic even at temperature 0.
 - **Contradiction (planned):** contradiction detection is not built and `confidence` is `None`.
-  What exists is that conflicting evidence ids are kept visible as withheld (ADR 0008); see the
-  evidence-id conflict gap in `architecture.md` Known gaps.
+  What exists is that conflicting evidence ids are kept visible as withheld (ADR 0008) and that the
+  most severe variant decides (ADR 0026).
 
 ## Quality evaluation
 

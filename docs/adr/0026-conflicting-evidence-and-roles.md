@@ -38,7 +38,7 @@ reproducible.
    when a combination returns NO-GO. The result does not depend on the order, only the time does.
 4. Each combination whose outcome is more severe than the main run adds a rule result
    `evidence.conflict_variant` (outcome = that combination's outcome, rationale a fixed sentence
-   naming the category and connectors, never item content). `reconcile` then takes the most
+   naming the category and the variant number, never an id or item content). `reconcile` then takes the most
    severe of all rule results as it does today, so nothing can relax.
 5. The audit record keeps the withheld items, adds which combination was worst (variant indexes by
    connector name), and the page shows it next to the withheld evidence.
@@ -49,7 +49,9 @@ reproducible.
 **Capacity bounds (not safety limits):** at most `MAX_CONFLICT_IDS` conflicting ids and
 `MAX_VARIANTS_PER_ID` variants each, and at most `MAX_COMBINATIONS` runs. Beyond a bound the
 engine does not guess: it adds `evidence.conflict_unbounded` (INSUFFICIENT EVIDENCE) and the main
-result stands. The numbers are chosen in the build and recorded here; they protect run time only.
+result stands. Owner's numbers (2026-11-05): `MAX_CONFLICT_IDS = 4`, `MAX_VARIANTS_PER_ID = 3`,
+`MAX_COMBINATIONS = 64`. They protect run time only. Note that 4 ids with 3 variants each is 81
+combinations, so the combination cap binds first and such a case is `evidence.conflict_unbounded`.
 
 **Consequences:** a hostile or faulty source can force NO-GO by sending an invented dangerous
 variant. That is the safe direction, it is visible to the human, and a human can still override
@@ -61,6 +63,14 @@ EVIDENCE; order independence; early stop gives the same result; every bound; no 
 reaches a prompt; mutation checks (drop the combination loop, keep the first variant only, let a
 variant relax). A rule set with a validated definition is needed to exercise a limit; a test
 definition with a labelled synthetic limit is used, never a real one.
+
+**Built (2026-11-05):** `orchestration/conflict_variants.py`, wired in Assess and again in Rejudge
+(at the later clock); the evidence service keeps the variants (`EvidenceSet.variants`, derived from
+`withheld`, so the record shape is unchanged). Two safety tests were replaced with stronger ones, on
+the owner's approval: the "PINNED" test that asserted the gap (now NO-GO plus a variant rule result
+without ids), and the "withheld items never reach the engine" check (now: the main run never sees
+one and no run sees two variants of one id). The record does not yet carry which combination was
+worst as its own field; the rule result's rationale names it (category and variant number).
 
 ## Part B: roles and authorization
 

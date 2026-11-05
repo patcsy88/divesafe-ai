@@ -74,7 +74,12 @@ TRACE_ISSUE_KINDS: Final[Mapping[StageName, Mapping[str, str | None]]] = {
         "no_evidence": None,
     },
     StageName.RETRIEVE: {"not_configured": None},
-    StageName.ASSESS: {"connector_issues_rule": None, "unevaluated_factors": None},
+    StageName.ASSESS: {
+        "connector_issues_rule": None,
+        "unevaluated_factors": None,
+        "conflict_variant": None,
+        "conflict_unbounded": None,
+    },
     StageName.REASON: {
         "skipped_no_provider": None,
         "timed_out": None,

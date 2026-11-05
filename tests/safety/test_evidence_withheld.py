@@ -214,9 +214,11 @@ class _Recorder:
 
     def __init__(self) -> None:
         self.seen: list[str] = []
+        self.calls: list[list[str]] = []  # the ids of each engine run, in order
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
         self.seen.extend(i.id for i in evidence)
+        self.calls.append([i.id for i in evidence])
         return RuleResult(rule_id=self.rule_id, outcome=R.GO, rationale="synthetic")
 
 
@@ -284,8 +286,14 @@ def reaches_nowhere(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     provider = sl.fake()
     record, recorder, stage_ids = run(provider)
     prompt = "\n".join(r.messages[1].content for r in provider.requests)
-    if "ev-wind" in recorder.seen:
-        bad.append("engine saw a withheld item")
+    # ADR 0026: the MAIN run never sees a withheld item; only the variant runs may, one variant
+    # per conflicting id at most (never both), and nothing else gets one.
+    if not recorder.calls or "ev-wind" in recorder.calls[0]:
+        bad.append("the main engine run saw a withheld item")
+    if any(call.count("ev-wind") > 1 for call in recorder.calls):
+        bad.append("an engine run saw two variants of one id")
+    if not any(call.count("ev-wind") == 1 for call in recorder.calls[1:]):
+        bad.append("control: no variant run evaluated a variant")
     if "ev-waves_swell" not in recorder.seen:
         bad.append("control: engine saw no evidence")
     if "ev-wind" in stage_ids:
@@ -376,19 +384,25 @@ def test_without_a_conflict_the_signed_off_rule_gives_no_go() -> None:
     assert record.withheld_evidence == ()
 
 
-def test_a_conflict_that_hides_the_no_go_gives_insufficient_evidence_and_shows_the_items() -> None:
+def test_a_conflict_that_would_hide_a_no_go_still_gives_no_go_and_shows_the_items() -> None:
+    """ADR 0026 Part A. This test used to pin the gap (INSUFFICIENT EVIDENCE); the most severe
+    variant now decides, and the rule result names connectors and categories, never an id."""
     hidden = height(0, 5.0)
     record = assess_with(
         [_Source("a", hidden, height(1, 0.1)), _Source("b", height(0, 0.1))],
     )
-    assert record.final_recommendation == R.INSUFFICIENT_EVIDENCE  # pinned, NOT NO-GO
-    assert record.deterministic_recommendation == R.INSUFFICIENT_EVIDENCE
-    assert record.final_recommendation != R.NO_GO
+    assert record.final_recommendation == R.NO_GO
+    assert record.deterministic_recommendation == R.NO_GO
+    assert record.final_recommendation != R.INSUFFICIENT_EVIDENCE
     assert [i.id for i in record.withheld_evidence] == ["e-0", "e-0"]
-    assert hidden in record.withheld_evidence  # the human can see the item that would be NO-GO
-    assert [i.id for i in record.evidence] == ["e-1"]
+    assert hidden in record.withheld_evidence  # the human can still see the dangerous item
+    assert [i.id for i in record.evidence] == ["e-1"]  # and it is still not an evaluated item
     assert record.evidence_issues == (issue_text("a, b", "waves_swell"),)
     assert any(r.rule_id == "evidence.connector_issues" for r in record.rule_results)
+    variant = [r for r in record.rule_results if r.rule_id == "evidence.conflict_variant"]
+    assert len(variant) == 1 and variant[0].outcome == R.NO_GO
+    assert "waves_swell" in variant[0].rationale and "e-0" not in variant[0].rationale
+    assert variant[0].evidence_ids == ()  # a variant is never cited
 
 
 # --- (d) AssessmentRecord validation ----------------------------------------------------------

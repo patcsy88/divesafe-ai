@@ -166,13 +166,12 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Evidence-id conflicts hide the most severe variant** (a conflict can turn NO-GO into
-  INSUFFICIENT EVIDENCE; the deferred "keep the most severe variant" option must be decided before
-  any validated rule ships). See [risk-model.md](risk-model.md) and ADR 0008.
+- **Evidence-id conflicts (closed by ADR 0026, 2026-11-05):** the most severe variant decides, by
+  the deterministic engine (`orchestration/conflict_variants.py`). Left open: the capacity bounds
+  (4 ids, 3 variants, 64 combinations) leave a larger conflict at INSUFFICIENT EVIDENCE
+  (`evidence.conflict_unbounded`). The start-up guard `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP` is
+  removed.
 
-- **Ruleset loader:** `build_engine` (`api/state.py`) refuses a ruleset with VALIDATED definitions
-  at start-up unless `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP=true`, while the evidence-id conflict
-  decision above is open. Remove the guard when that decision is made.
 - **`kb_screen` id-screen gaps (accepted by the owner, 2026-11-03):** 9 strict xfails in
   `tests/safety/test_kb_screen.py` (`_fold` bypasses: punctuation inside `kb:` and a connector
   prefix dropped, spaced or percent-encoded). The id screen is a screen, not a control

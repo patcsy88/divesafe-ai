@@ -530,23 +530,18 @@ def test_a_quality_failure_is_tagged_with_the_quality_factor_not_freshness() -> 
     assert stale_factors[0] == RiskFactorKind.DATA_FRESHNESS
 
 
-def test_a_ruleset_with_signed_off_definitions_is_refused_while_the_conflict_gap_is_open(
+def test_a_ruleset_with_signed_off_definitions_loads_now_the_conflict_gap_is_closed(
     tmp_path: Path,
 ) -> None:
-    """A conflict can hide the most severe variant (ADR 0008), so loading signed-off limits needs
-    the operator to accept that gap. Without it start-up fails; with it the engine builds."""
+    """ADR 0026 closed the evidence-id conflict gap (the most severe variant decides), so the
+    start-up guard `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP` is gone: a ruleset with signed-off
+    definitions loads with no acceptance flag, and the old flag is not a setting any more."""
     from tests.unit.test_ruleset_loader import _file, _write, tioman
 
     from divesafe.api.state import build_engine
     from divesafe.config import Settings
 
     path = _write(tmp_path, _file(tioman()))
-    refused = Settings(_env_file=None, evidence_max_age_minutes=60, ruleset_path=path)  # type: ignore[call-arg]
-    with pytest.raises(RuntimeError, match="conflict gap"):
-        build_engine(refused, now=NOW)
-    accepted = refused.model_copy(update={"accept_evidence_conflict_gap": True})
-    assert build_engine(accepted, now=NOW) is not None
-    # an empty ruleset loads no limits, so there is nothing to refuse
-    (tmp_path / "e").mkdir()
-    empty = _write(tmp_path / "e", _file())
-    assert build_engine(refused.model_copy(update={"ruleset_path": empty}), now=NOW) is not None
+    plain = Settings(_env_file=None, evidence_max_age_minutes=60, ruleset_path=path)  # type: ignore[call-arg]
+    assert build_engine(plain, now=NOW) is not None
+    assert "accept_evidence_conflict_gap" not in Settings.model_fields

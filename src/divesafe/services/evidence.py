@@ -53,6 +53,15 @@ class EvidenceSet:
     connector_outcomes: tuple[ConnectorOutcome, ...] = ()
 
     @property
+    def variants(self) -> tuple[tuple[EvidenceItem, ...], ...]:
+        """The distinct items of each conflicting id, in the withheld order (ADR 0026). For the
+        deterministic variant check only: never cited, never given to an agent or a prompt."""
+        by_id: dict[str, list[EvidenceItem]] = {}
+        for item in self.withheld:
+            by_id.setdefault(item.id, []).append(item)
+        return tuple(tuple(items) for items in by_id.values())
+
+    @property
     def conflicts(self) -> int:
         """Ids withheld because different items shared them."""
         return len({i.id for i in self.withheld})

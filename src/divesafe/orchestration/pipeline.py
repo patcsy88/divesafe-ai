@@ -48,6 +48,11 @@ from divesafe.domain import (
     unnamed_qualifier,
 )
 from divesafe.models import LLMProvider
+from divesafe.orchestration.conflict_variants import (
+    UNBOUNDED_RULE,
+    VARIANT_RULE,
+    variant_results,
+)
 from divesafe.orchestration.graph import STAGES, next_stage
 from divesafe.orchestration.supervisor import check_invariants, supervise
 from divesafe.risk import Reconciliation, RiskRulesEngine, reconcile
@@ -177,6 +182,10 @@ async def _assess(run: _Run) -> StageOutcome:
             )
         )
     run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
+    run.rule_results.extend(
+        variant_results(engine, plan, evidence.items, evidence.variants, now, run.deterministic)
+    )
+    run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
     run.unevaluated = assessment.unevaluated_factors
     run.ruleset_version = assessment.ruleset_version
     return StageOutcome.COMPLETED
@@ -251,6 +260,18 @@ async def _rejudge(run: _Run) -> StageOutcome:
         before = len(run.rule_results)
         later = run.engine.assess(run.plan, run.evidence_set.items, run.completed)
         run.rule_results.extend(r for r in later.rule_results if r not in run.rule_results)
+        run.rule_results.extend(
+            r
+            for r in variant_results(
+                run.engine,
+                run.plan,
+                run.evidence_set.items,
+                run.evidence_set.variants,
+                run.completed,
+                most_severe(tuple(x.outcome for x in run.rule_results)),
+            )
+            if r not in run.rule_results
+        )
         if run.plan.planned_start <= run.completed:
             run.rule_results.append(
                 RuleResult(
@@ -417,6 +438,10 @@ def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]
     elif name is StageName.ASSESS:
         if any(r.rule_id == _CONNECTOR_ISSUES_RULE for r in run.rule_results):
             codes.append(issue_code(name, "connector_issues_rule"))
+        if any(r.rule_id == VARIANT_RULE for r in run.rule_results):
+            codes.append(issue_code(name, "conflict_variant"))
+        if any(r.rule_id == UNBOUNDED_RULE for r in run.rule_results):
+            codes.append(issue_code(name, "conflict_unbounded"))
         if run.unevaluated:
             codes.append(issue_code(name, "unevaluated_factors"))
     elif name is StageName.REASON:

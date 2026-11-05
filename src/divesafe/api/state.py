@@ -156,12 +156,6 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
             raise RuntimeError(f"the ruleset cannot be loaded: {exc}") from exc
         if not loaded.is_clean:
             raise RuntimeError(f"the ruleset has refused definitions: {loaded.describe_refusals()}")
-        if loaded.rules and not settings.accept_evidence_conflict_gap:
-            raise RuntimeError(
-                "the ruleset has signed-off definitions while the evidence-id conflict gap is "
-                "open (a conflict can hide the most severe variant, ADR 0008); decide the gap, or "
-                "accept it with DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP=true"
-            )
         logger.warning(
             "ruleset loaded",
             extra={
