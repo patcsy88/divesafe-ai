@@ -71,6 +71,8 @@ class RunAwareRepository(AssessmentRepository, RunStore, Protocol):
 
 
 _APPEND_ONLY = ("human_decision", "actual_conditions")
+# Change only by appending one reassignment to a record that has no decision yet (ADR 0026).
+_REASSIGNABLE = ("assigned_decider", "reassignments")
 
 
 def check_successor(old: AssessmentRecord, new: AssessmentRecord) -> None:
@@ -80,7 +82,20 @@ def check_successor(old: AssessmentRecord, new: AssessmentRecord) -> None:
     except ValueError as exc:
         raise InvalidSuccessorError("successor record is not valid") from exc
     before, after = old.model_dump(), new.model_dump()
+    reassigning = new.reassignments != old.reassignments
+    if reassigning:
+        if old.human_decision is not None or new.human_decision is not None:
+            raise InvalidSuccessorError("a decided assessment cannot be reassigned")
+        added = new.reassignments[len(old.reassignments) :]
+        if (
+            len(added) != 1
+            or new.reassignments[: len(old.reassignments)] != old.reassignments
+            or added[0].from_decider != old.assigned_decider
+        ):
+            raise InvalidSuccessorError("reassignments are append-only, one at a time")
     for key, value in before.items():
+        if key in _REASSIGNABLE and reassigning:
+            continue
         if key not in _APPEND_ONLY and value != after[key]:
             raise InvalidSuccessorError(f"field '{key}' may not change")
     for field in _APPEND_ONLY:

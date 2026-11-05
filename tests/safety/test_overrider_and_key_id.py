@@ -562,7 +562,15 @@ def test_a_decision_with_no_key_id_is_refused_and_nothing_is_recorded() -> None:
 
 def test_mutation_the_missing_key_id_check_is_removed() -> None:
     mutant = mutated_module(
-        app_module, ("        if not principal.key_id:\n", "        if False:\n")
+        app_module,
+        (
+            "        if not principal.key_id:\n"
+            '            logger.error("authenticator set no key id", '
+            'extra={"actor": principal.actor})\n'
+            '            raise HTTPException(status_code=500, detail="internal error")\n'
+            "        if (\n            severity(",
+            "        if (\n            severity(",
+        ),
     )
     status, decision = _no_key_id_status(mutant)
     assert status == 200 and decision is not None and decision.key_id is None

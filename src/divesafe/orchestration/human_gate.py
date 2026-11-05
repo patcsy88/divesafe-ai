@@ -10,7 +10,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from divesafe.domain import ActualConditions, AssessmentRecord, HumanDecision, Recommendation
+from divesafe.domain import (
+    ActualConditions,
+    AssessmentRecord,
+    HumanDecision,
+    Reassignment,
+    Recommendation,
+)
 
 
 class AlreadyDecidedError(RuntimeError):
@@ -33,6 +39,40 @@ class DecisionRequiredError(RuntimeError):
 
 def _revalidated(record: AssessmentRecord, **changes: Any) -> AssessmentRecord:
     return AssessmentRecord.model_validate({**record.model_dump(), **changes})
+
+
+class NotReassignableError(RuntimeError):
+    """The assessment cannot be moved (already decided, or the target is the current decider)."""
+
+
+def reassign(
+    record: AssessmentRecord,
+    *,
+    to_decider: str,
+    reassigned_by: str,
+    reassigned_at: datetime,
+    key_id: str,
+) -> AssessmentRecord:
+    """Move a still-pending assessment to another decider. The previous assignee loses the right
+    to decide at once. The caller has already checked that `to_decider` may decide."""
+    if record.human_decision is not None:
+        raise NotReassignableError("this assessment already has a decision")
+    if record.assigned_decider is None:
+        raise NotReassignableError("this assessment has no assigned decider")
+    if record.assigned_decider.casefold() == to_decider.strip().casefold():
+        raise NotReassignableError("this assessment is already assigned to that decider")
+    move = Reassignment(
+        from_decider=record.assigned_decider,
+        to_decider=to_decider,
+        reassigned_by=reassigned_by,
+        reassigned_at=reassigned_at,
+        key_id=key_id,
+    )
+    return _revalidated(
+        record,
+        assigned_decider=to_decider,
+        reassignments=(*record.reassignments, move),
+    )
 
 
 def decide(

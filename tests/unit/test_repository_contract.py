@@ -238,3 +238,147 @@ def test_unvalidated_successor_is_rejected(repo: AssessmentRepository) -> None:
     )
     with pytest.raises(InvalidSuccessorError):
         repo.replace(pending, forged)
+
+
+# --- ADR 0026: a pending assessment may be reassigned, append-only ------------------------------
+
+
+def _assigned(record: AssessmentRecord, who: str = "ann") -> AssessmentRecord:
+    return AssessmentRecord.model_validate({**record.model_dump(), "assigned_decider": who})
+
+
+def _moved(record: AssessmentRecord, to: str = "bob", *, at: int = 1) -> AssessmentRecord:
+    from datetime import timedelta as _td
+
+    from divesafe.domain import Reassignment
+
+    move = Reassignment(
+        from_decider=str(record.assigned_decider),
+        to_decider=to,
+        reassigned_by="root",
+        reassigned_at=NOW + _td(minutes=at),
+        key_id="0123456789ab",
+    )
+    return AssessmentRecord.model_validate(
+        {
+            **record.model_dump(),
+            "assigned_decider": to,
+            "reassignments": (*record.reassignments, move),
+        }
+    )
+
+
+def test_a_pending_record_can_be_reassigned_and_then_again(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    assert repo.get("r1") == first
+    second = _moved(first, "cara", at=2)
+    repo.replace(first, second)
+    stored = repo.get("r1")
+    assert stored is not None and stored.assigned_decider == "cara"
+    assert [m.to_decider for m in stored.reassignments] == ["bob", "cara"]
+
+
+def test_a_reassigned_record_can_still_be_decided_by_the_new_assignee(
+    repo: AssessmentRepository,
+) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    moved = _moved(pending, "bob")
+    repo.replace(pending, moved)
+    later = HumanDecision(
+        decided_by="bob",
+        decision=R.INSUFFICIENT_EVIDENCE,
+        decided_at=NOW + timedelta(minutes=10),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**moved.model_dump(), "human_decision": later.model_dump()}
+    )
+    repo.replace(moved, decided)
+    assert repo.get("r1") == decided
+
+
+def test_a_decided_record_cannot_be_reassigned(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    decided = _decided(pending, "ann")
+    repo.replace(pending, decided)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(decided, _moved(decided, "bob", at=0))
+    assert repo.get("r1") == decided
+
+
+def test_the_assignee_cannot_change_without_a_recorded_move(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    sneaky = AssessmentRecord.model_validate({**pending.model_dump(), "assigned_decider": "bob"})
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, sneaky)
+    assert repo.get("r1") == pending
+
+
+def test_a_reassignment_cannot_be_removed_rewritten_or_stacked(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    two_at_once = _moved(_moved(first, "cara", at=2), "dan", at=3)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, two_at_once)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, pending)  # undoing a move
+    rewritten = _moved(pending, "cara")  # a different history ending elsewhere
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, rewritten)
+    assert repo.get("r1") == first
+
+
+def test_a_reassignment_cannot_carry_another_change(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    moved = _moved(pending, "bob")
+    altered = AssessmentRecord.model_validate({**moved.model_dump(), "ruleset_version": "other"})
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, altered)
+    assert repo.get("r1") == pending
+
+
+def test_a_move_must_start_from_the_current_assignee(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    from divesafe.domain import Reassignment
+
+    forged = Reassignment(
+        from_decider="zed",
+        to_decider="bob",
+        reassigned_by="root",
+        reassigned_at=NOW + timedelta(minutes=1),
+        key_id="0123456789ab",
+    )
+    wrong = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "assigned_decider": "bob", "reassignments": (forged,)}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, wrong)
+    assert repo.get("r1") == pending
+
+
+def test_an_earlier_move_cannot_be_rewritten_in_place(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    second = _moved(first, "cara", at=2)
+    rewritten_first = first.reassignments[0].model_copy(update={"reassigned_by": "mallory"})
+    forged = AssessmentRecord.model_validate(
+        {
+            **second.model_dump(),
+            "reassignments": (rewritten_first, second.reassignments[1]),
+        }
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, forged)
+    assert repo.get("r1") == first

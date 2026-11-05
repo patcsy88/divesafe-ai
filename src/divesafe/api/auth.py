@@ -42,6 +42,7 @@ class Role(StrEnum):
     OVERRIDER = (
         "overrider"  # as a decider, choose a LESS severe outcome than the system's (ADR 0026)
     )
+    ADMIN = "admin"  # move a pending assessment to another decider; cannot decide (ADR 0026)
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,8 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
             raise ValueError("a decider key must also be a viewer: a decision needs the evidence")
         if Role.OVERRIDER in role_set and not {Role.DECIDER, Role.VIEWER} <= role_set:
             raise ValueError("an overrider key must also be a decider and a viewer")
+        if Role.ADMIN in role_set and Role.VIEWER not in role_set:
+            raise ValueError("an admin key must also be a viewer: moving needs the assessment")
         entries[digest] = KeyEntry(actor, role_set)
     labels = [key_id_of(d) for d in entries]
     if len(set(labels)) != len(labels):

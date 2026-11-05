@@ -715,8 +715,8 @@ def test_a_wrong_pin_leaves_the_schema_version_unchanged_and_a_retry_with_the_re
     monkeypatch.undo()
     applied = migrate(bare.admin_dsn)
     after = [int(r[0]) for r in bare.rows("SELECT version FROM public.schema_migrations")]
-    assert applied == [4]
-    assert sorted(after) == [1, 2, 3, 4]
+    assert applied == [4, 5]
+    assert sorted(after) == [1, 2, 3, 4, 5]
 
 
 def test_a_missing_pin_for_the_running_major_makes_migrate_refuse_and_roll_back(

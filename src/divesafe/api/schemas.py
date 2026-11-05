@@ -128,6 +128,10 @@ class CreateAssessmentRequest(_Request):
     )
 
 
+class ReassignRequest(_Request):
+    to_decider: str = Field(min_length=1, max_length=100)
+
+
 class DecisionRequest(_Request):
     decision: Recommendation
     rationale: str | None = Field(default=None, max_length=5000)

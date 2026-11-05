@@ -34,6 +34,7 @@ from divesafe.api.schemas import (
     CreateAssessmentRequest,
     DecisionRequest,
     EvidenceView,
+    ReassignRequest,
     RunStatusView,
     SiteListView,
     SiteView,
@@ -51,10 +52,12 @@ from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
     NotAssignedDeciderError,
+    NotReassignableError,
     RunOptions,
     assess_dive,
     check_assigned,
     decide,
+    reassign,
     report_actual_conditions,
 )
 from divesafe.services import (
@@ -82,6 +85,9 @@ _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
 )
 
+_NOT_REASSIGNABLE = (
+    "nothing was changed; only a pending assessment can move, to a different decider"
+)
 _NOT_OVERRIDER = (
     "nothing was recorded; choosing a less severe outcome than the system's needs the overrider "
     "role, and the assessment is still pending"
@@ -106,6 +112,7 @@ READ = require_role(Role.VIEWER, limit_key="read")
 READ_OWN = require_any_role((Role.VIEWER, Role.ASSESSOR), limit_key="read")
 CREATE = require_role(Role.ASSESSOR, limit_key="create")
 DECIDE = require_role(Role.DECIDER, limit_key="decide")
+REASSIGN = require_role(Role.ADMIN, limit_key="decide")
 
 
 def _messages(exc: ValidationError) -> list[str]:
@@ -580,6 +587,53 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 "actor": principal.actor,
                 "override": body.decision != record.final_recommendation,
             },
+        )
+        return AssessmentView.of(updated)
+
+    @app.post("/v1/assessments/{assessment_id}/reassign", tags=["human gate"])
+    def reassign_assessment(
+        assessment_id: AssessmentId,
+        body: ReassignRequest,
+        principal: Annotated[Principal, Depends(REASSIGN)],
+    ) -> AssessmentView:
+        record = _load(assessment_id, principal)
+        if record.human_decision is not None:
+            raise HTTPException(status_code=409, detail=_NOT_REASSIGNABLE)
+        if not principal.key_id:
+            logger.error("authenticator set no key id", extra={"actor": principal.actor})
+            raise HTTPException(status_code=500, detail="internal error")
+        target = app_state.authenticator.canonical_decider(body.to_decider)
+        if target is None:
+            logger.warning(
+                "reassignment refused: unknown decider", extra={"actor": principal.actor}
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="name a known key holder with the decider role to take over the decision",
+            )
+        try:
+            updated = reassign(
+                record,
+                to_decider=target,
+                reassigned_by=principal.actor,
+                reassigned_at=app_state.clock(),
+                key_id=principal.key_id,
+            )
+            app_state.repository.replace(record, updated)
+        except NotReassignableError as exc:
+            raise HTTPException(status_code=409, detail=_NOT_REASSIGNABLE) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail="assessment changed; reload it") from exc
+        except RecordNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "reassignment refused: invalid successor", extra={"assessment_id": assessment_id}
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
+        logger.info(
+            "assessment reassigned",
+            extra={"assessment_id": assessment_id, "actor": principal.actor},
         )
         return AssessmentView.of(updated)
 

@@ -55,6 +55,7 @@ REVIEWED_GUARD_MIGRATIONS: Mapping[int, str] = MappingProxyType(
     {
         3: "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b306297",
         4: "c95979fbf982c54ef0f05528d9549944d49a10c0210690854509c9042a36df8e",
+        5: "76afa4028d3cd312dfd1b8a472b584b639077cd2a35a2e3b529d75c1ae685f40",
     }
 )
 KNOWLEDGE_MIGRATION = 4
@@ -292,6 +293,74 @@ _V3 = """
 ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard;
 ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_insert_guard;
 ALTER TABLE public.assessments ENABLE ALWAYS TRIGGER assessments_no_truncate_guard;
+"""
+
+
+_V5 = """
+CREATE OR REPLACE FUNCTION public.assessments_append_only() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE
+    json_null constant jsonb := 'null'::jsonb;
+    old_decision jsonb := COALESCE(OLD.record->'human_decision', json_null);
+    old_actual jsonb := COALESCE(OLD.record->'actual_conditions', json_null);
+    new_decision jsonb := COALESCE(NEW.record->'human_decision', json_null);
+    new_actual jsonb := COALESCE(NEW.record->'actual_conditions', json_null);
+    old_moves jsonb := COALESCE(OLD.record->'reassignments', '[]'::jsonb);
+    new_moves jsonb := COALESCE(NEW.record->'reassignments', '[]'::jsonb);
+    is_move boolean := false;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'assessments are never deleted';
+    END IF;
+    -- A reassignment: while nothing is decided, exactly one move is appended to `reassignments`
+    -- and `assigned_decider` becomes that move's target. Nothing else may change.
+    IF old_decision = json_null AND new_decision = json_null
+       AND old_actual = json_null AND new_actual = json_null
+       AND jsonb_typeof(old_moves) = 'array' AND jsonb_typeof(new_moves) = 'array'
+       AND jsonb_array_length(new_moves) = jsonb_array_length(old_moves) + 1
+       AND jsonb_array_length(new_moves) <= 10
+    THEN
+        is_move := COALESCE(
+            (NEW.record - 'assigned_decider' - 'reassignments')
+                IS NOT DISTINCT FROM (OLD.record - 'assigned_decider' - 'reassignments')
+            AND (new_moves - (jsonb_array_length(new_moves) - 1)) = old_moves
+            AND (new_moves->-1)->>'from_decider' = OLD.record->>'assigned_decider'
+            AND (new_moves->-1)->>'to_decider' = NEW.record->>'assigned_decider'
+            AND lower(btrim((new_moves->-1)->>'from_decider'))
+                <> lower(btrim((new_moves->-1)->>'to_decider')),
+            false
+        );
+    END IF;
+    IF NEW.id <> OLD.id
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR (NOT is_move AND (NEW.record - 'human_decision' - 'actual_conditions')
+          IS DISTINCT FROM (OLD.record - 'human_decision' - 'actual_conditions'))
+       OR (old_decision <> json_null AND new_decision <> old_decision)
+       OR (old_actual <> json_null AND new_actual <> old_actual)
+    THEN
+        RAISE EXCEPTION 'only a first human decision and first actual conditions may be appended';
+    END IF;
+    IF new_actual <> json_null AND new_decision = json_null THEN
+        RAISE EXCEPTION 'actual conditions require a decision';
+    END IF;
+    IF old_decision = json_null AND new_decision <> json_null THEN
+        IF NOT COALESCE(
+            jsonb_typeof(new_decision) = 'object'
+            AND length(btrim(new_decision->>'decided_by')) > 0
+            AND new_decision->>'decision' IN ('GO', 'CAUTION', 'NO-GO', 'INSUFFICIENT EVIDENCE')
+            AND jsonb_typeof(new_decision->'is_override') = 'boolean'
+            AND (
+                (new_decision->'is_override') = 'false'::jsonb
+                OR length(btrim(COALESCE(new_decision->>'override_rationale', ''))) > 0
+            ),
+            false
+        ) THEN
+            RAISE EXCEPTION 'the human decision is malformed';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
 """
 
 
@@ -706,6 +775,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(2, "pending runs and failure counts", _V2),
     Migration(3, "guard triggers fire in every replication role", _V3),
     Migration(4, "knowledge store tables and guard triggers", _V4),
+    Migration(5, "a pending assessment may be reassigned, append-only", _V5),
 )
 
 Applied = tuple[int, str, str]  # version, name, checksum

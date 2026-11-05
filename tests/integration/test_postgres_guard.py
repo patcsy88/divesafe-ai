@@ -1060,7 +1060,7 @@ def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> No
 
     _postgres()
     try:
-        # Back to version 2: migration 4 sits above 3, so it goes too, with its objects.
+        # Back to version 2: migrations 4 and 5 sit above 3, so they go too (4 with its objects).
         _sql("DELETE FROM schema_migrations WHERE version >= 3")
         drop_knowledge_objects()
         for trigger in GUARD_TRIGGERS:
@@ -1069,7 +1069,7 @@ def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> No
         problems = repo.verify(least_privilege=False)
         assert any("schema version 2" in p for p in problems)
         assert all(any(t in p for p in problems) for t in GUARD_TRIGGERS)
-        assert migrate(DSN) == [3, 4]  # type: ignore[arg-type]
+        assert migrate(DSN) == [3, 4, 5]  # type: ignore[arg-type]
         assert repo.verify(least_privilege=False) == []
     finally:
         _postgres()
@@ -1463,3 +1463,175 @@ def test_an_old_shape_decided_row_can_still_be_given_actual_conditions() -> None
     assert "key_id" not in stored["human_decision"]
     assert "decided_by_creator" not in stored["human_decision"]
     assert repo.get("r1") == done
+
+
+# --- ADR 0026: the database allows one appended reassignment of a pending row, nothing else -----
+
+
+def _move(frm: str, to: str, at: str = "2026-10-08T12:30:00Z") -> dict[str, object]:
+    return {
+        "from_decider": frm,
+        "to_decider": to,
+        "reassigned_by": "root",
+        "reassigned_at": at,
+        "key_id": "0123456789ab",
+    }
+
+
+def _assigned_row() -> dict[str, object]:
+    return {**_base(), "assigned_decider": "ann", "reassignments": []}
+
+
+@pytest.fixture
+def pending_row(stored: PostgresAssessmentRepository) -> dict[str, object]:
+    row = _assigned_row()
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(row)  # the starting row is set up directly; every later write meets the guard
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    return row
+
+
+def test_the_database_allows_one_appended_move_of_a_pending_row(
+    pending_row: dict[str, object],
+) -> None:
+    _set_record({**pending_row, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]})
+    again = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "bob"), _move("bob", "cara")],
+    }
+    _set_record(again)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        pytest.param(lambda r: {**r, "assigned_decider": "bob"}, id="assignee-without-a-move"),
+        pytest.param(
+            lambda r: {**r, "reassignments": [_move("ann", "bob")]}, id="move-without-assignee"
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "cara",
+                "reassignments": [_move("ann", "bob"), _move("bob", "cara")],
+            },
+            id="two-moves-at-once",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "bob", "reassignments": [_move("zed", "bob")]},
+            id="move-from-the-wrong-person",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "ANN ", "reassignments": [_move("ann", "ANN ")]},
+            id="move-to-the-same-person",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob"), _move("bob", "bob")],
+            },
+            id="two-moves-the-second-to-the-same-person",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob")],
+                "ruleset_version": "other",
+            },
+            id="move-plus-another-change",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob")],
+                "final_recommendation": "GO",
+            },
+            id="move-plus-a-recommendation-change",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "bob", "reassignments": "not a list"},
+            id="moves-not-a-list",
+        ),
+    ],
+)
+def test_the_database_refuses_a_forged_move(pending_row: dict[str, object], forged: object) -> None:
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(forged(pending_row))  # type: ignore[operator]
+    assert json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'")) == (
+        json.loads(json.dumps(pending_row))
+    )
+
+
+def test_the_database_refuses_to_remove_or_rewrite_an_earlier_move(
+    pending_row: dict[str, object],
+) -> None:
+    moved = {**pending_row, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]}
+    _set_record(moved)
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(pending_row)  # undo
+    rewritten = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "cara")],
+    }
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(rewritten)
+    forged_history = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "dan"), _move("dan", "cara")],
+    }
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(forged_history)
+
+
+def test_the_database_refuses_a_move_of_a_decided_row(stored: PostgresAssessmentRepository) -> None:
+    decided = json.loads(_decided(_record()).model_dump_json())
+    decided = {**decided, "assigned_decider": "ann", "reassignments": []}
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(decided)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record({**decided, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]})
+
+
+def test_the_database_caps_the_number_of_moves(pending_row: dict[str, object]) -> None:
+    moves: list[dict[str, object]] = []
+    names = [f"d{i}" for i in range(12)]
+    current = "ann"
+    row = pending_row
+    for i in range(10):
+        moves.append(_move(current, names[i]))
+        row = {**pending_row, "assigned_decider": names[i], "reassignments": list(moves)}
+        _set_record(row)
+        current = names[i]
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(
+            {
+                **pending_row,
+                "assigned_decider": "last",
+                "reassignments": [*moves, _move(current, "last")],
+            }
+        )
+
+
+def test_the_database_refuses_a_move_that_rewrites_an_earlier_one_in_place(
+    pending_row: dict[str, object],
+) -> None:
+    """The earlier move keeps its from and to; only another field of it changes. Only the check
+    that the old moves are an unchanged prefix can see this."""
+    first = _move("ann", "bob")
+    _set_record({**pending_row, "assigned_decider": "bob", "reassignments": [first]})
+    rewritten_first = {**first, "reassigned_by": "mallory"}
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(
+            {
+                **pending_row,
+                "assigned_decider": "cara",
+                "reassignments": [rewritten_first, _move("bob", "cara")],
+            }
+        )

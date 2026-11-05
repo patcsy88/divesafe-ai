@@ -25,3 +25,8 @@ Status: accepted
 - Reads are not scoped to owner.
 - `assigned_decider` is stored in the JSON record; the PostgreSQL trigger treats it as immutable
   because it only allows `human_decision` and `actual_conditions` to change.
+
+## Amendment (ADR 0026, 2026-11-06)
+
+An `admin` may move a pending assessment to another decider. The change is recorded in
+`reassignments` on the record; the previous assignee can no longer decide it.

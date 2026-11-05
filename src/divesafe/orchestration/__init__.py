@@ -10,8 +10,10 @@ from divesafe.orchestration.human_gate import (
     AlreadyDecidedError,
     DecisionRequiredError,
     NotAssignedDeciderError,
+    NotReassignableError,
     check_assigned,
     decide,
+    reassign,
     report_actual_conditions,
 )
 from divesafe.orchestration.pipeline import (
@@ -55,6 +57,8 @@ __all__ = [
     "UnsafeConfigurationError",
     "RunOptions",
     "assess_dive",
+    "NotReassignableError",
     "decide",
+    "reassign",
     "report_actual_conditions",
 ]

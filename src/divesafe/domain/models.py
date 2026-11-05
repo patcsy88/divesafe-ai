@@ -230,6 +230,26 @@ class Finding(_Frozen):
         return self
 
 
+MAX_REASSIGNMENTS = 10
+
+
+class Reassignment(_Frozen):
+    """One move of a still-pending assessment to another decider (ADR 0026). Appended by an
+    `admin`, never edited. Names are the configured actor names; `key_id` labels the admin's key."""
+
+    from_decider: str = Field(min_length=1, max_length=100)
+    to_decider: str = Field(min_length=1, max_length=100)
+    reassigned_by: str = Field(min_length=1, max_length=100)
+    reassigned_at: AwareDatetime
+    key_id: str = Field(pattern=r"^(?:[0-9a-f]{12}|dev)$")
+
+    @model_validator(mode="after")
+    def _moves_to_someone_else(self) -> Reassignment:
+        if self.from_decider.strip().casefold() == self.to_decider.strip().casefold():
+            raise ValueError("a reassignment must name a different decider")
+        return self
+
+
 class HumanDecision(_Frozen):
     """The human's decision. Any override is allowed (ADR 0004); a less severe one needs the
     `overrider` role (ADR 0026, enforced by the API). It needs an identified decision-maker and a
@@ -383,6 +403,14 @@ class AssessmentRecord(_Frozen):
         ),
         max_length=100,
     )
+    reassignments: tuple[Reassignment, ...] = Field(
+        default=(),
+        max_length=MAX_REASSIGNMENTS,
+        description=(
+            "Moves of this assessment between deciders before it was decided, oldest first "
+            "(ADR 0026). `assigned_decider` is the last one's target."
+        ),
+    )
     human_decision: HumanDecision | None = None
     actual_conditions: ActualConditions | None = None
     supervisor_verdict: SupervisorVerdict | None = Field(
@@ -480,6 +508,7 @@ class AssessmentRecord(_Frozen):
         self._check_supervisor()
         self._check_stages()
 
+        self._check_reassignments()
         if self.human_decision is not None:
             if self.human_decision.decided_at < self.created_at:
                 raise ValueError("decided_at is before the assessment was created")
@@ -505,6 +534,23 @@ class AssessmentRecord(_Frozen):
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self
+
+    def _check_reassignments(self) -> None:
+        """A chain: each move starts where the last ended, in time order, and the current
+        assignee is where the last one ended. Nothing moves after the decision."""
+        previous_to: str | None = None
+        previous_at = self.created_at
+        for move in self.reassignments:
+            if previous_to is not None and move.from_decider != previous_to:
+                raise ValueError("reassignments must form a chain")
+            if move.reassigned_at < previous_at:
+                raise ValueError("a reassignment is dated before the one before it")
+            previous_to, previous_at = move.to_decider, move.reassigned_at
+        if previous_to is not None:
+            if self.assigned_decider != previous_to:
+                raise ValueError("assigned_decider must be where the last reassignment ended")
+            if self.human_decision is not None and previous_at > self.human_decision.decided_at:
+                raise ValueError("a reassignment is dated after the decision")
 
     def _check_stages(self) -> None:
         """At most one trace per stage, in graph order, each pointing at the next entry (None

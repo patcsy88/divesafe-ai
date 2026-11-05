@@ -62,16 +62,24 @@ REVIEWED_THREE = "7588a25481499fa29d84a995fa9a851c8056690ec7b3591f6c3cd1f59b3062
 
 REVIEWED_FOUR = "c95979fbf982c54ef0f05528d9549944d49a10c0210690854509c9042a36df8e"
 
+REVIEWED_FIVE = "76afa4028d3cd312dfd1b8a472b584b639077cd2a35a2e3b529d75c1ae685f40"
 
-def test_migrations_three_and_four_are_pinned_and_are_the_only_reviewed_exceptions() -> None:
+
+def test_migrations_three_four_and_five_are_pinned_and_are_the_only_reviewed_exceptions() -> None:
     from divesafe.services.migrations import REVIEWED_GUARD_MIGRATIONS
 
     assert MIGRATIONS[2].version == 3
     assert MIGRATIONS[2].checksum == REVIEWED_THREE
     assert MIGRATIONS[3].version == 4
     assert MIGRATIONS[3].checksum == REVIEWED_FOUR
-    assert dict(REVIEWED_GUARD_MIGRATIONS) == {3: REVIEWED_THREE, 4: REVIEWED_FOUR}
-    assert set(REVIEWED_GUARD_MIGRATIONS) == {3, 4}
+    assert MIGRATIONS[4].version == 5
+    assert MIGRATIONS[4].checksum == REVIEWED_FIVE
+    assert dict(REVIEWED_GUARD_MIGRATIONS) == {
+        3: REVIEWED_THREE,
+        4: REVIEWED_FOUR,
+        5: REVIEWED_FIVE,
+    }
+    assert set(REVIEWED_GUARD_MIGRATIONS) == {3, 4, 5}
 
 
 def test_the_reviewed_table_is_read_only_for_every_operation() -> None:

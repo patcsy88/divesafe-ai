@@ -107,7 +107,15 @@ no groups. An unreadable assessment returns 404, the same as a missing one, so i
 **Config format:** `{"actor": ..., "roles": [...], "groups": [...]}`; `groups` is optional.
 
 **Built (2026-11-05), items 1-3:** `overrider`, `key_id`, `decided_by_creator`. The evaluation
-output does not yet show `decided_by_creator` (open). `admin` reassignment and `groups` are not built.
+output does not yet show `decided_by_creator` (open).
+
+**Built (2026-11-06), item 4:** `admin` reassignment. `POST /v1/assessments/{id}/reassign` (admin only;
+the new assignee must pass `canonical_decider`; a decided assessment or a move to the same person
+is 409). Each move is a `Reassignment` on the record (max 10, chained, in time order, with the
+admin's `key_id`); the old assignee loses the right at once. Migration 5 lets the guard trigger
+accept exactly one appended move of an undecided row (checksum pinned in
+`REVIEWED_GUARD_MIGRATIONS`, mutation-checked against a real database). The page lists the moves.
+`groups` is not built.
 
 ## Storage (the hard part)
 

@@ -214,6 +214,19 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <dd>{r.created_by ? plain(r.created_by) : "unknown"}</dd>
           <dt>Decision to be recorded by</dt>
           <dd>{r.assigned_decider ? plain(r.assigned_decider) : "nobody (this record cannot be decided)"}</dd>
+          {(r.reassignments ?? []).length > 0 && <dt>Moved between deciders</dt>}
+          {(r.reassignments ?? []).length > 0 && (
+            <dd>
+              <ul>
+                {(r.reassignments ?? []).map((m, i) => (
+                  <li key={i}>
+                    {plain(m.from_decider)} to {plain(m.to_decider)}, by {plain(m.reassigned_by)} on{" "}
+                    {formatWhen(m.reassigned_at)} (key {plain(m.key_id)})
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          )}
         </dl>
       </section>
 

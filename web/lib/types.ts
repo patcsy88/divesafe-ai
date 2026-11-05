@@ -51,6 +51,13 @@ export interface AssessmentRecord {
   model_version: string | null;
   created_by: string | null;
   assigned_decider: string | null;
+  reassignments?: {
+    from_decider: string;
+    to_decider: string;
+    reassigned_by: string;
+    reassigned_at: string;
+    key_id: string;
+  }[];
   actual_conditions: {
     reported_at: string;
     reported_by: string;
