@@ -6,6 +6,7 @@ Deterministic, no model. Uses the labelled SYNTHETIC wave-height limit from
 EQUIVALENT MUTANTS (not tested):
   - the `break` after NO-GO (only run time changes; `test_stopping_early_...` pins the count);
   - the order of `itertools.product` (the maximum does not depend on order);
+  - the variant check in Rejudge (no rule takes the clock, so it can add nothing Assess did not);
   - removing `if not groups: return []` (one run on no variants cannot be worse than the baseline,
     so the `worst_choice is None` guard returns the same empty list).
 """
@@ -198,7 +199,7 @@ def test_the_stage_trace_names_the_variant_result_with_a_fixed_code() -> None:
 
 
 def test_variants_are_checked_again_at_the_later_clock() -> None:
-    """Rejudge adds a variant result that the later clock makes new, never removes one."""
+    """The variant result survives Rejudge (the call there is an equivalent mutant, see above)."""
     from divesafe.data import TIOMAN_ISLAND
     from divesafe.orchestration import assess_dive
 
@@ -439,3 +440,50 @@ def test_mutation_running_the_search_from_a_no_go_start_is_caught() -> None:
         ),
     )
     assert _no_go_start_calls(mutant) > 0
+
+
+def _later_group_and_kept_items(module: Any) -> list[str]:
+    bad: list[str] = []
+    engine, plan = no_go_engine(), _plan()
+    seen: list[list[str]] = []
+    real = engine.assess
+
+    def spy(p: Any, items: Any, now: Any) -> Any:
+        seen.append([i.id for i in items])
+        return real(p, items, now)
+
+    engine.assess = spy  # type: ignore[method-assign]
+    kept = height(7, SAFE)
+    groups = [
+        tuple(height(0, v) for v in (SAFE, SAFE + 0.1)),
+        tuple(height(1, v) for v in (SAFE, DANGER)),  # danger only in the second group, 2nd variant
+    ]
+    got = module.variant_results(engine, plan, [kept], groups, NOW, R.INSUFFICIENT_EVIDENCE)
+    if [(r.rule_id, r.outcome) for r in got] != [(VARIANT_RULE, R.NO_GO)]:
+        bad.append("a dangerous variant in a later group was missed")
+    if not seen or any(kept.id not in ids for ids in seen):
+        bad.append("the kept items were not passed with the variants")
+    if any(len(ids) != 3 for ids in seen):
+        bad.append("a run did not have the kept item plus one variant per id")
+    return bad
+
+
+def test_a_danger_in_a_later_group_is_found_and_kept_items_stay_in_every_run() -> None:
+    assert _later_group_and_kept_items(cv) == []
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        pytest.param(
+            (
+                "added = [g[i] for g, i in zip(groups, choice, strict=True)]",
+                "added = [groups[0][choice[0]]]",
+            ),
+            id="only-the-first-group-is-added",
+        ),
+        pytest.param(("[*items, *added]", "[*added]"), id="kept-items-dropped"),
+    ],
+)
+def test_mutation_of_which_items_each_run_gets_is_caught(edit: tuple[str, str]) -> None:
+    assert _later_group_and_kept_items(mutated_module(cv, edit)) != []

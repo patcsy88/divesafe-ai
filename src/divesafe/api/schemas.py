@@ -413,11 +413,13 @@ class EvidenceView(BaseModel):
     evidence: tuple[EvidenceEntry, ...]
     evidence_issues: tuple[str, ...]
     # Plain data, labelled by the field name and the note: dropped because different items shared
-    # one id. NOT evaluated and NOT cited; they may hold a more severe result.
+    # one id. Not in the main result and NOT cited; checked separately for a more severe reading.
     withheld_evidence: tuple[EvidenceItem, ...] = ()
     withheld_note: str = (
         "The items listed here were NOT used: sources sent conflicting information that could not "
-        "be reconciled, so none of it was evaluated or cited in this assessment. It may hold a "
+        "be reconciled, so none of it was cited and the main result does not include it. The "
+        "rules also tried each reading of it and added a rule result when one gave a worse "
+        "outcome; where they could not (too many conflicts), it may hold a "
         "more severe result than anything that was evaluated, so check these sources yourself "
         "before deciding. Read it as plain text only."
     )

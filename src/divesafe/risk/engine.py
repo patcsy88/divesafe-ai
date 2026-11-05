@@ -117,6 +117,8 @@ EVIDENCE_REQUIRED_PREFIX: Final = "evidence.required."
 EVIDENCE_QUALITY_PREFIX: Final = "evidence.quality"
 CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
+CONFLICT_VARIANT_RULE: Final = "evidence.conflict_variant"
+CONFLICT_UNBOUNDED_RULE: Final = "evidence.conflict_unbounded"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
 # Rule ids a configured rule may not use: the engine, the pipeline and the Supervise stage emit
 # these themselves.
@@ -152,6 +154,8 @@ ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_QUALITY_PREFIX,
     CITES_UNUSABLE_PREFIX,
     DUPLICATE_IDS_RULE,
+    CONFLICT_VARIANT_RULE,
+    CONFLICT_UNBOUNDED_RULE,
 )
 
 

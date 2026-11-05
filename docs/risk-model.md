@@ -100,7 +100,7 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   the dropped items are kept in the audit record as **withheld evidence**: not cited, not
   evaluated, and not passed to the engine, the agents or the prompts. They are shown, clearly
   labelled, to the human. The conflict issue names the category and says the withheld evidence was
-  not evaluated. A source whose only items were dropped is left out of `data_versions`, so the
+  not in the main result (the variant search reads them only to add severity). A source whose only items were dropped is left out of `data_versions`, so the
   record does not show that source's version; the withheld items keep their own `source_version`.
   **Built (ADR 0026, 2026-11-05): the most severe variant decides.** The main run still excludes
   the conflicting items, but the deterministic engine also runs once for every combination of one
@@ -111,8 +111,8 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   bounds (not safety limits): at most 4 conflicting ids, 3 variants each, 64 combinations; beyond
   them nothing is guessed and `evidence.conflict_unbounded` (INSUFFICIENT EVIDENCE) is added. A
   source can still force NO-GO by sending an invented dangerous variant (the safe direction; the
-  human sees the withheld items and the rule result, and may override with the `overrider` role).
-  **Known gaps (evidence conflicts):** the withheld items are shown to the human; a conflict
+  human sees the withheld items and the rule result, and any assigned decider may override today (ADR 0004); restricting a less severe override to an `overrider` role is ADR 0026 Part B, not built).
+  **Known gaps (evidence conflicts):** the record has no field for the worst combination (the rationale names the category and variant number, which two conflicting ids of one category cannot tell apart); the withheld items are shown to the human; a conflict
   across different ids is not a conflict; the combination cap can leave a large conflict at
   INSUFFICIENT EVIDENCE; and the record validator checks shape only (an `evidence.conflict:` issue exists and each withheld id is on at
   least two different items). It does not check that the items match the issue's categories or

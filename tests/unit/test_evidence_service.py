@@ -67,7 +67,7 @@ def test_identical_duplicates_collapse_and_conflicts_are_dropped_with_an_issue()
     assert conflicted.items == ()
     assert conflicted.issues == (
         "evidence.conflict: x, y returned different wind evidence under one id; none of it used "
-        "(withheld, not evaluated; it could hold a more severe result)",
+        "(withheld from the main result; checked separately for a more severe one)",
     )
     assert list(conflicted.withheld) == [a, different]
     assert conflicted.data_versions == {}

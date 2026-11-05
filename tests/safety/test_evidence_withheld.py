@@ -91,7 +91,7 @@ def speeds(items: Sequence[EvidenceItem]) -> list[Any]:
 def issue_text(connectors: str, categories: str) -> str:
     return (
         f"evidence.conflict: {connectors} returned different {categories} evidence under one id; "
-        "none of it used (withheld, not evaluated; it could hold a more severe result)"
+        "none of it used (withheld from the main result; checked separately for a more severe one)"
     )
 
 

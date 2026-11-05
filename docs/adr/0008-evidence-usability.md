@@ -92,7 +92,7 @@ and recorded in this ADR, together with the compensating controls.
   INSUFFICIENT EVIDENCE, so the dropped items are kept in the audit record as withheld evidence
   (not cited, not evaluated, not passed to the engine, agents or prompts) and shown clearly
   labelled to the human; the conflict issue names the category and says the withheld evidence was
-  not evaluated. A source whose only items were dropped is left out of `data_versions`; the
+  not in the main result (ADR 0026 reads them only to add severity). A source whose only items were dropped is left out of `data_versions`; the
   withheld items keep their own `source_version`. **Built later (ADR 0026, 2026-11-05):** the
   most severe variant decides; the engine runs on each combination and adds an
   `evidence.conflict_variant` rule result, so a hidden NO-GO stays NO-GO (this closes the gap

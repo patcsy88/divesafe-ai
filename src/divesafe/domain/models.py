@@ -338,8 +338,9 @@ class AssessmentRecord(_Frozen):
         default=(),
         description=(
             "Items dropped because different items shared one id. For the human reviewer only: "
-            "NOT evaluated, NOT citable, never given to the engine, agents or prompts. They may "
-            "hold a more severe result than anything evaluated."
+            "Not in the main result, NOT citable, never given to agents or prompts; only the "
+            "deterministic variant search reads them, to add severity (ADR 0026). If that "
+            "search was not possible they may hold a more severe result than anything evaluated."
         ),
     )
     findings: tuple[Finding, ...] = ()

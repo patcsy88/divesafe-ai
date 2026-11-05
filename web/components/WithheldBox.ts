@@ -4,9 +4,9 @@ import type { EvidenceItem } from "../lib/types.ts";
 
 // Written with createElement (no JSX) so that the offline tests can load and render it.
 // Everything below is text: no link, no anchor, no DOM id taken from an item, no raw HTML.
-export const WITHHELD_TITLE = "Withheld evidence - NOT used, NOT evaluated, may hold a more severe result";
+export const WITHHELD_TITLE = "Withheld evidence - NOT used in the main result, checked separately for a more severe result";
 export const WITHHELD_INTRO =
-  "These items disagreed with other data under one id. They were not used and may hold a more severe result than the one shown.";
+  "These items disagreed with other data under one id. They were not used in the main result. The rules also check each reading for a more severe result and show it as a rule result; if that was not possible, they may hold a more severe result than the one shown.";
 
 function item(it: EvidenceItem, n: number): ReactElement {
   const notes = Array.isArray(it.quality_notes) ? it.quality_notes : [];
@@ -19,7 +19,7 @@ function item(it: EvidenceItem, n: number): ReactElement {
       null,
       h("span", { className: "tag" }, clip(it.data_kind)),
       h("span", { className: "tag" }, provenanceLabel(String(it.data_kind))),
-      h("span", { className: "tag" }, "not evaluated"),
+      h("span", { className: "tag" }, "not in main result"),
     ),
     h(
       "dl",

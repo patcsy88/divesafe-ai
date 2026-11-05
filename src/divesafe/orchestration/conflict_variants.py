@@ -24,6 +24,7 @@ from divesafe.domain import (
     severity,
 )
 from divesafe.risk import RiskRulesEngine
+from divesafe.risk.engine import CONFLICT_UNBOUNDED_RULE, CONFLICT_VARIANT_RULE
 
 Variants = Sequence[EvidenceItem]
 
@@ -32,8 +33,8 @@ MAX_CONFLICT_IDS = 4
 MAX_VARIANTS_PER_ID = 3
 MAX_COMBINATIONS = 64
 
-VARIANT_RULE = "evidence.conflict_variant"
-UNBOUNDED_RULE = "evidence.conflict_unbounded"
+VARIANT_RULE = CONFLICT_VARIANT_RULE
+UNBOUNDED_RULE = CONFLICT_UNBOUNDED_RULE
 
 
 def within_bounds(groups: Sequence[Variants]) -> bool:

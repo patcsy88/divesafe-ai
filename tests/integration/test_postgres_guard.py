@@ -1188,7 +1188,7 @@ def _withheld_record() -> object:
     )
     issue = (
         "evidence.conflict: x, y returned different wind evidence under one id; none of it used "
-        "(withheld, not evaluated; it could hold a more severe result)"
+        "(withheld from the main result; checked separately for a more severe one)"
     )
     return AssessmentRecord.model_validate(
         {

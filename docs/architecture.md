@@ -104,7 +104,7 @@ project's concept names map onto it like this:
 **Terms: "withheld" has three meanings.**
 
 - `withheld_evidence`: conflicting evidence dropped before the rules run, kept in the record and
-  shown to the human, never evaluated ([ADR 0008](adr/0008-evidence-usability.md)).
+  shown to the human, not in the main result and only read by the variant search to add severity ([ADR 0008](adr/0008-evidence-usability.md)).
 - `decision_withheld` / `DECISION_WITHHELD`: the human decision hidden from a create-only key
   ([ADR 0019](adr/0019-asynchronous-assessment-creation.md)).
 - `withheld_knowledge`: knowledge items not sent to a model because of the egress basis
@@ -170,7 +170,7 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   the deterministic engine (`orchestration/conflict_variants.py`). Left open: the capacity bounds
   (4 ids, 3 variants, 64 combinations) leave a larger conflict at INSUFFICIENT EVIDENCE
   (`evidence.conflict_unbounded`). The start-up guard `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP` is
-  removed.
+  removed. The record has no field of its own for the worst combination.
 
 - **`kb_screen` id-screen gaps (accepted by the owner, 2026-11-03):** 9 strict xfails in
   `tests/safety/test_kb_screen.py` (`_fold` bypasses: punctuation inside `kb:` and a connector

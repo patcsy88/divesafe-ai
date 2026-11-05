@@ -62,7 +62,7 @@ def conflict_issue(*connectors: str, categories: tuple[str, ...] = ("wind",)) ->
     return (
         f"evidence.conflict: {', '.join(connectors)} returned different "
         f"{', '.join(categories)} evidence under one id; none of it used "
-        "(withheld, not evaluated; it could hold a more severe result)"
+        "(withheld from the main result; checked separately for a more severe one)"
     )
 
 

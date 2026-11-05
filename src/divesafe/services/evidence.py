@@ -47,7 +47,8 @@ class EvidenceSet:
     issues: tuple[str, ...]
     data_versions: dict[str, str]
     # Items dropped because two different items shared an id. For the audit record only: they are
-    # never evaluated, cited, or passed to the engine, the agents or a prompt.
+    # never cited, and never passed to the main engine run, the agents or a prompt (ADR 0026: only
+    # the variant search sees them, to add severity).
     withheld: tuple[EvidenceItem, ...] = ()
     # One per connector, in call order. Defaulted so callers that build a set by hand still work.
     connector_outcomes: tuple[ConnectorOutcome, ...] = ()
@@ -103,7 +104,7 @@ def build_evidence_set(
             issues.append(
                 f"evidence.conflict: {', '.join(connectors)} returned different "
                 f"{', '.join(categories)} evidence under one id; none of it used "
-                "(withheld, not evaluated; it could hold a more severe result)"
+                "(withheld from the main result; checked separately for a more severe one)"
             )
             for _, item in claimed:
                 if item not in withheld:
