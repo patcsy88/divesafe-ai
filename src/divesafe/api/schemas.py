@@ -264,7 +264,14 @@ class AssessmentView(BaseModel):
     def withheld(cls, record: AssessmentRecord) -> AssessmentView:
         """The record as a create-only key may see it: a human decision and later reports are
         not shown, and neither the status nor the override flag says whether one exists."""
-        stripped = record.model_copy(update={"human_decision": None, "actual_conditions": None})
+        stripped = record.model_copy(
+            update={
+                "human_decision": None,
+                "actual_conditions": None,
+                "reassignments": (),
+                "assigned_decider": record.original_decider,
+            }
+        )
         view = cls.of(stripped)
         return view.model_copy(
             update={

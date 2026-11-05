@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from tests.api_polling import create_and_poll
 from tests.safety.kb_fakes import mutated_module
-from tests.safety.test_api_human_gate import AUTH_A, KEY_A, KEY_B, _build, _create, _hash
+from tests.safety.test_api_human_gate import AUTH_A, KEY_A, KEY_B, PLAN, _build, _create, _hash
 
 from divesafe.api import app as app_module
 from divesafe.api import auth as auth_module
 from divesafe.api.auth import ApiKeyAuthenticator, KeyEntry, Principal, Role, parse_api_key_hashes
+from divesafe.domain import AssessmentRecord, Reassignment, Recommendation
+from divesafe.orchestration import decide
+from divesafe.services import InvalidSuccessorError
+from divesafe.services.repository import check_successor
 
 pytestmark = pytest.mark.safety
 
@@ -153,6 +159,9 @@ def test_an_admin_key_must_also_be_a_viewer() -> None:
         parse_api_key_hashes(_config(["admin"]))
     with pytest.raises(ValueError, match="admin"):
         parse_api_key_hashes(_config(["admin", "assessor"]))
+    for roles in (["admin", "viewer", "decider"], ["admin", "viewer", "decider", "overrider"]):
+        with pytest.raises(ValueError, match="admin"):  # it could take over and decide
+            parse_api_key_hashes(_config(roles))
     parsed = parse_api_key_hashes(_config(["admin", "viewer"]))
     assert parsed["a" * 64].roles == frozenset({Role.ADMIN, Role.VIEWER})
     assert Role.DECIDER not in parsed["a" * 64].roles  # admin does not imply decider
@@ -269,3 +278,163 @@ def test_mutation_the_same_person_check_is_removed() -> None:
             reassigned_at=record.created_at,
             key_id="0" * 12,
         )
+
+
+def test_mutation_an_admin_may_also_be_a_decider() -> None:
+    mutant = mutated_module(
+        auth_module,
+        ("if Role.ADMIN in role_set and Role.DECIDER in role_set:", "if False:"),
+    )
+    assert mutant.parse_api_key_hashes(_config(["admin", "viewer", "decider"]))
+
+
+def test_the_eleventh_move_is_a_409_and_nothing_is_recorded() -> None:
+    client, _, repo, rid = _setup()
+    for i in range(10):
+        assert _move(client, rid, "cara" if i % 2 == 0 else "bob").status_code == 200
+    before = repo.get(rid)
+    assert before is not None and len(before.reassignments) == 10
+    assert _move(client, rid, "cara").status_code == 409
+    assert repo.get(rid) == before
+
+
+def test_a_move_dated_before_the_last_one_is_a_409() -> None:
+    client, _, repo, rid = _setup()
+    assert _move(client, rid, "cara").status_code == 200
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+    real = state.clock
+    state.clock = lambda: real() - timedelta(hours=1)
+    before = repo.get(rid)
+    assert _move(client, rid, "bob").status_code == 409
+    assert repo.get(rid) == before
+
+
+KEY_DAVE = "key-for-dave-test-only"
+AUTH_DAVE = {"Authorization": f"Bearer {KEY_DAVE}"}
+
+
+def test_a_create_only_key_does_not_see_that_the_assessment_was_moved() -> None:
+    client, _, repo, _ = _setup()
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+    state.authenticator = ApiKeyAuthenticator(
+        {**KEYS, _hash(KEY_DAVE): KeyEntry("dave", frozenset({Role.ASSESSOR}))}
+    )
+    headers = {**AUTH_DAVE, "Idempotency-Key": "d" * 20}
+    first = create_and_poll(client, {**PLAN, "decider": "bob"}, headers)
+    assert first.status_code == 200, first.text
+    rid = first.json()["record"]["id"]
+    assert _move(client, rid, "cara").status_code == 200
+    seen = client.get(f"/v1/assessments/{rid}", headers=AUTH_DAVE).json()["record"]
+    assert seen["reassignments"] == [] and seen["assigned_decider"] == "bob"
+    assert "root" not in json.dumps(seen) and _hash(KEY_ROOT)[:12] not in json.dumps(seen)
+    retry = client.post("/v1/assessments", json={**PLAN, "decider": "bob"}, headers=headers)
+    assert retry.status_code in (200, 202), retry.text  # a legitimate retry, not a 422
+    assert retry.json()["record"]["reassignments"] == []
+
+
+def test_mutation_a_create_only_key_sees_the_moves() -> None:
+    from divesafe.api import schemas as schemas_module
+
+    mutant = mutated_module(
+        schemas_module,
+        (
+            '"assigned_decider": record.original_decider,',
+            '"assigned_decider": record.assigned_decider,',
+        ),
+    )
+    record = _pending_with_a_move()
+    assert mutant.AssessmentView.withheld(record).record.assigned_decider == "cara"  # leaks
+    assert schemas_module.AssessmentView.withheld(record).record.assigned_decider == "bob"
+
+
+def _pending_with_a_move() -> Any:
+    client, _, repo, rid = _setup()
+    assert _move(client, rid, "cara").status_code == 200
+    record = repo.get(rid)
+    assert record is not None
+    return record
+
+
+# --- the record's own rules: each is the only thing that stops a record from lying -------------
+
+
+def _fields(record: Any, **changes: Any) -> dict[str, Any]:
+    return {**record.model_dump(), **changes}
+
+
+def _step(frm: str, to: str, minutes: int, record: Any) -> Reassignment:
+    return Reassignment(
+        from_decider=frm,
+        to_decider=to,
+        reassigned_by="root",
+        reassigned_at=record.created_at + timedelta(minutes=minutes),
+        key_id="0123456789ab",
+    )
+
+
+def test_the_record_refuses_inconsistent_reassignment_history() -> None:
+    record = _pending_with_a_move()
+    ok = record.reassignments[0]
+    assert ok.from_decider == "bob"
+    cases = {
+        "not a chain": _fields(
+            record,
+            assigned_decider="dan",
+            reassignments=(ok, _step("zed", "dan", 5, record)),
+        ),
+        "assignee is not where the last move ended": _fields(record, assigned_decider="bob"),
+        "out of time order": _fields(
+            record,
+            assigned_decider="bob",
+            reassignments=(ok, _step("cara", "bob", -5, record)),
+        ),
+        "dated before creation": _fields(
+            record,
+            reassignments=(_step("bob", "cara", -5, record),),
+        ),
+    }
+    for name, data in cases.items():
+        with pytest.raises(ValueError):
+            AssessmentRecord.model_validate(data)
+            pytest.fail(name)
+    with pytest.raises(ValueError):
+        _step("bob", " BOB ", 1, record)  # a move to the same person
+
+
+def test_the_record_refuses_a_move_dated_after_the_decision() -> None:
+    record = _pending_with_a_move()
+    decided = decide(
+        record,
+        decided_by="cara",
+        decision=Recommendation.NO_GO,
+        decided_at=record.reassignments[-1].reassigned_at,
+        rationale="Too risky.",
+        key_id="0123456789ab",
+    )
+    late = _step("cara", "dan", 600, record)
+    with pytest.raises(ValueError):
+        AssessmentRecord.model_validate(
+            _fields(decided, assigned_decider="dan", reassignments=(*decided.reassignments, late))
+        )
+
+
+def test_check_successor_alone_refuses_a_move_that_leaves_the_assignee_unchanged() -> None:
+    """The in-memory store has only `check_successor` and the record validator between a
+    recorded move and the assignee; the validator must hold on its own."""
+    client, _, repo, rid = _setup()
+    old = repo.get(rid)
+    assert old is not None
+    forged = old.model_construct(**{**dict(old), "reassignments": (_step("bob", "cara", 1, old),)})
+    with pytest.raises(InvalidSuccessorError):
+        check_successor(old, forged)
+
+
+def test_mutation_the_record_validator_is_not_called() -> None:
+    from divesafe.domain import models as models_module
+
+    mutant = mutated_module(models_module, ("        self._check_reassignments()\n", ""))
+    record = _pending_with_a_move()
+    broken = _fields(record, assigned_decider="bob")
+    mutant.AssessmentRecord.model_validate(broken)  # the weakened copy accepts the lie
+    with pytest.raises(ValueError):
+        AssessmentRecord.model_validate(broken)

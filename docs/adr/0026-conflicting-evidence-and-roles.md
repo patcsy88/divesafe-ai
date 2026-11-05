@@ -117,6 +117,14 @@ accept exactly one appended move of an undecided row (checksum pinned in
 `REVIEWED_GUARD_MIGRATIONS`, mutation-checked against a real database). The page lists the moves.
 `groups` is not built.
 
+**Review fixes and rulings (2026-11-06):** the owner ruled that an `admin` key may not also be a
+`decider` (start-up refuses it), so one key cannot move an assessment to itself and decide it. A
+create-only key sees the assessment as created (original assignee, no moves). The 11th move and a
+move dated before the last one are 409. Known gaps: after 10 moves nobody can move the record
+again; the trigger checks the shape of a move (from, to, count, prefix) but not its mover, key id or
+date, as for a first decision; the guard function body is not pinned by `pg_get_functiondef`; a new
+record is not required to start with no moves; `decision_max_age` is not applied to a move.
+
 ## Storage (the hard part)
 
 - `human_decision` is write-once and the trigger refuses any change to it once set (ADR 0015).

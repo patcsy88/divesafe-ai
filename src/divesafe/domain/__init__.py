@@ -14,6 +14,7 @@ from divesafe.domain.conditions import (
 from divesafe.domain.lineage import are_independent, can_corroborate
 from divesafe.domain.models import (
     INVARIANT_CHECKS,
+    MAX_REASSIGNMENTS,
     SUPERVISOR_RULE_PREFIX,
     ActualConditions,
     AssessmentRecord,
@@ -129,6 +130,7 @@ __all__ = [
     "Finding",
     "GeoPoint",
     "HumanDecision",
+    "MAX_REASSIGNMENTS",
     "Reassignment",
     "MarineWarning",
     "OceanConditions",

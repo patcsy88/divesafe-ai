@@ -153,6 +153,10 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
             raise ValueError("an overrider key must also be a decider and a viewer")
         if Role.ADMIN in role_set and Role.VIEWER not in role_set:
             raise ValueError("an admin key must also be a viewer: moving needs the assessment")
+        if Role.ADMIN in role_set and Role.DECIDER in role_set:
+            raise ValueError(
+                "an admin key may not also be a decider: it could take over and decide"
+            )
         entries[digest] = KeyEntry(actor, role_set)
     labels = [key_id_of(d) for d in entries]
     if len(set(labels)) != len(labels):

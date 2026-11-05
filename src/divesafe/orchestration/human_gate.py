@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from divesafe.domain import (
+    MAX_REASSIGNMENTS,
     ActualConditions,
     AssessmentRecord,
     HumanDecision,
@@ -61,6 +62,12 @@ def reassign(
         raise NotReassignableError("this assessment has no assigned decider")
     if record.assigned_decider.casefold() == to_decider.strip().casefold():
         raise NotReassignableError("this assessment is already assigned to that decider")
+    if len(record.reassignments) >= MAX_REASSIGNMENTS:
+        raise NotReassignableError("this assessment has been moved as often as is allowed")
+    if record.reassignments and reassigned_at < record.reassignments[-1].reassigned_at:
+        raise NotReassignableError("this move is dated before the last one")
+    if reassigned_at < record.created_at:
+        raise NotReassignableError("this move is dated before the assessment")
     move = Reassignment(
         from_decider=record.assigned_decider,
         to_decider=to_decider,

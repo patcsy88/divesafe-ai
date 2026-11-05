@@ -535,6 +535,11 @@ class AssessmentRecord(_Frozen):
             raise ValueError("actual conditions require a recorded human decision")
         return self
 
+    @property
+    def original_decider(self) -> str | None:
+        """Who the assessment was assigned to when it was created."""
+        return self.reassignments[0].from_decider if self.reassignments else self.assigned_decider
+
     def _check_reassignments(self) -> None:
         """A chain: each move starts where the last ended, in time order, and the current
         assignee is where the last one ended. Nothing moves after the decision."""

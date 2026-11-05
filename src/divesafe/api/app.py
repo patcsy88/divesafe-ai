@@ -325,7 +325,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             # The same key must mean the same request; anything else is refused, not reinterpreted.
             if (
                 existing.plan != plan
-                or existing.assigned_decider != decider
+                or existing.original_decider != decider
                 or existing.created_by != principal.actor
             ):
                 raise HTTPException(
