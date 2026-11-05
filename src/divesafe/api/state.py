@@ -244,6 +244,11 @@ def build_default_state(settings: Settings) -> AppState:
             "DIVESAFE_OLLAMA_* variables are set but the Ollama adapter was removed; ignored",
             extra={"count": len(leftover)},
         )
+    if "DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP" in os.environ:
+        logger.warning(
+            "DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP is set but the guard was removed "
+            "(ADR 0026); ignored"
+        )
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     connectors: list[Connector] = [
         OpenMeteoMarineConnector(getter),

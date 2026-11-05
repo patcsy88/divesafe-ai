@@ -45,7 +45,7 @@ def within_bounds(groups: Sequence[Variants]) -> bool:
 
 
 def _describe(groups: Sequence[Variants], chosen: Sequence[int]) -> str:
-    # Connector names and category values only (fixed names); never an id or item content.
+    # Category values and variant numbers only (fixed names); never an id or item content.
     parts = [
         f"{group[i].category.value} (variant {i + 1} of {len(group)})"
         for group, i in zip(groups, chosen, strict=True)
@@ -63,8 +63,8 @@ def variant_results(
 ) -> list[RuleResult]:
     """Rule results to add to the main run, or none when there is no conflict or no variant is
     more severe than `baseline` (the main run's most severe outcome)."""
-    if not groups:
-        return []
+    if not groups or baseline is Recommendation.NO_GO:
+        return []  # nothing can be more severe than NO-GO, so no run is needed
     if not within_bounds(groups):
         return [
             RuleResult(
@@ -76,7 +76,7 @@ def variant_results(
                 ),
             )
         ]
-    worst = baseline
+    worst: Recommendation = baseline
     worst_choice: tuple[int, ...] | None = None
     for choice in itertools.product(*(range(len(g)) for g in groups)):
         added = [g[i] for g, i in zip(groups, choice, strict=True)]

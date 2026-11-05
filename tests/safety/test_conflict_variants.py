@@ -409,3 +409,33 @@ def _fetch(*items: EvidenceItem) -> Any:
     from divesafe.data import FetchResult
 
     return FetchResult(items)
+
+
+def _no_go_start_calls(module: Any) -> int:
+    engine, plan = no_go_engine(), _plan()
+    calls: list[int] = []
+    real = engine.assess
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    engine.assess = counting  # type: ignore[method-assign]
+    found = module.variant_results(engine, plan, [], conflict_groups(3, 3), NOW, R.NO_GO)
+    assert found == []
+    return len(calls)
+
+
+def test_a_result_already_no_go_runs_the_engine_no_more_times() -> None:
+    assert _no_go_start_calls(cv) == 0
+
+
+def test_mutation_running_the_search_from_a_no_go_start_is_caught() -> None:
+    mutant = mutated_module(
+        cv,
+        (
+            "if not groups or baseline is Recommendation.NO_GO:",
+            "if not groups:",
+        ),
+    )
+    assert _no_go_start_calls(mutant) > 0
