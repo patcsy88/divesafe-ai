@@ -231,8 +231,9 @@ class Finding(_Frozen):
 
 
 class HumanDecision(_Frozen):
-    """The human's decision. Any override, including to a less severe outcome, is allowed
-    (ADR 0004) but needs an identified decision-maker and a non-blank rationale.
+    """The human's decision. Any override is allowed (ADR 0004); a less severe one needs the
+    `overrider` role (ADR 0026, enforced by the API). It needs an identified decision-maker and a
+    non-blank rationale.
     """
 
     decided_by: str
@@ -485,6 +486,16 @@ class AssessmentRecord(_Frozen):
             is_override = self.human_decision.decision != self.final_recommendation
             if self.human_decision.is_override != is_override:
                 raise ValueError("is_override must equal (human decision != recommendation)")
+            flag = self.human_decision.decided_by_creator
+            if flag is not None and (
+                self.created_by is None
+                or flag
+                != (
+                    self.created_by.strip().casefold()
+                    == self.human_decision.decided_by.strip().casefold()
+                )
+            ):
+                raise ValueError("decided_by_creator must equal (decided_by == created_by)")
             if self.actual_conditions is not None:
                 reported = self.actual_conditions.reported_at
                 if reported < self.human_decision.decided_at:

@@ -151,6 +151,9 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
         if Role.OVERRIDER in role_set and not {Role.DECIDER, Role.VIEWER} <= role_set:
             raise ValueError("an overrider key must also be a decider and a viewer")
         entries[digest] = KeyEntry(actor, role_set)
+    labels = [key_id_of(d) for d in entries]
+    if len(set(labels)) != len(labels):
+        raise ValueError("DIVESAFE_API_KEY_HASHES has two keys with the same key id")
     names = [e.actor.casefold() for e in entries.values()]
     if len(set(names)) != len(names):
         raise ValueError("DIVESAFE_API_KEY_HASHES gives two keys the same actor name")
@@ -225,7 +228,8 @@ def require_principal(request: Request) -> Principal:
 def require_role(role: Role, *, limit_key: str) -> Callable[[Request], Principal]:
     """Authenticate, check the role (403), then apply the actor's rate limit (429).
 
-    A denied request is not charged to the limiter."""
+    A request denied here is not charged to the limiter. (A 403 raised later, inside a handler,
+    such as "not the assigned decider" or "needs overrider", is charged.)"""
     return require_any_role((role,), limit_key=limit_key)
 
 

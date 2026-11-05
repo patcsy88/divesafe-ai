@@ -145,7 +145,7 @@ def decision_misses(fn: Callable[[Any, Any], dict[str, Any]]) -> list[str]:
         decided_by_creator=False,
     )
     record = AssessmentRecord.model_validate(
-        {**clean.model_dump(), "human_decision": decision.model_dump()}
+        {**clean.model_dump(), "created_by": "bob", "human_decision": decision.model_dump()}
     )
     bad: list[str] = []
     full = doc(record)

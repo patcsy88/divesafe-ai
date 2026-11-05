@@ -150,7 +150,7 @@ class Settings(BaseSettings):
 
     auth_mode: Literal["api_key", "dev"] = "api_key"
     # JSON object mapping sha256 hex digest of an API key -> actor name. Never store raw keys.
-    # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"]}}
+    # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"|"overrider"]}}
     api_key_hashes: SecretStr | None = None
 
     # Per-actor operational limits (abuse and upstream-quota protection, not safety limits).

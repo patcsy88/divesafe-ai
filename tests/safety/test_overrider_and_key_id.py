@@ -382,3 +382,101 @@ def test_mutation_the_overrider_start_up_refusal_is_removed() -> None:
     assert Role.OVERRIDER in parsed["a" * 64].roles
     with pytest.raises(ValueError):
         parse_api_key_hashes(_config(["overrider"]))  # the real one refuses
+
+
+# --- review fixes: the creator flag is validated, and key ids must be distinct -----------------
+
+
+def _decided_record(created_by: str | None, decided_by: str, flag: bool | None) -> Any:
+    from datetime import timedelta
+
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.domain import AssessmentRecord
+
+    base = run_pipeline(fake())
+    human = HumanDecision(
+        decided_by=decided_by,
+        decision=base.final_recommendation,
+        decided_at=base.created_at + timedelta(minutes=1),
+        is_override=False,
+        key_id="0123456789ab",
+        decided_by_creator=flag,
+    )
+    return AssessmentRecord.model_validate(
+        {**base.model_dump(), "created_by": created_by, "human_decision": human.model_dump()}
+    )
+
+
+def test_the_record_refuses_a_creator_flag_that_hides_self_approval() -> None:
+    with pytest.raises(ValueError, match="decided_by_creator"):
+        _decided_record("alice", "Alice", False)  # the creator decided, case-insensitively
+    with pytest.raises(ValueError, match="decided_by_creator"):
+        _decided_record("alice", "bob", True)
+    with pytest.raises(ValueError, match="decided_by_creator"):
+        _decided_record(None, "bob", False)  # nobody to compare with: only None is honest
+
+
+def test_the_record_accepts_a_true_creator_flag_and_an_unrecorded_one() -> None:
+    assert _decided_record("alice", " ALICE ", True).human_decision.decided_by_creator is True
+    assert _decided_record("alice", "bob", False).human_decision.decided_by_creator is False
+    assert _decided_record("alice", "bob", None).human_decision.decided_by_creator is None
+    assert _decided_record(None, "bob", None).human_decision.decided_by_creator is None
+
+
+def test_mutation_the_creator_flag_check_is_removed() -> None:
+    from divesafe.domain import models as models_module
+
+    mutant = mutated_module(
+        models_module,
+        ('raise ValueError("decided_by_creator must equal (decided_by == created_by)")', "pass"),
+    )
+    human = HumanDecision(
+        decided_by="alice",
+        decision=Recommendation.NO_GO,
+        decided_at="2026-10-08T18:00:00Z",  # type: ignore[arg-type]
+        is_override=False,
+        decided_by_creator=False,
+    )
+    real = _decided_record("bob", "bob", True)  # a valid control record from the real module
+    payload = {
+        **real.model_dump(),
+        "created_by": "alice",
+        "human_decision": {
+            **human.model_dump(),
+            "decision": real.final_recommendation,
+            "decided_at": real.human_decision.decided_at,
+        },
+    }
+    payload["human_decision"]["decided_by_creator"] = False
+    payload["human_decision"]["is_override"] = False
+    assert mutant.AssessmentRecord.model_validate(payload) is not None  # the mutant lets it through
+    with pytest.raises(ValueError, match="decided_by_creator"):
+        models_module.AssessmentRecord.model_validate(payload)
+
+
+def test_two_keys_with_the_same_key_id_are_refused_at_start_up() -> None:
+    same = "a" * 12
+    raw = json.dumps(
+        {
+            same + "0" * 52: {"actor": "carol", "roles": ["viewer"]},
+            same + "1" * 52: {"actor": "dave", "roles": ["viewer"]},
+        }
+    )
+    with pytest.raises(ValueError, match="key id"):
+        parse_api_key_hashes(raw)
+
+
+def test_mutation_the_key_id_clash_check_is_removed() -> None:
+    mutant = mutated_module(
+        auth_module,
+        ("if len(set(labels)) != len(labels):", "if False:"),
+    )
+    same = "a" * 12
+    raw = json.dumps(
+        {
+            same + "0" * 52: {"actor": "carol", "roles": ["viewer"]},
+            same + "1" * 52: {"actor": "dave", "roles": ["viewer"]},
+        }
+    )
+    assert len(mutant.parse_api_key_hashes(raw)) == 2
