@@ -111,7 +111,7 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   bounds (not safety limits): at most 4 conflicting ids, 3 variants each, 64 combinations; beyond
   them nothing is guessed and `evidence.conflict_unbounded` (INSUFFICIENT EVIDENCE) is added. A
   source can still force NO-GO by sending an invented dangerous variant (the safe direction; the
-  human sees the withheld items and the rule result, and any assigned decider may override today (ADR 0004); restricting a less severe override to an `overrider` role is ADR 0026 Part B, not built).
+  human sees the withheld items and the rule result, and a less severe human outcome needs the `overrider` role (ADR 0026)).
   **Known gaps (evidence conflicts):** the record has no field for the worst combination (the rationale names the category and variant number, which two conflicting ids of one category cannot tell apart); the withheld items are shown to the human; a conflict
   across different ids is not a conflict; the combination cap can leave a large conflict at
   INSUFFICIENT EVIDENCE; and the record validator checks shape only (an `evidence.conflict:` issue exists and each withheld id is on at
@@ -234,7 +234,8 @@ fully assessed and that the problems found still apply.
 
 ## Human override policy ([ADR 0004](adr/0004-human-override-policy.md))
 
-A human may override any recommendation, including `NO-GO`, to a less severe outcome. The
+A human with the `overrider` role (ADR 0026) may override any recommendation, including `NO-GO`, to
+a less severe outcome; a `decider` without it may accept or choose a more severe one. The
 system's recommendation is never altered; the override is a separate `HumanDecision` that needs
 an identified decision-maker and a non-blank rationale. Less severe overrides are flagged
 (`AssessmentRecord.overrides_to_less_severe`) for review and evaluation.

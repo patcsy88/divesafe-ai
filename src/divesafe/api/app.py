@@ -512,6 +512,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if same_decision(record):
                 return replay(record)
             raise HTTPException(status_code=409, detail="this assessment already has a decision")
+        if not principal.key_id:
+            logger.error("authenticator set no key id", extra={"actor": principal.actor})
+            raise HTTPException(status_code=500, detail="internal error")
         if (
             severity(body.decision) < severity(record.final_recommendation)
             and Role.OVERRIDER not in principal.roles

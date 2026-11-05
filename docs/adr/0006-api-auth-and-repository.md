@@ -35,8 +35,8 @@ minimum interval per host; a request that would break it fails closed as a conne
 - Decisions are attributable to a configured actor, not to claimed free text.
 - Records are lost on restart until the PostgreSQL adapter exists. The in-memory adapter is for
   development and tests only.
-- API keys give an actor name but no roles; every authenticated actor can create, decide and
-  report. Role separation (for example only qualified dive leaders may override) is not built.
+- Superseded by ADR 0013 and ADR 0026: keys carry explicit roles, and a less severe human outcome
+  needs `overrider`.
 - Rate limiting is per process; multiple workers would each allow their own quota.
 
 ## Hardening applied after review

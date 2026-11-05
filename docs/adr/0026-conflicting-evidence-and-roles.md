@@ -106,6 +106,9 @@ no groups. An unreadable assessment returns 404, the same as a missing one, so i
 
 **Config format:** `{"actor": ..., "roles": [...], "groups": [...]}`; `groups` is optional.
 
+**Built (2026-11-05), items 1-3:** `overrider`, `key_id`, `decided_by_creator`. The evaluation
+output does not yet show `decided_by_creator` (open). `admin` reassignment and `groups` are not built.
+
 ## Storage (the hard part)
 
 - `human_decision` is write-once and the trigger refuses any change to it once set (ADR 0015).

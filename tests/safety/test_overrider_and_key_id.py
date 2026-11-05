@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.api_polling import create_and_poll
 from tests.safety.kb_fakes import mutated_module
 from tests.safety.test_api_human_gate import AUTH_A, KEY_A, KEY_B, _build, _create, _hash
 
@@ -226,7 +225,7 @@ def test_a_retried_decision_keeps_the_first_key_id() -> None:
 # --- mutations --------------------------------------------------------------------------------
 
 
-def _gate_misses(app_mod: Any) -> list[str]:
+def _gate_misses() -> list[str]:
     bad: list[str] = []
     client, _ = _client(DECIDER_ROLES)
     client.app.state.divesafe.authenticator = ApiKeyAuthenticator(  # type: ignore[attr-defined]
@@ -247,7 +246,7 @@ def _gate_misses(app_mod: Any) -> list[str]:
 
 
 def test_the_real_gate_meets_the_check() -> None:
-    assert _gate_misses(app_module) == []
+    assert _gate_misses() == []
 
 
 def test_mutation_the_role_check_is_removed() -> None:
@@ -280,10 +279,6 @@ def _build_with(module: Any) -> tuple[TestClient, None, None]:
     )
     app = module.create_app(state)
     return TestClient(app), None, None
-
-
-def test_a_polling_helper_is_available() -> None:
-    assert callable(create_and_poll)
 
 
 def _identity_misses() -> list[str]:
@@ -480,3 +475,94 @@ def test_mutation_the_key_id_clash_check_is_removed() -> None:
         }
     )
     assert len(mutant.parse_api_key_hashes(raw)) == 2
+
+
+# --- risk review: the comparison is against the FINAL recommendation --------------------------
+
+
+def _tightened_client() -> tuple[TestClient, Any]:
+    from tests.agent.scripted_llm import scripted
+
+    from divesafe.models import FakeProvider
+
+    client, _, repo = _build(provider=FakeProvider(scripted(recommendation="NO-GO")))
+    client.app.state.divesafe.authenticator = ApiKeyAuthenticator(  # type: ignore[attr-defined]
+        {
+            _hash(KEY_A): KeyEntry("alice", frozenset(Role)),
+            _hash(KEY_B): KeyEntry("bob", DECIDER_ROLES),
+        }
+    )
+    return client, repo
+
+
+def _tightened_status(client: TestClient, decide_with: TestClient | None = None) -> tuple[int, Any]:
+    record = _create(client, decider="bob")["record"]
+    assert record["final_recommendation"] == "NO-GO"
+    assert record["deterministic_recommendation"] == "INSUFFICIENT EVIDENCE"
+    response = (decide_with or client).post(
+        f"/v1/assessments/{record['id']}/decision",
+        json={"decision": "INSUFFICIENT EVIDENCE", "rationale": "Back to the rules' result."},
+        headers=AUTH_BOB,
+    )
+    return response.status_code, record["id"]
+
+
+def test_going_back_to_the_rules_result_after_the_model_tightened_needs_overrider() -> None:
+    client, repo = _tightened_client()
+    status, rid = _tightened_status(client)
+    assert status == 403
+    stored = repo.get(rid)
+    assert stored is not None and stored.human_decision is None
+
+
+def test_mutation_the_comparison_uses_the_rules_result_instead_of_the_final_one() -> None:
+    mutant = mutated_module(
+        app_module,
+        (
+            "severity(body.decision) < severity(record.final_recommendation)",
+            "severity(body.decision) < severity(record.deterministic_recommendation)",
+        ),
+    )
+    client, _ = _tightened_client()
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+    status, _ = _tightened_status(client, TestClient(mutant.create_app(state)))
+    assert status != 403  # the mutant lets it through, so the real test above has teeth
+
+
+class _NoKeyId:
+    """An authenticator that forgets to set `key_id`."""
+
+    def authenticate(self, request: Any) -> Any:
+        from divesafe.api.auth import Principal
+
+        return Principal("bob", DECIDER_ROLES)
+
+    def canonical_decider(self, name: str) -> str | None:
+        return name
+
+
+def _no_key_id_status(module: Any) -> tuple[int, Any]:
+    client, repo = _client(DECIDER_ROLES)
+    rid, final = _final(client, "bob")
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+    state.authenticator = _NoKeyId()
+    target = TestClient(module.create_app(state))
+    status = target.post(
+        f"/v1/assessments/{rid}/decision", json={"decision": final}, headers=AUTH_BOB
+    ).status_code
+    stored = repo.get(rid)
+    assert stored is not None
+    return status, stored.human_decision
+
+
+def test_a_decision_with_no_key_id_is_refused_and_nothing_is_recorded() -> None:
+    status, decision = _no_key_id_status(app_module)
+    assert status == 500 and decision is None
+
+
+def test_mutation_the_missing_key_id_check_is_removed() -> None:
+    mutant = mutated_module(
+        app_module, ("        if not principal.key_id:\n", "        if False:\n")
+    )
+    status, decision = _no_key_id_status(mutant)
+    assert status == 200 and decision is not None and decision.key_id is None

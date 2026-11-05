@@ -164,6 +164,8 @@ def decision_misses(fn: Callable[[Any, Any], dict[str, Any]]) -> list[str]:
     changed = fn(record, old)  # stored without the keys, successor holds real values
     if changed["human_decision"].get("key_id") != "0123456789ab":
         bad.append("a real key_id was silently dropped instead of reaching the guard")
+    if changed["human_decision"].get("decided_by_creator") is not False:
+        bad.append("a real decided_by_creator=false was silently dropped")
     kept = fn(record, full)
     if kept["human_decision"].get("key_id") != "0123456789ab":
         bad.append("a stored key_id was dropped")
