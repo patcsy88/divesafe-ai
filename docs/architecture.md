@@ -195,7 +195,7 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Roles and authorization:** keys carry explicit roles (ADR 0013); a less severe human outcome
   needs `overrider` (ADR 0026, built) and each decision records its `key_id` and
   `decided_by_creator`. `admin` moves a pending assessment to another decider (ADR 0026, built,
-  migration 5). Not built yet (ADR 0026 Part B): `groups` to scope reads. Key rotation and revocation are manual (edit the
+  migration 5). `groups` scope what a viewer key may read (ADR 0026, built). Key rotation and revocation are manual (edit the
   configured hashes).
 - **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
   No request-size or per-client rate limits beyond the provider-limit guard.

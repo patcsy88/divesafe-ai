@@ -115,7 +115,15 @@ is 409). Each move is a `Reassignment` on the record (max 10, chained, in time o
 admin's `key_id`); the old assignee loses the right at once. Migration 5 lets the guard trigger
 accept exactly one appended move of an undecided row (checksum pinned in
 `REVIEWED_GUARD_MIGRATIONS`, mutation-checked against a real database). The page lists the moves.
-`groups` is not built.
+**Built (2026-11-06), item 5:** `groups`. The config entry takes an optional `groups` list (max 20,
+case-insensitive, printable, bounded). A viewer key with groups reads an assessment, its evidence
+or a run's status only if it created it, is assigned to it, or shares a group with its creator or
+its assigned decider; otherwise the answer is the same 404 as a missing id. A key with no groups
+reads everything, and production start-up warns while any viewer key has none. Create-only keys are
+unchanged (own assessments only). Scope follows the *current* assignee, so a reassignment can move
+an assessment into or out of a group's view. Known gaps: group membership is looked up by actor
+name (names are unique by casefold); `/v1/sites` is not scoped (public reference data); there is
+no list endpoint to scope.
 
 **Review fixes and rulings (2026-11-06):** the owner ruled that an `admin` key may not also be a
 `decider` (start-up refuses it), so one key cannot move an assessment to itself and decide it. A

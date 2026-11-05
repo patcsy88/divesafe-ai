@@ -230,9 +230,23 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.exception("unhandled error", extra={"path": request.url.path})
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
+    def _in_scope(created_by: str | None, assigned: str | None, principal: Principal) -> bool:
+        """Read scope (ADR 0026): a key with no groups reads everything; one with groups reads
+        what it created, what is assigned to it, and what its creator or assignee's groups share."""
+        if not principal.groups:
+            return True
+        names = [n for n in (created_by, assigned) if n]
+        if principal.actor.casefold() in {n.strip().casefold() for n in names}:
+            return True
+        groups_of = getattr(app_state.authenticator, "groups_of", None)
+        if groups_of is None:
+            return False
+        return any(principal.groups & groups_of(n) for n in names)
+
     def _may_see(run: PendingRun, principal: Principal) -> bool:
         return (
             Role.VIEWER in principal.roles
+            and _in_scope(run.created_by, run.assigned_decider, principal)
             or run.created_by == principal.actor
             or run.assigned_decider == principal.actor
         )
@@ -244,7 +258,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if run is None:
                 record = app_state.repository.get(assessment_id)  # finished between the reads
                 if record is not None:
-                    return record
+                    return _scoped(record, principal)
             if run is not None and principal is not None and _may_see(run, principal):
                 raise HTTPException(
                     status_code=409,
@@ -254,6 +268,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
                         else "nothing was recorded; this assessment did not finish"
                     ),
                 )
+            raise HTTPException(status_code=404, detail="assessment not found")
+        return _scoped(record, principal)
+
+    def _scoped(record: AssessmentRecord, principal: Principal | None) -> AssessmentRecord:
+        # Unreadable looks exactly like missing, so ids cannot be probed.
+        if (
+            principal is not None
+            and Role.VIEWER in principal.roles
+            and not _in_scope(record.created_by, record.assigned_decider, principal)
+        ):
             raise HTTPException(status_code=404, detail="assessment not found")
         return record
 
@@ -449,12 +473,15 @@ def create_app(state: AppState | None = None) -> FastAPI:
             record = app_state.repository.get(assessment_id)
         if record is not None:
             if viewer:
-                return AssessmentView.of(record)
+                return AssessmentView.of(_scoped(record, principal))
             if record.created_by != principal.actor:
                 raise HTTPException(status_code=404, detail="assessment not found")
             # A create-only key sees the record as it was created, as a replay does.
             return AssessmentView.withheld(record)
-        if run is None or not (viewer or run.created_by == principal.actor):
+        if run is None or not (
+            (viewer and _in_scope(run.created_by, run.assigned_decider, principal))
+            or run.created_by == principal.actor
+        ):
             raise HTTPException(status_code=404, detail="assessment not found")
         return RunStatusView.of(run)
 

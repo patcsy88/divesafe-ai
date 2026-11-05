@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -52,12 +52,15 @@ class Principal:
     # A non-secret label of the key used (first 12 hex characters of its sha256, ADR 0026), or
     # "dev". Empty only for a principal built by hand.
     key_id: str = ""
+    # Read scope (ADR 0026): names of the groups this key belongs to. Empty = no scoping.
+    groups: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class KeyEntry:
     actor: str
     roles: frozenset[Role]
+    groups: frozenset[str] = frozenset()
 
 
 class Authenticator(Protocol):
@@ -91,7 +94,19 @@ class ApiKeyAuthenticator:
         for known, entry in self._hashes.items():  # no early exit: constant-ish time
             if hmac.compare_digest(known, digest):
                 match = entry
-        return Principal(match.actor, match.roles, key_id_of(digest)) if match else None
+        if match is None:
+            return None
+        principal = Principal(match.actor, match.roles, key_id_of(digest))
+        return replace(principal, groups=match.groups)
+
+    def groups_of(self, actor: str) -> frozenset[str]:
+        """The groups of the key holder called `actor` (empty when unknown)."""
+        wanted = actor.strip().casefold()
+        found: set[str] = set()
+        for e in self._hashes.values():
+            if e.actor.casefold() == wanted:
+                found |= e.groups
+        return frozenset(found)
 
     def canonical_decider(self, actor: str) -> str | None:
         wanted = actor.strip().casefold()
@@ -117,6 +132,23 @@ _FORMAT_ERROR = (
 )
 
 
+_ENTRY_KEYS = {"actor", "roles", "groups"}
+_MAX_GROUPS = 20
+
+
+def _groups(raw: object) -> frozenset[str]:
+    """Group names are compared case-insensitively; at most 20 per key, printable, bounded."""
+    if not isinstance(raw, list) or len(raw) > _MAX_GROUPS:
+        raise ValueError(_FORMAT_ERROR)
+    names: set[str] = set()
+    for item in raw:
+        name = _actor(item) if isinstance(item, str) else None
+        if name is None:
+            raise ValueError(_FORMAT_ERROR)
+        names.add(name.casefold())
+    return frozenset(names)
+
+
 def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
     def no_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
         keys = [k for k, _ in pairs]
@@ -134,7 +166,7 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
     for digest, value in data.items():
         if not isinstance(digest, str) or not _HEX64.fullmatch(digest):
             raise ValueError(_FORMAT_ERROR)
-        if not isinstance(value, dict) or set(value) != {"actor", "roles"}:
+        if not isinstance(value, dict) or not {"actor", "roles"} <= set(value) <= _ENTRY_KEYS:
             raise ValueError(_FORMAT_ERROR)
         actor = _actor(value["actor"]) if isinstance(value["actor"], str) else None
         roles = value["roles"]
@@ -157,7 +189,7 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
             raise ValueError(
                 "an admin key may not also be a decider: it could take over and decide"
             )
-        entries[digest] = KeyEntry(actor, role_set)
+        entries[digest] = KeyEntry(actor, role_set, _groups(value.get("groups", [])))
     labels = [key_id_of(d) for d in entries]
     if len(set(labels)) != len(labels):
         raise ValueError("DIVESAFE_API_KEY_HASHES has two keys with the same key id")
@@ -174,7 +206,12 @@ def build_authenticator(settings: Settings) -> Authenticator:
     if settings.api_key_hashes is None:
         logger.warning("no API keys configured; every authenticated request will be rejected")
         return ApiKeyAuthenticator({})
-    return ApiKeyAuthenticator(parse_api_key_hashes(settings.api_key_hashes.get_secret_value()))
+    entries = parse_api_key_hashes(settings.api_key_hashes.get_secret_value())
+    if settings.environment == "production" and any(
+        Role.VIEWER in e.roles and not e.groups for e in entries.values()
+    ):
+        logger.warning("a viewer key has no groups, so it can read every assessment (ADR 0026)")
+    return ApiKeyAuthenticator(entries)
 
 
 def client_source(request: Request, trusted_proxies: frozenset[str]) -> str:

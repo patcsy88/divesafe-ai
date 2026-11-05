@@ -66,3 +66,4 @@
 - ADR 0026 adds a fifth role, `admin`: it moves a pending assessment to another decider and does not
   imply `decider`. An `admin` key must also be a `viewer`, or start-up is refused. Reassignment uses
   the `decide` rate limit.
+- ADR 0026 adds optional `groups` to a key (read scope, not a role): see that ADR.
