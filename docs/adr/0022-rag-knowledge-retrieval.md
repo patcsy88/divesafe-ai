@@ -979,6 +979,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       - The wiring takes `model_host` from `urllib.parse.urlsplit(...).hostname` (no `[::1]`
         brackets), with a test for `http://[::1]:8000`.
       - The human view shows withheld knowledge in fixed wording (decision 14), with a test.
+      - **`model_host` is hidden from create-only keys (owner decision 2026-11-06, security
+        review note 7).** A host name can reveal deployment layout and a create-only key does not
+        need it; `egress_basis` and `withheld_knowledge` stay visible to every reader. The host is
+        removed in the API view only (the stored record keeps it), and is marked as hidden with a
+        separate flag (e.g. `model_host_withheld: true`, like ADR 0019's `decision_withheld`),
+        never with null, because null means "no model server". Viewer, decider, overrider and
+        admin keys see it. Tests: a create-only key never receives the host, on creation, polling
+        and later reads; the other roles do.
     - **The live evaluation path applies the same basis filter**, as `tide_check_allowed` does for
       tides (ADR 0023 decision 7): it must not put corpus text in a prompt unless its basis is
       `declared_local`.
@@ -1482,9 +1490,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   record cannot show where the server forwards a prompt.
 - **`kb:` ids in `withheld_evidence` (ADR 0008) are not grammar-checked** (security review,
   2026-11-06, note 8). Those items never reach a prompt, so the risk is low.
-- **`model_host` is shown to every key that can read the record, including create-only keys**
-  (security review note 7). A host name can reveal deployment layout; whether create-only keys
-  should see it is an open owner question.
+- **Until the wiring stage, the API record view shows `model_host` to every key that can read the
+  record, including create-only keys** (security review note 7). Nothing sets the field yet, so no
+  host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
+  a condition on the wiring stage (decision 15).
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
