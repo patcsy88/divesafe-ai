@@ -4,7 +4,8 @@ reads, so a trigger set missing one name, or not enabled, is simulated. The fake
 ADR 0022 condition 9 catalogue queries from an intact catalogue, so what varies here is only the
 trigger names and enablement; the catalogue checks themselves (owners, rules, row security,
 inheritance, persistence, function and trigger-type pins, trigger shape) are tested in
-test_kb_catalogue.py. Grant drift and added columns are not covered by either."""
+test_kb_catalogue.py. Grant drift and added columns are covered by the condition 11 checks
+there (scenarios in kb_catalogue_fake.py), not by this file."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import textwrap
 from typing import Any
 
 import pytest
-from tests.safety.kb_catalogue_fake import Catalog
+from tests.safety.kb_catalogue_fake import Catalog, own_everything
 
 from divesafe.services import migrations as migrations_module
 from divesafe.services.migrations import (
@@ -76,9 +77,7 @@ class _FakeConnection:
             # ADR 0022 condition 9 queries: an intact catalogue (the trigger names are what this
             # file varies; the catalogue checks themselves are in test_kb_catalogue.py)
             answer = Catalog(current_user="divesafe_owner", assessments_owner="divesafe_owner")
-            for table in answer.tables.values():
-                table.owner = "divesafe_owner"
-            answer.schema_owner = answer.db_owner = "divesafe_owner"
+            own_everything(answer, "divesafe_owner")
             found = answer.answer(text, params)
             if found is not None:
                 return found  # type: ignore[return-value]

@@ -32,6 +32,8 @@ from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.services.migrations import (
     GUARD_FUNCTIONS,
     GUARD_TRIGGERS,
+    KNOWLEDGE_FUNCTIONS,
+    KNOWLEDGE_SEQUENCE,
     KNOWLEDGE_TABLES,
     knowledge_problems,
     migrate,
@@ -352,6 +354,58 @@ def _storage_errors() -> Iterator[None]:
 
 # has_parameter_privilege() exists from PostgreSQL 15.
 _PARAMETER_PRIVILEGES_FROM = 150000
+_MAINTAIN_PRIVILEGE_FROM = 170000
+_MAINTAIN = "MAINTAIN"
+_KB_TABLE_LIST = ", ".join(f"'{t}'" for t in KNOWLEDGE_TABLES)
+_KB_FUNCTION_LIST = ", ".join(f"'{f}'" for f in sorted(set(KNOWLEDGE_FUNCTIONS.values())))
+
+
+def _any_kb_table(condition: str) -> str:
+    return (
+        "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        f"WHERE n.nspname = 'public' AND c.relname IN ({_KB_TABLE_LIST}) AND {condition})"
+    )
+
+
+def _knowledge_privilege_checks() -> tuple[tuple[str, str], ...]:
+    """ADR 0022 conditions 11.4 and 11.5, app side: the application role may only SELECT the
+    knowledge tables, holds no column privilege, nothing on the ordering sequence, and neither
+    owns nor may EXECUTE a knowledge function. A missing object reads as false here; the
+    knowledge catalogue check reports it."""
+    kb_function = (
+        "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+        f"WHERE n.nspname = 'public' AND p.proname IN ({_KB_FUNCTION_LIST}) AND {{}})"
+    )
+    return (
+        (
+            _any_kb_table("pg_has_role(current_user, c.relowner, 'MEMBER')"),
+            "owns a knowledge table",
+        ),
+        (
+            _any_kb_table(
+                "has_table_privilege(c.oid, "
+                "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')"
+            ),
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            _any_kb_table("has_any_column_privilege(c.oid, 'INSERT, UPDATE, REFERENCES')"),
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            f"COALESCE(has_sequence_privilege(to_regclass('public.{KNOWLEDGE_SEQUENCE}'), "
+            "'USAGE, SELECT, UPDATE'), false)",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            kb_function.format("has_function_privilege(p.oid, 'EXECUTE')"),
+            "can EXECUTE a knowledge function",
+        ),
+        (
+            kb_function.format("pg_has_role(current_user, p.proowner, 'MEMBER')"),
+            "owns a knowledge function",
+        ),
+    )
 
 
 class PostgresAssessmentRepository:
@@ -371,7 +425,9 @@ class PostgresAssessmentRepository:
         schema or the database, is (or can become) a superuser, can create objects in the public
         schema or schemas in the database (a schema owner can drop the table without firing any
         trigger), may set the replica mode, can create roles, or can delete, truncate or create
-        triggers."""
+        triggers; and, for the knowledge tables (ADR 0022 condition 11), any privilege beyond
+        SELECT, a column privilege, the ordering sequence, EXECUTE on or ownership of a knowledge
+        function, or (PostgreSQL 17+) MAINTAIN."""
         problems: list[str] = []
         with _storage_errors(), self._connect() as conn:
             # A role or database setting of search_path must not let an object in another schema
@@ -528,9 +584,17 @@ class PostgresAssessmentRepository:
                 "AND pg_has_role(current_user, p.proowner, 'MEMBER'))",
                 "owns a guard function",
             ),
+            *_knowledge_privilege_checks(),
         )
         all_checks = list(checks)
         version = conn.execute("SELECT current_setting('server_version_num')::int").fetchone()
+        if version is not None and version[0] >= _MAINTAIN_PRIVILEGE_FROM:
+            all_checks.append(
+                (
+                    _any_kb_table(f"has_table_privilege(c.oid, '{_MAINTAIN}')"),
+                    "holds MAINTAIN on a knowledge table",
+                )
+            )
         if version is not None and version[0] >= _PARAMETER_PRIVILEGES_FROM:
             # With this right the role could set session_replication_role = replica, which skips
             # ordinary triggers and constraints (the guard triggers are ENABLE ALWAYS, so they

@@ -18,7 +18,12 @@ from tests.safety.kb_catalogue_fake import Catalog, Rows, expected_tgtype
 from tests.safety.kb_fakes import mutated_module
 
 from divesafe.services import kb_pins, migrations
-from divesafe.services.migrations import KNOWLEDGE_FUNCTION_SHA256, KNOWLEDGE_TRIGGERS, MIGRATIONS
+from divesafe.services.migrations import (
+    KNOWLEDGE_FUNCTION_SHA256,
+    KNOWLEDGE_SHAPE_SHA256,
+    KNOWLEDGE_TRIGGERS,
+    MIGRATIONS,
+)
 
 pytestmark = pytest.mark.safety
 
@@ -219,9 +224,12 @@ def test_a_database_error_gives_the_fixed_text_and_no_dsn(
 def test_the_output_lists_the_major_the_five_hashes_and_nine_tgtype_lines(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Owner-approved change (2026-11-06): the output now ends with nine `shape` lines (ADR 0022
+    # condition 11). Exactly 1 major + 5 function + 9 tgtype + 9 shape lines, in that order.
     conn = PinConnection(has_history=False)
     _, out, _ = run(monkeypatch, conn, capsys, apply=True)
     lines = out.splitlines()
+    assert len(lines) == 1 + 5 + 9 + 9
     assert lines[0] == "postgresql_major 16"
     hashes = dict(line.split(" ") for line in lines[1:6])
     assert hashes == dict(KNOWLEDGE_FUNCTION_SHA256[16])
@@ -230,7 +238,10 @@ def test_the_output_lists_the_major_the_five_hashes_and_nine_tgtype_lines(
     parsed = {line.split(" ")[1]: int(line.split(" ")[2]) for line in type_lines}
     assert set(parsed) == set(KNOWLEDGE_TRIGGERS)
     assert parsed == {n: expected_tgtype(n) for n in KNOWLEDGE_TRIGGERS}
-    assert lines[6:] == type_lines  # the tgtype lines come after the function lines
+    assert lines[6:15] == type_lines  # the tgtype lines come after the function lines
+    shape_lines = [line.split(" ") for line in lines[15:]]
+    assert all(len(parts) == 3 and parts[0] == "shape" for parts in shape_lines)
+    assert {key: digest for _, key, digest in shape_lines} == dict(KNOWLEDGE_SHAPE_SHA256[16])
 
 
 # --- mutations (copies) -----------------------------------------------------------------------
@@ -246,6 +257,7 @@ ROLLBACK_IN_REFUSAL = (
     '                    conn.rollback()\n                    sys.stderr.write("refused'
 )
 TGTYPE_OUT = '        sys.stdout.write(f"tgtype {name} {value}\\n")'
+SHAPE_OUT = '        sys.stdout.write(f"shape {key} {digest}\\n")'
 
 PIN_MUTATIONS = [
     pytest.param(GUARD_CHECK, "                if False:", id="p-apply-guard-removed"),
@@ -278,6 +290,15 @@ PIN_MUTATIONS = [
         "    for name, value in list(types.items())[:8]:\n" + TGTYPE_OUT,
         id="p-one-tgtype-line-dropped",
     ),
+    pytest.param(
+        "    for key, digest in shapes.items():\n" + SHAPE_OUT,
+        "    for key, digest in list(shapes.items())[:8]:\n" + SHAPE_OUT,
+        id="p-one-shape-line-dropped",
+    ),
+    pytest.param(
+        SHAPE_OUT, '        sys.stdout.write(f"{key} {digest}\\n")', id="p-shape-label-dropped"
+    ),
+    pytest.param(SHAPE_OUT, "        pass", id="p-shape-lines-not-printed"),
     pytest.param(
         '    sys.stderr.write("could not read the database\\n")',
         '    sys.stderr.write(dsn + "\\n")',
@@ -323,6 +344,9 @@ def pin_misses(
             bad.append("statement-timeout")
         if len([line for line in out.splitlines() if line.startswith("tgtype ")]) != 9:
             bad.append("nine-tgtype-lines")
+        shapes = [line.split(" ") for line in out.splitlines() if line.startswith("shape ")]
+        if {p[1]: p[2] for p in shapes if len(p) == 3} != dict(KNOWLEDGE_SHAPE_SHA256[16]):
+            bad.append("nine-shape-lines")
     inspect_only = attempt("inspect", True, False)
     if inspect_only is not None:
         code, out, err, conn = inspect_only
@@ -376,3 +400,4 @@ def test_mutation_of_kb_pins_is_caught(
 def test_the_pins_tool_reads_through_the_same_functions_the_check_uses() -> None:
     assert kb_pins.knowledge_function_hashes is migrations.knowledge_function_hashes
     assert kb_pins.knowledge_trigger_types is migrations.knowledge_trigger_types
+    assert kb_pins.knowledge_shape_digests is migrations.knowledge_shape_digests

@@ -1,6 +1,6 @@
-"""Mutations of ADR 0022 condition 9 (`knowledge_problems`, `migrate`, `verify`). Each runs on a
-COPY of the module source (`mutated_module`), never on `src`, and must make a test fail: either a
-scenario of tests/safety/kb_catalogue_fake.py gets a wrong answer (or crashes: a crash is not a
+"""Mutations of ADR 0022 conditions 9 and 11 (`knowledge_problems`, `migrate`, `verify`). Each runs
+on a COPY of the module source (`mutated_module`), never on `src`, and must make a test fail: either
+a scenario of tests/safety/kb_catalogue_fake.py gets a wrong answer (or crashes: a crash is not a
 refusal), or the migrate()/verify() behaviour differs.
 
 EQUIVALENT MUTANTS (deliberately not tested; the offline fake cannot tell them apart, and on a real
@@ -286,6 +286,203 @@ KNOWLEDGE_MUTATIONS = [
 ]
 
 
+# condition 11 (shape pins, sequence, functions, SECURITY DEFINER wrappers, table and column ACLs)
+SEQ_ACL_SQL = '        "WHERE x.grantee <> c.relowner) "'
+SEQ_OWNER_SQL = (
+    '        f"c.relowner IS NOT DISTINCT FROM {expected_owner} AND {expected_owner} IS NOT NULL, "'
+)
+FN_OWNER_SQL = (
+    '        f"p.proowner IS NOT DISTINCT FROM {expected_owner} AND {expected_owner} IS NOT NULL, "'
+)
+FN_ACL_NULL = (
+    '        "p.proacl IS NOT NULL AND NOT EXISTS '
+    '(SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x "'
+)
+FN_ACL_SQL = '        "WHERE x.grantee <> p.proowner) "'
+DEFINER_MEMBER = (
+    '        f"AND pg_catalog.pg_has_role(p.proowner, {expected_owner}, %s) IS NOT FALSE "'
+)
+DEFINER_GUARDS = '        f"AND p.oid NOT IN {called}",'
+DEFINER_CHECK = "    if wrappers is None or int(wrappers[0]) != 0:"
+TABLE_ACL_SQL = '        "WHERE x.grantee <> c.relowner AND (x.grantee = 0 OR x.is_grantable "'
+COLUMN_ACL_SQL = (
+    '        "WHERE a.attrelid = c.oid AND x.grantee <> c.relowner AND (x.grantee = 0 "'
+)
+COLUMN_ACL_TAIL = '        "OR x.is_grantable OR x.privilege_type <> ALL(%s::text[]))) "'
+ACL_PARAMS = "        (list(_KB_TABLE_GRANTS), list(_KB_COLUMN_GRANTS), tables),"
+
+CONDITION_11_MUTATIONS = [
+    pytest.param(
+        "    problems += _shape_problems(", "    _ = _shape_problems(", id="k-shape-check-unwired"
+    ),
+    pytest.param(
+        "    problems += _sequence_problems(",
+        "    _ = _sequence_problems(",
+        id="k-sequence-check-unwired",
+    ),
+    pytest.param(
+        "    problems += _function_problems(",
+        "    _ = _function_problems(",
+        id="k-function-check-unwired",
+    ),
+    pytest.param(
+        "    problems += _acl_problems(", "    _ = _acl_problems(", id="k-acl-check-unwired"
+    ),
+    # 11.1 / 11.2 shape digests
+    pytest.param(
+        '            joined = "\\n".join(sorted(lines)).encode()',
+        '            joined = "\\n".join(lines).encode()',
+        id="k-rows-not-sorted",
+    ),
+    pytest.param(
+        "json.dumps(list(row[1:]),", "json.dumps(list(row[2:]),", id="k-first-column-not-hashed"
+    ),
+    pytest.param(
+        "json.dumps(list(row[1:]),", "json.dumps(list(row[1:-1]),", id="k-last-column-not-hashed"
+    ),
+    pytest.param(
+        "            if str(row[0]) in grouped:",
+        "            if str(row[0]) in grouped or True:",
+        id="k-other-tables-not-filtered",
+    ),
+    pytest.param(
+        "    pins = KNOWLEDGE_SHAPE_SHA256.get(major, {}) if major is not None else {}",
+        "    pins = KNOWLEDGE_SHAPE_SHA256.get(major, KNOWLEDGE_SHAPE_SHA256[16]) "
+        "if major is not None else {}",
+        id="k-unknown-major-uses-the-16-shape-pins",
+    ),
+    pytest.param(
+        "        if shape_pin is None:", "        if False:", id="k-missing-shape-pin-quiet"
+    ),
+    pytest.param(
+        "        shape_pin = pins.get(key)",
+        "        shape_pin = pins.get(key, digest)",
+        id="k-missing-shape-pin-is-a-pass",
+    ),
+    pytest.param(
+        "        elif digest != shape_pin:", "        elif False:", id="k-shape-compare-removed"
+    ),
+    pytest.param(
+        "        elif digest != shape_pin:",
+        "        elif digest == shape_pin:",
+        id="k-shape-compare-inverted",
+    ),
+    # 11.3 sequence
+    pytest.param(
+        '    if row is None:\n        return ["the knowledge ordering sequence could not be read"]',
+        "    if row is None:\n        return []",
+        id="k-missing-sequence-is-a-pass",
+    ),
+    pytest.param(
+        "    if tuple(row[:8]) != KNOWLEDGE_SEQUENCE_PARAMETERS:",
+        "    if False:",
+        id="k-sequence-parameters-not-compared",
+    ),
+    pytest.param(
+        "    if tuple(row[:8]) != KNOWLEDGE_SEQUENCE_PARAMETERS:",
+        "    if tuple(row[:7]) != KNOWLEDGE_SEQUENCE_PARAMETERS[:7]:",
+        id="k-sequence-persistence-not-compared",
+    ),
+    pytest.param(
+        "    if tuple(row[:8]) != KNOWLEDGE_SEQUENCE_PARAMETERS:",
+        "    if row[2] < 0:",
+        id="k-sequence-only-negative-increment-refused",
+    ),
+    pytest.param("    if row[8] is not True:", "    if False:", id="k-sequence-owner-not-checked"),
+    pytest.param("    if row[9] is not True:", "    if False:", id="k-sequence-acl-not-checked"),
+    pytest.param(SEQ_ACL_SQL, '        "WHERE true) "', id="k-sequence-owner-entry-counted"),
+    pytest.param(SEQ_OWNER_SQL, '        "true, "', id="k-sequence-owner-sql-removed"),
+    # 11.4 functions
+    pytest.param("        if owned is not True:", "        if False:", id="k-function-owner-quiet"),
+    pytest.param(
+        "        if only_owner is not True:", "        if False:", id="k-function-acl-quiet"
+    ),
+    pytest.param(FN_OWNER_SQL, '        "true, "', id="k-function-owner-sql-removed"),
+    pytest.param(
+        FN_ACL_NULL,
+        '        "NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x "',
+        id="k-null-proacl-accepted",
+    ),
+    pytest.param(FN_ACL_SQL, '        "WHERE true) "', id="k-function-owner-entry-counted"),
+    # 11.7 SECURITY DEFINER wrappers
+    pytest.param(DEFINER_CHECK, "    if False:", id="k-definer-check-removed"),
+    pytest.param(
+        DEFINER_CHECK,
+        "    if wrappers is not None and int(wrappers[0]) != 0:",
+        id="k-unreadable-definer-count-passes",
+    ),
+    pytest.param(
+        DEFINER_MEMBER,
+        '        f"AND pg_catalog.pg_has_role(p.proowner, {expected_owner}, %s) "',
+        id="k-unknown-membership-not-counted",
+    ),
+    pytest.param(DEFINER_MEMBER, '        "AND %s IS NOT NULL "', id="k-every-definer-counted"),
+    pytest.param(DEFINER_GUARDS, '        "AND %s IS NOT NULL",', id="k-guards-counted"),
+    # 11.5 table and column ACLs
+    pytest.param(
+        '_KB_TABLE_GRANTS = ("SELECT", "INSERT")',
+        '_KB_TABLE_GRANTS = ("SELECT", "INSERT", "UPDATE")',
+        id="k-table-update-allowed",
+    ),
+    pytest.param(
+        '_KB_COLUMN_GRANTS = ("INSERT",)',
+        '_KB_COLUMN_GRANTS = ("INSERT", "UPDATE")',
+        id="k-column-update-allowed",
+    ),
+    pytest.param(
+        '_KB_COLUMN_GRANTS = ("INSERT",)',
+        '_KB_COLUMN_GRANTS = ("INSERT", "SELECT")',
+        id="k-column-select-allowed",
+    ),
+    pytest.param(
+        ACL_PARAMS,
+        "        (list(_KB_COLUMN_GRANTS), list(_KB_TABLE_GRANTS), tables),",
+        id="k-acl-lists-swapped",
+    ),
+    pytest.param(
+        TABLE_ACL_SQL,
+        '        "WHERE x.grantee <> c.relowner AND (x.is_grantable "',
+        id="k-table-public-allowed",
+    ),
+    pytest.param(
+        TABLE_ACL_SQL,
+        '        "WHERE x.grantee <> c.relowner AND (x.grantee = 0 "',
+        id="k-table-grant-option-allowed",
+    ),
+    pytest.param(
+        TABLE_ACL_SQL,
+        '        "WHERE (x.grantee = 0 OR x.is_grantable "',
+        id="k-table-owner-entry-counted",
+    ),
+    pytest.param(
+        COLUMN_ACL_SQL,
+        '        "WHERE a.attrelid = c.oid AND x.grantee <> c.relowner AND (false "',
+        id="k-column-public-allowed",
+    ),
+    pytest.param(
+        COLUMN_ACL_TAIL,
+        '        "OR x.privilege_type <> ALL(%s::text[]))) "',
+        id="k-column-grant-option-allowed",
+    ),
+    pytest.param(
+        COLUMN_ACL_TAIL, '        "OR x.is_grantable)) "', id="k-column-privilege-not-compared"
+    ),
+    pytest.param("        if table_ok is not True:", "        if False:", id="k-table-acl-quiet"),
+    pytest.param(
+        "        if columns_ok is not True:", "        if False:", id="k-column-acl-quiet"
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new"), CONDITION_11_MUTATIONS)
+def test_mutation_of_the_condition_11_checks_is_caught_by_a_scenario(old: str, new: str) -> None:
+    real = fake.failing_scenarios(migrations)
+    mutant = mutated_module(migrations, (old, new))
+    caught = fake.failing_scenarios(mutant)
+    assert real == []
+    assert caught != [], "no scenario noticed the mutation"
+
+
 @pytest.mark.parametrize(("old", "new"), KNOWLEDGE_MUTATIONS)
 def test_mutation_of_knowledge_problems_is_caught_by_a_scenario(old: str, new: str) -> None:
     real = fake.failing_scenarios(migrations)
@@ -308,6 +505,10 @@ def migrate_misses(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Scenarios in which `module.migrate` does not raise (or does not roll back) when it must, or
     raises when the catalogue is intact."""
     bad = []
+    # the real pins, read once: `module` may be `migrations` itself, which the loop patches
+    real_pins = migrations.KNOWLEDGE_FUNCTION_SHA256
+    real_types = migrations.KNOWLEDGE_TRIGGER_TGTYPE
+    real_shapes = migrations.KNOWLEDGE_SHAPE_SHA256
     for scenario in [s for s in SCENARIOS if s.current]:
         catalog = Catalog()
         scenario.mutate(catalog)
@@ -316,14 +517,17 @@ def migrate_misses(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         monkeypatch.setattr(
             module,
             "KNOWLEDGE_FUNCTION_SHA256",
-            scenario.pins if scenario.pins is not None else migrations.KNOWLEDGE_FUNCTION_SHA256,
+            scenario.pins if scenario.pins is not None else real_pins,
         )
         monkeypatch.setattr(
             module,
             "KNOWLEDGE_TRIGGER_TGTYPE",
-            scenario.type_pins
-            if scenario.type_pins is not None
-            else migrations.KNOWLEDGE_TRIGGER_TGTYPE,
+            scenario.type_pins if scenario.type_pins is not None else real_types,
+        )
+        monkeypatch.setattr(
+            module,
+            "KNOWLEDGE_SHAPE_SHA256",
+            scenario.shape_pins if scenario.shape_pins is not None else real_shapes,
         )
         try:
             module.migrate("postgresql://never-used/x_test")

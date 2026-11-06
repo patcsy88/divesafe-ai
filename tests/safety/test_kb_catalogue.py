@@ -8,6 +8,8 @@ offline). Mutations are in test_kb_catalogue_mutations.py."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -22,11 +24,15 @@ from tests.safety.kb_catalogue_fake import (
     Scenario,
     VerifyConnection,
 )
+from tests.safety.kb_catalogue_rows import SHAPE_ROWS
 
 from divesafe.services import migrations, postgres
 from divesafe.services.migrations import (
     KNOWLEDGE_FUNCTION_SHA256,
     KNOWLEDGE_FUNCTIONS,
+    KNOWLEDGE_SEQUENCE,
+    KNOWLEDGE_SHAPE_ASPECTS,
+    KNOWLEDGE_SHAPE_SHA256,
     KNOWLEDGE_TABLES,
     KNOWLEDGE_TRIGGERS,
     MigrationError,
@@ -76,6 +82,46 @@ def test_the_scenario_table_covers_every_check_and_has_unique_ids() -> None:
         "transition-table-new",
         "no-trigger-type-pins",
         "trigger-type-pin-missing-for-one-trigger",
+        # condition 11
+        "shape-rows-in-another-order",
+        "constraint-dropped",
+        "constraint-not-valid",
+        "constraint-deferrable",
+        "constraint-check-changed",
+        "foreign-key-dropped",
+        "constraint-added",
+        "column-not-null-dropped",
+        "column-type-changed",
+        "column-default-added",
+        "column-generated",
+        "column-identity",
+        "column-collation",
+        "column-added",
+        "column-renamed",
+        "index-invalid",
+        "index-added",
+        "row-of-another-table-is-ignored",
+        "no-shape-pins",
+        "shape-pin-missing-for-one-key",
+        "sequence-missing",
+        "sequence-wrong-owner",
+        "sequence-granted-to-another-role",
+        "sequence-increment-negative",
+        "sequence-cycle",
+        "function-wrong-owner",
+        "function-executable-by-another-role",
+        "security-definer-wrapper",
+        "security-definer-count-unreadable",
+        "table-privilege-beyond-select-insert",
+        "column-privilege-beyond-insert",
+        "sequence-granted-to-public",
+        "function-executable-by-public-null-acl",
+        "security-definer-owner-membership-unknown",
+        "table-privilege-to-public",
+        "table-privilege-with-grant-option",
+        "column-privilege-to-public",
+        "column-privilege-with-grant-option",
+        "column-select-privilege",
     ):
         assert needed in ids, needed
 
@@ -101,10 +147,7 @@ def test_the_internal_foreign_key_triggers_are_not_counted_as_extra_triggers() -
 
 def test_the_expected_owner_is_the_current_user_or_the_assessments_owner() -> None:
     catalog = Catalog(current_user="runner_test", assessments_owner="other_test")
-    for table in catalog.tables.values():
-        table.owner = "runner_test"
-    catalog.schema_owner = "runner_test"
-    catalog.db_owner = "runner_test"
+    fake.own_everything(catalog, "runner_test")
     by_current = knowledge_problems(CatalogConnection(catalog), owner_is_current_user=True)
     by_assessments = knowledge_problems(CatalogConnection(catalog), owner_is_current_user=False)
     assert by_current == []
@@ -150,6 +193,11 @@ WRITE = re.compile(
 )
 CATALOGUES = ("pg_class", "pg_trigger", "pg_proc", "pg_namespace", "pg_rewrite", "pg_policy")
 CATALOGUES += ("pg_inherits", "pg_roles", "pg_database")
+# condition 11: the catalogues and catalogue functions of the shape, sequence, function and ACL
+# queries (a same-named object earlier on a search path must not stand in for them)
+CATALOGUES += ("pg_attribute", "pg_attrdef", "pg_collation", "pg_constraint", "pg_index")
+CATALOGUES += ("pg_sequence", "aclexplode", "pg_has_role", "format_type", "pg_get_expr")
+CATALOGUES += ("pg_get_constraintdef", "pg_get_indexdef")
 
 
 def all_queries() -> list[tuple[str, Any]]:
@@ -178,16 +226,24 @@ def test_every_catalogue_is_schema_qualified() -> None:
 
 
 def test_the_table_names_travel_as_parameters_not_in_the_query_text() -> None:
+    # Owner-approved change (2026-11-06): a parameterised query carries all three table names, or
+    # exactly the sequence name (condition 11.3); the sequence name never appears in the text.
     parameterised = 0
+    sequence_queries = 0
     for text, params in all_queries():
         for table in KNOWLEDGE_TABLES:
             assert table not in text, table
+        assert KNOWLEDGE_SEQUENCE not in text
         if "%s" in text:
             parameterised += 1
             assert params is not None
             flat = [item for p in params for item in (p if isinstance(p, list) else [p])]
-            assert set(KNOWLEDGE_TABLES) <= set(flat)
+            if flat == [KNOWLEDGE_SEQUENCE]:
+                sequence_queries += 1
+            else:
+                assert set(KNOWLEDGE_TABLES) <= set(flat)
     assert parameterised >= 3
+    assert sequence_queries == 2  # one per owner path
 
 
 FIXED_LITERALS = (
@@ -252,7 +308,9 @@ def test_the_pin_table_is_read_only() -> None:
 def test_an_unpinned_major_fails_closed_with_one_problem_per_trigger(major: int) -> None:
     catalog = Catalog(major=major)
     found = knowledge_problems(CatalogConnection(catalog), owner_is_current_user=True)
-    assert sorted(found) == sorted(fake.no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in KNOWLEDGE_TRIGGERS)
+    expected = [fake.no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in KNOWLEDGE_TRIGGERS]
+    expected += fake._no_shape_pins()  # noqa: SLF001
+    assert sorted(found) == sorted(expected)
 
 
 def test_an_empty_or_mutated_pin_table_fails_closed() -> None:
@@ -271,6 +329,61 @@ def test_knowledge_function_hashes_is_read_only_and_parameterised() -> None:
         assert text.lstrip().upper().startswith("SELECT")
         assert "%s" in text or "server_version_num" in text
     assert catalog.log[-1][1] == (sorted(FIVE),)
+
+
+# --- condition 11: the shape pins -----------------------------------------------------------------
+
+
+def _independent_digests(rows: dict[str, list[tuple[Any, ...]]]) -> dict[str, str]:
+    """The digest written out again, apart from migrations: per table and aspect, the compact JSON
+    of each row without its table name, sorted, joined by newlines, SHA-256 hex."""
+    out = {}
+    for aspect in KNOWLEDGE_SHAPE_ASPECTS:
+        for table in KNOWLEDGE_TABLES:
+            lines = sorted(
+                json.dumps(list(r[1:]), separators=(",", ":"))
+                for r in rows[aspect]
+                if r[0] == table
+            )
+            out[f"{table}.{aspect}"] = hashlib.sha256("\n".join(lines).encode()).hexdigest()
+    return out
+
+
+def test_the_recorded_rows_hash_to_the_pins_for_both_majors() -> None:
+    expected = _independent_digests(SHAPE_ROWS)
+    assert dict(KNOWLEDGE_SHAPE_SHA256[16]) == expected
+    assert dict(KNOWLEDGE_SHAPE_SHA256[17]) == expected
+
+
+def test_knowledge_shape_digests_matches_the_independent_digest() -> None:
+    catalog = Catalog()
+    assert migrations.knowledge_shape_digests(CatalogConnection(catalog)) == (
+        _independent_digests(SHAPE_ROWS)
+    )
+
+
+def test_the_shape_pin_table_has_nine_distinct_pins_for_exactly_majors_16_and_17() -> None:
+    keys = {f"{t}.{a}" for a in KNOWLEDGE_SHAPE_ASPECTS for t in KNOWLEDGE_TABLES}
+    assert set(KNOWLEDGE_SHAPE_ASPECTS) == {"columns", "constraints", "indexes"}
+    assert set(KNOWLEDGE_SHAPE_SHA256) == {16, 17}
+    for major, pins in KNOWLEDGE_SHAPE_SHA256.items():
+        assert set(pins) == keys, major
+        assert len(set(pins.values())) == 9, major
+        for digest in pins.values():
+            assert re.fullmatch(r"[0-9a-f]{64}", digest) is not None, major
+
+
+def test_the_shape_pin_table_is_read_only() -> None:
+    with pytest.raises(TypeError):
+        KNOWLEDGE_SHAPE_SHA256[18] = {}  # type: ignore[index]
+    with pytest.raises(TypeError):
+        KNOWLEDGE_SHAPE_SHA256[16]["kb_chunks.columns"] = "0" * 64  # type: ignore[index]
+
+
+def test_every_recorded_row_belongs_to_a_knowledge_table() -> None:
+    for aspect, rows in SHAPE_ROWS.items():
+        assert rows, aspect
+        assert {r[0] for r in rows} == set(KNOWLEDGE_TABLES), aspect
 
 
 # --- verify() -------------------------------------------------------------------------------------
@@ -373,6 +486,8 @@ def test_migrate_raises_on_any_problem_and_the_transaction_rolls_back(
         monkeypatch.setattr(migrations, "KNOWLEDGE_FUNCTION_SHA256", scenario.pins)
     if scenario.type_pins is not None:
         monkeypatch.setattr(migrations, "KNOWLEDGE_TRIGGER_TGTYPE", scenario.type_pins)
+    if scenario.shape_pins is not None:
+        monkeypatch.setattr(migrations, "KNOWLEDGE_SHAPE_SHA256", scenario.shape_pins)
     with pytest.raises(MigrationError) as caught:
         migrations.migrate("postgresql://never-used/x_test")
     message = str(caught.value)

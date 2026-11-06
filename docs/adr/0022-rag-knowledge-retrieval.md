@@ -1266,9 +1266,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `verify()` fails when a trigger or its function is missing, disabled or not paired.
   `guarded()` refuses the forbidden words,
   DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`.
-  **Later stage, not built (condition 11.4 and 11.5):** the production start-up check refuses an app
-  role that owns a knowledge table or function (directly or by membership) and one that is a member
-  of the loader role, and checks knowledge-table column privileges. A zero-chunk manifest refused by `kb_load`
+  **Built 2026-11-06 (condition 11.4 and 11.5):** `verify(least_privilege=True)` refuses an app
+  role that owns a knowledge table or function (directly or by membership), holds any table
+  privilege beyond SELECT (MAINTAIN too, from PostgreSQL 17), any column privilege, anything on the
+  ordering sequence, or EXECUTE on a knowledge function. Membership of the loader role is not
+  checked by name: an inheriting member should show up through the inherited INSERT (not tested
+  live), and a NOINHERIT member that could `SET ROLE` to the loader is **not** caught. A zero-chunk manifest refused by `kb_load`
   before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
@@ -1503,14 +1506,13 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   (decisions 7, 11).
 - **The loader can take `LOCK TABLE`** on tables it can read (denial of service); not prevented.
 - **Default privileges for the owner role are not checked** by `db_init` or the loader check.
-- **The catalogue check (condition 9) is narrow.** It runs in `migrate()` and at `verify()` start-up
-  only, and it does not cover constraints, columns, sequence parameters, function owner and
-  EXECUTE, or knowledge-table privileges. Those are condition 11, **MUST land before the connector
-  stage**. The pins detect database drift, not code drift (code drift is covered by the migration
-  checksum plus review).
+- **The catalogue check (conditions 9 and 11) runs in `migrate()` and at `verify()` start-up
+  only.** Condition 11.1-11.5 and 11.7 are built (2026-11-06); still not detected: a renamed
+  constraint (the shape digest leaves names out), a sequence `RESTART` (the current value is not
+  pinned), and conditions 11.6, 11.8 and 11.9. The pins detect database drift, not code drift (code
+  drift is covered by the migration checksum plus review).
 - **`verify()` knowledge checks are start-up only** and judge the owner by consistency with the
-  owner of `public.assessments`. Column privileges for the app and loader on `kb_*` tables are not
-  checked by `verify(least_privilege=True)` (condition 11).
+  owner of `public.assessments`.
 - **A zero-chunk approved version.** The database refuses to approve a version with no chunks, but
   an owner or superuser write, or a restore, can still create an APPROVED version with zero
   chunks. Later stage: the connector should raise an evidence issue for an approved governing
@@ -1529,8 +1531,9 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   now catches in the database:** an extra trigger, a replaced function body, trigger shape, RLS and
   policies, rules, inheritance children, UNLOGGED, `public` owner or rename, and `DROP SCHEMA public`.
   **Partly caught:** `REASSIGN OWNED` (`verify()` judges consistency with the owner of
-  `assessments`, not identity). **Not caught:** everything in condition 11, event triggers and
-  superuser catalogue edits.
+  `assessments`, not identity). **Condition 11 (2026-11-06) now catches:** `ADD COLUMN`,
+  `ADD CONSTRAINT`, extra indexes and grants on `kb_*`. **Not caught:** conditions 11.6, 11.8 and
+  11.9, event triggers and superuser catalogue edits.
 - **Loader role attributes and memberships are checked by name only in stage 1a.** Superuser,
   membership of the owner or app role, CREATEROLE, BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role
   that holds TEMP are **not** checked by `kb_load` yet. `db_init` checks the TEMP path at install
@@ -1644,21 +1647,31 @@ citation guard are later stages.
     (ADR 0024 A8):** the privilege checks run in separate transactions, and `withdraw` checks role
     names only.
 11. **Catalogue checks condition 9 does not make (added 2026-10-25; MUST land before the connector
-    stage).** Open; each needs a failure test and a mutation. Not detected today:
+    stage).** 11.1-11.5 and 11.7 are **built 2026-11-06** (scenarios in `tests/safety/kb_catalogue_fake.py`, mutations in
+    `tests/safety/test_kb_catalogue_mutations.py` and `tests/safety/test_app_kb_privileges.py`,
+    live breaks on PostgreSQL 16 and 17 in `tests/integration/test_kb_catalogue_live.py` and
+    `test_postgres_guard.py`; awaiting review).
     - **11.1** Constraints (dropped, `NOT VALID` CHECK, NOT NULL, UNIQUE, FK), including
       `display_permitted`, `licence_reference_present`, `approver_role`, `all_sites`, the review
-      window, `status` / `hash_checked` and `UNIQUE(event_order)`. Owner: the connector-stage
-      catalogue slice.
-    - **11.2** Columns, defaults, types and generated columns. Same owner.
+      window, `status` / `hash_checked` and `UNIQUE(event_order)`. **Built:** per table, a SHA-256
+      of the sorted constraint and index rows (`KNOWLEDGE_SHAPE_SHA256`, nine pins per major,
+      generated with `kb_pins`). **Gap:** a renamed constraint is not detected (names are left out).
+    - **11.2** Columns, defaults, types and generated columns. **Built** the same way (a third
+      digest per table; an added or renamed column changes it).
     - **11.3** `kb_status_event_order_seq` parameters (INCREMENT -1, RESTART), which could make
-      "latest status" read wrongly. Same owner.
-    - **11.4** Function owner and PUBLIC EXECUTE; the app-role ownership check does not cover the
-      five knowledge functions. Owner: the `verify()` least-privilege extension.
-    - **11.5** App and loader privileges on `kb_*` tables, not checked by
-      `verify(least_privilege=True)`. Same owner.
-    - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity).
+      "latest status" read wrongly. **Built:** parameters, owner and ACL (only the owner). **Gap:**
+      `RESTART` changes only the current value, which is not pinned.
+    - **11.4** Function owner and PUBLIC EXECUTE. **Built:** every function a knowledge trigger
+      calls must be owned by the expected owner, with a non-NULL ACL naming only the owner; app
+      side, `verify(least_privilege=True)` refuses an app role that owns or may EXECUTE one.
+    - **11.5** App and loader privileges on `kb_*` tables. **Built:** a role other than the owner
+      may hold only SELECT / INSERT on a table and only INSERT on a column, never with a grant
+      option, never PUBLIC; app side, only SELECT (and no MAINTAIN on PostgreSQL 17+).
+    - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity). Open.
     - **11.7** A SECURITY DEFINER wrapper owned by the owner that disables, inserts and re-enables.
-    - **11.8** Tampering between start-ups: the check runs at `migrate()` and start-up only.
+      **Built:** no SECURITY DEFINER function in any schema other than those the knowledge triggers
+      call may be owned by a member of the owner role (a superuser owner counts; unknown counts).
+    - **11.8** Tampering between start-ups: the check runs at `migrate()` and start-up only. Open.
     - **11.9** An owner can drop and recreate a knowledge table with the same triggers and
       functions. Every check passes, and the status history, including a withdrawal, is lost.
     - Event triggers and superuser catalogue edits (out of scope).

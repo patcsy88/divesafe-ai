@@ -55,12 +55,14 @@ from divesafe.services import migrations as migrations_module
 from divesafe.services.migrations import (
     KNOWLEDGE_FUNCTION_SHA256,
     KNOWLEDGE_FUNCTIONS,
+    KNOWLEDGE_SHAPE_SHA256,
     KNOWLEDGE_TABLES,
     KNOWLEDGE_TRIGGER_TGTYPE,
     MIGRATIONS,
     MigrationError,
     knowledge_function_hashes,
     knowledge_problems,
+    knowledge_shape_digests,
     knowledge_trigger_types,
     migrate,
 )
@@ -93,7 +95,10 @@ def _dsn_for(database: str, user: str | None = None) -> str:
 
 
 def _is_knowledge(problem: str) -> bool:
-    return "knowledge" in problem or "kb_" in problem or "public schema" in problem
+    return any(
+        part in problem
+        for part in ("knowledge", "kb_", "public schema", "ordering sequence", "SECURITY DEFINER")
+    ) or problem == fake.function_acl("a function")
 
 
 @dataclass
@@ -212,6 +217,12 @@ def test_verify_as_the_application_role_reports_no_knowledge_problem(scratch: Sc
         "pg_database",
         "pg_namespace",
         "pg_class",
+        "pg_attribute",
+        "pg_attrdef",
+        "pg_collation",
+        "pg_constraint",
+        "pg_index",
+        "pg_sequence",
     ],
 )
 def test_the_application_role_can_read_each_catalogue_the_check_uses(
@@ -279,6 +290,19 @@ def test_the_trigger_types_are_the_same_read_as_the_application_role(scratch: Sc
     assert found == dict(KNOWLEDGE_TRIGGER_TGTYPE)
 
 
+def test_the_shape_digests_match_the_pins_on_the_running_major(scratch: Scratch) -> None:
+    """Condition 11.1 / 11.2: a changed migration 4 table definition, or a PostgreSQL major with
+    different catalogue output, fails here: regenerate with `kb_pins` and review."""
+    with psycopg.connect(scratch.admin_dsn) as conn:
+        as_owner = knowledge_shape_digests(conn)
+    with psycopg.connect(scratch.app_dsn) as conn:
+        as_app = knowledge_shape_digests(conn)
+    pinned = KNOWLEDGE_SHAPE_SHA256.get(_major(scratch))
+    assert pinned is not None
+    assert as_owner == dict(pinned)
+    assert as_app == dict(pinned)
+
+
 def test_kb_pins_lists_the_major_five_hashes_and_nine_tgtype_lines(scratch: Scratch) -> None:
     """Runs the dev tool as a subprocess in its read-only mode against the migrated scratch
     database. The DSN goes in the child's environment only; the output must not contain it."""
@@ -298,16 +322,20 @@ def test_kb_pins_lists_the_major_five_hashes_and_nine_tgtype_lines(scratch: Scra
     code = done.returncode
     lines = done.stdout.splitlines()
     leaked = scratch.admin_dsn in done.stdout + done.stderr or PASSWORD in done.stdout + done.stderr
-    type_lines = [line.split(" ") for line in lines if line.startswith("tgtype ")]
-    function_lines = [line.split(" ") for line in lines[1:] if not line.startswith("tgtype ")]
     major = _major(scratch)
+    function_lines = [line.split(" ") for line in lines[1:6]]
+    type_lines = [line.split(" ") for line in lines[6:15]]
+    shape_lines = [line.split(" ") for line in lines[15:]]
     assert code == 0
+    assert len(lines) == 1 + 5 + 9 + 9
     assert lines[0] == f"postgresql_major {major}"
     assert {name: digest for name, digest in function_lines} == dict(
         KNOWLEDGE_FUNCTION_SHA256[major]
     )
-    assert len(type_lines) == 9
+    assert all(parts[0] == "tgtype" for parts in type_lines)
     assert {name: int(value) for _, name, value in type_lines} == dict(KNOWLEDGE_TRIGGER_TGTYPE)
+    assert all(parts[0] == "shape" for parts in shape_lines)
+    assert {key: digest for _, key, digest in shape_lines} == dict(KNOWLEDGE_SHAPE_SHA256[major])
     assert leaked is False
 
 
@@ -430,12 +458,14 @@ BREAKS = [
             "CREATE TRIGGER leaky_trigger_test BEFORE INSERT ON public.kb_chunks FOR EACH ROW "
             "EXECUTE FUNCTION public.leaky_noop_test()",
         ),
-        [fake.NINE],
+        # 11.4 also sees the extra trigger's function: its NULL proacl lets PUBLIC execute it
+        [fake.NINE, fake.function_acl("a function")],
     ),
     Break(
         "trigger-dropped",
         ("DROP TRIGGER kb_chunks_insert_guard ON public.kb_chunks",),
-        [fake.NINE],
+        # 11.7: kb_chunks_insert, no longer called by a trigger, is a stray SECURITY DEFINER
+        [fake.NINE, fake.DEFINER],
         migrate_detail=False,
     ),
     Break(
@@ -450,7 +480,7 @@ BREAKS = [
     Break(
         "trigger-calls-the-wrong-function",
         _replacing("public.kb_no_truncate"),
-        [fake.not_call(INSERT_GUARD), fake.mismatch("kb_chunks_insert")],
+        [fake.not_call(INSERT_GUARD), fake.mismatch("kb_chunks_insert"), fake.DEFINER],
     ),
     Break(
         "trigger-calls-a-same-named-function-in-another-schema",
@@ -460,7 +490,12 @@ BREAKS = [
             "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
             *_replacing("leaky_schema_test.kb_chunks_insert"),
         ),
-        [fake.not_call(INSERT_GUARD), fake.mismatch("kb_chunks_insert")],
+        [
+            fake.not_call(INSERT_GUARD),
+            fake.mismatch("kb_chunks_insert"),
+            fake.DEFINER,  # the real one, no longer called
+            fake.function_acl("kb_chunks_insert"),  # the impostor: NULL proacl
+        ],
     ),
     Break(
         "trigger-disabled",
@@ -584,6 +619,129 @@ BREAKS = [
         ("ALTER SCHEMA public OWNER TO pg_database_owner", "ALTER DATABASE {db} OWNER TO {other}"),
         [fake.PUBLIC_OWNER],
     ),
+    # condition 11.1 / 11.2: constraints, columns and indexes match the pinned shape
+    Break(
+        "check-constraint-dropped",
+        ("ALTER TABLE public.kb_documents DROP CONSTRAINT kb_documents_display_permitted_check",),
+        [fake.shape_mismatch("kb_documents", "constraints")],
+    ),
+    Break(
+        "check-constraint-not-valid",
+        (
+            "ALTER TABLE public.kb_documents DROP CONSTRAINT kb_documents_display_permitted_check",
+            "ALTER TABLE public.kb_documents ADD CONSTRAINT kb_documents_display_permitted_check "
+            "CHECK (display_permitted) NOT VALID",
+        ),
+        [fake.shape_mismatch("kb_documents", "constraints")],
+    ),
+    Break(
+        "unique-constraint-dropped",
+        ("ALTER TABLE public.kb_status_events DROP CONSTRAINT kb_status_events_event_order_key",),
+        [
+            fake.shape_mismatch("kb_status_events", "constraints"),
+            fake.shape_mismatch("kb_status_events", "indexes"),
+        ],
+    ),
+    Break(
+        "column-not-null-dropped",
+        ("ALTER TABLE public.kb_documents ALTER COLUMN title DROP NOT NULL",),
+        [fake.shape_mismatch("kb_documents", "columns")],
+    ),
+    Break(
+        "column-default-changed",
+        ("ALTER TABLE public.kb_documents ALTER COLUMN all_sites SET DEFAULT true",),
+        [fake.shape_mismatch("kb_documents", "columns")],
+    ),
+    Break(
+        "column-type-changed",
+        ("ALTER TABLE public.kb_chunks ALTER COLUMN section TYPE varchar(300)",),
+        # the CHECK on section is rewritten with a cast, so the constraints differ too
+        [
+            fake.shape_mismatch("kb_chunks", "columns"),
+            fake.shape_mismatch("kb_chunks", "constraints"),
+        ],
+    ),
+    Break(
+        "column-added",
+        ("ALTER TABLE public.kb_chunks ADD COLUMN leaky_column_test text",),
+        [fake.shape_mismatch("kb_chunks", "columns")],
+    ),
+    Break(
+        "index-added",
+        ("CREATE INDEX leaky_index_test ON public.kb_chunks (section)",),
+        [fake.shape_mismatch("kb_chunks", "indexes")],
+    ),
+    # 11.3 the ordering sequence
+    Break(
+        "sequence-counts-down",
+        ("ALTER SEQUENCE public.kb_status_event_order_seq INCREMENT -1 MINVALUE -100 START -1",),
+        [fake.SEQUENCE_PARAMETERS],
+    ),
+    Break(
+        "sequence-usage-granted-to-another-role",
+        ("GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO {other}",),
+        [fake.SEQUENCE_ACL],
+    ),
+    Break(
+        "sequence-owner-changed",
+        ("ALTER SEQUENCE public.kb_status_event_order_seq OWNER TO {other}",),
+        [fake.SEQUENCE_OWNER],
+    ),
+    # 11.4 the guard functions
+    Break(
+        "function-executable-by-public",
+        ("GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO PUBLIC",),
+        [fake.function_acl("kb_no_truncate")],
+    ),
+    Break(
+        "function-executable-by-another-role",
+        ("GRANT EXECUTE ON FUNCTION public.kb_chunks_insert() TO {other}",),
+        [fake.function_acl("kb_chunks_insert")],
+    ),
+    Break(
+        "function-owner-changed",
+        ("ALTER FUNCTION public.kb_no_truncate() OWNER TO {other}",),
+        [fake.function_owner("kb_no_truncate")],
+    ),
+    # 11.7 a SECURITY DEFINER function other than the guards, owned by the owner role
+    Break(
+        "security-definer-function-in-public",
+        (
+            "CREATE FUNCTION public.leaky_definer_test() RETURNS void LANGUAGE sql "
+            "SECURITY DEFINER AS 'SELECT 1'",
+        ),
+        [fake.DEFINER],
+    ),
+    Break(
+        "security-definer-function-in-another-schema",
+        (
+            "CREATE SCHEMA leaky_schema_test",
+            "CREATE FUNCTION leaky_schema_test.leaky_definer_test() RETURNS void LANGUAGE sql "
+            "SECURITY DEFINER AS 'SELECT 1'",
+        ),
+        [fake.DEFINER],
+    ),
+    # 11.5 table and column privileges
+    Break(
+        "table-update-granted",
+        ("GRANT UPDATE ON public.kb_chunks TO {other}",),
+        [fake.table_acl("kb_chunks")],
+    ),
+    Break(
+        "table-select-granted-to-public",
+        ("GRANT SELECT ON public.kb_chunks TO PUBLIC",),
+        [fake.table_acl("kb_chunks")],
+    ),
+    Break(
+        "table-select-with-grant-option",
+        ("GRANT SELECT ON public.kb_documents TO {other} WITH GRANT OPTION",),
+        [fake.table_acl("kb_documents")],
+    ),
+    Break(
+        "column-update-granted",
+        ("GRANT UPDATE (title) ON public.kb_documents TO {other}",),
+        [fake.column_acl("kb_documents")],
+    ),
 ]
 BREAK_IDS = [b.id for b in BREAKS]
 
@@ -593,6 +751,20 @@ ACCEPTED = [
         "public-owned-by-pg_database_owner", ("ALTER SCHEMA public OWNER TO pg_database_owner",), []
     ),
     Break("public-owned-by-the-owner-directly", ("ALTER SCHEMA public OWNER TO {me}",), []),
+    Break(
+        "column-insert-granted",  # the loader's own form of grant on kb_status_events
+        ("GRANT INSERT (status) ON public.kb_status_events TO {other}",),
+        [],
+    ),
+    Break(
+        "security-definer-function-owned-by-another-role",
+        (
+            "CREATE FUNCTION public.leaky_definer_test() RETURNS void LANGUAGE sql "
+            "SECURITY DEFINER AS 'SELECT 1'",
+            "ALTER FUNCTION public.leaky_definer_test() OWNER TO {other}",
+        ),
+        [],
+    ),
 ]
 
 

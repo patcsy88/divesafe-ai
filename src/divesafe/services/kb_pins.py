@@ -1,5 +1,5 @@
-"""Dev-only helper: print the pins for `migrations.KNOWLEDGE_FUNCTION_SHA256` and
-`KNOWLEDGE_TRIGGER_TGTYPE` (ADR 0022 condition 9).
+"""Dev-only helper: print the pins for `migrations.KNOWLEDGE_FUNCTION_SHA256`,
+`KNOWLEDGE_TRIGGER_TGTYPE` (ADR 0022 condition 9) and `KNOWLEDGE_SHAPE_SHA256` (condition 11).
 
     DIVESAFE_PIN_DSN='postgresql://...' DIVESAFE_PIN_APPLY=1 python -m divesafe.services.kb_pins
 
@@ -9,7 +9,8 @@ being checked. APPLY applies the migrations in one transaction, reads the values
 and is refused unless `public.schema_migrations` does not exist (an empty scratch database only).
 Without APPLY it reads a database already at version 4, read-only (for inspection, not for pins).
 Output: `postgresql_major <n>`, then `<function> <sha256 hex>` per function, then
-`tgtype <trigger> <integer>` per trigger. The DSN comes from the environment, not argv, and is
+`tgtype <trigger> <integer>` per trigger, then `shape <table>.<aspect> <sha256 hex>` per table
+and aspect. The DSN comes from the environment, not argv, and is
 never printed. Nothing here is used at run time.
 """
 
@@ -23,6 +24,7 @@ import psycopg
 from divesafe.services.migrations import (
     MIGRATIONS,
     knowledge_function_hashes,
+    knowledge_shape_digests,
     knowledge_trigger_types,
 )
 
@@ -49,6 +51,7 @@ def main() -> int:
                 conn.read_only = True
             major, hashes = knowledge_function_hashes(conn)
             types = knowledge_trigger_types(conn)
+            shapes = knowledge_shape_digests(conn)
             conn.rollback()
     except psycopg.Error:
         sys.stderr.write("could not read the database\n")
@@ -58,6 +61,8 @@ def main() -> int:
         sys.stdout.write(f"{name} {digest}\n")
     for name, value in types.items():
         sys.stdout.write(f"tgtype {name} {value}\n")
+    for key, digest in shapes.items():
+        sys.stdout.write(f"shape {key} {digest}\n")
     return 0
 
 

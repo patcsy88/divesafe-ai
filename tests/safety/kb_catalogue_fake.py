@@ -12,10 +12,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg.errors
+from tests.safety.kb_catalogue_rows import SHAPE_ROWS
 
 from divesafe.services.migrations import (
     KNOWLEDGE_FUNCTION_SHA256,
     KNOWLEDGE_FUNCTIONS,
+    KNOWLEDGE_SEQUENCE_PARAMETERS,
+    KNOWLEDGE_SHAPE_ASPECTS,
+    KNOWLEDGE_SHAPE_SHA256,
     KNOWLEDGE_TABLES,
     KNOWLEDGE_TRIGGERS,
 )
@@ -84,6 +88,47 @@ SHAPE_FRAGMENTS = (
 )
 
 
+SHAPE_FRAGMENTS_BY_ASPECT = {
+    "columns": "JOIN pg_catalog.pg_attribute a ON",
+    "constraints": "FROM pg_catalog.pg_constraint con",
+    "indexes": "FROM pg_catalog.pg_index i",
+}
+
+
+APP = "app_test"
+LOADER = "loader_test"
+PUBLIC = "PUBLIC"
+# the object's owner, whoever that is: ALTER ... OWNER TO rewrites the ACL to the new owner
+SELF = "<owner>"
+OWNER_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+
+
+@dataclass(frozen=True)
+class Grant:
+    grantee: str
+    privilege: str
+    grantable: bool = False
+
+
+def _loader(*privileges: str) -> list[Grant]:
+    return [Grant(LOADER, p) for p in privileges]
+
+
+def acl_ok(grants: list[Grant], text: str, allowed: list[str]) -> bool:
+    """One NOT EXISTS subquery of `_acl_problems`: each condition applies only if its fragment is
+    in that subquery's text; the allowed privileges come from the parameters."""
+    for g in grants:
+        if "x.grantee <> c.relowner" in text and g.grantee == SELF:
+            continue
+        if (
+            (g.grantee == PUBLIC and "x.grantee = 0" in text)
+            or (g.grantable and "x.is_grantable" in text)
+            or ("x.privilege_type <> ALL(%s::text[])" in text and g.privilege not in allowed)
+        ):
+            return False
+    return True
+
+
 def plain_shape(t: Trig, text: str) -> bool:
     checks = (
         not t.qual,
@@ -129,8 +174,34 @@ class Catalog:
     internal: list[Trig] = field(default_factory=list)
     digests: dict[str, str] = field(default_factory=dict)
     tables: dict[str, Table] = field(default_factory=dict)
+    # condition 11: the recorded real rows (kb_catalogue_rows), the sequence and the functions
+    shape: dict[str, list[tuple[Any, ...]]] = field(default_factory=dict)
+    sequence_row: tuple[Any, ...] | None = KNOWLEDGE_SEQUENCE_PARAMETERS
+    sequence_owner: str = OWNER
+    sequence_acl: list[str] = field(default_factory=lambda: [SELF])  # grantees
+    function_owners: dict[str, str] = field(default_factory=dict)
+    function_acl: dict[str, list[str] | None] = field(default_factory=dict)  # None: NULL proacl
+    # SECURITY DEFINER functions outside the guards: is the owner a member of the expected owner
+    # (True, False or unknown None)? None for the whole list: the count cannot be read.
+    definers: list[bool | None] | None = field(default_factory=lambda: [False])
+    table_acl: dict[str, list[Grant]] = field(default_factory=dict)
+    column_acl: dict[str, list[Grant]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self.shape = {aspect: list(rows) for aspect, rows in SHAPE_ROWS.items()}
+        functions = sorted(set(KNOWLEDGE_FUNCTIONS.values()))
+        self.function_owners = dict.fromkeys(functions, OWNER)
+        self.function_acl = {f: [SELF] for f in functions}
+        # as install_schema grants them: the owner holds everything, the app SELECT, the loader
+        # SELECT and INSERT (kb_status_events: SELECT plus column INSERT)
+        owner = [Grant(SELF, p) for p in OWNER_PRIVILEGES]
+        self.table_acl = {
+            "kb_documents": [*owner, Grant(APP, "SELECT"), *_loader("SELECT", "INSERT")],
+            "kb_chunks": [*owner, Grant(APP, "SELECT"), *_loader("SELECT", "INSERT")],
+            "kb_status_events": [*owner, Grant(APP, "SELECT"), *_loader("SELECT")],
+        }
+        self.column_acl = {t: [] for t in KNOWLEDGE_TABLES}
+        self.column_acl["kb_status_events"] = [Grant(LOADER, "INSERT")]
         self.triggers = [Trig(table_of(n), n, KNOWLEDGE_FUNCTIONS[n]) for n in KNOWLEDGE_TRIGGERS]
         # the foreign keys of kb_chunks / kb_status_events: internal triggers, filtered by the query
         self.internal = [
@@ -141,6 +212,21 @@ class Catalog:
         ]
         self.digests = dict(KNOWLEDGE_FUNCTION_SHA256[16])
         self.tables = {t: Table() for t in KNOWLEDGE_TABLES}
+
+    def _execute_ok(self, name: str, text: str) -> bool:
+        acl = self.function_acl[name]
+        if acl is None:  # NULL proacl: PUBLIC may EXECUTE; aclexplode(NULL) has no rows
+            return "p.proacl IS NOT NULL" not in text
+        others = "x.grantee <> p.proowner" in text
+        return all(others and g == SELF for g in acl)
+
+    def _definer_count(self, text: str) -> int:
+        assert self.definers is not None
+        guards = 0 if "AND p.oid NOT IN" in text else len(set(KNOWLEDGE_FUNCTIONS.values()))
+        if "pg_catalog.pg_has_role(p.proowner" not in text:
+            return guards + len(self.definers)
+        unknown_counts = "IS NOT FALSE" in text
+        return guards + sum(1 for m in self.definers if m is True or (m is None and unknown_counts))
 
     def expected_owner(self, text: str) -> str | None:
         return self.current_user if "rolname = current_user" in text else self.assessments_owner
@@ -154,8 +240,51 @@ class Catalog:
             raise psycopg.errors.InsufficientPrivilege("denied")
         if "server_version_num" in text:
             return Rows([(self.major * 10000,)])
+        if "p.proacl" in text:
+            expected = self.expected_owner(text)
+            return Rows(
+                [
+                    (
+                        name,
+                        "p.proowner IS NOT DISTINCT FROM" not in text
+                        or (expected is not None and owner == expected),
+                        self._execute_ok(name, text),
+                    )
+                    for name, owner in self.function_owners.items()
+                    if name in {t.func for t in self.triggers}
+                ]
+            )
+        if "p.prosecdef" in text:
+            return Rows([] if self.definers is None else [(self._definer_count(text),)])
         if "FROM pg_catalog.pg_proc p JOIN" in text:
             return Rows(sorted(self.digests.items()))
+        for aspect, fragment in SHAPE_FRAGMENTS_BY_ASPECT.items():
+            if fragment in text:
+                return Rows(list(self.shape[aspect]))
+        if "pg_catalog.pg_sequence" in text:
+            if self.sequence_row is None:
+                return Rows([])
+            expected = self.expected_owner(text)
+            owner_ok = expected is not None and self.sequence_owner == expected
+            if "c.relowner IS NOT DISTINCT FROM" not in text:
+                owner_ok = True
+            others = "x.grantee <> c.relowner" in text
+            only_owner = all(others and g == SELF for g in self.sequence_acl)
+            return Rows([(*self.sequence_row, owner_ok, only_owner)])
+        if "aclexplode(c.relacl)" in text:
+            parts = text.split("NOT EXISTS")
+            assert len(parts) == 3, "the ACL query has one table and one column subquery"
+            return Rows(
+                [
+                    (
+                        n,
+                        acl_ok(self.table_acl[n], parts[1], params[0]),
+                        acl_ok(self.column_acl[n], parts[2], params[1]),
+                    )
+                    for n, t in self.tables.items()
+                    if not t.hidden
+                ]
+            )
         if "SELECT t.tgname, t.tgtype" in text:  # knowledge_trigger_types
             rows = list(self.triggers)
             if "NOT t.tgisinternal" not in text:
@@ -281,6 +410,38 @@ def wrong_owner(table: str) -> str:
     return f"{table} is not owned by the expected owner role"
 
 
+# condition 11
+SEQUENCE_UNREAD = "the knowledge ordering sequence could not be read"
+SEQUENCE_PARAMETERS = "the knowledge ordering sequence does not have its expected parameters"
+SEQUENCE_OWNER = "the knowledge ordering sequence is not owned by the expected owner role"
+SEQUENCE_ACL = "a role other than the owner holds a privilege on the ordering sequence"
+DEFINER = "a SECURITY DEFINER function other than the guards runs as the owner role"
+
+
+def no_shape_pin(table: str, aspect: str) -> str:
+    return f"no pinned definition of the {aspect} of {table} on this PostgreSQL version"
+
+
+def shape_mismatch(table: str, aspect: str) -> str:
+    return f"the {aspect} of {table} do not match their pinned definition"
+
+
+def function_owner(function: str) -> str:
+    return f"{function} is not owned by the expected owner role"
+
+
+def function_acl(function: str) -> str:
+    return f"a role other than the owner may EXECUTE {function}"
+
+
+def table_acl(table: str) -> str:
+    return f"a role other than the owner holds more than SELECT or INSERT on {table}"
+
+
+def column_acl(table: str) -> str:
+    return f"a column privilege other than INSERT is granted on {table}"
+
+
 # --- one table of scenarios, used by the tests AND by every mutation -----------------------------
 
 
@@ -292,6 +453,7 @@ class Scenario:
     current: bool = True
     pins: Mapping[int, Mapping[str, str]] | None = None
     type_pins: Mapping[str, int] | None = None
+    shape_pins: Mapping[int, Mapping[str, str]] | None = None
 
 
 def _trig(cat: Catalog, name: str) -> Trig:
@@ -299,7 +461,25 @@ def _trig(cat: Catalog, name: str) -> Trig:
 
 
 def _all_owner() -> list[str]:
-    return [wrong_owner(t) for t in KNOWLEDGE_TABLES] + [PUBLIC_OWNER]
+    functions = sorted(set(KNOWLEDGE_FUNCTIONS.values()))
+    return (
+        [wrong_owner(t) for t in KNOWLEDGE_TABLES]
+        + [PUBLIC_OWNER, SEQUENCE_OWNER]
+        + [function_owner(f) for f in functions]
+    )
+
+
+def own_everything(cat: Catalog, role: str) -> None:
+    for table in cat.tables.values():
+        table.owner = role
+    cat.schema_owner = role
+    cat.db_owner = role
+    cat.sequence_owner = role
+    cat.function_owners = dict.fromkeys(cat.function_owners, role)
+
+
+def _no_shape_pins() -> list[str]:
+    return [no_shape_pin(t, a) for a in KNOWLEDGE_SHAPE_ASPECTS for t in KNOWLEDGE_TABLES]
 
 
 def _major(cat: Catalog, major: int) -> None:
@@ -333,6 +513,269 @@ def _fault(name: str, **fields: Any) -> Callable[[Catalog], None]:
             setattr(_trig(cat, name), key, value)
 
     return mutate
+
+
+def _edit_row(aspect: str, index: int, column: int, value: Any) -> Callable[[Catalog], None]:
+    def mutate(cat: Catalog) -> None:
+        row = list(cat.shape[aspect][index])
+        row[column] = value
+        cat.shape[aspect][index] = tuple(row)
+
+    return mutate
+
+
+def _row_index(aspect: str, table: str, needle: str) -> int:
+    return next(
+        i for i, r in enumerate(SHAPE_ROWS[aspect]) if r[0] == table and needle in str(r[-1])
+    )
+
+
+def _column_index(table: str, column: str) -> int:
+    return next(i for i, r in enumerate(SHAPE_ROWS["columns"]) if r[0] == table and r[2] == column)
+
+
+def _drop_row(aspect: str, index: int) -> Callable[[Catalog], None]:
+    return lambda cat: cat.shape[aspect].pop(index)
+
+
+def _add_row(aspect: str, row: tuple[Any, ...]) -> Callable[[Catalog], None]:
+    return lambda cat: cat.shape[aspect].append(row)
+
+
+def _reverse_rows(cat: Catalog) -> None:
+    for rows in cat.shape.values():
+        rows.reverse()
+
+
+def _sequence(position: int, value: Any) -> Callable[[Catalog], None]:
+    def mutate(cat: Catalog) -> None:
+        assert cat.sequence_row is not None
+        row = list(cat.sequence_row)
+        row[position] = value
+        cat.sequence_row = tuple(row)
+
+    return mutate
+
+
+def _condition_11_scenarios() -> list[Scenario]:
+    display = _row_index("constraints", "kb_documents", "CHECK (display_permitted)")
+    unique = _row_index("constraints", "kb_status_events", "UNIQUE (event_order)")
+    status_fk = _row_index("constraints", "kb_status_events", "FOREIGN KEY")
+    title = _column_index("kb_documents", "title")
+    section = _column_index("kb_chunks", "section")
+    order = _column_index("kb_status_events", "event_order")
+    events_index = _row_index("indexes", "kb_status_events", "event_order")
+    sequence = [
+        ("sequence-type", 0, "integer"),
+        ("sequence-start", 1, 100),
+        ("sequence-increment-negative", 2, -1),
+        ("sequence-maximum", 3, 10),
+        ("sequence-minimum", 4, -100),
+        ("sequence-cache", 5, 20),
+        ("sequence-cycle", 6, True),
+        ("sequence-unlogged", 7, "u"),
+    ]
+    out = [
+        Scenario("shape-rows-in-another-order", _reverse_rows, []),
+        Scenario(
+            "constraint-dropped",
+            _drop_row("constraints", display),
+            [shape_mismatch("kb_documents", "constraints")],
+        ),
+        Scenario(
+            "constraint-not-valid",
+            _edit_row("constraints", display, 2, False),
+            [shape_mismatch("kb_documents", "constraints")],
+        ),
+        Scenario(
+            "constraint-deferrable",
+            _edit_row("constraints", unique, 3, True),
+            [shape_mismatch("kb_status_events", "constraints")],
+        ),
+        Scenario(
+            "constraint-check-changed",
+            _edit_row("constraints", display, 7, "CHECK (true)"),
+            [shape_mismatch("kb_documents", "constraints")],
+        ),
+        Scenario(
+            "foreign-key-dropped",
+            _drop_row("constraints", status_fk),
+            [shape_mismatch("kb_status_events", "constraints")],
+        ),
+        Scenario(
+            "constraint-added",
+            _add_row(
+                "constraints", ("kb_chunks", "c", True, False, False, False, True, "CHECK (true)")
+            ),
+            [shape_mismatch("kb_chunks", "constraints")],
+        ),
+        Scenario(
+            "column-not-null-dropped",
+            _edit_row("columns", title, 4, False),
+            [shape_mismatch("kb_documents", "columns")],
+        ),
+        Scenario(
+            "column-type-changed",
+            _edit_row("columns", section, 3, "character varying(300)"),
+            [shape_mismatch("kb_chunks", "columns")],
+        ),
+        Scenario(
+            "column-default-added",
+            _edit_row("columns", title, 8, "'x'::text"),
+            [shape_mismatch("kb_documents", "columns")],
+        ),
+        Scenario(
+            "column-generated",
+            _edit_row("columns", title, 5, "s"),
+            [shape_mismatch("kb_documents", "columns")],
+        ),
+        Scenario(
+            "column-identity",
+            _edit_row("columns", order, 6, "a"),
+            [shape_mismatch("kb_status_events", "columns")],
+        ),
+        Scenario(
+            "column-collation",
+            _edit_row("columns", title, 7, "C"),
+            [shape_mismatch("kb_documents", "columns")],
+        ),
+        Scenario(
+            "column-added",
+            _add_row("columns", ("kb_chunks", 7, "extra", "text", False, "", "", "default", None)),
+            [shape_mismatch("kb_chunks", "columns")],
+        ),
+        Scenario(
+            "column-renamed",
+            _edit_row("columns", title, 2, "heading"),
+            [shape_mismatch("kb_documents", "columns")],
+        ),
+        Scenario(
+            "index-invalid",
+            _edit_row("indexes", events_index, 1, False),
+            [shape_mismatch("kb_status_events", "indexes")],
+        ),
+        Scenario(
+            "index-added",
+            _add_row(
+                "indexes",
+                (
+                    "kb_chunks",
+                    True,
+                    True,
+                    True,
+                    True,
+                    "CREATE INDEX extra_idx ON public.kb_chunks USING btree (section)",
+                ),
+            ),
+            [shape_mismatch("kb_chunks", "indexes")],
+        ),
+        Scenario(
+            "row-of-another-table-is-ignored",
+            _add_row("columns", ("assessments", 1, "id", "text", True, "", "", "default", None)),
+            [],
+        ),
+        Scenario("no-shape-pins", lambda c: None, _no_shape_pins(), shape_pins={}),
+        Scenario(
+            "shape-pin-missing-for-one-key",
+            lambda c: None,
+            [no_shape_pin("kb_chunks", "indexes")],
+            shape_pins={
+                16: {
+                    k: v for k, v in KNOWLEDGE_SHAPE_SHA256[16].items() if k != "kb_chunks.indexes"
+                }
+            },
+        ),
+        Scenario(
+            "sequence-missing",
+            lambda c: _set(c, sequence_row=None),
+            [SEQUENCE_UNREAD],
+        ),
+        Scenario(
+            "sequence-wrong-owner",
+            lambda c: _set(c, sequence_owner="leaky_owner_test"),
+            [SEQUENCE_OWNER],
+        ),
+        Scenario(
+            "sequence-granted-to-another-role",
+            lambda c: c.sequence_acl.append(APP),
+            [SEQUENCE_ACL],
+        ),
+        Scenario(
+            "sequence-granted-to-public",
+            lambda c: c.sequence_acl.append(PUBLIC),
+            [SEQUENCE_ACL],
+        ),
+        Scenario(
+            "function-wrong-owner",
+            lambda c: c.function_owners.update(kb_no_truncate="leaky_owner_test"),
+            [function_owner("kb_no_truncate")],
+        ),
+        Scenario(
+            "function-executable-by-another-role",
+            lambda c: c.function_acl["kb_chunks_insert"].append(APP),  # type: ignore[union-attr]
+            [function_acl("kb_chunks_insert")],
+        ),
+        Scenario(
+            "function-executable-by-public-null-acl",
+            lambda c: c.function_acl.update(kb_no_update_delete=None),
+            [function_acl("kb_no_update_delete")],
+        ),
+        Scenario(
+            "security-definer-wrapper",
+            lambda c: c.definers.append(True),  # type: ignore[union-attr]
+            [DEFINER],
+        ),
+        Scenario(
+            "security-definer-owner-membership-unknown",
+            lambda c: c.definers.append(None),  # type: ignore[union-attr]
+            [DEFINER],
+        ),
+        Scenario(
+            "security-definer-count-unreadable",
+            lambda c: _set(c, definers=None),
+            [DEFINER],
+        ),
+        Scenario(
+            "table-privilege-beyond-select-insert",
+            lambda c: c.table_acl["kb_chunks"].append(Grant(APP, "UPDATE")),
+            [table_acl("kb_chunks")],
+        ),
+        Scenario(
+            "table-privilege-to-public",
+            lambda c: c.table_acl["kb_documents"].append(Grant(PUBLIC, "SELECT")),
+            [table_acl("kb_documents")],
+        ),
+        Scenario(
+            "table-privilege-with-grant-option",
+            lambda c: c.table_acl["kb_status_events"].append(Grant(LOADER, "SELECT", True)),
+            [table_acl("kb_status_events")],
+        ),
+        Scenario(
+            "column-privilege-beyond-insert",
+            lambda c: c.column_acl["kb_documents"].append(Grant(APP, "UPDATE")),
+            [column_acl("kb_documents")],
+        ),
+        Scenario(
+            "column-privilege-to-public",
+            lambda c: c.column_acl["kb_chunks"].append(Grant(PUBLIC, "INSERT")),
+            [column_acl("kb_chunks")],
+        ),
+        Scenario(
+            "column-privilege-with-grant-option",
+            lambda c: c.column_acl["kb_status_events"].append(Grant(LOADER, "INSERT", True)),
+            [column_acl("kb_status_events")],
+        ),
+        Scenario(
+            "column-select-privilege",
+            lambda c: c.column_acl["kb_chunks"].append(Grant(APP, "SELECT")),
+            [column_acl("kb_chunks")],
+        ),
+    ]
+    out += [
+        Scenario(name, _sequence(position, value), [SEQUENCE_PARAMETERS])
+        for name, position, value in sequence
+    ]
+    return out
 
 
 def build_scenarios() -> list[Scenario]:
@@ -438,12 +881,12 @@ def build_scenarios() -> list[Scenario]:
         Scenario(
             "no-pin-for-major-15",
             lambda c: _major(c, 15),
-            [no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in triggers],
+            [no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in triggers] + _no_shape_pins(),
         ),
         Scenario(
             "no-pin-for-major-18",
             lambda c: _major(c, 18),
-            [no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in triggers],
+            [no_pin(KNOWLEDGE_FUNCTIONS[n]) for n in triggers] + _no_shape_pins(),
         ),
         Scenario(
             "empty-pin-table",
@@ -638,6 +1081,7 @@ def build_scenarios() -> list[Scenario]:
             type_pins={**_types_without(""), "kb_chunks_insert_guard": 19},
         ),
     ]
+    out += _condition_11_scenarios()
     for state in ("O", "D", "R"):
         out.append(
             Scenario(
@@ -657,6 +1101,9 @@ def run_scenario(module: Any, scenario: Scenario) -> list[str]:
     scenario.mutate(catalog)
     original = module.KNOWLEDGE_FUNCTION_SHA256
     original_types = module.KNOWLEDGE_TRIGGER_TGTYPE
+    original_shapes = module.KNOWLEDGE_SHAPE_SHA256
+    if scenario.shape_pins is not None:
+        module.KNOWLEDGE_SHAPE_SHA256 = scenario.shape_pins
     if scenario.pins is not None:
         module.KNOWLEDGE_FUNCTION_SHA256 = scenario.pins
     if scenario.type_pins is not None:
@@ -668,6 +1115,7 @@ def run_scenario(module: Any, scenario: Scenario) -> list[str]:
     finally:
         module.KNOWLEDGE_FUNCTION_SHA256 = original
         module.KNOWLEDGE_TRIGGER_TGTYPE = original_types
+        module.KNOWLEDGE_SHAPE_SHA256 = original_shapes
     return found
 
 

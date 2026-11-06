@@ -11,6 +11,7 @@ import pytest
 from tests.unit.test_repository_contract import _decided, _postgres, _record
 
 from divesafe.services import PostgresAssessmentRepository
+from divesafe.services.migrations import KNOWLEDGE_FUNCTIONS
 from divesafe.services.postgres import GUARD_TRIGGERS
 
 DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
@@ -891,6 +892,83 @@ def test_verification_counts_membership_in_the_owning_role_as_ownership(
     assert app.verify(least_privilege=True) == []
 
 
+@pytest.mark.parametrize(
+    ("grant", "undo", "problem"),
+    [
+        (
+            "GRANT INSERT ON public.kb_chunks TO divesafe_app_test",
+            "REVOKE INSERT ON public.kb_chunks FROM divesafe_app_test",
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            "GRANT INSERT (status) ON public.kb_status_events TO divesafe_app_test",
+            "REVOKE INSERT (status) ON public.kb_status_events FROM divesafe_app_test",
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            "GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO divesafe_app_test",
+            "REVOKE USAGE ON SEQUENCE public.kb_status_event_order_seq FROM divesafe_app_test",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO divesafe_app_test",
+            "REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM divesafe_app_test",
+            "can EXECUTE a knowledge function",
+        ),
+        (
+            "ALTER FUNCTION public.kb_chunks_insert() OWNER TO divesafe_app_test",
+            "ALTER FUNCTION public.kb_chunks_insert() OWNER TO CURRENT_USER",
+            "owns a knowledge function",
+        ),
+        (
+            "ALTER TABLE public.kb_documents OWNER TO divesafe_app_test",
+            "ALTER TABLE public.kb_documents OWNER TO CURRENT_USER",
+            "owns a knowledge table",
+        ),
+    ],
+    ids=["insert", "column-insert", "sequence", "execute", "function-owner", "table-owner"],
+)
+def test_verification_flags_an_application_role_with_knowledge_privileges(
+    app_role_dsn: str, grant: str, undo: str, problem: str
+) -> None:
+    """ADR 0022 conditions 11.4 / 11.5, application side, on a real server."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(grant)
+    try:
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(undo)
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_maintain_on_a_knowledge_table_from_postgresql_17(
+    app_role_dsn: str,
+) -> None:
+    if int(_sql_value("SHOW server_version_num")) < 170000:
+        pytest.skip("MAINTAIN exists from PostgreSQL 17")
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("GRANT MAINTAIN ON public.kb_chunks TO divesafe_app_test")
+    try:
+        problems = app.verify(least_privilege=True)
+        assert any("holds MAINTAIN on a knowledge table" in p for p in problems)
+    finally:
+        _sql("REVOKE MAINTAIN ON public.kb_chunks FROM divesafe_app_test")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_the_application_role_can_read_the_acl_and_sequence_catalogues(app_role_dsn: str) -> None:
+    with psycopg.connect(app_role_dsn) as conn:
+        acl = conn.execute(
+            "SELECT pg_catalog.count(*) FROM pg_catalog.pg_class c, "
+            "pg_catalog.aclexplode(c.relacl) x WHERE c.relname = 'kb_chunks'"
+        ).fetchone()
+        sequence = conn.execute("SELECT pg_catalog.count(*) FROM pg_catalog.pg_sequence").fetchone()
+    assert acl is not None and acl[0] > 0
+    assert sequence is not None and sequence[0] > 0
+
+
 def test_verification_flags_a_guard_function_the_application_role_owns(
     app_role_dsn: str,
 ) -> None:
@@ -1104,7 +1182,12 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
     # The knowledge guard (ADR 0022 condition 9) judges the kb tables and the public schema against
     # the owner of public.assessments, so a new assessments owner must own them too, as one owner
     # does in a real deployment. (Changing only assessments made it report 4 owner problems.)
+    # Condition 11.3 / 11.4 judge the ordering sequence and the guard functions the same way.
     kb_tables = ("kb_documents", "kb_chunks", "kb_status_events")
+    kb_owned = (
+        "SEQUENCE public.kb_status_event_order_seq",
+        *(f"FUNCTION public.{f}()" for f in sorted(set(KNOWLEDGE_FUNCTIONS.values()))),
+    )
     original_public_owner = _sql_value(
         "SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace "
         "WHERE nspname = 'public'"
@@ -1114,6 +1197,8 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
     _sql("ALTER TABLE assessments OWNER TO divesafe_plain_owner_test")
     for table in kb_tables:
         _sql(f"ALTER TABLE {table} OWNER TO divesafe_plain_owner_test")
+    for owned in kb_owned:
+        _sql(f"ALTER {owned} OWNER TO divesafe_plain_owner_test")
     _sql("ALTER SCHEMA public OWNER TO divesafe_plain_owner_test")
     try:
         assert app.verify(least_privilege=True, owner_not_superuser=True) == []
@@ -1127,6 +1212,8 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
         _sql(f'ALTER SCHEMA public OWNER TO "{original_public_owner}"')
         for table in kb_tables:
             _sql(f"ALTER TABLE {table} OWNER TO CURRENT_USER")
+        for owned in kb_owned:
+            _sql(f"ALTER {owned} OWNER TO CURRENT_USER")
         _sql("ALTER TABLE assessments OWNER TO CURRENT_USER")
         _sql("DROP ROLE divesafe_plain_owner_test")
 
