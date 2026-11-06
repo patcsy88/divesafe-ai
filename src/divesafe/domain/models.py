@@ -11,7 +11,14 @@ import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, Field, StrictInt, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StringConstraints,
+    model_validator,
+)
 
 from divesafe.domain.base import Frozen as _Frozen
 from divesafe.domain.provenance import (
@@ -381,8 +388,14 @@ def knowledge_ref(evidence_id: str) -> KnowledgeRef | None:
     return KnowledgeRef(document_id=parts[1], version=int(parts[2]), chunk=int(parts[3]))
 
 
+# Mirrors `models.loopback.is_loopback`, which `domain` may not import.
+_LOOPBACK_NAMES = frozenset({"localhost"})
+
+
 def _valid_host(host: str) -> bool:
-    if len(host) > 253:
+    """A lowercase DNS name or an IP literal: no scheme, port, userinfo, path, brackets or zone
+    id, and no `0x` label or all-digit last label (an address disguised as a name)."""
+    if len(host) > 253 or "%" in host:
         return False
     try:
         ipaddress.ip_address(host)
@@ -390,7 +403,30 @@ def _valid_host(host: str) -> bool:
         pass
     else:
         return host == host.lower()
-    return bool(_HOST_NAME.fullmatch(host)) and not host.rsplit(".", 1)[-1].isdigit()
+    return (
+        bool(_HOST_NAME.fullmatch(host))
+        and not host.rsplit(".", 1)[-1].isdigit()
+        and not any(label.startswith("0x") or len(label) > 63 for label in host.split("."))
+    )
+
+
+def _is_loopback(host: str) -> bool:
+    if host in _LOOPBACK_NAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
+
+
+# A basis `check_egress` gives only for a loopback server (`external` false), and the one it gives
+# only for a remote one.
+_LOOPBACK_BASES: frozenset[RecordEgressBasis] = frozenset(
+    {RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.LOOPBACK_EXTERNAL_OPT_IN}
+)
 
 
 class AssessmentRecord(_Frozen):
@@ -399,6 +435,9 @@ class AssessmentRecord(_Frozen):
     `final_recommendation` is the system's recommendation, not an action. Until a
     `HumanDecision` is attached the record is `PENDING_HUMAN` and must not be acted on.
     """
+
+    # A validation error must not carry record content (decision text, model output) into a log.
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     id: str = Field(min_length=1)
     created_at: AwareDatetime
@@ -641,8 +680,12 @@ class AssessmentRecord(_Frozen):
                 raise ValueError("model_host requires an egress basis with a model server")
         elif host is None or not _valid_host(host):
             raise ValueError("model_host must be the model server's host name only")
+        elif (basis in _LOOPBACK_BASES) != _is_loopback(host):
+            raise ValueError("model_host does not match the egress basis")
 
         knowledge = {ref: e.id for e in self.evidence if (ref := knowledge_ref(e.id)) is not None}
+        if len(knowledge) > MAX_KNOWLEDGE_ITEMS:
+            raise ValueError("a record holds at most 20 knowledge items")
         if knowledge and basis is None:
             raise ValueError("a record with knowledge evidence needs an egress basis")
         withheld = self.withheld_knowledge
@@ -658,6 +701,9 @@ class AssessmentRecord(_Frozen):
         }
         model_cited |= {i for s in self.scenarios for i in s.evidence_ids}
         model_cited |= set(self.proposal_evidence_ids)
+        model_cited |= {
+            i for t in self.stages if t.name is StageName.REASON for i in t.evidence_ids
+        }
         if held_ids & model_cited:
             raise ValueError("withheld knowledge cannot be cited by model output")
 

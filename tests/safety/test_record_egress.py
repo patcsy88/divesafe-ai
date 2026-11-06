@@ -26,6 +26,11 @@ from divesafe.domain import (
     Recommendation,
     RecordEgressBasis,
     RuleResult,
+    Scenario,
+    ScenarioKind,
+    StageName,
+    StageOutcome,
+    StageTrace,
     knowledge_ref,
 )
 from divesafe.domain import models as models_module
@@ -174,16 +179,44 @@ def test_a_withheld_entry_appears_once() -> None:
     assert _refused(doc, "appears at most once")
 
 
-def test_withheld_knowledge_cannot_be_cited_by_model_output() -> None:
-    finding = Finding(
-        agent="site_intelligence", summary="synthetic", evidence_ids=(KB_ID,)
-    ).model_dump(mode="json")
+def _citing(channel: str) -> dict[str, Any]:
+    finding = Finding(agent="site_intelligence", summary="synthetic", evidence_ids=(KB_ID,))
+    if channel == "findings":
+        return {"findings": [finding.model_dump(mode="json")]}
+    if channel == "cross_examination_findings":
+        return {"cross_examination_findings": [finding.model_dump(mode="json")]}
+    if channel == "scenarios":
+        scenario = Scenario(
+            kind=ScenarioKind.MARGINAL, summary="synthetic", evidence_ids=(KB_ID,), confidence=0.5
+        )
+        return {"scenarios": [scenario.model_dump(mode="json")]}
+    if channel == "proposal":
+        return {
+            "proposal_evidence_ids": [KB_ID],
+            "proposed_recommendation": "NO-GO",
+            "final_recommendation": "NO-GO",
+        }
+    reason = StageTrace(
+        name=StageName.REASON,
+        outcome=StageOutcome.COMPLETED,
+        next_stage=None,
+        started_at=NOW,
+        finished_at=NOW,
+        evidence_ids=(KB_ID,),
+    )
+    return {"stages": [reason.model_dump(mode="json")]}
+
+
+@pytest.mark.parametrize(
+    "channel", ["findings", "cross_examination_findings", "scenarios", "proposal", "reason_trace"]
+)
+def test_withheld_knowledge_cannot_be_cited_by_model_output(channel: str) -> None:
     doc = _doc(
         _knowledge(),
         egress_basis="remote_external_opt_in",
         model_host="models.example.org",
         withheld_knowledge=_held(REF),
-        findings=[finding],
+        **_citing(channel),
     )
     assert _refused(doc, "cannot be cited by model output")
     sent = {**doc, "egress_basis": "declared_local", "model_host": "127.0.0.1"}
@@ -192,8 +225,8 @@ def test_withheld_knowledge_cannot_be_cited_by_model_output() -> None:
 
 
 def test_items_without_a_kb_id_are_not_judged() -> None:
-    """The owner's rule (2026-11-06): a KNOWLEDGE item with no `kb:` id is not covered. Pinned so
-    a change to the rule is a deliberate one (ADR 0022 Known gaps)."""
+    """The owner's rule (2026-11-06): a KNOWLEDGE item with no `kb:` id is not covered (ADR 0022
+    "Not solved"). Invert this test when decision 5's connector-stage KNOWLEDGE filter lands."""
     item = _knowledge("syn-site")
     record = AssessmentRecord.model_validate(_doc(item, egress_basis="none"))
     assert record.withheld_knowledge == ()
@@ -254,6 +287,11 @@ def test_a_model_server_basis_needs_its_host(basis: B) -> None:
         "Models.Example.org",
         "models.example.org.",
         "[::1]",
+        "::1%eth0",
+        "fe80::1%x@evil.example:443",
+        "1.0x7f",
+        "0x7f000001",
+        ("a" * 64) + ".example.org",
         "10.0.0.256",
         "0x7f.1",
         "",
@@ -267,9 +305,37 @@ def test_model_host_is_a_host_name_only(host: str) -> None:
         AssessmentRecord.model_validate(doc)
 
 
-@pytest.mark.parametrize("host", ["models.example.org", "localhost", "127.0.0.1", "::1"])
-def test_model_host_accepts_names_and_ip_literals(host: str) -> None:
-    AssessmentRecord.model_validate(_doc(egress_basis="loopback_external_opt_in", model_host=host))
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.8.9.10", "::1", "::ffff:7f00:1"])
+@pytest.mark.parametrize("basis", ["declared_local", "loopback_external_opt_in"])
+def test_a_loopback_basis_needs_a_loopback_host(basis: str, host: str) -> None:
+    AssessmentRecord.model_validate(_doc(egress_basis=basis, model_host=host))
+    assert _refused(_doc(egress_basis="remote_external_opt_in", model_host=host), "does not match")
+
+
+@pytest.mark.parametrize(
+    "host", ["models.example.org", "10.0.0.1", "2001:db8::1", "localhost.example"]
+)
+@pytest.mark.parametrize("basis", ["declared_local", "loopback_external_opt_in"])
+def test_a_remote_host_under_a_loopback_basis_is_refused(basis: str, host: str) -> None:
+    """ADR 0023: check_egress gives these two bases only when the server's address is loopback.
+    A remote host labelled declared_local would let knowledge leave the machine."""
+    assert _refused(_doc(egress_basis=basis, model_host=host), "does not match")
+    AssessmentRecord.model_validate(_doc(egress_basis="remote_external_opt_in", model_host=host))
+
+
+def test_more_than_the_bound_of_knowledge_items_is_refused_explicitly() -> None:
+    items = [_knowledge(f"kb:site-guide:1:{n}") for n in range(1, 22)]
+    assert _refused(_doc(*items, egress_basis="declared_local", model_host="::1"), "at most 20")
+    AssessmentRecord.model_validate(
+        _doc(*items[:20], egress_basis="declared_local", model_host="::1")
+    )
+
+
+def test_validation_errors_do_not_carry_record_content() -> None:
+    doc = _doc(_knowledge(), explanation="private-marker-text")
+    with pytest.raises(ValidationError) as caught:
+        AssessmentRecord.model_validate(doc)
+    assert "private-marker-text" not in str(caught.value)
 
 
 # --- mutations ----------------------------------------------------------------------------------
@@ -344,8 +410,45 @@ def _unwithheld(basis: str, host: str | None) -> dict[str, Any]:
         ),
         (
             ("        return host == host.lower()\n", "        return True\n"),
-            _doc(egress_basis="remote_external_opt_in", model_host="::FFFF:7F00:1"),
+            _doc(egress_basis="loopback_external_opt_in", model_host="::FFFF:7F00:1"),
             "host name only",
+        ),
+        (
+            ('if len(host) > 253 or "%" in host:', "if len(host) > 253:"),
+            _doc(egress_basis="declared_local", model_host="::1%eth0"),
+            "host name only",
+        ),
+        (
+            ('label.startswith("0x") or ', ""),
+            _doc(egress_basis="remote_external_opt_in", model_host="1.0x7f"),
+            "host name only",
+        ),
+        (
+            (
+                "        elif (basis in _LOOPBACK_BASES) != _is_loopback(host):\n",
+                "        elif False:\n",
+            ),
+            _doc(egress_basis="declared_local", model_host="models.example.org"),
+            "does not match",
+        ),
+        (
+            ("        return address.ipv4_mapped.is_loopback\n", "        return False\n"),
+            _doc(egress_basis="remote_external_opt_in", model_host="::ffff:7f00:1"),
+            "does not match",
+        ),
+        (
+            ("        if len(knowledge) > MAX_KNOWLEDGE_ITEMS:\n", "        if False:\n"),
+            _doc(
+                *[_knowledge(f"kb:site-guide:1:{n}") for n in range(1, 22)],
+                egress_basis="declared_local",
+                model_host="::1",
+            ),
+            "at most 20",
+        ),
+        (
+            ("        if len(withheld) != len(set(withheld)):\n", "        if False:\n"),
+            _doc(_knowledge(), egress_basis="none", withheld_knowledge=_held(REF, REF)),
+            "appears at most once",
         ),
         (
             ("            if host is not None:\n", "            if False:\n"),
@@ -363,6 +466,12 @@ def _unwithheld(basis: str, host: str | None) -> dict[str, Any]:
         "withheld-cited",
         "uppercase-prefix",
         "host-case",
+        "zone-id",
+        "hex-label",
+        "basis-host-mismatch",
+        "mapped-loopback",
+        "knowledge-bound",
+        "duplicate-withheld",
         "host-without-server",
     ],
 )

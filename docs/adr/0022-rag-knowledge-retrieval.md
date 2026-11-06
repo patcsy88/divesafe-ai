@@ -957,7 +957,28 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       **validator on `AssessmentRecord`**, not only by a test: a record whose `egress_basis` is
       anything but `declared_local` (including absent) is invalid if any knowledge evidence item in
       it is missing from `withheld_knowledge`. Older records have no knowledge items, so they still
-      validate.
+      validate. **As built (condition 7, owner decision 2026-11-06), "knowledge item" here means an
+      evidence item with a `kb:` id only**; a KNOWLEDGE-kind item without one is not judged (see
+      "Not solved"). The validator also refuses (review fixes, 2026-11-06): a `model_host` that
+      does not match the basis (`declared_local` and `loopback_external_opt_in` need `localhost`
+      or a loopback IP, IPv4-mapped included; `remote_external_opt_in` needs a non-loopback host);
+      a host with a zone id (`%`), a `0x` label or a label over 63 characters; more than 20 `kb:`
+      items (`MAX_KNOWLEDGE_ITEMS`, decision 12); and a withheld id cited by findings,
+      cross-examination findings, scenarios, the proposal or the Reason stage trace (rule results
+      and the other traces may cite it: `placeholder.site_constraint` does). Validation errors on
+      the record hide the input (`hide_input_in_errors`).
+    - **Conditions on the filter stage (risk review of condition 7, 2026-11-06).** The record
+      validator is a backstop; a breach makes `_gate` raise and nothing is stored, so the filter
+      stage MUST keep model and connector mistakes from reaching it:
+      - Supervise's `citations_valid` and the runner's allowed ids use the ids actually sent, not
+        all evidence, with a test that a model citing a withheld id gives a degraded **stored**
+        record.
+      - The filter decides "knowledge" with `domain.knowledge_ref`, the validator's definition.
+      - The knowledge connector drops malformed `kb:` ids and items past `MAX_KNOWLEDGE_ITEMS`,
+        each with a fixed issue.
+      - The wiring takes `model_host` from `urllib.parse.urlsplit(...).hostname` (no `[::1]`
+        brackets), with a test for `http://[::1]:8000`.
+      - The human view shows withheld knowledge in fixed wording (decision 14), with a test.
     - **The live evaluation path applies the same basis filter**, as `tide_check_allowed` does for
       tides (ADR 0023 decision 7): it must not put corpus text in a prompt unless its basis is
       `declared_local`.
@@ -1454,8 +1475,16 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   covered.
 - **The record validator checks the record, not the prompt.** It cannot see whether a withheld
   item was actually left out of a prompt; that is the filter's job and its tests (decision 15).
-  It does refuse a record in which model output (findings, scenarios, proposal) cites a withheld
-  item.
+  It does refuse a record in which model output (findings, scenarios, proposal, Reason trace)
+  cites a withheld item.
+- **The basis/host cross-check is a consistency check, not proof of locality.** A loopback
+  `model_host` under `declared_local` still rests on the operator's declaration (ADR 0023); the
+  record cannot show where the server forwards a prompt.
+- **`kb:` ids in `withheld_evidence` (ADR 0008) are not grammar-checked** (security review,
+  2026-11-06, note 8). Those items never reach a prompt, so the risk is low.
+- **`model_host` is shown to every key that can read the record, including create-only keys**
+  (security review note 7). A host name can reveal deployment layout; whether create-only keys
+  should see it is an open owner question.
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
@@ -1613,7 +1642,10 @@ citation guard are later stages.
    `kb:` id is **not** judged (see "Not solved"); the reason is that synthetic KNOWLEDGE items
    (`tests/safety/test_cross_examination.py`) reach prompts today with no basis. Built in
    `AssessmentRecord._check_egress` (`RecordEgressBasis`, `KnowledgeRef`, `knowledge_ref` in
-   `domain/models.py`), tested with mutations in `tests/safety/test_record_egress.py`.
+   `domain/models.py`), tested with mutations in `tests/safety/test_record_egress.py`. Review
+   fixes (2026-11-06): basis/host cross-check, zone-id / `0x` / long-label hosts refused, a 20-item
+   bound on `kb:` evidence, the Reason trace counted as model output, `hide_input_in_errors`; the
+   conditions the filter stage must meet are listed under decision 15.
 8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
    the over-long line ~88.
 
