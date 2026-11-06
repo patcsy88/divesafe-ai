@@ -1304,7 +1304,16 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   checked by name. Each privilege counts when held directly, inherited, or held by any role the app
   role is a member of, so a NOINHERIT member (or a grant `WITH INHERIT FALSE`) that could
   `SET ROLE` to the loader is caught too (closed 2026-11-06, live on PostgreSQL 16 and 17:
-  `test_verification_flags_a_privilege_reachable_only_by_set_role`). A zero-chunk manifest refused by `kb_load`
+  `test_verification_flags_a_privilege_reachable_only_by_set_role`). **Extended 2026-11-07** to
+  the older app checks: DELETE, TRUNCATE and TRIGGER on `assessments`, writes to the other app
+  tables, CREATE on `public` and on the database, and SET on `session_replication_role` count the
+  same SET ROLE paths (`test_verification_flags_an_audit_privilege_reachable_only_by_set_role`), and
+  `verify()` refuses a session whose `current_user` differs from its `session_user` (a stored
+  `ALTER ROLE ... SET role` would otherwise make every check judge another role;
+  `test_verification_flags_a_stored_role_setting_on_the_application_role`). PostgreSQL counts a
+  membership granted `WITH SET FALSE` or with ADMIN only as membership too, so such a membership in
+  a role holding one of these privileges also refuses start-up, although it cannot be used
+  directly; this fails closed and the runbook says to remove the membership. A zero-chunk manifest refused by `kb_load`
   before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
@@ -1564,7 +1573,19 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   current value is not pinned: set below the highest `event_order`, a later event can sort before
   an earlier one, so a withdrawn version can read as approved again; comparing `last_value` with
   `max(event_order)` in `migrate()` is possible but not built), and conditions 11.6, 11.8 and
-  11.9.
+  11.9. The same sequence edits can also **block `withdraw`**: `setval` or `RESTART` onto values
+  already used makes the next status insert fail on `UNIQUE(event_order)`, and `setval` near
+  MAXVALUE makes every status insert fail. Both need the owner or a superuser (the sequence ACL is
+  checked to be owner-only), but they stop the path that makes the corpus stricter. ADR 0024's
+  fallback (a), the owner's `psql` INSERT, fails the same way; fallback (b), stopping the API, is
+  the one that works until the owner repairs the sequence (`setval` above `max(event_order)`).
+- **The one-inserter rule (condition 11.5) counts direct grantees only.** `_acl_problems` counts
+  the distinct non-owner roles named in the table and column ACLs. It does not check that the one
+  inserter is the loader, and it does not count roles that can INSERT through membership of that
+  role (inherited or by `SET ROLE`) or through a predefined role such as `pg_write_all_data`. The
+  application role is covered by its own membership check in `verify()`; any other role is not.
+  Renaming the loader leaves the old loader's grants in place and is refused (fails closed) until
+  they are revoked by hand (ADR 0024 A1 note, runbook).
 - **Condition 11.7 has false positives.** Any SECURITY DEFINER function in any schema owned by a
   member of the owner role (a superuser owner counts) makes `migrate()` and `verify()` refuse, even
   one unrelated to the knowledge tables, such as an extension's. The fix is to change the
@@ -1596,11 +1617,12 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `assessments`, not identity). **Condition 11 (2026-11-06) now catches:** `ADD COLUMN`,
   `ADD CONSTRAINT`, extra indexes and grants on `kb_*`. **Not caught:** conditions 11.6, 11.8 and
   11.9, event triggers and superuser catalogue edits.
-- **Loader role attributes and memberships are checked by name only in stage 1a.** Superuser,
-  membership of the owner or app role, CREATEROLE, BYPASSRLS, and NOINHERIT/`SET ROLE` paths to a role
-  that holds TEMP are **not** checked by `kb_load` yet. `db_init` checks the TEMP path at install
-  time (TEMP read-back, member clause), but memberships can change after install, so `kb_load`'s
-  self-check MUST repeat it at load time, before the first production load (condition 10).
+- **Loader role attributes and memberships: what is left.** Stage 1a checked them by name only;
+  `kb_load`'s self-check now tests superuser, membership of the owner or app role, CREATEROLE,
+  BYPASSRLS, NOINHERIT/`SET ROLE` paths to a role that holds TEMP, and replication at load time
+  (condition 10, built and live-tested). `db_init` also checks the TEMP path at install time.
+  Remaining: the self-check's privilege checks run in separate transactions, so a change between
+  them is not seen, and `withdraw` checks role names only (ADR 0024 A8).
 - **The advisory-lock denial of service is not limited to the loader.** The app role can also call
   `pg_advisory_lock(1220001, ...)` (the knowledge lock class) and stall loads; see the ADR 0024
   runbook note.
@@ -1746,8 +1768,9 @@ citation guard are later stages.
     - **11.5** App and loader privileges on `kb_*` tables. **Built:** a role other than the owner
       may hold only SELECT / INSERT on a table and only INSERT on a column, never with a grant
       option, never PUBLIC; INSERT on `kb_status_events` is column-level only (its `event_order`
-      and `recorded_at` are the database's), and at most one role other than the owner may INSERT
-      into the three tables at all (table or column grants, counted by role). App side, only
+      and `recorded_at` are the database's), and at most one non-owner role is a direct INSERT
+      grantee on the three tables (table or column grants, counted by role; not checked to be the
+      loader; members of that role are not counted, see Known gaps). App side, only
       SELECT (and no MAINTAIN on PostgreSQL 17+), counting privileges held directly, inherited, or
       reachable by `SET ROLE` through any membership.
     - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity). Open.

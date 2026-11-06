@@ -1591,7 +1591,14 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   is unset, `db_init` skips the loader grants and the loader check (the production pin comes with
   the compose stage, A5). On a missing loader role the check runs **after** the migration: the
   schema stays migrated, `db_init` exits non-zero with a fixed message and the loader grants are
-  not applied.
+  not applied. **Changing the loader role name (2026-11-07):** `db_init` revokes only from the
+  roles it is given, so the old loader keeps INSERT and the next start-up refuses with "more than
+  one role other than the owner may INSERT into the knowledge tables" (ADR 0022 condition 11.5;
+  fails closed). The runbook step is to revoke the old loader's grants on the three knowledge
+  tables by hand as the owner (`docs/first-run-on-the-real-host.md`); live-tested by
+  `test_a_renamed_loader_is_refused_until_the_old_loader_loses_its_grants`. Revoking from every
+  other grantee automatically was not chosen: it would also silently remove a grant someone made
+  on purpose, which the refusal makes visible instead.
 - **`REVIEWED_GUARD_MIGRATIONS` entry for migration 4** skips the whole forbidden-word scan for
   that version; it is compensated by the checksum pin and the `migrate()` check that the nine named
   knowledge triggers are present and `ENABLE ALWAYS` (a subset check; "exactly nine, no tenth" is

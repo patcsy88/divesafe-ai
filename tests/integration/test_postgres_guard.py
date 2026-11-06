@@ -1007,6 +1007,73 @@ def test_verification_flags_a_privilege_reachable_only_by_set_role(
     assert app.verify(least_privilege=True) == []
 
 
+@pytest.mark.parametrize(
+    ("grant", "problem"),
+    [
+        ("GRANT DELETE ON public.assessments TO {group}", "can DELETE"),
+        ("GRANT TRIGGER ON public.assessments TO {group}", "can create triggers"),
+        (
+            "GRANT INSERT ON public.schema_migrations TO {group}",
+            "can write the migration history",
+        ),
+        ("GRANT CREATE ON SCHEMA public TO {group}", "can create objects in the public schema"),
+        (
+            "GRANT CREATE ON DATABASE {database} TO {group}",
+            "can create schemas in the database",
+        ),
+        (
+            "GRANT SET ON PARAMETER session_replication_role TO {group}",
+            "may set session_replication_role",
+        ),
+    ],
+    ids=["delete", "trigger", "migrations", "schema-create", "database-create", "parameter"],
+)
+def test_verification_flags_an_audit_privilege_reachable_only_by_set_role(
+    app_role_dsn: str, grant: str, problem: str
+) -> None:
+    """The same SET ROLE rule as the knowledge checks, for the audit-table, schema, database and
+    parameter checks."""
+    group = "divesafe_audit_setrole_group_test"
+    database = _sql_value("SELECT current_database()")
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(grant.format(group=group, database=f'"{database}"'))
+        _sql(f"GRANT {group} TO divesafe_app_test WITH INHERIT FALSE")
+        assert _sql_value(f"SELECT pg_has_role('divesafe_app_test', '{group}', 'USAGE')") in (
+            "False",
+            "false",
+        )
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_a_stored_role_setting_on_the_application_role(
+    app_role_dsn: str,
+) -> None:
+    """`ALTER ROLE app SET role = group` makes every session run as the group, so the checks
+    would judge the group instead of the login role."""
+    group = "divesafe_session_role_group_test"
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(f"GRANT {group} TO divesafe_app_test")
+        _sql(f"ALTER ROLE divesafe_app_test SET role = {group}")
+        problems = app.verify(least_privilege=True)
+        assert any("runs as a different role from its login role" in p for p in problems)
+    finally:
+        _sql("ALTER ROLE divesafe_app_test RESET role")
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
 def test_the_application_role_can_read_the_acl_and_sequence_catalogues(app_role_dsn: str) -> None:
     with psycopg.connect(app_role_dsn) as conn:
         acl = conn.execute(

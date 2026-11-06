@@ -10,8 +10,8 @@ and is refused unless `public.schema_migrations` does not exist (an empty scratc
 Without APPLY it reads a database already at version 4, read-only (for inspection, not for pins).
 Output: `postgresql_major <n>`, then `<function> <sha256 hex>` per function, then
 `tgtype <trigger> <integer>` per trigger, then `shape <table>.<aspect> <sha256 hex>` per table
-and aspect. The DSN comes from the environment, not argv, and is
-never printed. Nothing here is used at run time.
+and aspect. If any shape could not be read, it exits 5: the output is not a set of pins. The
+DSN comes from the environment, not argv, and is never printed. Nothing here is used at run time.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import psycopg
 
 from divesafe.services.migrations import (
     MIGRATIONS,
+    SHAPE_UNREADABLE,
     knowledge_function_hashes,
     knowledge_shape_digests,
     knowledge_trigger_types,
@@ -63,6 +64,9 @@ def main() -> int:
         sys.stdout.write(f"tgtype {name} {value}\n")
     for key, digest in shapes.items():
         sys.stdout.write(f"shape {key} {digest}\n")
+    if SHAPE_UNREADABLE in shapes.values():
+        sys.stderr.write("a table shape could not be read; these are not pins\n")
+        return 5
     return 0
 
 

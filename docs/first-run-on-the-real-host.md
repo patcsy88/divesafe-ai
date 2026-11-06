@@ -73,6 +73,19 @@ definer function (an extension's, say) owned by the owner role or a superuser (A
 11.7). Do not weaken the check. Re-own that function to a role outside the owner role, or drop it,
 after checking what it is for.
 
+If the knowledge loader role was renamed (`DIVESAFE_LOADER_DB_ROLE` changed), start-up refuses with
+"more than one role other than the owner may INSERT into the knowledge tables": `db-init` does not
+touch the old loader's grants. As the owner role, run
+`REVOKE ALL ON public.kb_documents, public.kb_chunks, public.kb_status_events FROM <old loader>`,
+then start again (ADR 0024 A1).
+
+The application role's checks also count roles it can switch to with `SET ROLE`, including
+memberships granted `WITH INHERIT FALSE`, `WITH SET FALSE` or with `ADMIN` only (PostgreSQL counts
+all of these as membership). A refusal such as "the application role can create objects in the
+public schema" with no direct grant usually means such a membership: remove the membership, not
+the check. A stored `ALTER ROLE ... SET role` on the application role is refused too ("runs as a
+different role from its login role").
+
 Check that no key is accepted without credentials:
 
 ```sh

@@ -401,3 +401,47 @@ def test_the_pins_tool_reads_through_the_same_functions_the_check_uses() -> None
     assert kb_pins.knowledge_function_hashes is migrations.knowledge_function_hashes
     assert kb_pins.knowledge_trigger_types is migrations.knowledge_trigger_types
     assert kb_pins.knowledge_shape_digests is migrations.knowledge_shape_digests
+
+
+# --- a shape that could not be read is not a pin ------------------------------------------------
+
+
+def _unreadable(module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = module.knowledge_shape_digests
+
+    def digests(conn: Any) -> dict[str, str]:
+        shapes = dict(real(conn))
+        first = next(iter(shapes))
+        shapes[first] = migrations.SHAPE_UNREADABLE
+        return shapes
+
+    monkeypatch.setattr(module, "knowledge_shape_digests", digests)
+
+
+def test_an_unreadable_shape_exits_5_with_a_fixed_message(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _unreadable(kb_pins, monkeypatch)
+    code, _, err = run(monkeypatch, PinConnection(has_history=False), capsys, apply=True)
+    assert code == 5
+    assert err == "a table shape could not be read; these are not pins\n"
+    assert "never-printed-secret" not in err
+
+
+UNREADABLE_CHECK = "    if SHAPE_UNREADABLE in shapes.values():\n"
+
+
+@pytest.mark.parametrize(
+    "new",
+    ["    if False:\n", "    if SHAPE_UNREADABLE in shapes:\n"],
+    ids=["check-removed", "checks-the-keys"],
+)
+def test_mutation_an_unreadable_shape_reported_as_success_is_caught(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], new: str
+) -> None:
+    mutant = mutated_module(kb_pins, (UNREADABLE_CHECK, new))
+    _unreadable(mutant, monkeypatch)
+    code, _, _ = run(
+        monkeypatch, PinConnection(has_history=False), capsys, apply=True, module=mutant
+    )
+    assert code != 5

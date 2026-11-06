@@ -189,9 +189,57 @@ def check_member_paths(module: Any) -> None:
         assert "FROM pg_roles r" in sql, label
 
 
+APP_MEMBER_CHECKS = [
+    ("can DELETE", "has_table_privilege", "to_regclass('public.assessments'), 'DELETE'"),
+    ("can TRUNCATE", "has_table_privilege", "to_regclass('public.assessments'), 'TRUNCATE'"),
+    ("can create triggers", "has_table_privilege", "to_regclass('public.assessments'), 'TRIGGER'"),
+    (
+        "can write the migration history",
+        "has_table_privilege",
+        "to_regclass('public.schema_migrations'), 'INSERT, UPDATE, DELETE, TRUNCATE'",
+    ),
+    (
+        "can TRUNCATE or create triggers on the pending runs table",
+        "has_table_privilege",
+        "to_regclass('public.pending_runs'), 'TRUNCATE, TRIGGER'",
+    ),
+    (
+        "can delete the failure counts",
+        "has_table_privilege",
+        "to_regclass('public.run_failure_counts'), 'DELETE, TRUNCATE'",
+    ),
+    ("can create objects in the public schema", "has_schema_privilege", "'public', 'CREATE'"),
+    (
+        "can create schemas in the database",
+        "has_database_privilege",
+        "current_database(), 'CREATE'",
+    ),
+    (
+        "may set session_replication_role (replica mode skips ordinary triggers)",
+        "has_parameter_privilege",
+        "'session_replication_role', 'SET'",
+    ),
+]
+SESSION_LABEL = "runs as a different role from its login role"
+
+
+def check_app_member_paths(module: Any) -> None:
+    """The audit-table, schema, database and parameter checks count SET ROLE paths too, and the
+    session must run as its login role (a stored `role` setting would change whose grants these
+    checks judge)."""
+    for label, function, args in APP_MEMBER_CHECKS:
+        sql = sql_of(module, label)
+        assert f"{function}({args})" in sql, label
+        assert f"{function}(r.oid, {args})" in sql, label
+        assert MEMBER_PATH in sql, label
+    assert sql_of(module, SESSION_LABEL) == "current_user <> session_user"
+    assert report(module, 170000, {SESSION_LABEL}) == [PREFIX + SESSION_LABEL]
+
+
 CHECKS = [
     check_labels,
     check_member_paths,
+    check_app_member_paths,
     check_each_reported_alone,
     check_table_sql,
     check_sequence_sql,
@@ -303,6 +351,32 @@ MUTATIONS = [
         "pg_has_role(current_user, c.relowner, 'MEMBER')",
         "c.relowner = 0",
         id="table-ownership-not-through-membership",
+    ),
+    pytest.param(
+        '            held = _self_or_member("has_table_privilege", '
+        "f\"to_regclass('{table}'), '{privileges}'\")",
+        "            held = f\"has_table_privilege(to_regclass('{table}'), '{privileges}')\"",
+        id="app-table-checks-without-member-path",
+    ),
+    pytest.param(
+        "_self_or_member(\"has_schema_privilege\", \"'public', 'CREATE'\")",
+        "\"has_schema_privilege('public', 'CREATE')\"",
+        id="schema-create-without-member-path",
+    ),
+    pytest.param(
+        '_self_or_member("has_database_privilege", "current_database(), \'CREATE\'")',
+        "\"has_database_privilege(current_database(), 'CREATE')\"",
+        id="database-create-without-member-path",
+    ),
+    pytest.param(
+        '_self_or_member("has_parameter_privilege", _REPLICATION_ROLE_SET)',
+        'f"has_parameter_privilege({_REPLICATION_ROLE_SET})"',
+        id="parameter-without-member-path",
+    ),
+    pytest.param(
+        '            ("current_user <> session_user", ',
+        '            ("false", ',
+        id="session-role-never-checked",
     ),
     pytest.param(
         '_self_or_member("has_function_privilege", "p.oid, \'EXECUTE\'")',

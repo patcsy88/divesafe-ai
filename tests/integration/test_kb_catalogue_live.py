@@ -818,8 +818,29 @@ def test_migrate_refuses_a_database_with_each_broken_invariant(
             assert problem in message
 
 
+# The runbook step for a new loader role name (docs/first-run-on-the-real-host.md, ADR 0024 A1).
+OLD_LOADER_REVOKE = (
+    "REVOKE ALL ON public.kb_documents, public.kb_chunks, public.kb_status_events FROM {loader}"
+)
+
+
+def test_a_renamed_loader_is_refused_until_the_old_loader_loses_its_grants(
+    scratch: Scratch,
+) -> None:
+    """`install_schema` revokes only from the roles it is given, so the old loader keeps INSERT
+    and the catalogue check refuses two inserters (fails closed) until the runbook step is run."""
+    install_schema(scratch.admin_dsn, APP, loader_role=OTHER)
+    assert fake.MANY_INSERTERS in scratch.owner_problems()
+    with pytest.raises(MigrationError):
+        migrate(scratch.admin_dsn)
+    scratch.apply((OLD_LOADER_REVOKE,))
+    assert scratch.owner_problems() == []
+    assert scratch.verify_as_app() == []
+    assert migrate(scratch.admin_dsn) == []
+
+
 @pytest.mark.parametrize("case", ACCEPTED, ids=[c.id for c in ACCEPTED])
-def test_the_other_legitimate_public_owner_forms_are_accepted(
+def test_the_legitimate_ownership_and_grant_forms_are_accepted(
     scratch: Scratch, case: Break
 ) -> None:
     scratch.apply(case.statements)

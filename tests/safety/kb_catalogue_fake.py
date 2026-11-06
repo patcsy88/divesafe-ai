@@ -136,23 +136,26 @@ def insert_rows(
     params: Any,
 ) -> list[tuple[str, str, bool]]:
     """The INSERT-grantee query of `_acl_problems`: (table, grantee, column-level?) per entry.
-    The owner filter, the privilege filter and the column half apply only if their fragment is in
-    the query text."""
-    others = "x.grantee <> c.relowner" in text
+    Each half of the UNION is read on its own: its owner filter and its privilege filter apply
+    only if that half's text holds the fragment, so dropping a filter from one half is noticed."""
+    table_text, _, column_text = text.partition("UNION ALL")
     # the privilege is a parameter: params is (tables, privilege, tables, privilege)
-    wanted = params[1] if "x.privilege_type = %s" in text else None
+    halves = [(table_acl, False, table_text, params[1])]
     # the column half is there only if it reads the column ACLs, and marks its rows as columns
     # only if it says so
-    halves = [(table_acl, False)]
-    if "aclexplode(a.attacl) x WHERE s.nspname" in text:
-        halves.append((column_acl, "x.grantee, true" in text))
-    return [
-        (table, g.grantee, is_column)
-        for acl, is_column in halves
-        for table, grants in acl.items()
-        for g in grants
-        if not (others and g.grantee == SELF) and (wanted is None or g.privilege == wanted)
-    ]
+    if "aclexplode(a.attacl) x WHERE s.nspname" in column_text:
+        halves.append((column_acl, "x.grantee, true" in column_text, column_text, params[-1]))
+    rows = []
+    for acl, is_column, half, privilege in halves:
+        others = "x.grantee <> c.relowner" in half
+        wanted = privilege if "x.privilege_type = %s" in half else None
+        rows += [
+            (table, g.grantee, is_column)
+            for table, grants in acl.items()
+            for g in grants
+            if not (others and g.grantee == SELF) and (wanted is None or g.privilege == wanted)
+        ]
+    return rows
 
 
 def plain_shape(t: Trig, text: str) -> bool:
@@ -853,6 +856,11 @@ def _condition_11_scenarios() -> list[Scenario]:
         Scenario(
             "the-loader-replaced-by-one-other-role",
             _replace_loader,
+            [],
+        ),
+        Scenario(
+            "the-owner-holds-a-column-insert-grant",  # the owner is never an inserter to count
+            lambda c: c.column_acl["kb_documents"].append(Grant(SELF, "INSERT")),
             [],
         ),
         Scenario(

@@ -687,8 +687,8 @@ def knowledge_problems(
     owner may hold only SELECT / INSERT, column INSERT, never PUBLIC or a grant option (11.5); and
     no other SECURITY DEFINER function, in any schema, run by a member of the owner (11.7).
 
-    It does NOT detect: a renamed constraint or a sequence RESTART; wholesale re-owning of
-    everything, which `verify()` cannot see because its expected owner is the owner of
+    It does NOT detect: a renamed CHECK/FK constraint or a sequence RESTART/setval; wholesale
+    re-owning of everything, which `verify()` cannot see because its expected owner is the owner of
     public.assessments; tampering that is undone before the next start-up; superuser edits of the
     catalogue; conditions 11.6, 11.8 and 11.9 (ADR 0022 Known gaps). Messages are fixed text.
     The expected owner is the role running the migration (`owner_is_current_user`, `migrate`) or
@@ -889,7 +889,7 @@ def _shape_problems(conn: psycopg.Connection[Any], major: int | None) -> list[st
 
 def _sequence_problems(conn: psycopg.Connection[Any], expected_owner: str) -> list[str]:
     """Condition 11.3: parameters, owner and ACL of the ordering sequence (NULL relacl is the
-    sequence default: owner only). The position of the sequence (RESTART) is not read."""
+    sequence default: owner only). The position of the sequence (RESTART, setval) is not read."""
     row = conn.execute(
         "SELECT pg_catalog.format_type(q.seqtypid, NULL), q.seqstart, q.seqincrement, q.seqmax, "
         "q.seqmin, q.seqcache, q.seqcycle, c.relpersistence, "
@@ -984,7 +984,8 @@ def _acl_problems(conn: psycopg.Connection[Any], tables: list[str]) -> list[str]
             )
         if columns_ok is not True:
             problems.append(f"a column privilege other than INSERT is granted on {relname}")
-    # Only the loader may INSERT, and into kb_status_events only through its column grant (the
+    # At most one non-owner role holds INSERT directly (this does not check that it is the loader,
+    # nor count members of that role), and on kb_status_events only through column grants (the
     # event_order and recorded_at columns are the database's). Grantees are oids, never printed.
     inserts = conn.execute(
         "SELECT c.relname, x.grantee, false FROM pg_catalog.pg_class c "

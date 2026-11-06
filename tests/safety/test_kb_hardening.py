@@ -43,6 +43,9 @@ DSN = "postgresql://never-used/x_test"
 
 
 def first_read(statements: list[str]) -> int:
+    # The first catalogue read that names pg_catalog. In `migrate()` that is knowledge_problems'
+    # own query, not migrate's first post-check (which does not name pg_catalog); that placement
+    # is checked separately by `migrate_order_problems`.
     return next(
         i for i, s in enumerate(statements) if s.startswith("SELECT") and "pg_catalog." in s
     )

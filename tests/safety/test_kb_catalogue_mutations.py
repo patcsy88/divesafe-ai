@@ -749,6 +749,21 @@ CONDITION_11_MUTATIONS = [
         '_KB_INSERT = "INSERT"', '_KB_INSERT = "SELECT"', id="k-inserters-read-as-selecters"
     ),
     pytest.param(
+        '"AND x.grantee <> c.relowner AND x.privilege_type = %s "\n',
+        '"AND x.privilege_type = %s "\n',
+        id="k-inserters-table-half-counts-the-owner",
+    ),
+    pytest.param(
+        '"AND x.grantee <> c.relowner AND x.privilege_type = %s",\n',
+        '"AND x.privilege_type = %s",\n',
+        id="k-inserters-column-half-counts-the-owner",
+    ),
+    pytest.param(
+        '"AND x.grantee <> c.relowner AND x.privilege_type = %s "\n',
+        '"AND x.grantee <> c.relowner "\n',
+        id="k-inserters-table-half-counts-every-privilege",
+    ),
+    pytest.param(
         "    inserts = [r for r in inserts if str(r[0]) in KNOWLEDGE_TABLES]\n",
         "    inserts = [r for r in inserts if str(r[0]) == 'kb_chunks']\n",
         id="k-inserters-only-on-one-table",
@@ -758,6 +773,9 @@ CONDITION_11_MUTATIONS = [
 # The exact scenarios that catch each narrow mutation: a narrow mutation must be caught by the
 # scenarios written for it, not only as a side effect (a broad one breaks the pristine scenarios).
 CONDITION_11_CATCHERS: dict[str, list[str]] = {
+    "k-inserters-column-half-counts-the-owner": [
+        "the-owner-holds-a-column-insert-grant",
+    ],
     "k-other-tables-not-filtered": [
         "row-of-another-table-is-ignored",
     ],

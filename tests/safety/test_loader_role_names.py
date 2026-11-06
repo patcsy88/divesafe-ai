@@ -332,6 +332,9 @@ def _harden_problems(grants: Any) -> list[str]:
         for wanted in (
             "SET LOCAL search_path = pg_catalog, pg_temp",
             "SET LOCAL quote_all_identifiers = off",
+            "SET LOCAL IntervalStyle = postgres",
+            "SET LOCAL DateStyle = 'ISO, MDY'",
+            "SET LOCAL TimeZone = 'UTC'",
         )
         if wanted not in conn.sent[:first]
     ]

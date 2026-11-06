@@ -117,7 +117,8 @@ def _kb_grants(
     )
     conn.execute("REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM PUBLIC")
     row = conn.execute("SELECT current_database()").fetchone()
-    assert row is not None
+    if row is None:
+        raise RepositoryUnavailableError("could not install the schema")
     conn.execute(
         sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(row[0]))
     )
@@ -184,6 +185,7 @@ def install_schema(
     migrate(admin_dsn, app_role=app_role)
     try:
         with psycopg.connect(admin_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
+            _harden(conn)
             if loader_role is not None:
                 owner = conn.execute("SELECT current_user").fetchone()
                 found = conn.execute(
@@ -383,6 +385,7 @@ def _self_or_member(function: str, args: str) -> str:
 _KB_TABLE_WRITES = "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'"
 _KB_COLUMN_WRITES = "'INSERT, UPDATE, REFERENCES'"
 _KB_SEQUENCE_USE = "'USAGE, SELECT, UPDATE'"
+_REPLICATION_ROLE_SET = "'session_replication_role', 'SET'"
 
 
 def _knowledge_privilege_checks() -> tuple[tuple[str, str], ...]:
@@ -547,10 +550,14 @@ class PostgresAssessmentRepository:
             )
 
         def can(table: str, privileges: str) -> str:
-            return f"COALESCE(has_table_privilege(to_regclass('{table}'), '{privileges}'), false)"
+            held = _self_or_member("has_table_privilege", f"to_regclass('{table}'), '{privileges}'")
+            return f"COALESCE({held}, false)"
 
         functions = ", ".join(f"'{f}'" for f in sorted(set(GUARD_FUNCTIONS.values())))
         checks = (
+            # Every check below judges current_user; a stored `role` setting would make that a
+            # different role from the login role, whose own grants would go unchecked.
+            ("current_user <> session_user", "runs as a different role from its login role"),
             (owns("public.assessments"), "owns the table"),
             (
                 "COALESCE((SELECT pg_has_role(current_user, nspowner, 'MEMBER') FROM pg_namespace "
@@ -563,11 +570,15 @@ class PostgresAssessmentRepository:
                 "owns the database",
             ),
             (
-                "COALESCE(has_schema_privilege('public', 'CREATE'), false)",
+                "COALESCE("
+                + _self_or_member("has_schema_privilege", "'public', 'CREATE'")
+                + ", false)",
                 "can create objects in the public schema",
             ),
             (
-                "COALESCE(has_database_privilege(current_database(), 'CREATE'), false)",
+                "COALESCE("
+                + _self_or_member("has_database_privilege", "current_database(), 'CREATE'")
+                + ", false)",
                 "can create schemas in the database",
             ),
             (
@@ -623,12 +634,15 @@ class PostgresAssessmentRepository:
             # still fire; the right stays refused as defence in depth).
             all_checks.append(
                 (
-                    "COALESCE(has_parameter_privilege('session_replication_role', 'SET'), false)",
+                    "COALESCE("
+                    + _self_or_member("has_parameter_privilege", _REPLICATION_ROLE_SET)
+                    + ", false)",
                     "may set session_replication_role (replica mode skips ordinary triggers)",
                 )
             )
         row = conn.execute("SELECT " + ", ".join(sql for sql, _ in all_checks)).fetchone()
-        assert row is not None
+        if row is None:
+            raise RepositoryUnavailableError("storage unavailable")
         return [
             f"the application role {name}"
             for (_, name), flag in zip(all_checks, row, strict=True)
