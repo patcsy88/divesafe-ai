@@ -70,6 +70,10 @@ class Authenticator(Protocol):
         """The configured name of `actor` if they are a known key holder who may decide."""
         ...
 
+    def groups_of(self, actor: str) -> frozenset[str]:
+        """The groups of the key holder called `actor` (empty when unknown)."""
+        ...
+
 
 def key_id_of(digest: str) -> str:
     return digest[:12]
@@ -125,6 +129,9 @@ class DevAuthenticator:
 
     def canonical_decider(self, actor: str) -> str | None:
         return _actor(actor)
+
+    def groups_of(self, actor: str) -> frozenset[str]:
+        return frozenset()
 
 
 _FORMAT_ERROR = (

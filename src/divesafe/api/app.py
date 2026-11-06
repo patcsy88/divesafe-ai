@@ -12,7 +12,7 @@ import inspect
 import logging
 import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated
@@ -230,23 +230,26 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.exception("unhandled error", extra={"path": request.url.path})
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
-    def _in_scope(created_by: str | None, assigned: str | None, principal: Principal) -> bool:
-        """Read scope (ADR 0026): a key with no groups reads everything; one with groups reads
-        what it created, what is assigned to it, and what its creator or assignee's groups share."""
-        if not principal.groups:
+    def _in_scope(names: Iterable[str | None], principal: Principal, *, pending: bool) -> bool:
+        """Read scope (ADR 0026). A key with no groups reads everything, and so does an admin
+        for an assessment with no decision yet. Otherwise a key reads what it created, holds or
+        was moved off, and what shares a group with any of those people."""
+        if not principal.groups or (pending and Role.ADMIN in principal.roles):
             return True
-        names = [n for n in (created_by, assigned) if n]
-        if principal.actor.casefold() in {n.strip().casefold() for n in names}:
+        people = [n for n in names if n]
+        if principal.actor.strip().casefold() in {n.strip().casefold() for n in people}:
             return True
-        groups_of = getattr(app_state.authenticator, "groups_of", None)
-        if groups_of is None:
-            return False
-        return any(principal.groups & groups_of(n) for n in names)
+        return any(principal.groups & app_state.authenticator.groups_of(n) for n in people)
+
+    def _record_in_scope(record: AssessmentRecord, principal: Principal) -> bool:
+        moves = [n for m in record.reassignments for n in (m.from_decider, m.to_decider)]
+        names = [record.created_by, record.assigned_decider, *moves]
+        return _in_scope(names, principal, pending=record.human_decision is None)
 
     def _may_see(run: PendingRun, principal: Principal) -> bool:
         return (
             Role.VIEWER in principal.roles
-            and _in_scope(run.created_by, run.assigned_decider, principal)
+            and _in_scope((run.created_by, run.assigned_decider), principal, pending=True)
             or run.created_by == principal.actor
             or run.assigned_decider == principal.actor
         )
@@ -276,7 +279,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         if (
             principal is not None
             and Role.VIEWER in principal.roles
-            and not _in_scope(record.created_by, record.assigned_decider, principal)
+            and not _record_in_scope(record, principal)
         ):
             raise HTTPException(status_code=404, detail="assessment not found")
         return record
@@ -479,7 +482,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             # A create-only key sees the record as it was created, as a replay does.
             return AssessmentView.withheld(record)
         if run is None or not (
-            (viewer and _in_scope(run.created_by, run.assigned_decider, principal))
+            (viewer and _in_scope((run.created_by, run.assigned_decider), principal, pending=True))
             or run.created_by == principal.actor
         ):
             raise HTTPException(status_code=404, detail="assessment not found")

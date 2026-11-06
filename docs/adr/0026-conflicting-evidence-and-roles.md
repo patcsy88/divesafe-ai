@@ -120,10 +120,18 @@ case-insensitive, printable, bounded). A viewer key with groups reads an assessm
 or a run's status only if it created it, is assigned to it, or shares a group with its creator or
 its assigned decider; otherwise the answer is the same 404 as a missing id. A key with no groups
 reads everything, and production start-up warns while any viewer key has none. Create-only keys are
-unchanged (own assessments only). Scope follows the *current* assignee, so a reassignment can move
-an assessment into or out of a group's view. Known gaps: group membership is looked up by actor
-name (names are unique by casefold); `/v1/sites` is not scoped (public reference data); there is
-no list endpoint to scope.
+unchanged (own assessments only). The creator, the current assignee and every person named in a
+move (from and to) count as the people whose groups decide scope, so a decider always reads what
+they must decide, and a decider moved off an assessment still sees it (and gets the 403 "assigned
+to another decider"). An `admin` key reads and can move every assessment that has no decision yet,
+whatever its groups (owner ruling, 2026-11-06; closes the stranded-assessment case); decided
+assessments stay scoped for admins too. A move can widen who reads a record: an admin, or a creator
+choosing the `decider`, can bring in another group. Known gaps: group membership is looked up by
+actor name (names are unique by casefold), so a reused actor name inherits every past assessment
+held under that name and a change of groups changes who reads old records (never reuse names);
+`/v1/sites` is not scoped (public reference data); there is no list endpoint to scope; an
+out-of-scope 404 is not logged and costs fewer repository reads than a missing id (ids are 128-bit
+random); group names are casefolded only (no Unicode normalisation).
 
 **Review fixes and rulings (2026-11-06):** the owner ruled that an `admin` key may not also be a
 `decider` (start-up refuses it), so one key cannot move an assessment to itself and decide it. A
