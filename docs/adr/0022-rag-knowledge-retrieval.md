@@ -1301,8 +1301,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   role that owns a knowledge table or function (directly or by membership), holds any table
   privilege beyond SELECT (MAINTAIN too, from PostgreSQL 17), any column privilege, anything on the
   ordering sequence, or EXECUTE on a knowledge function. Membership of the loader role is not
-  checked by name: an inheriting member should show up through the inherited INSERT (not tested
-  live), and a NOINHERIT member that could `SET ROLE` to the loader is **not** caught. A zero-chunk manifest refused by `kb_load`
+  checked by name. Each privilege counts when held directly, inherited, or held by any role the app
+  role is a member of, so a NOINHERIT member (or a grant `WITH INHERIT FALSE`) that could
+  `SET ROLE` to the loader is caught too (closed 2026-11-06, live on PostgreSQL 16 and 17:
+  `test_verification_flags_a_privilege_reachable_only_by_set_role`). A zero-chunk manifest refused by `kb_load`
   before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
@@ -1556,9 +1558,20 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **The loader can take `LOCK TABLE`** on tables it can read (denial of service); not prevented.
 - **Default privileges for the owner role are not checked** by `db_init` or the loader check.
 - **The catalogue check (conditions 9 and 11) runs in `migrate()` and at `verify()` start-up
-  only.** Condition 11.1-11.5 and 11.7 are built (2026-11-06); still not detected: a renamed
-  constraint (the shape digest leaves names out), a sequence `RESTART` (the current value is not
-  pinned), and conditions 11.6, 11.8 and 11.9. The pins detect database drift, not code drift (code
+  only.** Condition 11.1-11.5 and 11.7 are built (2026-11-06); still not detected: a renamed CHECK
+  or FOREIGN KEY constraint (the shape digest leaves constraint names out; a renamed UNIQUE or
+  primary key is caught through its index definition), a sequence `RESTART` or `setval` (the
+  current value is not pinned: set below the highest `event_order`, a later event can sort before
+  an earlier one, so a withdrawn version can read as approved again; comparing `last_value` with
+  `max(event_order)` in `migrate()` is possible but not built), and conditions 11.6, 11.8 and
+  11.9.
+- **Condition 11.7 has false positives.** Any SECURITY DEFINER function in any schema owned by a
+  member of the owner role (a superuser owner counts) makes `migrate()` and `verify()` refuse, even
+  one unrelated to the knowledge tables, such as an extension's. The fix is to change the
+  function's owner to a role outside the owner role, or drop it; there is no allow-list.
+- **The shape pins are per PostgreSQL major (16 and 17).** A new major needs new pins from
+  `kb_pins` before it can start; PostgreSQL 18 adds `pg_constraint.conenforced`, which the
+  constraint query does not read yet and must, before 18 is pinned. The pins detect database drift, not code drift (code
   drift is covered by the migration checksum plus review).
 - **`verify()` knowledge checks are start-up only** and judge the owner by consistency with the
   owner of `public.assessments`.
@@ -1714,30 +1727,45 @@ citation guard are later stages.
       `display_permitted`, `licence_reference_present`, `approver_role`, `all_sites`, the review
       window, `status` / `hash_checked` and `UNIQUE(event_order)`. **Built:** per table, a SHA-256
       of the sorted constraint and index rows (`KNOWLEDGE_SHAPE_SHA256`, nine pins per major,
-      generated with `kb_pins`). **Gap:** a renamed constraint is not detected (names are left out).
+      generated with `kb_pins`). Before the shape queries, `_harden` fixes `search_path`,
+      `quote_all_identifiers`, `IntervalStyle`, `DateStyle` and `TimeZone`, so a role or database
+      setting cannot change how a definition is printed; a row that cannot be serialised is
+      reported as unreadable, never compared. **Gap:** a renamed CHECK or FK constraint is not
+      detected (names are left out; a renamed UNIQUE or primary key changes its index definition).
+      PostgreSQL 18 pins must add `conenforced`.
     - **11.2** Columns, defaults, types and generated columns. **Built** the same way (a third
       digest per table; an added or renamed column changes it).
     - **11.3** `kb_status_event_order_seq` parameters (INCREMENT -1, RESTART), which could make
       "latest status" read wrongly. **Built:** parameters, owner and ACL (only the owner). **Gap:**
-      `RESTART` changes only the current value, which is not pinned.
+      `RESTART` or `setval` changes only the current value, which is not pinned; set below
+      `max(event_order)`, a later event sorts before an earlier one and a withdrawn version can
+      read as approved. A `last_value` check in `migrate()` is optional, not built.
     - **11.4** Function owner and PUBLIC EXECUTE. **Built:** every function a knowledge trigger
       calls must be owned by the expected owner, with a non-NULL ACL naming only the owner; app
       side, `verify(least_privilege=True)` refuses an app role that owns or may EXECUTE one.
     - **11.5** App and loader privileges on `kb_*` tables. **Built:** a role other than the owner
       may hold only SELECT / INSERT on a table and only INSERT on a column, never with a grant
-      option, never PUBLIC; app side, only SELECT (and no MAINTAIN on PostgreSQL 17+).
+      option, never PUBLIC; INSERT on `kb_status_events` is column-level only (its `event_order`
+      and `recorded_at` are the database's), and at most one role other than the owner may INSERT
+      into the three tables at all (table or column grants, counted by role). App side, only
+      SELECT (and no MAINTAIN on PostgreSQL 17+), counting privileges held directly, inherited, or
+      reachable by `SET ROLE` through any membership.
     - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity). Open.
     - **11.7** A SECURITY DEFINER wrapper owned by the owner that disables, inserts and re-enables.
       **Built:** no SECURITY DEFINER function in any schema other than those the knowledge triggers
       call may be owned by a member of the owner role (a superuser owner counts; unknown counts).
+      **False positives:** an unrelated definer function (an extension's, say) owned by such a role
+      is refused too; the runbook step is to re-own it outside the owner role or drop it.
     - **11.8** Tampering between start-ups: the check runs at `migrate()` and start-up only. Open.
     - **11.9** An owner can drop and recreate a knowledge table with the same triggers and
       functions. Every check passes, and the status history, including a withdrawal, is lost.
     - Event triggers and superuser catalogue edits (out of scope).
 
-    **Optional, not decided by the owner:** run `_harden` before the first post-checks in
-    `migrate()` (they currently run under the owner role's `search_path`), and make `verify()`
-    read-only for its whole connection.
+    **Done 2026-11-06:** `migrate()` runs `_harden` after the pending migrations (which keep the
+    session's own settings, under which their checksums were taken) and before its first
+    post-check; `install_schema`'s grant step runs it before its read-backs. `verify()` is
+    read-only from its knowledge check to the end of its transaction (SET LOCAL inside a released
+    savepoint lasts until the top-level transaction ends).
 
     The pins detect database drift, not code drift (code drift is covered by the migration checksum
     plus review).

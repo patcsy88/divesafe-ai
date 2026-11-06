@@ -628,11 +628,17 @@ ALTER TABLE public.kb_status_events ENABLE ALWAYS TRIGGER kb_status_events_no_tr
 
 
 def _harden(conn: psycopg.Connection[Any], *, read_only: bool = False) -> None:
-    """Inside the caller's transaction: built-ins only on the search path, and identifiers are not
-    force-quoted (which would change pg_get_functiondef). `read_only` uses SET LOCAL
-    transaction_read_only with SET LOCAL, so it also works inside a savepoint."""
+    """Inside the caller's transaction: built-ins only on the search path, identifiers not
+    force-quoted (which would change pg_get_functiondef), and the interval, date and time zone
+    output fixed (they change how constants in pg_get_constraintdef / pg_get_expr are written, so a
+    role or database setting could otherwise change a shape digest). SET LOCAL lasts until the end
+    of the enclosing top-level transaction: a released savepoint keeps it and a rolled-back one
+    undoes it, so with `read_only` inside a savepoint the rest of that transaction is read-only."""
     conn.execute("SET LOCAL search_path = pg_catalog, pg_temp")
     conn.execute("SET LOCAL quote_all_identifiers = off")
+    conn.execute("SET LOCAL IntervalStyle = postgres")
+    conn.execute("SET LOCAL DateStyle = 'ISO, MDY'")
+    conn.execute("SET LOCAL TimeZone = 'UTC'")
     if read_only:
         conn.execute("SET LOCAL transaction_read_only = on")
 
@@ -798,6 +804,10 @@ def knowledge_problems(
     return problems
 
 
+# Stands in for the digest of an aspect whose rows could not be serialised; not a hex digest, so
+# it never equals a pin.
+SHAPE_UNREADABLE = "unreadable"
+
 # One query per aspect of ADR 0022 condition 11.1 / 11.2. The first column is the table name; the
 # rest is serialised and hashed. Constraint and index rows carry no oid or name-only column, and
 # the rows are sorted in Python, so the digest does not depend on catalogue order.
@@ -832,16 +842,25 @@ _SHAPE_QUERIES = {
 
 def _shape_digests(conn: psycopg.Connection[Any]) -> dict[str, str]:
     """`<table>.<aspect>` -> SHA-256 hex of the sorted, JSON-serialised catalogue rows. A table
-    with no rows for an aspect hashes the empty list. The caller has run `_harden`."""
+    with no rows for an aspect hashes the empty list. A row that cannot be serialised makes that
+    key `SHAPE_UNREADABLE`, which is never compared with a pin. The caller has run `_harden`."""
     digests: dict[str, str] = {}
+    unreadable: set[str] = set()
     for aspect in KNOWLEDGE_SHAPE_ASPECTS:
         grouped: dict[str, list[str]] = {t: [] for t in KNOWLEDGE_TABLES}
         for row in conn.execute(_SHAPE_QUERIES[aspect], (list(KNOWLEDGE_TABLES),)).fetchall():
             if str(row[0]) in grouped:
-                grouped[str(row[0])].append(json.dumps(list(row[1:]), separators=(",", ":")))
+                try:
+                    line = json.dumps(list(row[1:]), separators=(",", ":"))
+                except (TypeError, ValueError):
+                    unreadable.add(f"{row[0]}.{aspect}")
+                    continue
+                grouped[str(row[0])].append(line)
         for table, lines in grouped.items():
             joined = "\n".join(sorted(lines)).encode()
             digests[f"{table}.{aspect}"] = hashlib.sha256(joined).hexdigest()
+    for key in unreadable:
+        digests[key] = SHAPE_UNREADABLE
     return digests
 
 
@@ -857,7 +876,9 @@ def _shape_problems(conn: psycopg.Connection[Any], major: int | None) -> list[st
     for key, digest in _shape_digests(conn).items():
         table, aspect = key.split(".")
         shape_pin = pins.get(key)
-        if shape_pin is None:
+        if digest == SHAPE_UNREADABLE:
+            problems.append(f"the {aspect} of {table} could not be read")
+        elif shape_pin is None:
             problems.append(
                 f"no pinned definition of the {aspect} of {table} on this PostgreSQL version"
             )
@@ -932,12 +953,16 @@ def _function_problems(
 
 _KB_TABLE_GRANTS = ("SELECT", "INSERT")
 _KB_COLUMN_GRANTS = ("INSERT",)
+_KB_COLUMN_INSERT_ONLY = "kb_status_events"
+_KB_INSERT = "INSERT"
 
 
 def _acl_problems(conn: psycopg.Connection[Any], tables: list[str]) -> list[str]:
     """Condition 11.5, role-independent: on each knowledge table no role but the owner holds a
     privilege other than SELECT or INSERT, PUBLIC holds nothing, no grant option is held, and
-    column privileges are INSERT only. Per-role checks are in `verify()` and `kb_privileges`."""
+    column privileges are INSERT only; INSERT on kb_status_events is column-level only, and at
+    most one role other than the owner may INSERT at all (table or column, across the three
+    tables). Per-role checks are in `verify()` and `kb_privileges`."""
     rows = conn.execute(
         "SELECT c.relname, NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(c.relacl) x "
         "WHERE x.grantee <> c.relowner AND (x.grantee = 0 OR x.is_grantable "
@@ -959,6 +984,32 @@ def _acl_problems(conn: psycopg.Connection[Any], tables: list[str]) -> list[str]
             )
         if columns_ok is not True:
             problems.append(f"a column privilege other than INSERT is granted on {relname}")
+    # Only the loader may INSERT, and into kb_status_events only through its column grant (the
+    # event_order and recorded_at columns are the database's). Grantees are oids, never printed.
+    inserts = conn.execute(
+        "SELECT c.relname, x.grantee, false FROM pg_catalog.pg_class c "
+        "JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace, "
+        "pg_catalog.aclexplode(c.relacl) x "
+        "WHERE s.nspname = 'public' AND c.relname = ANY(%s::text[]) "
+        "AND x.grantee <> c.relowner AND x.privilege_type = %s "
+        "UNION ALL "
+        "SELECT c.relname, x.grantee, true FROM pg_catalog.pg_class c "
+        "JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace "
+        "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid, "
+        "pg_catalog.aclexplode(a.attacl) x "
+        "WHERE s.nspname = 'public' AND c.relname = ANY(%s::text[]) "
+        "AND x.grantee <> c.relowner AND x.privilege_type = %s",
+        (tables, _KB_INSERT, tables, _KB_INSERT),
+    ).fetchall()
+    inserts = [r for r in inserts if str(r[0]) in KNOWLEDGE_TABLES]
+    if any(str(r[0]) == _KB_COLUMN_INSERT_ONLY and r[2] is not True for r in inserts):
+        problems.append(
+            f"a role other than the owner holds table-level INSERT on {_KB_COLUMN_INSERT_ONLY}"
+        )
+    if len({r[1] for r in inserts}) > 1:
+        problems.append(
+            "more than one role other than the owner may INSERT into the knowledge tables"
+        )
     return problems
 
 
@@ -1059,6 +1110,9 @@ def migrate(
                     "VALUES (%s, %s, %s)",
                     (m.version, m.name, m.checksum),
                 )
+            # The post-checks below read the catalogue; the migrations above keep the session's
+            # own settings (their checksums were taken under them).
+            _harden(conn)
             enabled = {
                 r[0]
                 for r in conn.execute(

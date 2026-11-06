@@ -310,6 +310,42 @@ def test_mutation_without_the_member_clause_an_unrelated_holder_is_refused() -> 
     run_grants(False, False, holders=("unrelated",), members=())  # real code accepts it
 
 
+# --- the read-backs run with a hardened search path (ADR 0022 condition 11) -----------------------
+
+
+class _RecordingConn(_FakeConn):
+    def __init__(self) -> None:
+        super().__init__(False, False)
+        self.sent: list[str] = []
+
+    def execute(self, query: Any, params: Any = None) -> _Result:
+        self.sent.append(query if isinstance(query, str) else repr(query))
+        return super().execute(query, params)
+
+
+def _harden_problems(grants: Any) -> list[str]:
+    conn = _RecordingConn()
+    grants(conn, "an_app", "a_loader")
+    first = next(i for i, q in enumerate(conn.sent) if q.startswith("SELECT"))
+    return [
+        wanted
+        for wanted in (
+            "SET LOCAL search_path = pg_catalog, pg_temp",
+            "SET LOCAL quote_all_identifiers = off",
+        )
+        if wanted not in conn.sent[:first]
+    ]
+
+
+def test_kb_grants_hardens_the_session_before_its_first_read() -> None:
+    assert _harden_problems(postgres_module._kb_grants) == []  # noqa: SLF001
+
+
+def test_mutation_kb_grants_without_the_hardening_is_noticed() -> None:
+    mutated = _mutated_grants("    _harden(conn)", "    pass")
+    assert _harden_problems(mutated) != []
+
+
 # --- db_init without a loader role: a bad application role --------------------------------------
 
 

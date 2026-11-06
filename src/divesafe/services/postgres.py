@@ -35,6 +35,7 @@ from divesafe.services.migrations import (
     KNOWLEDGE_FUNCTIONS,
     KNOWLEDGE_SEQUENCE,
     KNOWLEDGE_TABLES,
+    _harden,
     knowledge_problems,
     migrate,
     schema_problems,
@@ -106,6 +107,7 @@ def check_loader_role_name(role: str, app_role: str | None = None) -> None:
 def _kb_grants(
     conn: psycopg.Connection[Any], app_role: str | None, loader_role: str | None
 ) -> None:
+    _harden(conn)  # the read-backs below must use the built-in functions and catalogues
     tables = sql.SQL("public.kb_documents, public.kb_chunks, public.kb_status_events")
     conn.execute(sql.SQL("REVOKE ALL ON {} FROM PUBLIC").format(tables))
     conn.execute(
@@ -367,38 +369,56 @@ def _any_kb_table(condition: str) -> str:
     )
 
 
+def _self_or_member(function: str, args: str) -> str:
+    """`function(args)` for the current role, or `function(role, args)` for any other role it is a
+    member of: a NOINHERIT member, or one whose grant has INHERIT FALSE, does not inherit the
+    privilege but can still SET ROLE to it."""
+    return (
+        f"({function}({args}) OR EXISTS (SELECT 1 FROM pg_roles r "
+        "WHERE r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'MEMBER') "
+        f"AND {function}(r.oid, {args})))"
+    )
+
+
+_KB_TABLE_WRITES = "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'"
+_KB_COLUMN_WRITES = "'INSERT, UPDATE, REFERENCES'"
+_KB_SEQUENCE_USE = "'USAGE, SELECT, UPDATE'"
+
+
 def _knowledge_privilege_checks() -> tuple[tuple[str, str], ...]:
     """ADR 0022 conditions 11.4 and 11.5, app side: the application role may only SELECT the
     knowledge tables, holds no column privilege, nothing on the ordering sequence, and neither
-    owns nor may EXECUTE a knowledge function. A missing object reads as false here; the
-    knowledge catalogue check reports it."""
+    owns nor may EXECUTE a knowledge function. Each privilege counts when held directly, inherited,
+    or held by any role the application role is a member of (it could SET ROLE to it). A missing
+    object reads as false here; the knowledge catalogue check reports it."""
     kb_function = (
         "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
         f"WHERE n.nspname = 'public' AND p.proname IN ({_KB_FUNCTION_LIST}) AND {{}})"
     )
+    sequence = f"to_regclass('public.{KNOWLEDGE_SEQUENCE}')"
     return (
         (
             _any_kb_table("pg_has_role(current_user, c.relowner, 'MEMBER')"),
             "owns a knowledge table",
         ),
         (
-            _any_kb_table(
-                "has_table_privilege(c.oid, "
-                "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')"
-            ),
+            _any_kb_table(_self_or_member("has_table_privilege", f"c.oid, {_KB_TABLE_WRITES}")),
             "holds a privilege other than SELECT on a knowledge table",
         ),
         (
-            _any_kb_table("has_any_column_privilege(c.oid, 'INSERT, UPDATE, REFERENCES')"),
+            _any_kb_table(
+                _self_or_member("has_any_column_privilege", f"c.oid, {_KB_COLUMN_WRITES}")
+            ),
             "holds a column privilege on a knowledge table",
         ),
         (
-            f"COALESCE(has_sequence_privilege(to_regclass('public.{KNOWLEDGE_SEQUENCE}'), "
-            "'USAGE, SELECT, UPDATE'), false)",
+            "COALESCE("
+            + _self_or_member("has_sequence_privilege", f"{sequence}, {_KB_SEQUENCE_USE}")
+            + ", false)",
             "holds a privilege on the knowledge ordering sequence",
         ),
         (
-            kb_function.format("has_function_privilege(p.oid, 'EXECUTE')"),
+            kb_function.format(_self_or_member("has_function_privilege", "p.oid, 'EXECUTE'")),
             "can EXECUTE a knowledge function",
         ),
         (
@@ -496,9 +516,11 @@ class PostgresAssessmentRepository:
 
     @staticmethod
     def _knowledge_problems(conn: psycopg.Connection[Any]) -> list[str]:
-        """ADR 0022 condition 9. Read-only through SET LOCAL transaction_read_only, so it also
-        works inside a savepoint. A missing knowledge table is one problem (the schema check also
-        reports the pending migration); the detailed checks need all three."""
+        """ADR 0022 condition 9. Read-only through SET LOCAL transaction_read_only, sent inside a
+        savepoint: when the savepoint is released the setting (and the rest of `_harden`) stays
+        until the end of the top-level transaction, so the rest of `verify()` runs read-only too;
+        if the savepoint rolls back, it is undone. A missing knowledge table is one problem (the
+        schema check also reports the pending migration); the detailed checks need all three."""
         missing = [
             f"the {table} table does not exist (run db_init as the owner role)"
             for table in KNOWLEDGE_TABLES
@@ -591,7 +613,7 @@ class PostgresAssessmentRepository:
         if version is not None and version[0] >= _MAINTAIN_PRIVILEGE_FROM:
             all_checks.append(
                 (
-                    _any_kb_table(f"has_table_privilege(c.oid, '{_MAINTAIN}')"),
+                    _any_kb_table(_self_or_member("has_table_privilege", f"c.oid, '{_MAINTAIN}'")),
                     "holds MAINTAIN on a knowledge table",
                 )
             )

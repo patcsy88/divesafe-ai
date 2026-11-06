@@ -958,6 +958,55 @@ def test_verification_flags_maintain_on_a_knowledge_table_from_postgresql_17(
     assert app.verify(least_privilege=True) == []
 
 
+@pytest.mark.parametrize(
+    ("grant", "problem"),
+    [
+        (
+            "GRANT INSERT ON public.kb_chunks TO {group}",
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            "GRANT INSERT (status) ON public.kb_status_events TO {group}",
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            "GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO {group}",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO {group}",
+            "can EXECUTE a knowledge function",
+        ),
+        ("GRANT MAINTAIN ON public.kb_chunks TO {group}", "holds MAINTAIN on a knowledge table"),
+    ],
+    ids=["insert", "column-insert", "sequence", "execute", "maintain"],
+)
+def test_verification_flags_a_privilege_reachable_only_by_set_role(
+    app_role_dsn: str, grant: str, problem: str
+) -> None:
+    """ADR 0022 condition 11.5: a membership granted WITH INHERIT FALSE gives no inherited
+    privilege, but the application role can still SET ROLE to the group and use it."""
+    if "MAINTAIN" in grant and int(_sql_value("SHOW server_version_num")) < 170000:
+        pytest.skip("MAINTAIN exists from PostgreSQL 17")
+    group = "divesafe_kb_setrole_group_test"
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(grant.format(group=group))
+        _sql(f"GRANT {group} TO divesafe_app_test WITH INHERIT FALSE")
+        assert _sql_value(f"SELECT pg_has_role('divesafe_app_test', '{group}', 'USAGE')") in (
+            "False",
+            "false",
+        )  # really not inherited
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
 def test_the_application_role_can_read_the_acl_and_sequence_catalogues(app_role_dsn: str) -> None:
     with psycopg.connect(app_role_dsn) as conn:
         acl = conn.execute(

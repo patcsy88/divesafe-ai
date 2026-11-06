@@ -129,6 +129,32 @@ def acl_ok(grants: list[Grant], text: str, allowed: list[str]) -> bool:
     return True
 
 
+def insert_rows(
+    table_acl: dict[str, list[Grant]],
+    column_acl: dict[str, list[Grant]],
+    text: str,
+    params: Any,
+) -> list[tuple[str, str, bool]]:
+    """The INSERT-grantee query of `_acl_problems`: (table, grantee, column-level?) per entry.
+    The owner filter, the privilege filter and the column half apply only if their fragment is in
+    the query text."""
+    others = "x.grantee <> c.relowner" in text
+    # the privilege is a parameter: params is (tables, privilege, tables, privilege)
+    wanted = params[1] if "x.privilege_type = %s" in text else None
+    # the column half is there only if it reads the column ACLs, and marks its rows as columns
+    # only if it says so
+    halves = [(table_acl, False)]
+    if "aclexplode(a.attacl) x WHERE s.nspname" in text:
+        halves.append((column_acl, "x.grantee, true" in text))
+    return [
+        (table, g.grantee, is_column)
+        for acl, is_column in halves
+        for table, grants in acl.items()
+        for g in grants
+        if not (others and g.grantee == SELF) and (wanted is None or g.privilege == wanted)
+    ]
+
+
 def plain_shape(t: Trig, text: str) -> bool:
     checks = (
         not t.qual,
@@ -258,6 +284,8 @@ class Catalog:
             return Rows([] if self.definers is None else [(self._definer_count(text),)])
         if "FROM pg_catalog.pg_proc p JOIN" in text:
             return Rows(sorted(self.digests.items()))
+        if "x.grantee, false" in text:  # before the shape queries: it joins pg_attribute too
+            return Rows(list(insert_rows(self.table_acl, self.column_acl, text, params)))
         for aspect, fragment in SHAPE_FRAGMENTS_BY_ASPECT.items():
             if fragment in text:
                 return Rows(list(self.shape[aspect]))
@@ -442,6 +470,14 @@ def column_acl(table: str) -> str:
     return f"a column privilege other than INSERT is granted on {table}"
 
 
+EVENTS_TABLE_INSERT = "a role other than the owner holds table-level INSERT on kb_status_events"
+MANY_INSERTERS = "more than one role other than the owner may INSERT into the knowledge tables"
+
+
+def shape_unreadable(table: str, aspect: str) -> str:
+    return f"the {aspect} of {table} could not be read"
+
+
 # --- one table of scenarios, used by the tests AND by every mutation -----------------------------
 
 
@@ -555,6 +591,20 @@ def _sequence(position: int, value: Any) -> Callable[[Catalog], None]:
         cat.sequence_row = tuple(row)
 
     return mutate
+
+
+def _replace_loader(cat: Catalog) -> None:
+    for acl in (*cat.table_acl.values(), *cat.column_acl.values()):
+        acl[:] = [
+            Grant("other_loader_test", g.privilege) if g.grantee == LOADER else g for g in acl
+        ]
+
+
+def _split_inserts(cat: Catalog) -> None:
+    cat.table_acl["kb_chunks"] = [
+        g for g in cat.table_acl["kb_chunks"] if g != Grant(LOADER, "INSERT")
+    ]
+    cat.table_acl["kb_chunks"].append(Grant(APP, "INSERT"))
 
 
 def _condition_11_scenarios() -> list[Scenario]:
@@ -758,12 +808,57 @@ def _condition_11_scenarios() -> list[Scenario]:
         Scenario(
             "column-privilege-to-public",
             lambda c: c.column_acl["kb_chunks"].append(Grant(PUBLIC, "INSERT")),
-            [column_acl("kb_chunks")],
+            [column_acl("kb_chunks"), MANY_INSERTERS],
         ),
         Scenario(
             "column-privilege-with-grant-option",
             lambda c: c.column_acl["kb_status_events"].append(Grant(LOADER, "INSERT", True)),
             [column_acl("kb_status_events")],
+        ),
+        Scenario(
+            "status-events-table-level-insert",
+            lambda c: c.table_acl["kb_status_events"].append(Grant(LOADER, "INSERT")),
+            [EVENTS_TABLE_INSERT],
+        ),
+        Scenario(
+            "status-events-table-level-insert-by-the-app",
+            lambda c: c.table_acl["kb_status_events"].append(Grant(APP, "INSERT")),
+            [EVENTS_TABLE_INSERT, MANY_INSERTERS],
+        ),
+        Scenario(
+            "second-table-inserter",
+            lambda c: c.table_acl["kb_chunks"].append(Grant(APP, "INSERT")),
+            [MANY_INSERTERS],
+        ),
+        Scenario(
+            "second-column-inserter",
+            lambda c: c.column_acl["kb_status_events"].append(Grant(APP, "INSERT")),
+            [MANY_INSERTERS],
+        ),
+        Scenario(
+            "second-inserter-on-a-column-of-another-table",
+            lambda c: c.column_acl["kb_documents"].append(Grant(APP, "INSERT")),
+            [MANY_INSERTERS],
+        ),
+        Scenario(
+            "two-roles-split-the-insert-grants",  # three (table, role) pairs, two roles
+            _split_inserts,
+            [MANY_INSERTERS],
+        ),
+        Scenario(
+            "a-second-role-with-select-only-is-not-an-inserter",
+            lambda c: c.table_acl["kb_chunks"].append(Grant("reader_test", "SELECT")),
+            [],
+        ),
+        Scenario(
+            "the-loader-replaced-by-one-other-role",
+            _replace_loader,
+            [],
+        ),
+        Scenario(
+            "shape-row-not-serialisable",
+            _edit_row("constraints", display, 7, object()),
+            [shape_unreadable("kb_documents", "constraints")],
         ),
         Scenario(
             "column-select-privilege",

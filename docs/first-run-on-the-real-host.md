@@ -67,6 +67,12 @@ Expect `"status":"ok"` and `"storage":"durable"`. If `api` does not become healt
 refuses to start in production when a check fails (agent stage off, owner is a superuser, guard
 triggers not `ENABLE ALWAYS`, and so on); that is the design, not a bug to work around.
 
+Once the knowledge migration (4) is in, one refusal can be a false positive: "a SECURITY DEFINER
+function other than the guards runs as the owner role" also fires for an unrelated
+definer function (an extension's, say) owned by the owner role or a superuser (ADR 0022 condition
+11.7). Do not weaken the check. Re-own that function to a role outside the owner role, or drop it,
+after checking what it is for.
+
 Check that no key is accepted without credentials:
 
 ```sh

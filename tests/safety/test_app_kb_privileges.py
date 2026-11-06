@@ -163,11 +163,35 @@ def check_function_sql(module: Any) -> None:
         assert "n.nspname = 'public'" in sql, label
         assert listed(sql, "p.proname") == set(KNOWLEDGE_FUNCTIONS.values()), label
     assert "has_function_privilege(p.oid, 'EXECUTE')" in sql_of(module, KNOWLEDGE_LABELS[4])
+    assert MEMBER_PATH not in sql_of(module, KNOWLEDGE_LABELS[5])  # ownership: pg_has_role itself
     assert "pg_has_role(current_user, p.proowner, 'MEMBER')" in sql_of(module, KNOWLEDGE_LABELS[5])
+
+
+MEMBER_PATH = "pg_has_role(current_user, r.oid, 'MEMBER')"
+
+
+def check_member_paths(module: Any) -> None:
+    """Each privilege counts for the role itself AND for any role it is a member of (a NOINHERIT
+    member does not inherit, but may SET ROLE), with the same objects and privileges both times."""
+    sequence = f"to_regclass('public.{KNOWLEDGE_SEQUENCE}')"
+    expected = [
+        (KNOWLEDGE_LABELS[1], "has_table_privilege", f"c.oid, {TABLE_WRITES}"),
+        (KNOWLEDGE_LABELS[2], "has_any_column_privilege", "c.oid, 'INSERT, UPDATE, REFERENCES'"),
+        (KNOWLEDGE_LABELS[3], "has_sequence_privilege", f"{sequence}, 'USAGE, SELECT, UPDATE'"),
+        (KNOWLEDGE_LABELS[4], "has_function_privilege", "p.oid, 'EXECUTE'"),
+        (MAINTAIN_LABEL, "has_table_privilege", "c.oid, 'MAINTAIN'"),
+    ]
+    for label, function, args in expected:
+        sql = sql_of(module, label)
+        assert f"{function}({args})" in sql, label
+        assert f"{function}(r.oid, {args})" in sql, label
+        assert MEMBER_PATH in sql, label
+        assert "FROM pg_roles r" in sql, label
 
 
 CHECKS = [
     check_labels,
+    check_member_paths,
     check_each_reported_alone,
     check_table_sql,
     check_sequence_sql,
@@ -201,7 +225,8 @@ TABLE_LIST = '_KB_TABLE_LIST = ", ".join(f"\'{t}\'" for t in KNOWLEDGE_TABLES)'
 FUNCTION_LIST = (
     '_KB_FUNCTION_LIST = ", ".join(f"\'{f}\'" for f in sorted(set(KNOWLEDGE_FUNCTIONS.values())))'
 )
-TABLE_PRIVILEGES = "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')"
+TABLE_WRITES = "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'"
+TABLE_PRIVILEGES = f'_KB_TABLE_WRITES = "{TABLE_WRITES}"'
 
 MUTATIONS = [
     pytest.param("            *_knowledge_privilege_checks(),\n", "", id="checks-not-spliced"),
@@ -230,23 +255,60 @@ MUTATIONS = [
         id="function-gone",
     ),
     pytest.param(
-        TABLE_PRIVILEGES, "'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')", id="table-insert"
+        TABLE_PRIVILEGES,
+        TABLE_PRIVILEGES.replace("'INSERT, ", "'"),
+        id="table-insert",
     ),
     pytest.param(
-        TABLE_PRIVILEGES, "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES')", id="table-trigger"
+        TABLE_PRIVILEGES,
+        TABLE_PRIVILEGES.replace(", TRIGGER'", "'"),
+        id="table-trigger",
     ),
     pytest.param(
-        "has_any_column_privilege(c.oid, 'INSERT, UPDATE, REFERENCES')",
-        "has_any_column_privilege(c.oid, 'UPDATE, REFERENCES')",
+        "_KB_COLUMN_WRITES = \"'INSERT, UPDATE, REFERENCES'\"",
+        "_KB_COLUMN_WRITES = \"'UPDATE, REFERENCES'\"",
         id="column-insert",
     ),
-    pytest.param("\"'USAGE, SELECT, UPDATE'), false)\"", "\"'UPDATE'), false)\"", id="seq-usage"),
+    pytest.param(
+        "_KB_SEQUENCE_USE = \"'USAGE, SELECT, UPDATE'\"",
+        "_KB_SEQUENCE_USE = \"'UPDATE'\"",
+        id="seq-usage",
+    ),
+    pytest.param(
+        '        f"AND {function}(r.oid, {args})))"',
+        '        "AND false))"',
+        id="member-path-dropped",
+    ),
+    pytest.param(
+        '        f"({function}({args}) OR EXISTS (SELECT 1 FROM pg_roles r "',
+        '        "(false OR EXISTS (SELECT 1 FROM pg_roles r "',
+        id="own-privilege-dropped",
+    ),
+    pytest.param(
+        "AND pg_has_role(current_user, r.oid, 'MEMBER') ",
+        "",
+        id="member-path-not-limited-to-memberships",
+    ),
+    pytest.param(
+        '_self_or_member("has_table_privilege", f"c.oid, \'{_MAINTAIN}\'")',
+        "f\"has_table_privilege(c.oid, '{_MAINTAIN}')\"",
+        id="maintain-without-member-path",
+    ),
+    pytest.param(
+        '_self_or_member("has_sequence_privilege", f"{sequence}, {_KB_SEQUENCE_USE}")',
+        'f"has_sequence_privilege({sequence}, {_KB_SEQUENCE_USE})"',
+        id="sequence-without-member-path",
+    ),
     pytest.param(
         "pg_has_role(current_user, c.relowner, 'MEMBER')",
         "c.relowner = 0",
         id="table-ownership-not-through-membership",
     ),
-    pytest.param("has_function_privilege(p.oid, 'EXECUTE')", "false", id="execute-never-checked"),
+    pytest.param(
+        '_self_or_member("has_function_privilege", "p.oid, \'EXECUTE\'")',
+        '"false"',
+        id="execute-never-checked",
+    ),
     pytest.param(
         "kb_function.format(\"pg_has_role(current_user, p.proowner, 'MEMBER')\")",
         'kb_function.format("false")',

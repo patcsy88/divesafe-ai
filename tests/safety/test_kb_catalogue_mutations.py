@@ -286,6 +286,228 @@ KNOWLEDGE_MUTATIONS = [
 ]
 
 
+# Same for condition 9: the exact scenarios that catch each narrow mutation.
+KNOWLEDGE_CATCHERS: dict[str, list[str]] = {
+    "a-trigger-set-check-removed": [
+        "trigger-missing",
+        "last-trigger-missing",
+        "trigger-extra",
+        "trigger-duplicate",
+        "extra-trigger-shape-is-not-judged",
+    ],
+    "a-duplicates-allowed": [
+        "trigger-duplicate",
+    ],
+    "a-extra-triggers-allowed": [
+        "trigger-extra",
+        "extra-trigger-shape-is-not-judged",
+    ],
+    "a-missing-triggers-allowed": [
+        "trigger-missing",
+        "last-trigger-missing",
+    ],
+    "a-function-pairing-skipped": [
+        "trigger-calls-the-wrong-function",
+        "trigger-function-in-the-wrong-schema",
+    ],
+    "a-function-name-not-compared": [
+        "trigger-calls-the-wrong-function",
+    ],
+    "a-function-schema-not-compared": [
+        "trigger-function-in-the-wrong-schema",
+    ],
+    "a-wrong-table-check-removed": [
+        "trigger-on-the-wrong-table",
+    ],
+    "a-enable-always-check-removed": [
+        "trigger-enabled-state-O",
+        "trigger-enabled-state-D",
+        "trigger-enabled-state-R",
+    ],
+    "a-origin-accepted": [
+        "trigger-enabled-state-O",
+    ],
+    "a-only-disabled-refused": [
+        "trigger-enabled-state-O",
+        "trigger-enabled-state-R",
+    ],
+    "b-sha256-compare-removed": [
+        "trigger-calls-the-wrong-function",
+        "trigger-sha256-mismatch",
+        "shared-function-sha256-mismatch",
+    ],
+    "b-missing-pin-is-a-pass": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "empty-pin-table",
+        "function-missing-from-the-pin-table",
+    ],
+    "b-missing-pin-not-reported": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "empty-pin-table",
+        "function-missing-from-the-pin-table",
+    ],
+    "b-unknown-major-uses-the-16-pins": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "empty-pin-table",
+    ],
+    "c-rewrite-rule-check-removed": [
+        "rewrite-rule",
+        "counts-unreadable-fails-closed",
+    ],
+    "c-unreadable-counts-pass": [
+        "counts-unreadable-fails-closed",
+    ],
+    "d-policy-check-removed": [
+        "policy-row",
+        "counts-unreadable-fails-closed",
+    ],
+    "d-row-security-check-removed": [
+        "row-security-enabled",
+        "row-security-forced",
+        "row-security-forced-and-enabled",
+    ],
+    "d-relforcerowsecurity-ignored": [
+        "row-security-forced",
+    ],
+    "d-relrowsecurity-ignored": [
+        "row-security-enabled",
+    ],
+    "d-both-flags-needed": [
+        "row-security-enabled",
+        "row-security-forced",
+    ],
+    "e-inheritance-check-removed": [
+        "inheritance-parent",
+        "inheritance-child",
+        "counts-unreadable-fails-closed",
+    ],
+    "e-inherits-child-side-ignored": [
+        "inheritance-child",
+    ],
+    "e-inherits-parent-side-ignored": [
+        "inheritance-parent",
+    ],
+    "f-persistence-check-removed": [
+        "unlogged-table",
+        "temporary-table",
+    ],
+    "f-unlogged-accepted": [
+        "unlogged-table",
+    ],
+    "f-temporary-accepted": [
+        "temporary-table",
+    ],
+    "g-table-owner-check-removed": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "wrong-table-owner",
+    ],
+    "g-public-owner-check-removed": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "wrong-public-owner",
+        "public-owned-by-a-database-owner-who-is-not-expected",
+    ],
+    "g-database-owner-form-not-accepted": [
+        "public-owned-by-the-database-owner",
+        "public-owned-by-the-database-owner-false-path",
+    ],
+    "g-any-database-owner-accepted": [
+        "public-owned-by-a-database-owner-who-is-not-expected",
+    ],
+    "g-owner-paths-swapped": [
+        "pristine-false-path",
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "public-owned-by-the-database-owner-false-path",
+    ],
+    "g-unreadable-table-not-reported": [
+        "table-unreadable",
+    ],
+    "t-type-bits-subset-accepted": [
+        "tgtype-truncate-guard-is-per-row",
+        "tgtype-instead-bit-set-only",
+        "tgtype-extra-event-bit-only",
+    ],
+    "t-only-the-event-bits-compared": [
+        "tgtype-insert-guard-is-after",
+        "tgtype-truncate-guard-is-per-row",
+        "tgtype-truncate-bit-missing-only",
+        "tgtype-instead-bit-set-only",
+        "tgtype-row-bit-missing-only",
+        "tgtype-before-bit-missing-only",
+    ],
+    "t-truncate-bit-ignored": [
+        "tgtype-truncate-bit-missing-only",
+        "tgtype-instead-bit-set-only",
+    ],
+    "t-type-compared-by-size": [
+        "tgtype-insert-guard-fires-on-update",
+        "tgtype-truncate-guard-is-per-row",
+        "tgtype-instead-bit-set-only",
+        "tgtype-extra-event-bit-only",
+        "wrong-type-and-wrong-shape-give-both-problems",
+    ],
+    "t-instead-bit-ignored": [
+        "tgtype-instead-bit-set-only",
+    ],
+    "t-missing-type-pin-not-reported": [
+        "no-trigger-type-pins",
+        "trigger-type-pin-missing-for-one-trigger",
+        "missing-type-pin-fails-closed-even-for-a-wrong-type",
+    ],
+    "t-missing-type-pin-is-a-pass": [
+        "no-trigger-type-pins",
+        "trigger-type-pin-missing-for-one-trigger",
+        "missing-type-pin-fails-closed-even-for-a-wrong-type",
+    ],
+    "t-missing-type-pin-defaults-to-insert": [
+        "no-trigger-type-pins",
+        "trigger-type-pin-missing-for-one-trigger",
+        "missing-type-pin-fails-closed-even-for-a-wrong-type",
+    ],
+    "s-when-clause-not-checked": [
+        "when-clause-on-an-insert-guard",
+        "when-clause-on-a-truncate-guard",
+        "wrong-type-and-wrong-shape-give-both-problems",
+    ],
+    "s-column-list-not-checked": [
+        "update-of-column-list",
+    ],
+    "s-arguments-not-checked": [
+        "trigger-arguments",
+    ],
+    "s-deferrable-not-checked": [
+        "deferrable-trigger",
+    ],
+    "s-constraint-trigger-not-checked": [
+        "constraint-trigger",
+    ],
+    "s-old-transition-table-not-checked": [
+        "transition-table-old",
+    ],
+    "s-new-transition-table-not-checked": [
+        "transition-table-new",
+    ],
+    "s-both-transition-tables-not-checked": [
+        "transition-table-old",
+        "transition-table-new",
+    ],
+    "s-two-shape-checks-not-made": [
+        "when-clause-on-an-insert-guard",
+        "when-clause-on-a-truncate-guard",
+        "update-of-column-list",
+        "wrong-type-and-wrong-shape-give-both-problems",
+    ],
+}
+
+
 # condition 11 (shape pins, sequence, functions, SECURITY DEFINER wrappers, table and column ACLs)
 SEQ_ACL_SQL = '        "WHERE x.grantee <> c.relowner) "'
 SEQ_OWNER_SQL = (
@@ -352,7 +574,23 @@ CONDITION_11_MUTATIONS = [
         id="k-unknown-major-uses-the-16-shape-pins",
     ),
     pytest.param(
-        "        if shape_pin is None:", "        if False:", id="k-missing-shape-pin-quiet"
+        "        elif shape_pin is None:", "        elif False:", id="k-missing-shape-pin-quiet"
+    ),
+    # (f) a row that cannot be serialised
+    pytest.param(
+        "        if digest == SHAPE_UNREADABLE:",
+        "        if False:",
+        id="k-unreadable-shape-compared-as-a-digest",
+    ),
+    pytest.param(
+        "                except (TypeError, ValueError):",
+        "                except KeyError:",
+        id="k-unserialisable-shape-row-crashes",
+    ),
+    pytest.param(
+        '                    unreadable.add(f"{row[0]}.{aspect}")\n                    continue',
+        "                    continue",
+        id="k-unserialisable-shape-row-skipped",
     ),
     pytest.param(
         "        shape_pin = pins.get(key)",
@@ -471,25 +709,262 @@ CONDITION_11_MUTATIONS = [
     pytest.param(
         "        if columns_ok is not True:", "        if False:", id="k-column-acl-quiet"
     ),
+    # 11.5 INSERT grantees: kb_status_events column-level only, one inserter at most
+    pytest.param(
+        "    if len({r[1] for r in inserts}) > 1:",
+        "    if False:",
+        id="k-second-inserter-allowed",
+    ),
+    pytest.param(
+        "    if len({r[1] for r in inserts}) > 1:",
+        "    if len({r[1] for r in inserts}) > 2:",
+        id="k-two-other-inserters-allowed",
+    ),
+    pytest.param(
+        "    if len({r[1] for r in inserts}) > 1:",
+        "    if len({(r[0], r[1]) for r in inserts}) > 3:",
+        id="k-inserters-counted-per-table",
+    ),
+    pytest.param(
+        "    if any(str(r[0]) == _KB_COLUMN_INSERT_ONLY and r[2] is not True for r in inserts):",
+        "    if False:",
+        id="k-events-table-insert-allowed",
+    ),
+    pytest.param(
+        '_KB_COLUMN_INSERT_ONLY = "kb_status_events"',
+        '_KB_COLUMN_INSERT_ONLY = "kb_chunks"',
+        id="k-column-only-rule-on-the-wrong-table",
+    ),
+    pytest.param(
+        '        "pg_catalog.aclexplode(a.attacl) x "\n        "WHERE s.nspname',
+        '        "pg_catalog.aclexplode(NULL::aclitem[]) x "\n        "WHERE s.nspname',
+        id="k-column-inserters-not-read",
+    ),
+    pytest.param(
+        '        "SELECT c.relname, x.grantee, true FROM pg_catalog.pg_class c "',
+        '        "SELECT c.relname, x.grantee, false FROM pg_catalog.pg_class c "',
+        id="k-column-inserts-read-as-table-level",
+    ),
+    pytest.param(
+        '_KB_INSERT = "INSERT"', '_KB_INSERT = "SELECT"', id="k-inserters-read-as-selecters"
+    ),
+    pytest.param(
+        "    inserts = [r for r in inserts if str(r[0]) in KNOWLEDGE_TABLES]\n",
+        "    inserts = [r for r in inserts if str(r[0]) == 'kb_chunks']\n",
+        id="k-inserters-only-on-one-table",
+    ),
 ]
+
+# The exact scenarios that catch each narrow mutation: a narrow mutation must be caught by the
+# scenarios written for it, not only as a side effect (a broad one breaks the pristine scenarios).
+CONDITION_11_CATCHERS: dict[str, list[str]] = {
+    "k-other-tables-not-filtered": [
+        "row-of-another-table-is-ignored",
+    ],
+    "k-unknown-major-uses-the-16-shape-pins": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "no-shape-pins",
+    ],
+    "k-missing-shape-pin-quiet": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "no-shape-pins",
+        "shape-pin-missing-for-one-key",
+    ],
+    "k-unreadable-shape-compared-as-a-digest": [
+        "shape-row-not-serialisable",
+    ],
+    "k-unserialisable-shape-row-crashes": [
+        "shape-row-not-serialisable",
+    ],
+    "k-unserialisable-shape-row-skipped": [
+        "shape-row-not-serialisable",
+    ],
+    "k-missing-shape-pin-is-a-pass": [
+        "no-pin-for-major-15",
+        "no-pin-for-major-18",
+        "no-shape-pins",
+        "shape-pin-missing-for-one-key",
+    ],
+    "k-missing-sequence-is-a-pass": [
+        "sequence-missing",
+    ],
+    "k-sequence-parameters-not-compared": [
+        "sequence-type",
+        "sequence-start",
+        "sequence-increment-negative",
+        "sequence-maximum",
+        "sequence-minimum",
+        "sequence-cache",
+        "sequence-cycle",
+        "sequence-unlogged",
+    ],
+    "k-sequence-persistence-not-compared": [
+        "sequence-unlogged",
+    ],
+    "k-sequence-only-negative-increment-refused": [
+        "sequence-type",
+        "sequence-start",
+        "sequence-maximum",
+        "sequence-minimum",
+        "sequence-cache",
+        "sequence-cycle",
+        "sequence-unlogged",
+    ],
+    "k-sequence-owner-not-checked": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "sequence-wrong-owner",
+    ],
+    "k-sequence-acl-not-checked": [
+        "sequence-granted-to-another-role",
+        "sequence-granted-to-public",
+    ],
+    "k-sequence-owner-sql-removed": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "sequence-wrong-owner",
+    ],
+    "k-function-owner-quiet": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "function-wrong-owner",
+    ],
+    "k-function-acl-quiet": [
+        "function-executable-by-another-role",
+        "function-executable-by-public-null-acl",
+    ],
+    "k-function-owner-sql-removed": [
+        "current-user-path-uses-current-user",
+        "false-path-uses-the-assessments-owner",
+        "false-path-without-assessments-owner",
+        "function-wrong-owner",
+    ],
+    "k-null-proacl-accepted": [
+        "function-executable-by-public-null-acl",
+    ],
+    "k-definer-check-removed": [
+        "security-definer-wrapper",
+        "security-definer-owner-membership-unknown",
+        "security-definer-count-unreadable",
+    ],
+    "k-unreadable-definer-count-passes": [
+        "security-definer-count-unreadable",
+    ],
+    "k-unknown-membership-not-counted": [
+        "security-definer-owner-membership-unknown",
+    ],
+    "k-table-update-allowed": [
+        "table-privilege-beyond-select-insert",
+    ],
+    "k-column-update-allowed": [
+        "column-privilege-beyond-insert",
+    ],
+    "k-column-select-allowed": [
+        "column-select-privilege",
+    ],
+    "k-table-public-allowed": [
+        "table-privilege-to-public",
+    ],
+    "k-table-grant-option-allowed": [
+        "table-privilege-with-grant-option",
+    ],
+    "k-column-public-allowed": [
+        "column-privilege-to-public",
+    ],
+    "k-column-grant-option-allowed": [
+        "column-privilege-with-grant-option",
+    ],
+    "k-column-privilege-not-compared": [
+        "column-privilege-beyond-insert",
+        "column-select-privilege",
+    ],
+    "k-table-acl-quiet": [
+        "table-privilege-beyond-select-insert",
+        "table-privilege-to-public",
+        "table-privilege-with-grant-option",
+    ],
+    "k-column-acl-quiet": [
+        "column-privilege-beyond-insert",
+        "column-privilege-to-public",
+        "column-privilege-with-grant-option",
+        "column-select-privilege",
+    ],
+    "k-second-inserter-allowed": [
+        "column-privilege-to-public",
+        "status-events-table-level-insert-by-the-app",
+        "second-table-inserter",
+        "second-column-inserter",
+        "second-inserter-on-a-column-of-another-table",
+        "two-roles-split-the-insert-grants",
+    ],
+    "k-two-other-inserters-allowed": [
+        "column-privilege-to-public",
+        "status-events-table-level-insert-by-the-app",
+        "second-table-inserter",
+        "second-column-inserter",
+        "second-inserter-on-a-column-of-another-table",
+        "two-roles-split-the-insert-grants",
+    ],
+    "k-inserters-counted-per-table": [
+        "two-roles-split-the-insert-grants",
+    ],
+    "k-events-table-insert-allowed": [
+        "status-events-table-level-insert",
+        "status-events-table-level-insert-by-the-app",
+    ],
+    "k-column-inserters-not-read": [
+        "column-privilege-to-public",
+        "second-column-inserter",
+        "second-inserter-on-a-column-of-another-table",
+    ],
+    "k-inserters-only-on-one-table": [
+        "status-events-table-level-insert",
+        "status-events-table-level-insert-by-the-app",
+        "second-column-inserter",
+        "second-inserter-on-a-column-of-another-table",
+        "two-roles-split-the-insert-grants",
+    ],
+}
+
+
+def test_every_catcher_entry_names_a_real_mutation() -> None:
+    """A renamed mutation id would otherwise silently drop its exact-catcher check."""
+    assert set(CONDITION_11_CATCHERS) <= {p.id for p in CONDITION_11_MUTATIONS}
+    assert set(KNOWLEDGE_CATCHERS) <= {p.id for p in KNOWLEDGE_MUTATIONS}
+    assert all(CONDITION_11_CATCHERS.values()) and all(KNOWLEDGE_CATCHERS.values())
 
 
 @pytest.mark.parametrize(("old", "new"), CONDITION_11_MUTATIONS)
-def test_mutation_of_the_condition_11_checks_is_caught_by_a_scenario(old: str, new: str) -> None:
+def test_mutation_of_the_condition_11_checks_is_caught_by_a_scenario(
+    request: pytest.FixtureRequest, old: str, new: str
+) -> None:
     real = fake.failing_scenarios(migrations)
     mutant = mutated_module(migrations, (old, new))
     caught = fake.failing_scenarios(mutant)
     assert real == []
     assert caught != [], "no scenario noticed the mutation"
+    mutation_id = request.node.callspec.id
+    if mutation_id in CONDITION_11_CATCHERS:
+        assert sorted(caught) == sorted(CONDITION_11_CATCHERS[mutation_id]), caught
 
 
 @pytest.mark.parametrize(("old", "new"), KNOWLEDGE_MUTATIONS)
-def test_mutation_of_knowledge_problems_is_caught_by_a_scenario(old: str, new: str) -> None:
+def test_mutation_of_knowledge_problems_is_caught_by_a_scenario(
+    request: pytest.FixtureRequest, old: str, new: str
+) -> None:
     real = fake.failing_scenarios(migrations)
     mutant = mutated_module(migrations, (old, new))
     caught = fake.failing_scenarios(mutant)
     assert real == []
     assert caught != [], "no scenario noticed the mutation"
+    mutation_id = request.node.callspec.id
+    if mutation_id in KNOWLEDGE_CATCHERS:
+        assert sorted(caught) == sorted(KNOWLEDGE_CATCHERS[mutation_id]), caught
 
 
 def test_mutation_the_wrong_table_check_is_noticed_only_by_its_own_scenario() -> None:

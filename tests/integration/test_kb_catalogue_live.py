@@ -129,6 +129,7 @@ class Scratch:
                 "db": _ident(self.database),
                 "me": _ident(str(me_row[0])),
                 "other": _ident(OTHER),
+                "loader": _ident(LOADER),
             }
             for raw in statements:
                 if raw.startswith("@comment:"):
@@ -742,6 +743,22 @@ BREAKS = [
         ("GRANT UPDATE (title) ON public.kb_documents TO {other}",),
         [fake.column_acl("kb_documents")],
     ),
+    # 11.5 INSERT: only the loader, and on kb_status_events through its column grant only
+    Break(
+        "column-insert-granted-to-a-second-role",
+        ("GRANT INSERT (status) ON public.kb_status_events TO {other}",),
+        [fake.MANY_INSERTERS],
+    ),
+    Break(
+        "table-insert-granted-to-a-second-role",
+        ("GRANT INSERT ON public.kb_chunks TO {other}",),
+        [fake.MANY_INSERTERS],
+    ),
+    Break(
+        "status-events-table-level-insert-for-the-loader",
+        ("GRANT INSERT ON public.kb_status_events TO {loader}",),
+        [fake.EVENTS_TABLE_INSERT],
+    ),
 ]
 BREAK_IDS = [b.id for b in BREAKS]
 
@@ -752,8 +769,13 @@ ACCEPTED = [
     ),
     Break("public-owned-by-the-owner-directly", ("ALTER SCHEMA public OWNER TO {me}",), []),
     Break(
-        "column-insert-granted",  # the loader's own form of grant on kb_status_events
-        ("GRANT INSERT (status) ON public.kb_status_events TO {other}",),
+        "the-loaders-own-insert-grants-moved-to-one-other-role",
+        (
+            "REVOKE INSERT ON public.kb_documents, public.kb_chunks FROM {loader}",
+            "REVOKE INSERT ON public.kb_status_events FROM {loader}",
+            "GRANT INSERT ON public.kb_documents, public.kb_chunks TO {other}",
+            "GRANT INSERT (status) ON public.kb_status_events TO {other}",
+        ),
         [],
     ),
     Break(

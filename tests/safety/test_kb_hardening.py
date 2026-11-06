@@ -16,11 +16,14 @@ EQUIVALENT MUTANTS (deliberately not tested):
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from tests.safety.kb_catalogue_fake import (
     Catalog,
     CatalogConnection,
     MigrateConnection,
+    Rows,
     VerifyConnection,
 )
 from tests.safety.kb_fakes import mutated_module
@@ -31,6 +34,10 @@ pytestmark = pytest.mark.safety
 
 SEARCH_PATH = "SET LOCAL search_path = pg_catalog, pg_temp"
 QUOTING = "SET LOCAL quote_all_identifiers = off"
+INTERVALS = "SET LOCAL IntervalStyle = postgres"
+DATES = "SET LOCAL DateStyle = 'ISO, MDY'"
+TIME_ZONE = "SET LOCAL TimeZone = 'UTC'"
+HARDENING = [SEARCH_PATH, QUOTING, INTERVALS, DATES, TIME_ZONE]
 READ_ONLY = "SET LOCAL transaction_read_only = on"
 DSN = "postgresql://never-used/x_test"
 
@@ -44,7 +51,7 @@ def first_read(statements: list[str]) -> int:
 def order_problems(statements: list[str], *, read_only: bool) -> list[str]:
     found = []
     reading = first_read(statements)
-    for wanted in (SEARCH_PATH, QUOTING):
+    for wanted in HARDENING:
         at = [i for i, s in enumerate(statements) if s == wanted]
         if not at or at[0] > reading:
             found.append(f"{wanted!r} is not sent before the first catalogue query")
@@ -119,7 +126,7 @@ def test_the_statements_are_exactly_these_fixed_texts_with_no_value_in_them(
     entries = run_entries(migrations, postgres, monkeypatch)
     for label, (statements, _) in entries.items():
         sets = [s for s in statements if s.startswith("SET LOCAL")]
-        assert set(sets) <= {SEARCH_PATH, QUOTING, READ_ONLY}, label
+        assert set(sets) <= {*HARDENING, READ_ONLY}, label
         assert "%s" not in "".join(sets), label
 
 
@@ -135,10 +142,59 @@ def test_read_only_adds_exactly_the_one_statement() -> None:
     plain, ro = Catalog(), Catalog()
     migrations.knowledge_problems(CatalogConnection(plain), owner_is_current_user=True)
     migrations.knowledge_problems(CatalogConnection(ro), owner_is_current_user=True, read_only=True)
-    assert ro.sequence[:3] == [SEARCH_PATH, QUOTING, READ_ONLY]
-    assert plain.sequence[:2] == [SEARCH_PATH, QUOTING]
+    n = len(HARDENING)
+    assert ro.sequence[: n + 1] == [*HARDENING, READ_ONLY]
+    assert plain.sequence[:n] == HARDENING
     assert READ_ONLY not in plain.sequence
-    assert ro.sequence[3:] == plain.sequence[2:]  # nothing else differs
+    assert ro.sequence[n + 1 :] == plain.sequence[n:]  # nothing else differs
+
+
+def migrate_order_problems(queries: list[str]) -> list[str]:
+    """`migrate()` hardens after the migrations (which keep the session's settings) and before
+    its first post-check (the audit trigger read, which does not name pg_catalog)."""
+    history = max(i for i, q in enumerate(queries) if "INSERT INTO public.schema_migrations" in q)
+    first_check = next(i for i, q in enumerate(queries) if "FROM pg_trigger" in q)
+    found = []
+    for wanted in HARDENING:
+        at = [i for i, q in enumerate(queries) if q == wanted]
+        if not at or at[0] > first_check:
+            found.append(f"{wanted!r} is not sent before migrate's first post-check")
+        elif at[0] < history:
+            found.append(f"{wanted!r} is sent before the migrations run")
+    return found
+
+
+class OnePendingConnection(MigrateConnection):
+    """The last migration is still pending, so `migrate()` runs it before the post-checks."""
+
+    def execute(self, query: Any, params: Any = None) -> Any:
+        if "SELECT version, name, checksum FROM public.schema_migrations" in str(query):
+            self.queries.append(str(query))
+            return Rows([(m.version, m.name, m.checksum) for m in migrations.MIGRATIONS[:-1]])
+        return super().execute(query, params)
+
+
+def migrate_queries(mig: object, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    conn = OnePendingConnection(Catalog())
+    monkeypatch.setattr(migrations.psycopg, "connect", lambda *a, **k: conn)
+    mig.migrate(DSN)  # type: ignore[attr-defined]
+    return conn.queries
+
+
+def test_migrate_hardens_after_the_migrations_and_before_its_post_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries = migrate_queries(migrations, monkeypatch)
+    assert migrations.MIGRATIONS[-1].sql in queries  # the pending migration really ran
+    assert migrate_order_problems(queries) == []
+
+
+def test_the_migrate_checker_notices_hardening_too_early_or_too_late() -> None:
+    history = "INSERT INTO public.schema_migrations (version, name, checksum) VALUES (%s, %s, %s)"
+    check = "SELECT tgname FROM pg_trigger WHERE x"
+    assert migrate_order_problems([history, *HARDENING, check]) == []
+    assert migrate_order_problems([history, check, *HARDENING]) != []
+    assert migrate_order_problems([*HARDENING, history, check]) != []
 
 
 def test_verify_calls_knowledge_problems_with_read_only_true(
@@ -177,14 +233,18 @@ def test_migrate_calls_knowledge_problems_without_read_only(
 def test_the_checker_itself_notices_a_statement_after_the_first_query() -> None:
     late = ["SELECT pg_catalog.current_setting('x')", SEARCH_PATH, QUOTING]
     assert order_problems(late, read_only=False) != []
-    assert order_problems([SEARCH_PATH, QUOTING, "SELECT pg_catalog.x"], read_only=False) == []
-    assert order_problems([SEARCH_PATH, QUOTING, "SELECT pg_catalog.x"], read_only=True) != []
+    assert order_problems([*HARDENING, "SELECT pg_catalog.x"], read_only=False) == []
+    assert order_problems([*HARDENING, "SELECT pg_catalog.x"], read_only=True) != []
+    assert order_problems([SEARCH_PATH, QUOTING, "SELECT pg_catalog.x"], read_only=False) != []
 
 
 # --- mutations of _harden and its callers (copies) ------------------------------------------------
 
 SEARCH_LINE = '    conn.execute("SET LOCAL search_path = pg_catalog, pg_temp")\n'
 QUOTE_LINE = '    conn.execute("SET LOCAL quote_all_identifiers = off")\n'
+INTERVAL_LINE = '    conn.execute("SET LOCAL IntervalStyle = postgres")\n'
+DATE_LINE = """    conn.execute("SET LOCAL DateStyle = 'ISO, MDY'")\n"""
+ZONE_LINE = """    conn.execute("SET LOCAL TimeZone = 'UTC'")\n"""
 RO_LINE = '        conn.execute("SET LOCAL transaction_read_only = on")\n'
 HARDEN_HASHES = "    _harden(conn)\n    major_row"
 HARDEN_TYPES = '    _harden(conn)\n    rows = conn.execute(\n        "SELECT t.tgname, t.tgtype'
@@ -194,6 +254,29 @@ MIGRATIONS_MUTATIONS = [
     pytest.param(SEARCH_LINE, "", id="h-search-path-statement-removed"),
     pytest.param(QUOTE_LINE, "", id="h-quote-all-identifiers-statement-removed"),
     pytest.param(RO_LINE, "        pass\n", id="h-read-only-statement-removed"),
+    pytest.param(INTERVAL_LINE, "", id="h-interval-style-statement-removed"),
+    pytest.param(DATE_LINE, "", id="h-date-style-statement-removed"),
+    pytest.param(ZONE_LINE, "", id="h-time-zone-statement-removed"),
+    pytest.param(
+        INTERVAL_LINE,
+        '    conn.execute("SET LOCAL IntervalStyle = iso_8601")\n',
+        id="h-interval-style-iso",
+    ),
+    pytest.param(
+        DATE_LINE,
+        """    conn.execute("SET LOCAL DateStyle = 'German, DMY'")\n""",
+        id="h-date-style-german",
+    ),
+    pytest.param(
+        ZONE_LINE,
+        """    conn.execute("SET LOCAL TimeZone = 'Asia/Kuala_Lumpur'")\n""",
+        id="h-time-zone-local",
+    ),
+    pytest.param(
+        ZONE_LINE,
+        """    conn.execute("SET TimeZone = 'UTC'")\n""",
+        id="h-time-zone-not-local",
+    ),
     pytest.param(
         SEARCH_LINE,
         '    conn.execute("SET search_path = pg_catalog, pg_temp")\n',
@@ -271,6 +354,25 @@ def test_mutation_of_the_verify_hardening_is_caught(
     misses = hardening_misses(migrations, mutant, monkeypatch)
     assert misses != []
     assert not all(m.startswith("crash") for m in misses), "caught only by a crash"
+
+
+MIGRATE_HARDEN = "            _harden(conn)\n            enabled = {"
+MIGRATE_ORDER_MUTATIONS = [
+    pytest.param(MIGRATE_HARDEN, "            enabled = {", id="h-migrate-post-check-not-hardened"),
+    pytest.param(
+        "            pending = plan(",
+        "            _harden(conn)\n            pending = plan(",
+        id="h-migrate-hardens-before-the-migrations",
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new"), MIGRATE_ORDER_MUTATIONS)
+def test_mutation_of_the_migrate_hardening_is_caught(
+    monkeypatch: pytest.MonkeyPatch, old: str, new: str
+) -> None:
+    mutant = mutated_module(migrations, (old, new))
+    assert migrate_order_problems(migrate_queries(mutant, monkeypatch)) != []
 
 
 def test_mutation_the_hardening_moved_after_the_first_query_is_caught(

@@ -45,8 +45,10 @@ _NAME = re.compile(r"[a-z_]+")
 
 
 def _lit(values: tuple[str, ...]) -> str:
-    # built into SQL text: only fixed lower-case names may ever reach it
-    assert all(_NAME.fullmatch(v) for v in values)
+    # built into SQL text: only fixed lower-case names may ever reach it (a raise, not an assert,
+    # so `python -O` keeps the check)
+    if not all(_NAME.fullmatch(v) for v in values):
+        raise ValueError("not a fixed lower-case name")
     return ", ".join(f"'{v}'" for v in values)
 
 
