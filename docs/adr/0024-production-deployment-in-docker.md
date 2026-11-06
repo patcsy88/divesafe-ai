@@ -1395,8 +1395,8 @@ condition; the mutation check is to break the compose file once and watch it fai
   (10) **Unicode version (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14").** The
   reviewed character set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
   `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection), and
-  `docker/Dockerfile` moves to Python 3.14 first (A1 to A7 build list item below). No production
-  load until both are done.
+  `docker/Dockerfile` moves to Python 3.14 first (A1 to A7 build list item below; Dockerfile done 2026-11-06). No
+  production load until both are done.
 - **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
   column with no default could not be added later; it goes into the migration (proposed by
@@ -1533,9 +1533,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection). The
   safety test pins the set on 16.0.0 and, on any other interpreter, asserts that the loader
   refuses (it does not skip). Since 2026-11-06 (owner ruling) the project requires Python 3.14,
-  CI runs 3.14 only and `docker/Dockerfile` is `python:3.14-slim`; the 3.11 leg had failed every
-  load-flow safety test because the loader refused there. Versions are from memory, to be
-  confirmed by running. A6 gate (7) was re-reviewed
+  CI runs 3.14 only and `docker/Dockerfile` is `python:3.14-slim`; the 3.11 leg had failed 111
+  load-flow safety tests because the loader refused there. Local Python 3.14.10 reports
+  `unidata_version` 16.0.0; the image's interpreter is not checked directly (CI does not build the
+  image). A6 gate (7) was re-reviewed
   2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
   look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261; U+A78B
   and U+A78C imitate an apostrophe instead; see A6). Escaping non-ASCII as `\uXXXX` is transport
@@ -1831,6 +1832,17 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   once one is chosen.
 - **Base images float.** `python:3.14-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
+- **CI and supply chain (security review, 2026-11-06):** CI does not build `docker/Dockerfile`, so
+  a missing `cp314` wheel or the image's `unidata_version` is not checked there; Python
+  dependencies are not audited (`pip-audit`); actions are pinned by tag (`@v7`), not commit SHA;
+  `npm ci` runs install scripts before `npm audit`, and the audit uses the live advisory database
+  (CI can turn red with no code change). The base-image pin test asserts the exact tag, so pinning a
+  digest later needs another owner-approved safety-test change.
+- **Next.js 16.4.0 exposure (fixed in 16.4.5, 2026-11-06):** the web app's `login` server action is
+  callable before sign-in, so a 16.4.0 instance was exposed to the Server Actions DoS
+  (GHSA-p3m5-59mp-jv5r); images are unoptimised and `use cache` is unused, so the two RCE
+  advisories very likely did not apply (not proven). Any running 16.4.0 instance must be
+  redeployed. The production compose has no web service.
 - **Not run:** a complete first run (one assessment went through; see condition 1 for what was and
   was not seen), the 30-day certificate
   renewal, and the stack on Linux (the run was on Docker Desktop for macOS, where file ownership

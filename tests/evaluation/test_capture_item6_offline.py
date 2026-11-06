@@ -272,6 +272,45 @@ def test_a_path_differing_only_by_case_inside_the_repo_is_refused() -> None:
         cap.check_output_dir(upper)
 
 
+def _case_insensitive_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Runs on every system: `repo` and `REPO` are made to behave as one directory, as they are
+    on a case-insensitive volume, by making `samefile` compare casefolded paths."""
+    repo, upper = tmp_path / "repo", tmp_path / "REPO"
+    repo.mkdir()
+    upper.mkdir(exist_ok=True)  # already the same directory on a case-insensitive volume
+    (upper / "out").mkdir(exist_ok=True)
+
+    def samefile(a: object, b: object) -> bool:
+        return str(Path(str(a)).resolve()).casefold() == str(Path(str(b)).resolve()).casefold()
+
+    monkeypatch.setattr(cap.os.path, "samefile", samefile)
+    return repo, upper / "out"
+
+
+def test_the_case_only_check_compares_files_not_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, inside = _case_insensitive_volume(tmp_path, monkeypatch)
+    with pytest.raises(cap.CaptureRefused, match="inside the repository"):
+        cap.check_output_dir(inside, repo=repo)
+
+
+def test_mutation_a_text_comparison_misses_the_case_only_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.safety.kb_fakes import mutated_module
+
+    mutant = mutated_module(
+        cap,
+        (
+            "if candidate.exists() and os.path.samefile(candidate, root):",
+            "if candidate.exists() and str(candidate) == str(root):",
+        ),
+    )
+    repo, inside = _case_insensitive_volume(tmp_path, monkeypatch)
+    assert mutant.check_output_dir(inside, repo=repo) == inside.resolve()
+
+
 def test_an_existing_file_as_the_output_directory_is_refused(tmp_path: Path) -> None:
     plain = tmp_path / "not-a-dir"
     plain.write_text("x", encoding="utf-8")

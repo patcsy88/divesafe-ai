@@ -635,7 +635,8 @@ UNICODE_MESSAGE = "the loader needs the reviewed Python Unicode data"
 
 def test_the_accepted_non_ascii_set_is_pinned_by_version_count_and_hash() -> None:
     """Widening the accepted set needs ADR review. On another Unicode version the set is not
-    compared; the runtime refusal is asserted instead (so CI on 3.11 still proves the control)."""
+    compared; the runtime refusal is asserted instead. CI runs 3.14 only; the refusal on other
+    versions is proven by the tests below that patch `unidata_version`."""
     assert kb_screen.REVIEWED_UNIDATA_VERSION == PINNED_UNIDATA_VERSION
     check_pinned_set(kb_screen)
 

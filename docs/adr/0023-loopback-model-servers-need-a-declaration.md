@@ -240,8 +240,9 @@ plan and evidence data left the machine. The address cannot show where the promp
   IPv4-mapped conversion in `is_loopback` changes nothing on Python 3.14.8 or 3.11.17 (checked on
   2026-10-18 in a throwaway environment: the 63 loopback and egress tests pass with and without
   it). Both standard libraries already treat `::ffff:127.0.0.1` as loopback inside
-  `IPv6Address.is_loopback`, so the conversion is redundant there. **Python 3.12 (the container
-  image) and 3.13 were not tested.** An earlier note said CI's 3.11 would catch it; that was
+  `IPv6Address.is_loopback`, so the conversion is redundant there. **Python 3.12 and 3.13 were not
+  tested.** Since 2026-11-06 the project requires Python 3.14 and the container image is
+  `python:3.14-slim`, so the image's minor version is the one checked (patch release not checked). An earlier note said CI's 3.11 would catch it; that was
   wrong for the patch release tested. Which patch releases lack the standard-library handling was
   not checked. Without the conversion a mapped loopback address would be refused, which fails
   closed, and a mapped non-loopback address is refused on every version checked. The
