@@ -135,7 +135,7 @@ the most severe of every rule result, including any `supervisor.<check>` result.
 
 ## Technology
 
-Python 3.11+, FastAPI, Pydantic v2, PostgreSQL (+ pgvector for RAG), pytest, Docker Compose,
+Python 3.14+, FastAPI, Pydantic v2, PostgreSQL (+ pgvector for RAG), pytest, Docker Compose,
 stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 `divesafe.models.LLMProvider` ([ADR 0002](adr/0002-llm-provider-abstraction.md)).
 

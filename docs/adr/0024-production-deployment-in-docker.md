@@ -1532,9 +1532,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
   `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection). The
   safety test pins the set on 16.0.0 and, on any other interpreter, asserts that the loader
-  refuses (it does not skip). CI runs Python 3.11 (Unicode 14.0.0) and 3.14 (16.0.0), so the 3.11
-  leg cannot run the knowledge-set pin and relies on the refusal assertion;
-  `docker/Dockerfile` is `python:3.12-slim` (Unicode 15.0.0). Versions are from memory, to be
+  refuses (it does not skip). Since 2026-11-06 (owner ruling) the project requires Python 3.14,
+  CI runs 3.14 only and `docker/Dockerfile` is `python:3.14-slim`; the 3.11 leg had failed every
+  load-flow safety test because the loader refused there. Versions are from memory, to be
   confirmed by running. A6 gate (7) was re-reviewed
   2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
   look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261; U+A78B
@@ -1549,9 +1549,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   ASCII (`kb;abc`, `kb=abc`, `kb/abc`), plus the "and similar" word-list tail. `k_b:` is no
   longer open (underscore is refused).
 - **Amendment 1 build list, REQUIRED before the first production load: move `docker/Dockerfile`
-  from `python:3.12-slim` to Python 3.14** (Unicode 16.0.0; see the runtime control above). Not
-  done now; `docker/` changes wait for A1 to A7. Without it `kb_load` and `approve` refuse in the
-  production image.
+  from `python:3.12-slim` to Python 3.14** (Unicode 16.0.0; see the runtime control above).
+  Done 2026-11-06, ahead of A1 to A7, because `requires-python` became `>=3.14` and the old image
+  could no longer install the package. Only the base image changed. **Safety test change, on the owner's explicit
+  approval (2026-11-06):** the base-image pin in `test_the_image_runs_as_the_unprivileged_user`
+  went from `python:3.12-slim` to `python:3.14-slim`; the test is otherwise unchanged.
 - **Loader attribute checks (ADR 0022 condition 10)** are implemented in slice 1 (committed
   `b1d636f`) and live-tested. Remaining gap: the privilege checks run in separate transactions, and
   `withdraw` checks role names only.
@@ -1827,7 +1829,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **Port binding on older engines.** A port published to `127.0.0.1` was reachable from the local
   network on some older Docker Engine versions (recalled, not checked). State a minimum version
   once one is chosen.
-- **Base images float.** `python:3.12-slim` and `pgvector/pgvector:pg16` are tags, not digests.
+- **Base images float.** `python:3.14-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
 - **Not run:** a complete first run (one assessment went through; see condition 1 for what was and
   was not seen), the 30-day certificate

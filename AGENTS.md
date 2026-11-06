@@ -38,7 +38,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 
 ## 3. Coding standards
 
-- Python >= 3.11, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
+- Python >= 3.14, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
   `frozen=True` and `extra="forbid"` for domain values. Domain values use the `Frozen` base.
 - Configuration only through `Settings`; secrets are `SecretStr`, never logged or committed.
 - Code against `LLMProvider`, never a vendor SDK, outside `models/` adapters.

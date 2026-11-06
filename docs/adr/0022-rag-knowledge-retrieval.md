@@ -822,10 +822,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       reviewed set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse to run
       unless `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any
       connection). The safety test pins the set on 16.0.0 and, on any other interpreter, asserts
-      that the loader refuses (it does not skip). CI runs Python 3.11 (Unicode 14.0.0) and 3.14
-      (16.0.0), so the 3.11 leg cannot run the knowledge-set pin and relies on the refusal
-      assertion; `docker/Dockerfile` is `python:3.12-slim` (Unicode 15.0.0), so it must move to
-      3.14 before the first production load (ADR 0024 Amendment 1 build list). (Interpreter and
+      that the loader refuses (it does not skip). **Update 2026-11-06 (owner ruling):** the 3.11
+      CI leg failed 111 load-flow safety tests, because the loader refused there as designed and
+      those tests expect it to run. The project now requires Python 3.14 (`requires-python`), CI
+      runs 3.14 only, and `docker/Dockerfile` is `python:3.14-slim`. (Interpreter and
       Unicode versions are from memory, to be confirmed by running.) Combining marks are
       refused (the text is precomposed NFC). A second
       check refuses every default-ignorable code point from the
@@ -1431,8 +1431,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **Unicode version gate for the first production load (OWNER-APPROVED 2026-10-24, option
   "runtime check plus 3.14"; ADR 0024 A6 (10)):** `kb_load` and `approve` refuse unless
   `unicodedata.unidata_version == "16.0.0"` (exit 3), the safety test pins the set on 16.0.0 and
-  asserts the refusal elsewhere, and `docker/Dockerfile` moves to Python 3.14 first (not done;
-  docker changes wait for A1 to A7). See decision 13.
+  asserts the refusal elsewhere, and `docker/Dockerfile` moves to Python 3.14 first (done
+  2026-11-06: the project requires Python 3.14). See decision 13.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 

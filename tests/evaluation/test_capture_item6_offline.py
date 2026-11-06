@@ -263,7 +263,9 @@ def test_the_egress_skip_path_returns_a_fixed_message_and_no_configuration(
 def test_a_path_differing_only_by_case_inside_the_repo_is_refused() -> None:
     # On a case-insensitive volume the upper-cased name is the same directory as the repository.
     upper = cap.REPO.parent / cap.REPO.name.upper() / "tests" / "fixtures" / "capture"
-    if not os.path.samefile(cap.REPO, cap.REPO.parent / cap.REPO.name.upper()):
+    upper_root = cap.REPO.parent / cap.REPO.name.upper()
+    # On a case-sensitive volume the upper-cased path usually does not exist at all.
+    if not upper_root.exists() or not os.path.samefile(cap.REPO, upper_root):
         pytest.skip("this volume is case-sensitive; the case-only check has nothing to test")
     assert str(upper) != str(cap.REPO / "tests" / "fixtures" / "capture")
     with pytest.raises(cap.CaptureRefused, match="inside the repository"):

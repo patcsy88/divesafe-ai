@@ -537,7 +537,7 @@ def test_the_image_runs_as_the_unprivileged_user() -> None:
     """Neither service sets `user:`, so the Dockerfile decides: one stage, one USER, and no
     change to the user's groups."""
     instructions = _dockerfile_instructions()
-    assert [x for x in instructions if x.startswith("FROM ")] == ["FROM python:3.12-slim"]
+    assert [x for x in instructions if x.startswith("FROM ")] == ["FROM python:3.14-slim"]
     assert [x for x in instructions if x.startswith("USER ")] == ["USER divesafe"]
     assert "RUN useradd --create-home --uid 10001 divesafe" in instructions
     assert not any("usermod" in x or "groupadd" in x or "adduser" in x for x in instructions)
