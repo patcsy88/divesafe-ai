@@ -269,11 +269,16 @@ NAMES = "names = [record.created_by, record.assigned_decider, *moves]"
 LOAD = "record = _load(assessment_id, principal)\n"
 ASSIGNED = "        _require_assigned(record, principal)\n"
 RUN_SCOPE = "and _in_scope((run.created_by, run.assigned_decider), principal, pending=True)"
+CASEFOLD = 'folded = unicodedata.normalize("NFKC", name.casefold())'
 NAME_CHECK = "if principal.actor.strip().casefold() in {n.strip().casefold() for n in people}:"
 
 
+UNSCOPED = "_load(assessment_id, Principal(principal.actor, principal.roles, principal.key_id))"
+
+
 def _unscoped(text: str) -> str:
-    return text.replace("_load(assessment_id, principal)", "_load(assessment_id)")
+    """The route forgets the caller's groups (`principal` is required, so it cannot be dropped)."""
+    return text.replace("_load(assessment_id, principal)", UNSCOPED)
 
 
 def test_mutation_a_viewer_of_another_group_can_read() -> None:
@@ -399,16 +404,14 @@ def test_mutation_groups_are_ignored_when_reading_one_assessment() -> None:
 def test_mutation_the_evidence_path_is_not_scoped() -> None:
     mutant = _app_mutant(
         "return EvidenceView.of(_load(assessment_id, principal))",
-        "return EvidenceView.of(_load(assessment_id))",
+        _unscoped("return EvidenceView.of(_load(assessment_id, principal))"),
     )
     _, target, rid = _setup(mutant)
     assert _status(target, "fred", rid, "/evidence") == 200
 
 
 def test_mutation_a_group_is_matched_case_sensitively() -> None:
-    mutant = mutated_module(
-        auth_module, ("        names.add(name.casefold())", "        names.add(name)")
-    )
+    mutant = mutated_module(auth_module, (CASEFOLD, 'folded = unicodedata.normalize("NFKC", name)'))
     roles = [r.value for r in frozenset(Role) - {Role.ADMIN}]
     cfg = json.dumps(
         {
@@ -449,3 +452,165 @@ def test_mutation_the_production_warning_is_removed() -> None:
     finally:
         mutant.logger.removeHandler(handler)
     assert not any("no groups" in m for m in records)
+
+
+# --- security review minors (2026-11-06) ----------------------------------------------------------
+
+POST_INIT = 'object.__setattr__(self, "groups", frozenset(n for n in names if n is not None))'
+NFKC = 'name = " ".join(unicodedata.normalize("NFKC", raw).split())'
+CHARSET = "if not all(c.isalnum() or c in _GROUP_PUNCTUATION for c in folded):"
+NON_VIEWER = "visible = principal.actor in (record.created_by, record.assigned_decider)"
+
+
+def test_group_names_are_normalised_and_limited_to_a_plain_charset() -> None:
+    norm = auth_module.normalise_group
+    assert norm("Ｎｏｒｔｈ") == "north"  # fullwidth folds by NFKC
+    assert norm("  North   Team ") == "north team"
+    assert norm("Straße") == "strasse"
+    assert norm("dive-ops_2.a") == "dive-ops_2.a"
+    for bad in ("", "   ", "north\u200b", "nor\u00adth", "a/b", "a:b", "north\x00", "x" * 101):
+        assert norm(bad) is None, repr(bad)
+
+
+def test_a_key_entry_built_by_hand_is_normalised_like_a_parsed_one() -> None:
+    assert KeyEntry("erin", VIEW, frozenset({"Ｎｏｒｔｈ  "})).groups == frozenset({"north"})
+    with pytest.raises(ValueError):
+        KeyEntry("erin", VIEW, frozenset({"north\u200b"}))
+
+
+def test_mutation_a_hand_built_entry_is_not_normalised() -> None:
+    mutant = mutated_module(auth_module, (POST_INIT, "pass"))
+    assert mutant.KeyEntry("erin", VIEW, frozenset({"North"})).groups == frozenset({"North"})
+
+
+def _parse_groups(module: Any, groups: list[str]) -> frozenset[str]:
+    cfg = {"a" * 64: {"actor": "erin", "roles": ["viewer"], "groups": groups}}
+    parsed: frozenset[str] = module.parse_api_key_hashes(json.dumps(cfg))["a" * 64].groups
+    return parsed
+
+
+def test_mutation_group_names_are_not_nfkc_normalised() -> None:
+    mutant = mutated_module(
+        auth_module,
+        (NFKC, 'name = " ".join(raw.split())'),
+        (CASEFOLD, "folded = name.casefold()"),
+        (POST_INIT, "pass"),
+    )
+    assert _parse_groups(auth_module, ["Ｎｏｒｔｈ"]) == frozenset({"north"})
+    assert _parse_groups(mutant, ["Ｎｏｒｔｈ"]) != frozenset({"north"})
+
+
+def test_mutation_inner_whitespace_is_not_collapsed() -> None:
+    mutant = mutated_module(
+        auth_module,
+        (NFKC, 'name = unicodedata.normalize("NFKC", raw).strip()'),
+        (POST_INIT, "pass"),
+    )
+    assert _parse_groups(auth_module, ["north  team"]) == frozenset({"north team"})
+    assert _parse_groups(mutant, ["north  team"]) == frozenset({"north  team"})
+
+
+def test_mutation_the_group_charset_is_not_checked() -> None:
+    mutant = mutated_module(auth_module, (CHARSET, "if False:"), (POST_INIT, "pass"))
+    with pytest.raises(ValueError):
+        _parse_groups(auth_module, ["north\u200b"])
+    assert _parse_groups(mutant, ["north\u200b"]) == frozenset({"north\u200b"})
+
+
+def _mallory() -> tuple[TestClient, TestClient, str]:
+    """mallory may decide but holds no viewer role (only a hand-built entry allows that)."""
+    keys = {**_keys(), _hash("k-mallory"): KeyEntry("mallory", frozenset({Role.DECIDER}))}
+    AUTH["mallory"] = {"Authorization": "Bearer k-mallory"}
+    return _setup(auth=ApiKeyAuthenticator(keys))
+
+
+def test_a_key_without_the_viewer_role_sees_only_what_it_created_or_holds() -> None:
+    client, _, rid = _mallory()
+    for path, body in (
+        ("decision", {"decision": "NO-GO", "rationale": "x"}),
+        ("actual-conditions", {"observations": {}}),
+    ):
+        hidden = client.post(f"/v1/assessments/{rid}/{path}", json=body, headers=AUTH["mallory"])
+        gone = client.post(f"/v1/assessments/{'f' * 32}/{path}", json=body, headers=AUTH["mallory"])
+        assert (
+            (hidden.status_code, hidden.json())
+            == (gone.status_code, gone.json())
+            == (
+                404,
+                gone.json(),
+            )
+        )
+
+
+def test_mutation_a_key_without_the_viewer_role_is_not_scoped() -> None:
+    mutant = _app_mutant(NON_VIEWER, "visible = True")
+    client, _, rid = _mallory()
+    target = TestClient(mutant.create_app(client.app.state.divesafe))  # type: ignore[attr-defined]
+    assert _decide(target, "mallory", rid).status_code == 403  # tells hidden from missing
+
+
+class _Collect(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.getMessage() == "read refused: out of scope":
+            self.records.append(record)
+
+
+def _refusals(module: Any, call: Any) -> list[logging.LogRecord]:
+    """Attached to the module's own logger: `create_app` replaces the root handlers."""
+    handler = _Collect()
+    module.logger.addHandler(handler)
+    try:
+        call()
+    finally:
+        module.logger.removeHandler(handler)
+    return handler.records
+
+
+def test_an_out_of_scope_read_is_logged_with_the_actor_and_key_id() -> None:
+    client, _, rid = _setup()
+    label = auth_module.key_id_of(_hash(KEY_FRED))
+
+    def hidden() -> None:
+        assert _status(client, "fred", rid) == 404
+        assert _status(client, "fred", rid, "/evidence") == 404
+
+    found = _refusals(app_module, hidden)
+    assert [(r.actor, r.caller_label) for r in found] == [("fred", label)] * 2  # type: ignore[attr-defined]
+
+    def not_hidden() -> None:
+        assert _status(client, "fred", "f" * 32) == 404  # missing, not hidden
+        assert _status(client, "erin", rid) == 200
+
+    assert _refusals(app_module, not_hidden) == []
+
+
+def test_mutation_the_out_of_scope_read_is_not_logged() -> None:
+    mutant = _app_mutant('"read refused: out of scope"', '"assessment not found"')
+    _, target, rid = _setup(mutant)
+    assert _refusals(mutant, lambda: _status(target, "fred", rid)) == []
+
+
+def test_the_production_warning_names_the_unscoped_viewer_keys(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from divesafe.config import Settings
+
+    raw = {
+        "a" * 64: {"actor": "opal", "roles": ["viewer"]},
+        "b" * 64: {"actor": "erin", "roles": ["viewer"], "groups": ["north"]},
+        "c" * 64: {"actor": "make", "roles": ["assessor"]},
+    }
+    s = Settings(
+        environment="production", api_key_hashes=json.dumps(raw), llm_provider="openai_compatible"
+    )  # type: ignore[arg-type]
+    with caplog.at_level(logging.WARNING, logger=auth_module.logger.name):
+        auth_module.build_authenticator(s)
+    (warning,) = [r for r in caplog.records if "no groups" in r.getMessage()]
+    assert warning.unscoped_viewers == ["a" * 12]  # type: ignore[attr-defined]
+    from divesafe.config.logging import JsonFormatter
+
+    assert '"unscoped_viewers": ["aaaaaaaaaaaa"]' in JsonFormatter().format(warning)

@@ -130,8 +130,19 @@ choosing the `decider`, can bring in another group. Known gaps: group membership
 actor name (names are unique by casefold), so a reused actor name inherits every past assessment
 held under that name and a change of groups changes who reads old records (never reuse names);
 `/v1/sites` is not scoped (public reference data); there is no list endpoint to scope; an
-out-of-scope 404 is not logged and costs fewer repository reads than a missing id (ids are 128-bit
-random); group names are casefolded only (no Unicode normalisation).
+out-of-scope 404 costs fewer repository reads than a missing id (owner ruling 2026-11-06: kept as a
+gap, ids are 128-bit random).
+
+**Security review minors (2026-11-06):** group names are normalised in `KeyEntry` itself (so a
+hand-built entry matches a parsed one): NFKC, inner whitespace collapsed, casefolded, then only
+letters, digits, space, `.`, `_` and `-` are allowed (owner choice); anything else, such as a
+zero-width or format character, stops start-up. Every out-of-scope 404 logs a warning
+`read refused: out of scope` with the actor and key id (never for a truly missing id). The
+production "viewer key has no groups" warning lists the key ids of those keys. The scope helpers
+now require a principal, and a key without the `viewer` role sees only what it created or holds
+(parsing already refuses a decider or admin without `viewer`, so this guards hand-built entries and
+future roles). Known gap: Unicode letters that look alike but NFKC does not fold (for example
+Cyrillic and Latin `a`) are still different group names.
 
 **Review fixes and rulings (2026-11-06):** the owner ruled that an `admin` key may not also be a
 `decider` (start-up refuses it), so one key cannot move an assessment to itself and decide it. A

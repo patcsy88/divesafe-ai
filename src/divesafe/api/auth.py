@@ -14,6 +14,7 @@ import hmac
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -61,6 +62,13 @@ class KeyEntry:
     actor: str
     roles: frozenset[Role]
     groups: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        # Normalised here too, so an entry built by hand compares like a parsed one.
+        names = {normalise_group(g) for g in self.groups}
+        if None in names:
+            raise ValueError(_FORMAT_ERROR)
+        object.__setattr__(self, "groups", frozenset(n for n in names if n is not None))
 
 
 class Authenticator(Protocol):
@@ -141,18 +149,31 @@ _FORMAT_ERROR = (
 
 _ENTRY_KEYS = {"actor", "roles", "groups"}
 _MAX_GROUPS = 20
+_GROUP_PUNCTUATION = frozenset(" ._-")
+
+
+def normalise_group(raw: str) -> str | None:
+    """NFKC, inner whitespace collapsed, casefolded; letters, digits, space, `.`, `_`, `-` only.
+    None when the name is empty, too long or has any other character."""
+    name = " ".join(unicodedata.normalize("NFKC", raw).split())
+    folded = unicodedata.normalize("NFKC", name.casefold())
+    if not folded or len(folded) > _MAX_ACTOR:
+        return None
+    if not all(c.isalnum() or c in _GROUP_PUNCTUATION for c in folded):
+        return None
+    return folded
 
 
 def _groups(raw: object) -> frozenset[str]:
-    """Group names are compared case-insensitively; at most 20 per key, printable, bounded."""
+    """At most 20 group names per key, each normalised by `normalise_group`."""
     if not isinstance(raw, list) or len(raw) > _MAX_GROUPS:
         raise ValueError(_FORMAT_ERROR)
     names: set[str] = set()
     for item in raw:
-        name = _actor(item) if isinstance(item, str) else None
+        name = normalise_group(item) if isinstance(item, str) else None
         if name is None:
             raise ValueError(_FORMAT_ERROR)
-        names.add(name.casefold())
+        names.add(name)
     return frozenset(names)
 
 
@@ -217,7 +238,13 @@ def build_authenticator(settings: Settings) -> Authenticator:
     if settings.environment == "production" and any(
         Role.VIEWER in e.roles and not e.groups for e in entries.values()
     ):
-        logger.warning("a viewer key has no groups, so it can read every assessment (ADR 0026)")
+        unscoped = sorted(
+            key_id_of(d) for d, e in entries.items() if Role.VIEWER in e.roles and not e.groups
+        )
+        logger.warning(
+            "a viewer key has no groups, so it can read every assessment (ADR 0026)",
+            extra={"unscoped_viewers": unscoped},
+        )
     return ApiKeyAuthenticator(entries)
 
 

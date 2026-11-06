@@ -254,7 +254,19 @@ def create_app(state: AppState | None = None) -> FastAPI:
             or run.assigned_decider == principal.actor
         )
 
-    def _load(assessment_id: str, principal: Principal | None = None) -> AssessmentRecord:
+    def _hidden(assessment_id: str, principal: Principal) -> HTTPException:
+        # Logged so probing shows up; the caller gets exactly the answer for a missing id.
+        logger.warning(
+            "read refused: out of scope",
+            extra={
+                "assessment_id": assessment_id,
+                "actor": principal.actor,
+                "caller_label": principal.key_id,
+            },
+        )
+        return HTTPException(status_code=404, detail="assessment not found")
+
+    def _load(assessment_id: str, principal: Principal) -> AssessmentRecord:
         record = app_state.repository.get(assessment_id)
         if record is None:
             run = app_state.repository.get_run(assessment_id)
@@ -262,7 +274,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 record = app_state.repository.get(assessment_id)  # finished between the reads
                 if record is not None:
                     return _scoped(record, principal)
-            if run is not None and principal is not None and _may_see(run, principal):
+            if run is not None and _may_see(run, principal):
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -271,17 +283,19 @@ def create_app(state: AppState | None = None) -> FastAPI:
                         else "nothing was recorded; this assessment did not finish"
                     ),
                 )
+            if run is not None:
+                raise _hidden(assessment_id, principal)
             raise HTTPException(status_code=404, detail="assessment not found")
         return _scoped(record, principal)
 
-    def _scoped(record: AssessmentRecord, principal: Principal | None) -> AssessmentRecord:
+    def _scoped(record: AssessmentRecord, principal: Principal) -> AssessmentRecord:
         # Unreadable looks exactly like missing, so ids cannot be probed.
-        if (
-            principal is not None
-            and Role.VIEWER in principal.roles
-            and not _record_in_scope(record, principal)
-        ):
-            raise HTTPException(status_code=404, detail="assessment not found")
+        if Role.VIEWER in principal.roles:
+            visible = _record_in_scope(record, principal)
+        else:  # no viewer role: only what this key created or holds
+            visible = principal.actor in (record.created_by, record.assigned_decider)
+        if not visible:
+            raise _hidden(record.id, principal)
         return record
 
     def _require_assigned(record: AssessmentRecord, principal: Principal) -> None:
@@ -478,14 +492,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if viewer:
                 return AssessmentView.of(_scoped(record, principal))
             if record.created_by != principal.actor:
-                raise HTTPException(status_code=404, detail="assessment not found")
+                raise _hidden(assessment_id, principal)
             # A create-only key sees the record as it was created, as a replay does.
             return AssessmentView.withheld(record)
-        if run is None or not (
+        if run is None:
+            raise HTTPException(status_code=404, detail="assessment not found")
+        if not (
             (viewer and _in_scope((run.created_by, run.assigned_decider), principal, pending=True))
             or run.created_by == principal.actor
         ):
-            raise HTTPException(status_code=404, detail="assessment not found")
+            raise _hidden(assessment_id, principal)
         return RunStatusView.of(run)
 
     @app.get("/v1/assessments/{assessment_id}/evidence", tags=["assessments"])

@@ -206,7 +206,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   evaluation-strategy.md); vendor-specific OpenAI and Anthropic adapters are not built, and
   real-model behaviour is largely unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
 - **Contradiction detection** (see [risk-model.md](risk-model.md)).
-- **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
+- **Supply chain:** CI builds the image and checks its Python and Unicode versions, audits Python
+  (`pip-audit`) and npm dependencies, and pins actions by commit SHA (ADR 0024). Still open: image
+  digests, a Python lock file with hashes, an image scan.
 - **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
   instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.

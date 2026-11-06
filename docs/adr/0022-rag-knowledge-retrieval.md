@@ -826,8 +826,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       CI leg failed 111 load-flow safety tests, because the loader refused there as designed and
       those tests expect it to run. The project now requires Python 3.14 (`requires-python`), CI
       runs 3.14 only, and `docker/Dockerfile` is `python:3.14-slim`. Confirmed by running
-      (2026-11-06): local Python 3.14.10 reports `unidata_version` 16.0.0; the CI and image
-      interpreters are confirmed only indirectly, by the load-flow tests passing. A move to a new
+      (2026-11-06): local Python 3.14.10 reports `unidata_version` 16.0.0; the CI `image` job
+      asserts 16.0.0 inside the built image (locally 3.14.10); the CI test interpreter is
+      confirmed indirectly, by the load-flow tests passing. A move to a new
       minor Python (3.15 and later) needs a Unicode review first; `requires-python` does not cap it,
       and on another Unicode version the loader fails closed (exit 3). Combining marks are
       refused (the text is precomposed NFC). A second

@@ -1535,8 +1535,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   refuses (it does not skip). Since 2026-11-06 (owner ruling) the project requires Python 3.14,
   CI runs 3.14 only and `docker/Dockerfile` is `python:3.14-slim`; the 3.11 leg had failed 111
   load-flow safety tests because the loader refused there. Local Python 3.14.10 reports
-  `unidata_version` 16.0.0; the image's interpreter is not checked directly (CI does not build the
-  image). A6 gate (7) was re-reviewed
+  `unidata_version` 16.0.0; since 2026-11-06 the CI `image` job builds `docker/Dockerfile` and
+  asserts Python 3.14, `unidata_version` 16.0.0 and uid 10001 inside it (locally: 3.14.10). A6 gate (7) was re-reviewed
   2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
   look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261; U+A78B
   and U+A78C imitate an apostrophe instead; see A6). Escaping non-ASCII as `\uXXXX` is transport
@@ -1832,12 +1832,18 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   once one is chosen.
 - **Base images float.** `python:3.14-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
-- **CI and supply chain (security review, 2026-11-06):** CI does not build `docker/Dockerfile`, so
-  a missing `cp314` wheel or the image's `unidata_version` is not checked there; Python
-  dependencies are not audited (`pip-audit`); actions are pinned by tag (`@v7`), not commit SHA;
-  `npm ci` runs install scripts before `npm audit`, and the audit uses the live advisory database
-  (CI can turn red with no code change). The base-image pin test asserts the exact tag, so pinning a
-  digest later needs another owner-approved safety-test change.
+- **CI and supply chain (security review, 2026-11-06; partly closed the same day):** CI now builds
+  `docker/Dockerfile` (job `image`) and checks Python 3.14, `unidata_version` 16.0.0 and uid 10001
+  in the image, with no network; runs `pip-audit` 2.10.1 (pinned, CI-only, in its own venv, not a
+  project dependency) on the project's resolved dependencies; pins every action to a full commit SHA
+  (tag in a comment) with `persist-credentials: false`; and runs `npm audit --package-lock-only`
+  before `npm ci --ignore-scripts` (the lock has no package with an install script). Still open:
+  both audits use live advisory databases (CI can turn red with no code change); `pip-audit`
+  checks what CI resolves, not what a later image build resolves (no Python lock file, no hashes);
+  the image is built but not scanned (OS packages) and not published; SHA pins need manual
+  updates (no Dependabot); the `pgvector/pgvector:pg16` service image is a tag. The base-image pin
+  test asserts the exact tag, so pinning a digest later needs another owner-approved safety-test
+  change.
 - **Next.js 16.4.0 exposure (fixed in 16.4.5, 2026-11-06):** the web app's `login` server action is
   callable before sign-in, so a 16.4.0 instance was exposed to the Server Actions DoS
   (GHSA-p3m5-59mp-jv5r); images are unoptimised and `use cache` is unused, so the two RCE
