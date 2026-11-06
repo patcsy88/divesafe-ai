@@ -14,6 +14,8 @@ from divesafe.domain.conditions import (
 from divesafe.domain.lineage import are_independent, can_corroborate
 from divesafe.domain.models import (
     INVARIANT_CHECKS,
+    KNOWLEDGE_ID_PREFIX,
+    MAX_KNOWLEDGE_ITEMS,
     MAX_REASSIGNMENTS,
     SUPERVISOR_RULE_PREFIX,
     ActualConditions,
@@ -23,13 +25,16 @@ from divesafe.domain.models import (
     EvidenceItem,
     Finding,
     HumanDecision,
+    KnowledgeRef,
     Reassignment,
     Recommendation,
+    RecordEgressBasis,
     RuleResult,
     Scenario,
     ScenarioKind,
     SupervisorCheck,
     SupervisorVerdict,
+    knowledge_ref,
     most_severe,
     severity,
     supervisor_rule_id,
@@ -86,6 +91,11 @@ RiskFactor = RuleResult
 PostDiveObservation = ActualConditions
 
 __all__ = [
+    "KNOWLEDGE_ID_PREFIX",
+    "MAX_KNOWLEDGE_ITEMS",
+    "KnowledgeRef",
+    "RecordEgressBasis",
+    "knowledge_ref",
     "FACTOR_METRICS",
     "SUPPORTED_METRICS",
     "Comparison",

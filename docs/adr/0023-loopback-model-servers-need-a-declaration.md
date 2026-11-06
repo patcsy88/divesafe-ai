@@ -7,8 +7,9 @@ commit messages, not in a history section. **Text amended 2026-10-20/21 after ac
 ADR 0022 (typed record fields, the `no_agent_stage` value); acceptance of the decision itself is
 unchanged; not re-accepted.** Amends ADR 0007, 0016 and 0018. Closes the start-up part
 of the gap recorded in ADR 0022 decision 15. **ADR 0022 requires typed record fields `egress_basis`
-and `model_host` (not a string in `model_version`); they are not yet built**, and using the basis
-in the knowledge filter is not done either.
+and `model_host` (not a string in `model_version`); the fields and their validator are built
+(2026-11-06, ADR 0022 condition 7) but no run sets them yet**, and using the basis in the knowledge
+filter is not done either.
 
 > Amendment 2026-11-03: the Ollama adapter was removed (ADR 0016 amendment). Every mention of Ollama
 > below, including "both adapters", the Ollama tests and mutations, is history. The OpenAI-compatible

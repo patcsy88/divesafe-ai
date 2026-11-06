@@ -1722,3 +1722,83 @@ def test_the_database_refuses_a_move_that_rewrites_an_earlier_one_in_place(
                 "reassignments": [rewritten_first, _move("bob", "cara")],
             }
         )
+
+
+_EGRESS_KEYS = ("egress_basis", "model_host", "withheld_knowledge")
+
+
+def _egress_keys_present() -> list[str]:
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    return [k for k in _EGRESS_KEYS if k in stored]
+
+
+def test_a_row_without_the_egress_keys_is_decided_and_given_actuals_without_gaining_them() -> None:
+    """ADR 0022 condition 7: rows written before the egress fields existed stay as they were."""
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    pending = _record()
+    repo.create(pending)
+    old = _base()
+    for key in _EGRESS_KEYS:
+        del old[key]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _egress_keys_present() == []
+    decided = _decided(pending, "alice")
+    repo.replace(pending, decided)
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _egress_keys_present() == []
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and final.egress_basis is None and final.withheld_knowledge == ()
+
+
+def test_a_record_with_withheld_knowledge_round_trips() -> None:
+    from datetime import timedelta
+
+    from tests.conftest import NOW
+
+    from divesafe.domain import (
+        AssessmentRecord,
+        DataCategory,
+        DataKind,
+        EvidenceItem,
+        KnowledgeRef,
+        RecordEgressBasis,
+    )
+
+    item = EvidenceItem(  # SYNTHETIC knowledge item, record form
+        id="kb:site-guide:2:7",
+        category=DataCategory.SITE_INFORMATION,
+        source="kb:site-guide",
+        retrieved_at=NOW,
+        valid_at=NOW,
+        valid_until=NOW + timedelta(days=1),
+        is_forecast=False,
+        data_kind=DataKind.KNOWLEDGE,
+        value={},
+    )
+    base = _record()
+    record = AssessmentRecord.model_validate(
+        {
+            **base.model_dump(),
+            "evidence": [*base.model_dump()["evidence"], item.model_dump()],
+            "egress_basis": "remote_external_opt_in",
+            "model_host": "models.example.org",
+            "withheld_knowledge": [{"document_id": "site-guide", "version": 2, "chunk": 7}],
+        }
+    )
+    repo = _postgres()
+    repo.create(record)
+    decided = _decided(record, "alice")
+    repo.replace(record, decided)
+    assert _egress_keys_present() == list(_EGRESS_KEYS)
+    final = repo.get("r1")
+    assert final == decided
+    assert final is not None and final.egress_basis is RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN
+    assert final.withheld_knowledge == (KnowledgeRef(document_id="site-guide", version=2, chunk=7),)

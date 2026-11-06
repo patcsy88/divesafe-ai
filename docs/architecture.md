@@ -129,7 +129,11 @@ scenarios, explanation, model / ruleset / data versions, the Supervise stage's v
 names and a recommendation only, no dedicated view yet), the per-stage trace (`stages`, ADR 0025
 item 3: one `StageTrace` per executed stage in graph order with outcome, `next_stage`, timing,
 the evidence ids the stage used and fixed issue codes such as `observe.connector_failed:<name>`;
-empty on older records; never prompts, model text or provider error text), human
+empty on older records; never prompts, model text or provider error text), the egress fields
+(ADR 0022 decision 15: `egress_basis`, one of five fixed values; `model_host`, a host name only;
+`withheld_knowledge`, the `kb:` items not sent to a model, by document id, version and chunk; all
+absent on older records and, until the knowledge filter is wired, on new ones; the record refuses
+`kb:` evidence that is not withheld unless the basis is `declared_local`), human
 decision, override rationale, and later actual conditions. `deterministic_recommendation` is
 the most severe of every rule result, including any `supervisor.<check>` result.
 

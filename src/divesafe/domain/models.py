@@ -6,6 +6,8 @@ result, mislabels an override or cites unknown evidence cannot be constructed.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -324,6 +326,73 @@ class SupervisorVerdict(_Frozen):
         return self
 
 
+class RecordEgressBasis(StrEnum):
+    """Why the run's model server could receive a prompt, as stored on the record (ADR 0022
+    decision 15). A superset of `models.egress.EgressBasis`: `no_agent_stage` comes only from the
+    no-provider case and never from `check_egress`. Knowledge may reach a prompt only under
+    `declared_local`."""
+
+    DECLARED_LOCAL = "declared_local"
+    LOOPBACK_EXTERNAL_OPT_IN = "loopback_external_opt_in"
+    REMOTE_EXTERNAL_OPT_IN = "remote_external_opt_in"
+    NONE = "none"
+    NO_AGENT_STAGE = "no_agent_stage"
+
+
+# The bases with no model server, so no host (ADR 0022 decision 15).
+_NO_HOST_BASES: frozenset[RecordEgressBasis] = frozenset(
+    {RecordEgressBasis.NONE, RecordEgressBasis.NO_AGENT_STAGE}
+)
+KNOWLEDGE_ID_PREFIX = "kb:"
+# ADR 0022 decision 6: the strict document id grammar, and version / chunk 1..999999.
+KB_DOCUMENT_ID_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+){0,2}$"
+_KB_DOCUMENT_ID = re.compile(KB_DOCUMENT_ID_PATTERN)
+_KB_NUMBER = re.compile(r"^[1-9][0-9]{0,5}$")
+# ADR 0022 decision 12: at most 20 retrieved chunks per run.
+MAX_KNOWLEDGE_ITEMS = 20
+# A DNS name (as `config.settings._host_set` accepts) or an IP literal, lowercase, no brackets.
+_HOST_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
+
+
+class KnowledgeRef(_Frozen):
+    """One knowledge chunk by id only (document, version, chunk), never by title."""
+
+    document_id: str = Field(max_length=40, pattern=KB_DOCUMENT_ID_PATTERN)
+    version: StrictInt = Field(ge=1, le=999999)
+    chunk: StrictInt = Field(ge=1, le=999999)
+
+
+def knowledge_ref(evidence_id: str) -> KnowledgeRef | None:
+    """The chunk a `kb:<document_id>:<version>:<chunk>` evidence id names, or None for an id
+    outside the reserved `kb:` prefix (compared case-insensitively). Raises `ValueError` for a
+    reserved id that does not follow the decision 6 grammar."""
+    if evidence_id[: len(KNOWLEDGE_ID_PREFIX)].casefold() != KNOWLEDGE_ID_PREFIX:
+        return None
+    parts = evidence_id.split(":")
+    if (
+        len(parts) != 4
+        or parts[0] != "kb"
+        or len(parts[1]) > 40
+        or not _KB_DOCUMENT_ID.fullmatch(parts[1])
+        or not _KB_NUMBER.fullmatch(parts[2])
+        or not _KB_NUMBER.fullmatch(parts[3])
+    ):
+        raise ValueError("a kb: evidence id must be kb:<document_id>:<version>:<chunk>")
+    return KnowledgeRef(document_id=parts[1], version=int(parts[2]), chunk=int(parts[3]))
+
+
+def _valid_host(host: str) -> bool:
+    if len(host) > 253:
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return host == host.lower()
+    return bool(_HOST_NAME.fullmatch(host)) and not host.rsplit(".", 1)[-1].isdigit()
+
+
 class AssessmentRecord(_Frozen):
     """Immutable audit record of one assessment and what the human did with it.
 
@@ -420,6 +489,32 @@ class AssessmentRecord(_Frozen):
             "existed. A failed check is also a `supervisor.<check>` rule result."
         ),
     )
+    egress_basis: RecordEgressBasis | None = Field(
+        default=None,
+        description=(
+            "Why the model server could receive a prompt (ADR 0022 decision 15, ADR 0023). None "
+            "on records made before it existed. Knowledge (`kb:` evidence) may reach a prompt "
+            "only under `declared_local`; under any other value, or None, every knowledge item "
+            "is listed in `withheld_knowledge`."
+        ),
+    )
+    model_host: str | None = Field(
+        default=None,
+        max_length=253,
+        description=(
+            "Host name of the model server only: no scheme, port, path or userinfo. None when "
+            "the basis is `none` or `no_agent_stage`, or the basis is absent."
+        ),
+    )
+    withheld_knowledge: tuple[KnowledgeRef, ...] = Field(
+        default=(),
+        max_length=MAX_KNOWLEDGE_ITEMS,
+        description=(
+            "Knowledge items in the evidence that were NOT sent to a model because of the egress "
+            "basis, by id only (ADR 0022 decision 15). Not `withheld_evidence` (ADR 0008)."
+        ),
+    )
+
     stages: tuple[StageTrace, ...] = Field(
         default=(),
         description=(
@@ -507,6 +602,7 @@ class AssessmentRecord(_Frozen):
 
         self._check_supervisor()
         self._check_stages()
+        self._check_egress()
 
         self._check_reassignments()
         if self.human_decision is not None:
@@ -534,6 +630,36 @@ class AssessmentRecord(_Frozen):
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self
+
+    def _check_egress(self) -> None:
+        """ADR 0022 decision 15, checkable from the record alone: knowledge in a prompt implies
+        `declared_local`. Knowledge here means evidence with a `kb:` id (owner decision
+        2026-11-06); a KNOWLEDGE item without one is not covered (ADR 0022 Known gaps)."""
+        basis, host = self.egress_basis, self.model_host
+        if basis is None or basis in _NO_HOST_BASES:
+            if host is not None:
+                raise ValueError("model_host requires an egress basis with a model server")
+        elif host is None or not _valid_host(host):
+            raise ValueError("model_host must be the model server's host name only")
+
+        knowledge = {ref: e.id for e in self.evidence if (ref := knowledge_ref(e.id)) is not None}
+        if knowledge and basis is None:
+            raise ValueError("a record with knowledge evidence needs an egress basis")
+        withheld = self.withheld_knowledge
+        if len(withheld) != len(set(withheld)):
+            raise ValueError("each withheld knowledge item appears at most once")
+        if set(withheld) - knowledge.keys():
+            raise ValueError("withheld knowledge must name knowledge evidence in the record")
+        if basis is not RecordEgressBasis.DECLARED_LOCAL and knowledge.keys() - set(withheld):
+            raise ValueError("knowledge may reach a prompt only under egress basis declared_local")
+        held_ids = {knowledge[ref] for ref in withheld if ref in knowledge}
+        model_cited = {
+            i for f in (*self.findings, *self.cross_examination_findings) for i in f.evidence_ids
+        }
+        model_cited |= {i for s in self.scenarios for i in s.evidence_ids}
+        model_cited |= set(self.proposal_evidence_ids)
+        if held_ids & model_cited:
+            raise ValueError("withheld knowledge cannot be cited by model output")
 
     @property
     def original_decider(self) -> str | None:

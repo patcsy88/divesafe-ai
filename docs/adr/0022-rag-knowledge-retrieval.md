@@ -967,7 +967,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       same stage as the filter, never later, so the rule can be checked afterwards. Both are
       domain-record changes (decision 14), so `risk-reviewer` and `security-reviewer` are needed.
       The basis does not go into `model_version` (ADR 0023's text now says so): the typed fields
-      are required here and **not yet built**. **Safety invariant, checkable from
+      are required here; **the fields and the validator are built (2026-11-06, condition 7); the
+      filter, the `(provider, basis)` pair and the wiring through `assess_dive` are not**, so no
+      run sets them yet and every new record still has them absent. **Safety invariant, checkable from
       the record alone:** any record whose prompt held knowledge items has `egress_basis` equal to
       `declared_local`; a record with knowledge evidence and `egress_basis` of `no_agent_stage`
       (or any other value) holds only withheld items.
@@ -1445,6 +1447,15 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 
 ## Not solved
 
+- **A KNOWLEDGE item without a `kb:` id is not judged by the record validator** (owner decision
+  2026-11-06, condition 7). It can reach a prompt under any basis and need not be listed in
+  `withheld_knowledge`. Decision 5's connector-stage filter (drop KNOWLEDGE items from every
+  connector but the knowledge connector) is what closes this; until it lands, only `kb:` ids are
+  covered.
+- **The record validator checks the record, not the prompt.** It cannot see whether a withheld
+  item was actually left out of a prompt; that is the filter's job and its tests (decision 15).
+  It does refuse a record in which model output (findings, scenarios, proposal) cites a withheld
+  item.
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
@@ -1596,6 +1607,13 @@ citation guard are later stages.
    `egress_basis` (absent is valid only for records with no knowledge evidence); a knowledge item is
    identified by its KNOWLEDGE kind or a `kb:` id, matched on (document, version, chunk) parsed from
    the id against `withheld_knowledge`; the five-value enum lives in `domain`.
+   **Built 2026-11-06, narrowed by the owner (2026-11-06, "kb: ids only"):** a knowledge item is an
+   evidence item whose id has the reserved `kb:` prefix (compared case-insensitively); such an id
+   must follow the decision 6 grammar or the record is invalid. A KNOWLEDGE-kind item without a
+   `kb:` id is **not** judged (see "Not solved"); the reason is that synthetic KNOWLEDGE items
+   (`tests/safety/test_cross_examination.py`) reach prompts today with no basis. Built in
+   `AssessmentRecord._check_egress` (`RecordEgressBasis`, `KnowledgeRef`, `knowledge_ref` in
+   `domain/models.py`), tested with mutations in `tests/safety/test_record_egress.py`.
 8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
    the over-long line ~88.
 
