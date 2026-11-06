@@ -99,7 +99,7 @@ third-party text; the id pattern matches the API's; extra headers, `object-src '
 - API responses are cast, not validated, and not size-capped.
 - The boundary test is a tripwire: it misses extension-less imports, transitive imports and many
   sinks. No tests for headers, cookie attributes or the action origin check.
-- CI (`web` job: `npm ci`, `npm audit --omit=dev`, typecheck, tests, build on Node 24) has not run on GitHub yet. A new advisory can fail an unrelated change. Not yet run in a container or behind a proxy. Tested against a
+- CI (`web` job: `npm audit --omit=dev --package-lock-only`, a check that no locked package has an install script, `npm ci --ignore-scripts`, typecheck, tests, build on Node 24; see ADR 0024 "CI and supply chain"). It ran green on GitHub from run #62 (2026-11-06). A new advisory can fail an unrelated change. Not yet run in a container or behind a proxy. Tested against a
   fixture-backed API only, not a deployed one.
 
 ## Review changes (risk and security review of the decision pages, 2026-10-11)

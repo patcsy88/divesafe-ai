@@ -293,7 +293,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
         if Role.VIEWER in principal.roles:
             visible = _record_in_scope(record, principal)
         else:  # no viewer role: only what this key created or holds
-            visible = principal.actor in (record.created_by, record.assigned_decider)
+            visible = principal.actor.strip().casefold() in {
+                n.strip().casefold() for n in (record.created_by, record.assigned_decider) if n
+            }
         if not visible:
             raise _hidden(record.id, principal)
         return record

@@ -116,7 +116,8 @@ admin's `key_id`); the old assignee loses the right at once. Migration 5 lets th
 accept exactly one appended move of an undecided row (checksum pinned in
 `REVIEWED_GUARD_MIGRATIONS`, mutation-checked against a real database). The page lists the moves.
 **Built (2026-11-06), item 5:** `groups`. The config entry takes an optional `groups` list (max 20,
-case-insensitive, printable, bounded). A viewer key with groups reads an assessment, its evidence
+case-insensitive, printable, bounded; normalised and charset-limited since, see the security review
+minors below). A viewer key with groups reads an assessment, its evidence
 or a run's status only if it created it, is assigned to it, or shares a group with its creator or
 its assigned decider; otherwise the answer is the same 404 as a missing id. A key with no groups
 reads everything, and production start-up warns while any viewer key has none. Create-only keys are
@@ -136,13 +137,16 @@ gap, ids are 128-bit random).
 **Security review minors (2026-11-06):** group names are normalised in `KeyEntry` itself (so a
 hand-built entry matches a parsed one): NFKC, inner whitespace collapsed, casefolded, then only
 letters, digits, space, `.`, `_` and `-` are allowed (owner choice); anything else, such as a
-zero-width or format character, stops start-up. Every out-of-scope 404 logs a warning
+zero-width, format or control character (refused before whitespace is collapsed, so `\x1f` or
+U+2028 is not turned into a space) or a non-string, stops start-up. Every out-of-scope 404 logs a warning
 `read refused: out of scope` with the actor and key id (never for a truly missing id). The
 production "viewer key has no groups" warning lists the key ids of those keys. The scope helpers
-now require a principal, and a key without the `viewer` role sees only what it created or holds
-(parsing already refuses a decider or admin without `viewer`, so this guards hand-built entries and
-future roles). Known gap: Unicode letters that look alike but NFKC does not fold (for example
-Cyrillic and Latin `a`) are still different group names.
+now require a principal, and a key without the `viewer` role sees only what it created or holds,
+names compared case-insensitively (on `GET`, only what it created, in the withheld view; parsing already refuses a decider or admin without `viewer`, so this guards hand-built entries and
+future roles). Key ids now also appear in logs, so a guessable key could be tested offline against
+its logged 48-bit label by anyone who reads the logs: keys MUST be random 256-bit tokens
+(`secrets.token_urlsafe(32)`, as `.env.example` says). Known gap: Unicode letters that look alike
+but NFKC does not fold (for example Cyrillic and Latin `a`) are still different group names.
 
 **Review fixes and rulings (2026-11-06):** the owner ruled that an `admin` key may not also be a
 `decider` (start-up refuses it), so one key cannot move an assessment to itself and decide it. A

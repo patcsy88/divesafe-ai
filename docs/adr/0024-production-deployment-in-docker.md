@@ -1835,11 +1835,17 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **CI and supply chain (security review, 2026-11-06; partly closed the same day):** CI now builds
   `docker/Dockerfile` (job `image`) and checks Python 3.14, `unidata_version` 16.0.0 and uid 10001
   in the image, with no network; runs `pip-audit` 2.10.1 (pinned, CI-only, in its own venv, not a
-  project dependency) on the project's resolved dependencies; pins every action to a full commit SHA
-  (tag in a comment) with `persist-credentials: false`; and runs `npm audit --package-lock-only`
-  before `npm ci --ignore-scripts` (the lock has no package with an install script). Still open:
-  both audits use live advisory databases (CI can turn red with no code change); `pip-audit`
-  checks what CI resolves, not what a later image build resolves (no Python lock file, no hashes);
+  project dependency, so no ADR of its own) on the runtime dependencies (`[project].dependencies`);
+  pins every action to a full commit SHA (tag in a comment) with `persist-credentials: false`; and
+  runs `npm audit --omit=dev --package-lock-only` before `npm ci --ignore-scripts`, failing if any
+  locked package has an install script (none today). The pip-audit pin and the action SHAs are
+  updated by hand by whoever changes CI, with the reviewers. An `--ignore-vuln` or any other
+  advisory exception needs an ADR note and the owner's approval. Still open: both audits use live
+  advisory databases (CI can turn red with no code change); only runtime dependencies are audited
+  (dev and CI tools such as pytest, mypy, ruff, httpx, typescript, and pip-audit itself, are not);
+  `pip-audit` checks what it resolves at audit time, not the test venv or a later image build (no
+  Python lock file, no hashes); pip-audit's own dependencies are not hash-pinned, so a compromised
+  one could run code in CI (limited by `contents: read` and no saved credentials);
   the image is built but not scanned (OS packages) and not published; SHA pins need manual
   updates (no Dependabot); the `pgvector/pgvector:pg16` service image is a tag. The base-image pin
   test asserts the exact tag, so pinning a digest later needs another owner-approved safety-test

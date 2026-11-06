@@ -459,7 +459,7 @@ def test_mutation_the_production_warning_is_removed() -> None:
 POST_INIT = 'object.__setattr__(self, "groups", frozenset(n for n in names if n is not None))'
 NFKC = 'name = " ".join(unicodedata.normalize("NFKC", raw).split())'
 CHARSET = "if not all(c.isalnum() or c in _GROUP_PUNCTUATION for c in folded):"
-NON_VIEWER = "visible = principal.actor in (record.created_by, record.assigned_decider)"
+NON_VIEWER = "n.strip().casefold() for n in (record.created_by, record.assigned_decider) if n"
 
 
 def test_group_names_are_normalised_and_limited_to_a_plain_charset() -> None:
@@ -470,6 +470,17 @@ def test_group_names_are_normalised_and_limited_to_a_plain_charset() -> None:
     assert norm("dive-ops_2.a") == "dive-ops_2.a"
     for bad in ("", "   ", "north\u200b", "nor\u00adth", "a/b", "a:b", "north\x00", "x" * 101):
         assert norm(bad) is None, repr(bad)
+    for split_as_space in ("north\x1fteam", "north\x85team", "north\u2028team", "north\nteam"):
+        assert norm(split_as_space) is None, repr(split_as_space)  # refused, not made a space
+    with pytest.raises(ValueError):
+        KeyEntry("erin", VIEW, frozenset({1}))  # type: ignore[arg-type]
+
+
+def test_mutation_a_control_character_becomes_a_space() -> None:
+    mutant = mutated_module(
+        auth_module, ('in {"Cc", "Zl", "Zp"} for c in raw):', "in set() for c in raw):")
+    )
+    assert mutant.normalise_group("north\x1fteam") == "north team"
 
 
 def test_a_key_entry_built_by_hand_is_normalised_like_a_parsed_one() -> None:
@@ -517,21 +528,40 @@ def test_mutation_the_group_charset_is_not_checked() -> None:
     assert _parse_groups(mutant, ["north\u200b"]) == frozenset({"north\u200b"})
 
 
-def _mallory() -> tuple[TestClient, TestClient, str]:
-    """mallory may decide but holds no viewer role (only a hand-built entry allows that)."""
-    keys = {**_keys(), _hash("k-mallory"): KeyEntry("mallory", frozenset({Role.DECIDER}))}
-    AUTH["mallory"] = {"Authorization": "Bearer k-mallory"}
-    return _setup(auth=ApiKeyAuthenticator(keys))
+MALLORY = {"Authorization": "Bearer k-mallory"}
+MAKER = {"Authorization": "Bearer k-maker"}
+
+
+def _extra_keys() -> ApiKeyAuthenticator:
+    """mallory may decide but holds no viewer role (only a hand-built entry allows that); maker
+    may only create."""
+    return ApiKeyAuthenticator(
+        {
+            **_keys(),
+            _hash("k-mallory"): KeyEntry("Mallory", frozenset({Role.DECIDER})),
+            _hash("k-maker"): KeyEntry("maker", frozenset({Role.ASSESSOR})),
+        }
+    )
+
+
+def _mallory(module: Any = app_module, decider: str = "bob") -> tuple[TestClient, str]:
+    _, target, rid = _setup(module, decider=decider, auth=_extra_keys())
+    return target, rid
+
+
+def _mallory_decides(client: TestClient, rid: str) -> Any:
+    body = {"decision": "NO-GO", "rationale": "Too risky for this group."}
+    return client.post(f"/v1/assessments/{rid}/decision", json=body, headers=MALLORY)
 
 
 def test_a_key_without_the_viewer_role_sees_only_what_it_created_or_holds() -> None:
-    client, _, rid = _mallory()
+    client, rid = _mallory()
     for path, body in (
         ("decision", {"decision": "NO-GO", "rationale": "x"}),
         ("actual-conditions", {"observations": {}}),
     ):
-        hidden = client.post(f"/v1/assessments/{rid}/{path}", json=body, headers=AUTH["mallory"])
-        gone = client.post(f"/v1/assessments/{'f' * 32}/{path}", json=body, headers=AUTH["mallory"])
+        hidden = client.post(f"/v1/assessments/{rid}/{path}", json=body, headers=MALLORY)
+        gone = client.post(f"/v1/assessments/{'f' * 32}/{path}", json=body, headers=MALLORY)
         assert (
             (hidden.status_code, hidden.json())
             == (gone.status_code, gone.json())
@@ -542,11 +572,23 @@ def test_a_key_without_the_viewer_role_sees_only_what_it_created_or_holds() -> N
         )
 
 
+def test_a_key_without_the_viewer_role_reaches_what_it_holds_whatever_the_case() -> None:
+    client, rid = _mallory(decider="mallory")  # stored as "Mallory"
+    assert _mallory_decides(client, rid).status_code == 200
+
+
 def test_mutation_a_key_without_the_viewer_role_is_not_scoped() -> None:
-    mutant = _app_mutant(NON_VIEWER, "visible = True")
-    client, _, rid = _mallory()
-    target = TestClient(mutant.create_app(client.app.state.divesafe))  # type: ignore[attr-defined]
-    assert _decide(target, "mallory", rid).status_code == 403  # tells hidden from missing
+    target, rid = _mallory(_app_mutant("visible = principal.actor.strip()", "visible = True or ''"))
+    assert _mallory_decides(target, rid).status_code == 403  # tells hidden from missing
+
+
+def test_mutation_a_key_without_the_viewer_role_loses_what_it_holds() -> None:
+    for old, new in (
+        (NON_VIEWER, "n.strip().casefold() for n in (record.created_by,) if n"),
+        ("visible = principal.actor.strip().casefold() in {", "visible = principal.actor in {"),
+    ):
+        target, rid = _mallory(_app_mutant(old, new), decider="mallory")
+        assert _mallory_decides(target, rid).status_code == 404
 
 
 class _Collect(logging.Handler):
@@ -571,7 +613,7 @@ def _refusals(module: Any, call: Any) -> list[logging.LogRecord]:
 
 
 def test_an_out_of_scope_read_is_logged_with_the_actor_and_key_id() -> None:
-    client, _, rid = _setup()
+    _, client, rid = _setup(auth=_extra_keys())
     label = auth_module.key_id_of(_hash(KEY_FRED))
 
     def hidden() -> None:
@@ -580,6 +622,18 @@ def test_an_out_of_scope_read_is_logged_with_the_actor_and_key_id() -> None:
 
     found = _refusals(app_module, hidden)
     assert [(r.actor, r.caller_label) for r in found] == [("fred", label)] * 2  # type: ignore[attr-defined]
+
+    run_client, run_id = _with_a_running_run()
+    run_client.app.state.divesafe.authenticator = _extra_keys()  # type: ignore[attr-defined]
+    maker, made = _mallory()  # alice created it, not maker
+
+    def other_paths() -> None:
+        assert maker.get(f"/v1/assessments/{made}", headers=MAKER).status_code == 404  # create-only
+        assert _status(run_client, "fred", run_id) == 404  # a hidden run's status
+        assert _status(run_client, "fred", run_id, "/evidence") == 404  # a hidden run in _load
+
+    found = _refusals(app_module, other_paths)
+    assert [r.actor for r in found] == ["maker", "fred", "fred"]  # type: ignore[attr-defined]
 
     def not_hidden() -> None:
         assert _status(client, "fred", "f" * 32) == 404  # missing, not hidden

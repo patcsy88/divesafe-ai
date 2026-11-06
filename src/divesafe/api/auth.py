@@ -65,7 +65,7 @@ class KeyEntry:
 
     def __post_init__(self) -> None:
         # Normalised here too, so an entry built by hand compares like a parsed one.
-        names = {normalise_group(g) for g in self.groups}
+        names = {normalise_group(g) if isinstance(g, str) else None for g in self.groups}
         if None in names:
             raise ValueError(_FORMAT_ERROR)
         object.__setattr__(self, "groups", frozenset(n for n in names if n is not None))
@@ -154,7 +154,10 @@ _GROUP_PUNCTUATION = frozenset(" ._-")
 
 def normalise_group(raw: str) -> str | None:
     """NFKC, inner whitespace collapsed, casefolded; letters, digits, space, `.`, `_`, `-` only.
-    None when the name is empty, too long or has any other character."""
+    None when the name is empty, too long or has any other character. A control character is
+    refused before splitting, so `str.split` cannot turn it into a space."""
+    if any(unicodedata.category(c) in {"Cc", "Zl", "Zp"} for c in raw):
+        return None
     name = " ".join(unicodedata.normalize("NFKC", raw).split())
     folded = unicodedata.normalize("NFKC", name.casefold())
     if not folded or len(folded) > _MAX_ACTOR:

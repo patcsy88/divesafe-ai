@@ -95,6 +95,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Known vulnerabilities in runtime dependencies (from the lockfile, before install)
         run: npm audit --omit=dev --package-lock-only
+      - name: No locked package has an install script (a new one needs review, not a silent skip)
+        run: "! grep -q '\"hasInstallScript\"' package-lock.json"
       - name: Install exactly what the lockfile pins, without install scripts
         run: npm ci --ignore-scripts
       - run: npm run typecheck
