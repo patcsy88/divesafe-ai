@@ -204,6 +204,7 @@ def _prepare(conn: psycopg.Connection[Any], document_id: str, version: int) -> N
         "idle_in_transaction_session_timeout",
         require_limit(kb_common.WITHDRAW_IDLE_IN_TRANSACTION_TIMEOUT_MS),
     )
+    conn.execute(kb_common.SYNCHRONOUS_COMMIT)
     # Assumes kb_documents is append-only (triggers refuse UPDATE/DELETE), so a row seen here
     # cannot vanish before the INSERT; the foreign key still decides if that assumption breaks.
     exists = conn.execute(

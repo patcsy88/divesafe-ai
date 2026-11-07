@@ -1651,7 +1651,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   this by passing its own `options` (ADR 0022 Known gaps, "`options`-borne settings"). A
   `-c role=X` needs membership of `X`, which the loader's self-check flags; with the session-role
   check this refuses for `load` and `approve`, but `withdraw` only reports after the commit
-  (exit 13), so its WITHDRAWN event is written as `X`. Its timeouts are `SET LOCAL`. The `kb_load` settings model should pass a fixed `options` the same
+  (exit 13), so its WITHDRAWN event is written with `X`'s privileges. Its timeouts, `search_path`
+  and `synchronous_commit = on` are `SET LOCAL`, so `-c synchronous_commit=off` cannot lose a
+  reported write. Check 17's live test provokes `session_replication_role` through `PGOPTIONS`;
+  it must change when this lands. The `kb_load` settings model should pass a fixed `options` the same
   way, with a live test like the app's.
 - **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
   - **Stored `manifest_sha256` is a client claim**, like `hash_checked`: the database cannot

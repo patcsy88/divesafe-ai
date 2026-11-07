@@ -65,9 +65,10 @@ def check_isolation_first(monkeypatch: pytest.MonkeyPatch, run: Run | None = Non
     lock = fake.index_of("SET LOCAL lock_timeout = 10000")
     statement = fake.index_of("SET LOCAL statement_timeout = 30000")
     idle = fake.index_of("SET LOCAL idle_in_transaction_session_timeout = 10000")
+    sync = fake.index_of("SET LOCAL synchronous_commit = on")
     insert = fake.index_of("INSERT INTO public.kb_status_events")
-    assert iso < lock < statement < idle < insert
-    assert fake.log[iso][0] == fake.log[lock][0] == fake.log[idle][0] == fake.log[insert][0]
+    assert iso < lock < statement < idle < sync < insert
+    assert len({fake.log[i][0] for i in (iso, lock, idle, sync, insert)}) == 1
 
 
 def test_mutation_without_the_idle_in_transaction_timeout_is_caught(
@@ -82,6 +83,13 @@ def test_mutation_without_the_idle_in_transaction_timeout_is_caught(
     )
     with pytest.raises(AssertionError):
         check_isolation_first(monkeypatch, mutant((old, "")))
+
+
+def test_mutation_without_synchronous_commit_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AssertionError):
+        check_isolation_first(
+            monkeypatch, mutant(("    conn.execute(kb_common.SYNCHRONOUS_COMMIT)\n", ""))
+        )
 
 
 def test_read_committed_is_set_before_the_timeouts_and_the_insert(

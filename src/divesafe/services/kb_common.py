@@ -113,6 +113,12 @@ def parse_document_version(args: Sequence[str]) -> tuple[str, int]:
     return args[0], int(args[1])
 
 
+# The loader's connection takes `options` and PGOPTIONS from its environment (ADR 0024 A3), so a
+# `-c synchronous_commit=off` could let a reported write be lost in a crash. Every write
+# transaction sets it back; any role may.
+SYNCHRONOUS_COMMIT = "SET LOCAL synchronous_commit = on"
+
+
 def connect(dsn: str) -> psycopg.Connection[Any]:
     """A plain transaction-mode connection with `connect_timeout` (the keyword wins over any value
     in the string). Timeouts on the server side are SET LOCAL per transaction."""

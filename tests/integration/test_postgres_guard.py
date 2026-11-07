@@ -426,6 +426,7 @@ def app_role_dsn() -> str:
         conn.execute("CREATE ROLE divesafe_app_test LOGIN PASSWORD 'app-test-only'")
     install_schema(DSN, "divesafe_app_test")
     base.update(user="divesafe_app_test", password="app-test-only")
+    base.pop("options", None)  # the options tests below supply their own
     return psycopg.conninfo.make_conninfo(**base)
 
 

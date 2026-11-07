@@ -287,10 +287,11 @@ def test_a_status_event_insert_under_a_stricter_isolation_level_is_refused(
 #  1-3 (owns a knowledge table / table missing), 4-5 (owns the schema / database), 24 (owns a
 #    function): would need an ownership transfer of objects the migration owns; covered offline.
 #  16 is covered by test_temporary_reached_only_through_a_noinherit_role_is_reported below.
-#  17 (session_replication_role other than origin NOW): not provoked here. Since the loader's
-#    connection passes no `options` (ADR 0024 A3), it could be on PG15+ with GRANT SET ON
-#    PARAMETER and PGOPTIONS; once the loader passes a fixed `options`, only the stored setting
-#    (18) can be provoked from outside.
+#  17 (session_replication_role other than origin NOW) is provoked on PostgreSQL 15 and later by
+#    test_a_session_replication_role_set_through_pgoptions_is_reported, through PGOPTIONS, which
+#    reaches the loader only because its connection passes no `options` (ADR 0024 A3). When A3
+#    gives the loader a fixed `options`, that test must change: check 17 then becomes
+#    unprovokable from outside and moves back to this list.
 # The SQL of those checks is therefore not proven against a server by this file.
 
 _X_ROLE = "divesafe_kb_wdextra_test"
@@ -499,6 +500,50 @@ def test_a_loader_that_logs_in_directly_is_not_flagged_for_its_session_role(
     """On every supported major, not only from 15: the session-role check does not fire for a
     loader with no stored role setting (no false refusal)."""
     assert "runs as a different role from its login role" not in _problems(loader_dsn)
+
+
+def test_a_session_replication_role_set_through_pgoptions_is_reported(
+    loader_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check 17 against a real server. Needs PostgreSQL 15 for GRANT SET ON PARAMETER. PGOPTIONS
+    is set only around the loader's own connection."""
+    if _server_version() < 150000:
+        pytest.skip("GRANT ... ON PARAMETER needs PostgreSQL 15")
+    try:
+        _admin(f"GRANT SET ON PARAMETER session_replication_role TO {LOADER}")
+        with monkeypatch.context() as m:
+            m.setenv("PGOPTIONS", "-c session_replication_role=replica")
+            problems = _problems(loader_dsn)
+    finally:
+        _admin(f"REVOKE SET ON PARAMETER session_replication_role FROM {LOADER}")
+    assert "runs with session_replication_role other than origin" in problems
+
+
+def test_withdraw_commits_with_synchronous_commit_on_whatever_pgoptions_says(
+    loader_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`-c synchronous_commit=off` in PGOPTIONS reaches the loader's session (the positive
+    control); the write transaction sets it back before the INSERT, so a reported withdrawal is
+    flushed before it is reported."""
+    did = _fresh_id()
+    _draft(did)
+    seen: list[object] = []
+    original = kb_withdraw._send_insert
+
+    def spy(conn: psycopg.Connection[Any], document_id: str, version: int) -> datetime:
+        seen.append(conn.execute("SHOW synchronous_commit").fetchone())
+        return original(conn, document_id, version)
+
+    monkeypatch.setattr(kb_withdraw, "_send_insert", spy)
+    with monkeypatch.context() as m:
+        m.setenv("PGOPTIONS", "-c synchronous_commit=off")
+        with psycopg.connect(loader_dsn) as plain:
+            control = plain.execute("SHOW synchronous_commit").fetchone()
+        outcome = _withdraw(loader_dsn, did)
+    assert control == ("off",)
+    assert outcome.status in EXACT_OK
+    assert seen == [("on",)]
+    assert [e[0] for e in _events(did)] == ["DRAFT", "WITHDRAWN"]
 
 
 def test_the_parameter_privilege_is_reported_on_postgresql_15_and_later(loader_dsn: str) -> None:

@@ -1605,35 +1605,56 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   is still seen by the superuser check. Re-check on each new PostgreSQL major.
 - **`options`-borne settings (`-c ...`) cannot reach the app's sessions (owner decision
   2026-11-07: no config refusal).** The app's only connection path,
-  `PostgresAssessmentRepository._connect`, passes its own `options` (the two timeouts), and libpq
-  takes that keyword before any `options` in the connection string, in `PGOPTIONS` or in a
-  `service=` entry (probed live: a `work_mem` set in the string or `PGOPTIONS` applied only when
-  the code passed no `options`). So `-c role=...` put there never reaches the server. Other
-  libpq environment variables (`PGAPPNAME`, `PGTZ` and the like) still apply; none can set a
-  role. Pinned in `tests/safety/test_app_connection_options.py`: the repository passes
-  `_OPTIONS` (mutations: `options` dropped, `options=None`); `make_conninfo` replaces a string's
-  `options`; and a source scan finds every `psycopg.connect`, `Connection.connect`,
-  `AsyncConnection.connect` and pool call in `src/` and refuses one without `options` outside a
-  two-entry allow-list (`install_schema`, the loader's `kb_common.connect`), and any
-  `psycopg_pool` import, so a later connection pool cannot quietly bring the DSN's options back.
-  Live: `test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server` in
-  `tests/integration/test_postgres_guard.py` (role granted, both places; a plain connection
+  `PostgresAssessmentRepository._connect`, passes its own `options` (the two timeouts). psycopg
+  merges that keyword over any `options` in the connection string (`make_conninfo`), and libpq
+  takes it before `PGOPTIONS` (both probed live: a `work_mem` set in the string or in
+  `PGOPTIONS` applied only when the code passed no `options`) and, per the libpq documentation
+  (not probed), before a `service=` entry. So `-c role=...` put there never reaches the server.
+  Other libpq environment variables (`PGAPPNAME`, `PGTZ` and the like) still apply; `PGUSER` and
+  `PGSERVICE` can choose the login role when the string omits one, which `verify()` then judges,
+  but none can make `current_user` differ from the login role.
+  **Pinned in `tests/safety/test_app_connection_options.py`:**
+  - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
+  - `make_conninfo` replaces a string's `options`;
+  - a source scan of `src/` finds every `psycopg.connect`, `(Async)Connection.connect`,
+    `psycopg.crdb` and pool call and requires an `options` value that is a non-empty string
+    literal, an f-string or a module-level string constant bound once (a literal `None` or `""`,
+    or any other expression, counts as missing). Outside a two-entry allow-list keyed by
+    qualified function name (`install_schema`, the loader's `kb_common.connect`), each holding
+    exactly one connection, it fails. It also refuses any `psycopg_pool` or `psycopg.crdb`
+    import, `from psycopg import connect`/`Connection`, `import psycopg as <other>`, any use of
+    `psycopg.connect` other than calling it, and any use of `kb_common.connect` outside
+    `kb_load` and `kb_withdraw`. Out of reach (left to code review): `getattr`, `importlib`,
+    `psycopg.pq`, and the owner-role `psql` calls in `docker/`.
+
+  **Live:** `test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server`
+  in `tests/integration/test_postgres_guard.py` (role granted, both places; a plain connection
   without `options` runs as the group, the app's does not; mutation-checked live by dropping
   `options=_OPTIONS`, on 16 and 17). A refusal in `Settings` would add little and would reject
   harmless uses such as `application_name`. A stored `ALTER ROLE ... SET role` or
   `ALTER DATABASE ... SET role` is not affected by `options`; `verify()`'s session-role check
   catches it **at start-up, in production** (`least_privilege`) only. A setting stored after
   start-up applies to every later connection until the next restart; the app never issues one,
-  and the role must already be a member, whose privileges the checks count. **Not covered: the
-  loader.** `kb_common.connect` passes no `options`, so the loader's connection string and
-  `PGOPTIONS` do reach the server. A `-c role=X` needs the loader to be a member of `X`, which
-  the self-check already flags ("is a member of a role other than itself"), and the session-role
-  check names it; both **refuse for `load` and `approve`**, but for `withdraw` they **report
-  after the commit** (exit 13), so the WITHDRAWN event is written as the target role, still
-  through the trigger. Otherwise the gap exposes ordinary user-settable parameters, which either
-  fail closed or are overridden by the `SET LOCAL` timeouts. A fixed `options` for the loader
-  belongs to ADR 0024 A3 (the `kb_load` settings model). The admin connection in
-  `install_schema` passes none either; it is the owner role and needs no protection from itself.
+  and the role must already be a member, whose privileges the checks count.
+  **Not covered: the loader.** `kb_common.connect` passes no `options`, so the loader's
+  connection string and `PGOPTIONS` do reach the server.
+  - A `-c role=X` needs the loader to be a member of `X`, which the self-check already flags
+    ("is a member of a role other than itself"), and the session-role check names it. Both
+    **refuse for `load` and `approve`**, but for `withdraw` they **report after the commit**
+    (exit 13), so the WITHDRAWN event is written with `X`'s privileges, still through the
+    trigger.
+  - `-c session_replication_role=replica` needs `SET` on the parameter (PG15+) and is refused
+    by check 17, now proved live through `PGOPTIONS`.
+  - `-c synchronous_commit=off`, which any role may set, would let a reported write be lost in
+    a crash. Both write transactions now run `SET LOCAL synchronous_commit = on` before the
+    first INSERT (offline order tests with mutations; live for `withdraw` with a positive
+    control, mutation-checked on 16 and 17).
+  - Other user-settable parameters either fail closed or are overridden by the `SET LOCAL`
+    statements (timeouts, `search_path`). A fixed `options` for the loader belongs to ADR 0024
+    A3 (the `kb_load` settings model).
+
+  The admin connection in `install_schema` passes none either; it is the owner role and needs no
+  protection from itself.
 - **The app checks do not look at REPLICATION, BYPASSRLS or CREATEDB**, nor, from PostgreSQL 17,
   at MAINTAIN on `assessments` (granted by `pg_maintain`). MAINTAIN allows `LOCK TABLE`, a denial
   of service (as do `CLUSTER`, `VACUUM FULL` and `REINDEX`, which MAINTAIN also allows), but

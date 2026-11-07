@@ -99,6 +99,7 @@ def check_load_order(fake: LoadFakeConnection) -> None:
     lock_t = fake.position("SET LOCAL lock_timeout = 10000")
     stmt_t = fake.position("SET LOCAL statement_timeout = 30000", lock_t)
     idle_t = fake.position("SET LOCAL idle_in_transaction_session_timeout = 30000")
+    sync = fake.position("SET LOCAL synchronous_commit = on")
     glob = fake.position("(1220002, 0)")
     doc_lock = fake.position("(1220001, 'site-guide')")
     read_t = fake.position("SET LOCAL statement_timeout = 10000")
@@ -108,9 +109,13 @@ def check_load_order(fake: LoadFakeConnection) -> None:
     ins_chunk = fake.position("INSERT INTO public.kb_chunks")
     ins_draft = fake.position("'DRAFT', false")
     commit = fake.position("COMMIT", ins_draft)
-    assert iso < path < lock_t < stmt_t < idle_t < glob < doc_lock < read_t < sites < restored
+    assert (
+        iso < path < lock_t < stmt_t < idle_t < sync < glob < doc_lock < read_t < sites < restored
+    )
     assert restored < ins_doc < ins_chunk < ins_draft < commit
-    txns = {fake.log[i][0] for i in (iso, glob, doc_lock, sites, ins_doc, ins_chunk, ins_draft)}
+    txns = {
+        fake.log[i][0] for i in (iso, sync, glob, doc_lock, sites, ins_doc, ins_chunk, ins_draft)
+    }
     assert len(txns) == 1  # documents, chunks and DRAFT in ONE transaction with the locks
     assert fake.log[commit][1] == "COMMIT"
 
@@ -140,8 +145,9 @@ def test_load_statement_order_and_one_write_transaction(
         ),
         ('sql.Identifier("pg_temp")', 'sql.Identifier("public")'),
         ('sql.Identifier("pg_catalog"), sql.Identifier("pg_temp")', 'sql.Identifier("pg_temp")'),
+        ("    conn.execute(kb_common.SYNCHRONOUS_COMMIT)\n", ""),
     ],
-    ids=["no-idle-timeout", "public-not-pg_temp", "no-pg_catalog"],
+    ids=["no-idle-timeout", "public-not-pg_temp", "no-pg_catalog", "no-synchronous-commit"],
 )
 def test_mutation_in_begin_is_caught_by_the_load_statement_order(
     old: str, new: str, monkeypatch: pytest.MonkeyPatch, env: Env
