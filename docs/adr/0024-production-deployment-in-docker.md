@@ -1648,9 +1648,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The loader's connection takes `options` and `PGOPTIONS` from its environment (A3; recorded
   2026-11-07, not owner-decided).** `kb_common.connect` passes no `options` keyword, so a
   `-c ...` in the loader's connection string or in `PGOPTIONS` reaches the server. The app closes
-  this by passing its own `options` (ADR 0022 Known gaps, "Connection-time settings"); the
-  loader's session-role and `session_replication_role` checks refuse the known bypasses, and its
-  timeouts are `SET LOCAL`. The `kb_load` settings model should pass a fixed `options` the same
+  this by passing its own `options` (ADR 0022 Known gaps, "`options`-borne settings"). A
+  `-c role=X` needs membership of `X`, which the loader's self-check flags; with the session-role
+  check this refuses for `load` and `approve`, but `withdraw` only reports after the commit
+  (exit 13), so its WITHDRAWN event is written as `X`. Its timeouts are `SET LOCAL`. The `kb_load` settings model should pass a fixed `options` the same
   way, with a live test like the app's.
 - **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
   - **Stored `manifest_sha256` is a client claim**, like `hash_checked`: the database cannot

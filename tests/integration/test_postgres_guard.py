@@ -1081,22 +1081,29 @@ def test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the
     app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, where: str
 ) -> None:
     """The app passes its own `options`, which replaces any `options` in the connection string
-    and `PGOPTIONS` (ADR 0022 Known gaps). The group is granted, so without that override the
-    session would really run as the group."""
+    and `PGOPTIONS` (ADR 0022 Known gaps). The positive control proves the smuggled setting does
+    reach a connection without that override, so the test cannot pass because libpq ignored it.
+    `PGOPTIONS` is set only around the two connections, never for the setup or cleanup."""
     group = "divesafe_options_role_group_test"
     smuggled = f"-c role={group}"
     if where == "PGOPTIONS":
-        monkeypatch.setenv("PGOPTIONS", smuggled)
         dsn = app_role_dsn
     else:
         dsn = psycopg.conninfo.make_conninfo(app_role_dsn, options=smuggled)
     app = PostgresAssessmentRepository(dsn)
+    who = "SELECT current_user, session_user"
     _sql(f"DROP ROLE IF EXISTS {group}")
     _sql(f"CREATE ROLE {group} NOLOGIN")
     try:
         _sql(f"GRANT {group} TO divesafe_app_test")
-        with app._connect() as conn:
-            row = conn.execute("SELECT current_user, session_user").fetchone()
+        with monkeypatch.context() as m:
+            if where == "PGOPTIONS":
+                m.setenv("PGOPTIONS", smuggled)
+            with psycopg.connect(dsn) as plain:
+                control = plain.execute(who).fetchone()  # type: ignore[call-overload]
+            with app._connect() as conn:
+                row = conn.execute(who).fetchone()
+        assert control == (group, "divesafe_app_test")
         assert row == ("divesafe_app_test", "divesafe_app_test")
     finally:
         _sql(f"DROP OWNED BY {group}")

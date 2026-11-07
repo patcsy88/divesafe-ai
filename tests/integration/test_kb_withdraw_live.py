@@ -287,8 +287,10 @@ def test_a_status_event_insert_under_a_stricter_isolation_level_is_refused(
 #  1-3 (owns a knowledge table / table missing), 4-5 (owns the schema / database), 24 (owns a
 #    function): would need an ownership transfer of objects the migration owns; covered offline.
 #  16 is covered by test_temporary_reached_only_through_a_noinherit_role_is_reported below.
-#  17 (session_replication_role other than origin NOW): the loader's own session starts at its
-#    default; only the stored setting (18) can be provoked from outside.
+#  17 (session_replication_role other than origin NOW): not provoked here. Since the loader's
+#    connection passes no `options` (ADR 0024 A3), it could be on PG15+ with GRANT SET ON
+#    PARAMETER and PGOPTIONS; once the loader passes a fixed `options`, only the stored setting
+#    (18) can be provoked from outside.
 # The SQL of those checks is therefore not proven against a server by this file.
 
 _X_ROLE = "divesafe_kb_wdextra_test"
