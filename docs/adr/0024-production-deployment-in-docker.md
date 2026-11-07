@@ -1645,6 +1645,13 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   self-check must have **live failure coverage for each check** before `load` and `approve` rely
   on it. (5) ~~The pre-write role check's reuse of the 15 s timeout is also open.~~ Settled: 15 s,
   APPROVED by the owner with Q8, 2026-10-23 (A3).
+- **The loader's connection takes `options` and `PGOPTIONS` from its environment (A3; recorded
+  2026-11-07, not owner-decided).** `kb_common.connect` passes no `options` keyword, so a
+  `-c ...` in the loader's connection string or in `PGOPTIONS` reaches the server. The app closes
+  this by passing its own `options` (ADR 0022 Known gaps, "Connection-time settings"); the
+  loader's session-role and `session_replication_role` checks refuse the known bypasses, and its
+  timeouts are `SET LOCAL`. The `kb_load` settings model should pass a fixed `options` the same
+  way, with a live test like the app's.
 - **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
   - **Stored `manifest_sha256` is a client claim**, like `hash_checked`: the database cannot
     recompute it.

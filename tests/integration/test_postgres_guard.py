@@ -7,6 +7,7 @@ import json
 import os
 
 import psycopg
+import psycopg.conninfo
 import pytest
 from tests.unit.test_repository_contract import _decided, _postgres, _record
 
@@ -1073,6 +1074,33 @@ def test_verification_flags_a_stored_role_setting_on_the_application_role(
         _sql(f"DROP OWNED BY {group}")
         _sql(f"DROP ROLE {group}")
     assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize("where", ["connection string", "PGOPTIONS"])
+def test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """The app passes its own `options`, which replaces any `options` in the connection string
+    and `PGOPTIONS` (ADR 0022 Known gaps). The group is granted, so without that override the
+    session would really run as the group."""
+    group = "divesafe_options_role_group_test"
+    smuggled = f"-c role={group}"
+    if where == "PGOPTIONS":
+        monkeypatch.setenv("PGOPTIONS", smuggled)
+        dsn = app_role_dsn
+    else:
+        dsn = psycopg.conninfo.make_conninfo(app_role_dsn, options=smuggled)
+    app = PostgresAssessmentRepository(dsn)
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(f"GRANT {group} TO divesafe_app_test")
+        with app._connect() as conn:
+            row = conn.execute("SELECT current_user, session_user").fetchone()
+        assert row == ("divesafe_app_test", "divesafe_app_test")
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
 
 
 def test_the_application_role_can_read_the_acl_and_sequence_catalogues(app_role_dsn: str) -> None:
