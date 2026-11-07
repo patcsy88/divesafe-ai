@@ -28,6 +28,7 @@ from divesafe.services.migrations import (
     knowledge_shape_digests,
     knowledge_trigger_types,
 )
+from divesafe.services.repository import RepositoryUnavailableError
 
 _OPTIONS = "-c lock_timeout=5000 -c statement_timeout=30000"
 
@@ -54,7 +55,7 @@ def main() -> int:
             types = knowledge_trigger_types(conn)
             shapes = knowledge_shape_digests(conn)
             conn.rollback()
-    except psycopg.Error:
+    except (psycopg.Error, RepositoryUnavailableError):
         sys.stderr.write("could not read the database\n")
         return 4
     # Checked before any output, so nothing on stdout can be copied as a pin.

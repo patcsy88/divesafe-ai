@@ -443,7 +443,9 @@ CASES: list[tuple[str, list[str], list[str], int]] = [
             f"REVOKE {_X_ROLE} FROM {LOADER}",
             f"DROP ROLE {_X_ROLE}",
         ],
-        29,
+        kb_privileges._checks().index(
+            (kb_privileges._SESSION_ROLE_CHECK, "runs as a different role from its login role")
+        ),
     ),
 ]
 
@@ -467,6 +469,14 @@ def test_the_loader_is_clean_again_after_the_grants_are_undone(loader_dsn: str) 
         pytest.skip("before PostgreSQL 15 PUBLIC may CREATE in schema public")
     problems = _problems(loader_dsn)
     assert problems == []
+
+
+def test_a_loader_that_logs_in_directly_is_not_flagged_for_its_session_role(
+    loader_dsn: str,
+) -> None:
+    """On every supported major, not only from 15: the session-role check does not fire for a
+    loader with no stored role setting (no false refusal)."""
+    assert "runs as a different role from its login role" not in _problems(loader_dsn)
 
 
 def test_the_parameter_privilege_is_reported_on_postgresql_15_and_later(loader_dsn: str) -> None:

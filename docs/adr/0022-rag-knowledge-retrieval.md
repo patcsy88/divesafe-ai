@@ -1327,7 +1327,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   knowledge function; a session whose `current_user` differs from its `session_user` (a stored
   `ALTER ROLE <loader> SET role`, added 2026-11-07: every other check would judge the target role
   and the session could `RESET ROLE`; live case "stored role setting" in
-  `test_kb_withdraw_live.py`); no `sslmode` in production; the app refusing to start with the loader
+  `test_kb_withdraw_live.py`, mutation-checked live by setting the expression to `false`; for
+  `withdraw` this is a report after the commit, exit 13, not a refusal); no `sslmode` in production; the app refusing to start with the loader
   credential as its own, and with the loader or owner connection string in its environment in
   production; `db_init` failing with the fixed message when the loader role does not exist, and
   never creating it. **`db_init` TEMP test:** after `db_init`, TEMP is revoked from PUBLIC and the
@@ -1579,8 +1580,15 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   11.9. The same sequence edits can also **make `withdraw` fail**: after `setval` or `RESTART`
   onto values already used, status inserts fail on `UNIQUE(event_order)` until the sequence
   passes the used values (a failed insert still consumes its value, so a retry can succeed in a
-  gap with an `event_order` below earlier events; that is safe, because a WITHDRAWN event is final
-  whatever its order, decision 3), and `setval` near MAXVALUE makes every status insert fail.
+  gap with an `event_order` below earlier events), and `setval` near MAXVALUE makes every status
+  insert fail. **Finality after a setback is not enforced on the write side:** the trigger and
+  `approve` take the latest status by `event_order`, so after a setback a version with a
+  lower-ordered WITHDRAWN can still be APPROVED, and a second WITHDRAWN is accepted instead of
+  refused with KB001. A WITHDRAWN event stays final only if the selection query (not built yet)
+  applies decision 3 as "any WITHDRAWN event excludes the version", which the status-event test
+  "a WITHDRAWN event is final whatever the order" must prove, including a WITHDRAWN with a lower
+  `event_order` than the APPROVED. Until that test exists, treat a setback as able to make a
+  withdrawn version read as approved (above).
   Both need the owner or a superuser (the sequence ACL is
   checked to be owner-only), but they stop the path that makes the corpus stricter. ADR 0024's
   fallback (a), the owner's `psql` INSERT, fails the same way; fallback (b), stopping the API, is
@@ -1594,7 +1602,11 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   question.
 - **The app checks do not look at REPLICATION, BYPASSRLS or CREATEDB**, nor, from PostgreSQL 17,
   at MAINTAIN on `assessments` (granted by `pg_maintain`). MAINTAIN allows `LOCK TABLE`, a denial
-  of service, but cannot change a record. The loader self-check does check the three attributes.
+  of service, but cannot change a record. REPLICATION, where `pg_hba.conf` allows a replication
+  connection, can read the whole cluster (confidentiality, not record integrity). The loader
+  self-check does check the three attributes, but not a direct `GRANT MAINTAIN` on PostgreSQL 17
+  (membership of `pg_maintain` is caught as "a member of a role other than itself"); that only adds
+  another `LOCK TABLE` path, listed above.
 - **The one-inserter rule (condition 11.5) counts direct grantees only.** `_acl_problems` counts
   the distinct non-owner roles named in the table and column ACLs. It does not check that the one
   inserter is the loader, and it does not count roles that can INSERT through membership of that

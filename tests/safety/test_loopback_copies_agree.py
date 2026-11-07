@@ -88,3 +88,11 @@ def test_the_shared_list_holds_both_answers() -> None:
 def test_mutation_a_drifted_domain_copy_is_caught(old: str, new: str) -> None:
     mutant = mutated_module(domain_models, (old, new))
     assert disagreements(mutant._is_loopback, loopback.is_loopback) != []  # noqa: SLF001
+
+
+@pytest.mark.parametrize("host", ["::127.0.0.1", "64:ff9b::7f00:1"])
+def test_ipv4_compatible_and_nat64_forms_are_not_loopback(host: str) -> None:
+    """Agreement alone would pass if both copies drifted the same way; these are remote forms
+    (a NAT64 gateway forwards off the machine)."""
+    assert loopback.is_loopback(host) is False
+    assert domain_models._is_loopback(host) is False  # noqa: SLF001

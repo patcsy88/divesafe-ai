@@ -446,3 +446,49 @@ def test_mutation_an_unreadable_shape_reported_as_success_is_caught(
         monkeypatch, PinConnection(has_history=False), capsys, apply=True, module=mutant
     )
     assert code != 5
+
+
+def test_a_missing_server_version_gives_the_fixed_text_and_exit_4(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from divesafe.services.repository import RepositoryUnavailableError
+
+    def no_version(conn: Any) -> Any:
+        raise RepositoryUnavailableError("could not read the server version")
+
+    monkeypatch.setattr(kb_pins, "knowledge_function_hashes", no_version)
+    code, out, err = run(monkeypatch, PinConnection(has_history=False), capsys, apply=True)
+    assert (code, out, err) == (4, "", "could not read the database\n")
+
+
+def test_mutation_a_missing_server_version_escapes_as_a_traceback_is_caught(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from divesafe.services.repository import RepositoryUnavailableError
+
+    mutant = mutated_module(
+        kb_pins,
+        (
+            "    except (psycopg.Error, RepositoryUnavailableError):\n",
+            "    except psycopg.Error:\n",
+        ),
+    )
+
+    def no_version(conn: Any) -> Any:
+        raise RepositoryUnavailableError("could not read the server version")
+
+    monkeypatch.setattr(mutant, "knowledge_function_hashes", no_version)
+    with pytest.raises(RepositoryUnavailableError):
+        run(monkeypatch, PinConnection(has_history=False), capsys, apply=True, module=mutant)
+
+
+class _NoVersionConnection:
+    def execute(self, query: Any, params: Any = None) -> Rows:
+        return Rows([])  # SET LOCAL and the version read alike: no row
+
+
+def test_knowledge_function_hashes_raises_when_the_version_row_is_missing() -> None:
+    from divesafe.services.repository import RepositoryUnavailableError
+
+    with pytest.raises(RepositoryUnavailableError, match="^could not read the server version$"):
+        migrations.knowledge_function_hashes(_NoVersionConnection())  # type: ignore[arg-type]

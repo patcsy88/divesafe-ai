@@ -209,7 +209,8 @@ SESSION_LABEL = "runs as a different role from its login role"
 
 
 def session_role_problem(module: Any) -> list[str]:
-    """The session-role check's SQL is the comparison, and a clean session passes it."""
+    """The session-role check's SQL is exactly the comparison (text only; the behaviour is
+    proved live by the "stored role setting" case in test_kb_withdraw_live.py)."""
     sql = dict((label, expr) for expr, label in module._checks())
     found = []
     if sql.get(SESSION_LABEL) != "current_user <> session_user":

@@ -781,6 +781,10 @@ CONDITION_11_CATCHERS: dict[str, list[str]] = {
     "k-inserters-column-half-counts-the-owner": [
         "the-owner-holds-a-column-insert-grant",
     ],
+    "k-inserters-column-half-counts-every-privilege": [
+        "column-privilege-beyond-insert",
+        "column-select-privilege",
+    ],
     "k-other-tables-not-filtered": [
         "row-of-another-table-is-ignored",
     ],
