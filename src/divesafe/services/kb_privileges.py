@@ -94,6 +94,7 @@ def running_as_privileged_role(conn: psycopg.Connection[Any], *, statement_timeo
 
 
 _APP_WRITE_TABLES = ("assessments", "pending_runs", "run_failure_counts")
+_SESSION_ROLE_CHECK = "current_user <> session_user"
 
 
 def _writes_app_tables() -> str:
@@ -303,6 +304,9 @@ def _checks() -> list[tuple[str, str]]:
                 f"has a privilege on {table}",
             )
         )
+    # A stored `ALTER ROLE ... SET role` would make every check above judge another role, and the
+    # session could RESET ROLE back to the login role.
+    checks.append((_SESSION_ROLE_CHECK, "runs as a different role from its login role"))
     return checks
 
 

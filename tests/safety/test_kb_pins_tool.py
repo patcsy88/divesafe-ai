@@ -422,8 +422,9 @@ def test_an_unreadable_shape_exits_5_with_a_fixed_message(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _unreadable(kb_pins, monkeypatch)
-    code, _, err = run(monkeypatch, PinConnection(has_history=False), capsys, apply=True)
+    code, out, err = run(monkeypatch, PinConnection(has_history=False), capsys, apply=True)
     assert code == 5
+    assert out == ""  # nothing that could be pasted into migrations.py as a pin
     assert err == "a table shape could not be read; these are not pins\n"
     assert "never-printed-secret" not in err
 

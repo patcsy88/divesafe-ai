@@ -430,6 +430,21 @@ CASES: list[tuple[str, list[str], list[str], int]] = [
         [f"REVOKE SELECT ON public.schema_migrations FROM {LOADER}"],
         28,
     ),
+    (
+        # every other check would judge the target role; the session could RESET ROLE
+        "stored role setting",
+        [
+            f"CREATE ROLE {_X_ROLE}",
+            f"GRANT {_X_ROLE} TO {LOADER}",
+            f"ALTER ROLE {LOADER} SET role = {_X_ROLE}",
+        ],
+        [
+            f"ALTER ROLE {LOADER} RESET role",
+            f"REVOKE {_X_ROLE} FROM {LOADER}",
+            f"DROP ROLE {_X_ROLE}",
+        ],
+        29,
+    ),
 ]
 
 

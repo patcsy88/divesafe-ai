@@ -1164,7 +1164,12 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     event, **and the same per-document lock applies**, so (a) does not help against a stuck
     load of that family; use the runbook above. The exact INSERT is written in the runbook when the
     table exists; or (b) stop the API (`docker compose ... stop api`; a plain `docker stop` if the
-    variable is missing) until `withdraw` works. **Recorded as gap 5.**
+    variable is missing) until `withdraw` works. **Recorded as gap 5.** **Sequence case
+    (2026-11-07):** if `withdraw` exits 11 and no load of that family is running, the ordering
+    sequence may have been set back onto used values (`UNIQUE(event_order)`) or near MAXVALUE
+    (ADR 0022 Known gaps). Fallback (a) fails the same way, because its INSERT goes through the
+    same trigger; use (b), then, as the owner, `setval` the sequence above `max(event_order)` and
+    run `withdraw` again.
   - **Pins.** The test that `withdraw` succeeds while another session holds the global lock, and
     its mutation (make `withdraw` take the global lock), are in ADR 0022's test list, with: a
     withdrawal behind a load that holds the **same family's** lock refuses within the timeout

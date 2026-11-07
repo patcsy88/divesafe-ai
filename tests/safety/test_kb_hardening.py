@@ -389,10 +389,10 @@ def test_mutation_the_hardening_moved_after_the_first_query_is_caught(
             "    major_row",
         ),
         (
-            "    assert major_row is not None\n    rows = conn.execute(\n"
-            '        "SELECT p.proname, ',
-            "    assert major_row is not None\n    _harden(conn)\n    rows = conn.execute(\n"
-            '        "SELECT p.proname, ',
+            '        raise RepositoryUnavailableError("could not read the server version")\n'
+            "    rows = conn.execute(\n",
+            '        raise RepositoryUnavailableError("could not read the server version")\n'
+            "    _harden(conn)\n    rows = conn.execute(\n",
         ),
     )
     misses = hardening_misses(mutant, postgres, monkeypatch)

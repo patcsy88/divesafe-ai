@@ -12,7 +12,7 @@ from typing import Any
 
 import psycopg
 import pytest
-from tests.safety.kb_fakes import FakeConnection
+from tests.safety.kb_fakes import FakeConnection, mutated_module
 
 from divesafe.services import kb_privileges
 from divesafe.services.kb_privileges import (
@@ -53,6 +53,7 @@ LABELS = [
     "has a privilege on pending_runs",
     "has a privilege on run_failure_counts",
     "has a privilege on schema_migrations",
+    "runs as a different role from its login role",
 ]
 PARAMETER_LABEL = "may set session_replication_role"
 TIMEOUT = 15_000
@@ -75,7 +76,7 @@ def test_each_problem_class_is_reported_alone(index: int) -> None:
     assert problems(FakeConnection(selfcheck_flags={index: True})) == [LABELS[index]]
 
 
-@pytest.mark.parametrize("index", [0, 9, 10, 15, 22, 28])
+@pytest.mark.parametrize("index", [0, 9, 10, 15, 22, 28, 29])
 def test_an_unknown_answer_counts_as_a_problem(index: int) -> None:
     fake = FakeConnection()
     original = fake._answer
@@ -165,7 +166,7 @@ def _without(index: int) -> Callable[[], list[tuple[str, str]]]:
     return checks
 
 
-@pytest.mark.parametrize("index", [0, 5, 9, 10, 15, 21, 22, 28])
+@pytest.mark.parametrize("index", [0, 5, 9, 10, 15, 21, 22, 28, 29])
 def test_mutation_a_removed_check_is_caught(monkeypatch: pytest.MonkeyPatch, index: int) -> None:
     every_label_is_reported(monkeypatch)
     monkeypatch.setattr(kb_privileges, "_checks", _without(index))
@@ -200,6 +201,39 @@ def test_mutation_a_check_that_counts_unknown_as_clean_is_caught(
         )
     )
     assert problems(fake2) == [LABELS[0]]  # the real one reports it
+
+
+# --- a stored role setting (ALTER ROLE <loader> SET role = ...) is refused ------------------------
+
+SESSION_LABEL = "runs as a different role from its login role"
+
+
+def session_role_problem(module: Any) -> list[str]:
+    """The session-role check's SQL is the comparison, and a clean session passes it."""
+    sql = dict((label, expr) for expr, label in module._checks())
+    found = []
+    if sql.get(SESSION_LABEL) != "current_user <> session_user":
+        found.append("the session-role check is not current_user <> session_user")
+    return found
+
+
+def test_the_session_role_check_compares_current_and_session_user() -> None:
+    assert session_role_problem(kb_privileges) == []
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        '_SESSION_ROLE_CHECK = "false"',
+        '_SESSION_ROLE_CHECK = "current_user <> current_user"',
+    ],
+    ids=["session-role-never-checked", "session-role-compares-itself"],
+)
+def test_mutation_a_loader_session_role_check_that_cannot_fire_is_caught(new: str) -> None:
+    mutant = mutated_module(
+        kb_privileges, ('_SESSION_ROLE_CHECK = "current_user <> session_user"', new)
+    )
+    assert session_role_problem(mutant) != []
 
 
 # --- running as the owner or app role ------------------------------------------------------------

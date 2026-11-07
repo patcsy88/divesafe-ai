@@ -764,6 +764,11 @@ CONDITION_11_MUTATIONS = [
         id="k-inserters-table-half-counts-every-privilege",
     ),
     pytest.param(
+        '"AND x.grantee <> c.relowner AND x.privilege_type = %s",\n',
+        '"AND x.grantee <> c.relowner",\n',
+        id="k-inserters-column-half-counts-every-privilege",
+    ),
+    pytest.param(
         "    inserts = [r for r in inserts if str(r[0]) in KNOWLEDGE_TABLES]\n",
         "    inserts = [r for r in inserts if str(r[0]) == 'kb_chunks']\n",
         id="k-inserters-only-on-one-table",

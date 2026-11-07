@@ -648,7 +648,8 @@ def knowledge_function_hashes(conn: psycopg.Connection[Any]) -> tuple[int, dict[
     knowledge functions in `public`. Read-only; used by `kb_pins` to generate the pins."""
     _harden(conn)
     major_row = conn.execute("SELECT pg_catalog.current_setting('server_version_num')").fetchone()
-    assert major_row is not None
+    if major_row is None:
+        raise RepositoryUnavailableError("could not read the server version")
     rows = conn.execute(
         "SELECT p.proname, pg_catalog.encode(pg_catalog.sha256("
         "pg_catalog.convert_to(pg_catalog.pg_get_functiondef(p.oid), 'UTF8')), 'hex') "
@@ -961,8 +962,9 @@ def _acl_problems(conn: psycopg.Connection[Any], tables: list[str]) -> list[str]
     """Condition 11.5, role-independent: on each knowledge table no role but the owner holds a
     privilege other than SELECT or INSERT, PUBLIC holds nothing, no grant option is held, and
     column privileges are INSERT only; INSERT on kb_status_events is column-level only, and at
-    most one role other than the owner may INSERT at all (table or column, across the three
-    tables). Per-role checks are in `verify()` and `kb_privileges`."""
+    most one non-owner role is a direct INSERT grantee (table or column, across the three tables;
+    members of that role and predefined roles are not counted). Per-role checks are in `verify()`
+    and `kb_privileges`."""
     rows = conn.execute(
         "SELECT c.relname, NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(c.relacl) x "
         "WHERE x.grantee <> c.relowner AND (x.grantee = 0 OR x.is_grantable "

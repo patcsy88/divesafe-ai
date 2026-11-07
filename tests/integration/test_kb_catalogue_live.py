@@ -787,6 +787,11 @@ ACCEPTED = [
         ),
         [],
     ),
+    Break(  # the owner is never an inserter to count (the fake's matching scenario)
+        "the-owner-holds-a-column-insert-grant",
+        ("GRANT INSERT (document_id) ON public.kb_documents TO {me}",),
+        [],
+    ),
 ]
 
 
@@ -831,6 +836,7 @@ def test_a_renamed_loader_is_refused_until_the_old_loader_loses_its_grants(
     and the catalogue check refuses two inserters (fails closed) until the runbook step is run."""
     install_schema(scratch.admin_dsn, APP, loader_role=OTHER)
     assert fake.MANY_INSERTERS in scratch.owner_problems()
+    assert fake.MANY_INSERTERS in scratch.verify_as_app()  # what start-up runs
     with pytest.raises(MigrationError):
         migrate(scratch.admin_dsn)
     scratch.apply((OLD_LOADER_REVOKE,))

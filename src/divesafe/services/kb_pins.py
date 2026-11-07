@@ -10,7 +10,7 @@ and is refused unless `public.schema_migrations` does not exist (an empty scratc
 Without APPLY it reads a database already at version 4, read-only (for inspection, not for pins).
 Output: `postgresql_major <n>`, then `<function> <sha256 hex>` per function, then
 `tgtype <trigger> <integer>` per trigger, then `shape <table>.<aspect> <sha256 hex>` per table
-and aspect. If any shape could not be read, it exits 5: the output is not a set of pins. The
+and aspect. If any shape could not be read, it exits 5 and writes nothing to stdout. The
 DSN comes from the environment, not argv, and is never printed. Nothing here is used at run time.
 """
 
@@ -57,6 +57,10 @@ def main() -> int:
     except psycopg.Error:
         sys.stderr.write("could not read the database\n")
         return 4
+    # Checked before any output, so nothing on stdout can be copied as a pin.
+    if SHAPE_UNREADABLE in shapes.values():
+        sys.stderr.write("a table shape could not be read; these are not pins\n")
+        return 5
     sys.stdout.write(f"postgresql_major {major}\n")
     for name, digest in hashes.items():
         sys.stdout.write(f"{name} {digest}\n")
@@ -64,9 +68,6 @@ def main() -> int:
         sys.stdout.write(f"tgtype {name} {value}\n")
     for key, digest in shapes.items():
         sys.stdout.write(f"shape {key} {digest}\n")
-    if SHAPE_UNREADABLE in shapes.values():
-        sys.stderr.write("a table shape could not be read; these are not pins\n")
-        return 5
     return 0
 
 

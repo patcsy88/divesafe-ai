@@ -1324,7 +1324,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   on any `kb_*` table; any column privilege beyond the grants (INSERT on the ordering column,
   INSERT on the recorded-at column, UPDATE of any column); TEMP on the database (granted
   directly or through PUBLIC); USAGE, SELECT or UPDATE on the ordering sequence; EXECUTE on a
-  knowledge function; no `sslmode` in production; the app refusing to start with the loader
+  knowledge function; a session whose `current_user` differs from its `session_user` (a stored
+  `ALTER ROLE <loader> SET role`, added 2026-11-07: every other check would judge the target role
+  and the session could `RESET ROLE`; live case "stored role setting" in
+  `test_kb_withdraw_live.py`); no `sslmode` in production; the app refusing to start with the loader
   credential as its own, and with the loader or owner connection string in its environment in
   production; `db_init` failing with the fixed message when the loader role does not exist, and
   never creating it. **`db_init` TEMP test:** after `db_init`, TEMP is revoked from PUBLIC and the
@@ -1573,12 +1576,25 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   current value is not pinned: set below the highest `event_order`, a later event can sort before
   an earlier one, so a withdrawn version can read as approved again; comparing `last_value` with
   `max(event_order)` in `migrate()` is possible but not built), and conditions 11.6, 11.8 and
-  11.9. The same sequence edits can also **block `withdraw`**: `setval` or `RESTART` onto values
-  already used makes the next status insert fail on `UNIQUE(event_order)`, and `setval` near
-  MAXVALUE makes every status insert fail. Both need the owner or a superuser (the sequence ACL is
+  11.9. The same sequence edits can also **make `withdraw` fail**: after `setval` or `RESTART`
+  onto values already used, status inserts fail on `UNIQUE(event_order)` until the sequence
+  passes the used values (a failed insert still consumes its value, so a retry can succeed in a
+  gap with an `event_order` below earlier events; that is safe, because a WITHDRAWN event is final
+  whatever its order, decision 3), and `setval` near MAXVALUE makes every status insert fail.
+  Both need the owner or a superuser (the sequence ACL is
   checked to be owner-only), but they stop the path that makes the corpus stricter. ADR 0024's
   fallback (a), the owner's `psql` INSERT, fails the same way; fallback (b), stopping the API, is
   the one that works until the owner repairs the sequence (`setval` above `max(event_order)`).
+- **`session_authorization` does not bypass the session-role check (probed 2026-11-07).** On
+  PostgreSQL 16 and 17 a connection-time `-c session_authorization=<role>` and a stored
+  `ALTER ROLE ... SET session_authorization` are accepted but have no effect: `current_user`,
+  `session_user` and the `pg_stat_activity` login all stay the login role, so a superuser login
+  is still seen by the superuser check. Re-check on each new PostgreSQL major. Refusing an
+  `options` key in the production app connection string (and `PGOPTIONS`) is an open owner
+  question.
+- **The app checks do not look at REPLICATION, BYPASSRLS or CREATEDB**, nor, from PostgreSQL 17,
+  at MAINTAIN on `assessments` (granted by `pg_maintain`). MAINTAIN allows `LOCK TABLE`, a denial
+  of service, but cannot change a record. The loader self-check does check the three attributes.
 - **The one-inserter rule (condition 11.5) counts direct grantees only.** `_acl_problems` counts
   the distinct non-owner roles named in the table and column ACLs. It does not check that the one
   inserter is the loader, and it does not count roles that can INSERT through membership of that
