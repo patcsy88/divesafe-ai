@@ -316,10 +316,6 @@ def _problems(dsn: str) -> list[str]:
         conn.close()
 
 
-def _label(index: int) -> str:
-    return kb_privileges._checks()[index][1]
-
-
 def test_a_correctly_provisioned_loader_has_no_problems_on_postgresql_15_and_later(
     loader_dsn: str,
 ) -> None:
@@ -329,106 +325,126 @@ def test_a_correctly_provisioned_loader_has_no_problems_on_postgresql_15_and_lat
     assert problems == []
 
 
-CASES: list[tuple[str, list[str], list[str], int]] = [
-    ("superuser", [f"ALTER ROLE {LOADER} SUPERUSER"], [f"ALTER ROLE {LOADER} NOSUPERUSER"], 8),
+CASES: list[tuple[str, list[str], list[str], str]] = [
+    (
+        "superuser",
+        [f"ALTER ROLE {LOADER} SUPERUSER"],
+        [f"ALTER ROLE {LOADER} NOSUPERUSER"],
+        "is a superuser or a member of one",
+    ),
     (
         "member of another role",
         [f"CREATE ROLE {_X_ROLE}", f"GRANT {_X_ROLE} TO {LOADER}"],
         [f"REVOKE {_X_ROLE} FROM {LOADER}", f"DROP ROLE {_X_ROLE}"],
-        9,
+        "is a member of a role other than itself",
     ),
     (
         "replication",
         [f"ALTER ROLE {LOADER} REPLICATION"],
         [f"ALTER ROLE {LOADER} NOREPLICATION"],
-        10,
+        "can replicate, or is a member of a role that can",
     ),
-    ("createrole", [f"ALTER ROLE {LOADER} CREATEROLE"], [f"ALTER ROLE {LOADER} NOCREATEROLE"], 11),
-    ("createdb", [f"ALTER ROLE {LOADER} CREATEDB"], [f"ALTER ROLE {LOADER} NOCREATEDB"], 12),
-    ("bypassrls", [f"ALTER ROLE {LOADER} BYPASSRLS"], [f"ALTER ROLE {LOADER} NOBYPASSRLS"], 13),
+    (
+        "createrole",
+        [f"ALTER ROLE {LOADER} CREATEROLE"],
+        [f"ALTER ROLE {LOADER} NOCREATEROLE"],
+        "can create roles, or is a member of a role that can",
+    ),
+    (
+        "createdb",
+        [f"ALTER ROLE {LOADER} CREATEDB"],
+        [f"ALTER ROLE {LOADER} NOCREATEDB"],
+        "can create databases, or is a member of a role that can",
+    ),
+    (
+        "bypassrls",
+        [f"ALTER ROLE {LOADER} BYPASSRLS"],
+        [f"ALTER ROLE {LOADER} NOBYPASSRLS"],
+        "bypasses row-level security, or is a member of a role that does",
+    ),
     (
         "program or file role",
         [f"GRANT pg_execute_server_program TO {LOADER}"],
         [f"REVOKE pg_execute_server_program FROM {LOADER}"],
-        14,
+        "is a member of a role that can run programs or read or write server files",
     ),
     (
         "temporary on the database",
         ["GRANT TEMPORARY ON DATABASE {db} TO " + LOADER],
         ["REVOKE TEMPORARY ON DATABASE {db} FROM " + LOADER],
-        15,
+        "has TEMPORARY on the database (directly or through PUBLIC)",
     ),
     (
         "create in schema public",
         [f"GRANT CREATE ON SCHEMA public TO {LOADER}"],
         [f"REVOKE CREATE ON SCHEMA public FROM {LOADER}"],
-        6,
+        "can create objects in the public schema",
     ),
     (
         "create schema in the database",
         ["GRANT CREATE ON DATABASE {db} TO " + LOADER],
         ["REVOKE CREATE ON DATABASE {db} FROM " + LOADER],
-        7,
+        "can create schemas in the database",
     ),
     (
         "stored session_replication_role",
         [f"ALTER ROLE {LOADER} SET session_replication_role = replica"],
         [f"ALTER ROLE {LOADER} RESET session_replication_role"],
-        18,
+        "has a stored session_replication_role setting",
     ),
     (
         "update on a knowledge table",
         [f"GRANT UPDATE ON public.kb_documents TO {LOADER}"],
         [f"REVOKE UPDATE ON public.kb_documents FROM {LOADER}"],
-        19,
+        "has UPDATE, DELETE, TRUNCATE, TRIGGER or REFERENCES on a knowledge table",
     ),
     (
         "column update on a knowledge table",
         [f"GRANT UPDATE (document_id) ON public.kb_status_events TO {LOADER}"],
         [f"REVOKE UPDATE (document_id) ON public.kb_status_events FROM {LOADER}"],
-        20,
+        "has a column UPDATE or REFERENCES privilege on a knowledge table",
     ),
     (
         "insert beyond the column grant",
         [f"GRANT INSERT (recorded_at) ON public.kb_status_events TO {LOADER}"],
         [f"REVOKE INSERT (recorded_at) ON public.kb_status_events FROM {LOADER}"],
-        21,
+        "can INSERT a status-event column beyond its grant (ordering key or recorded-at)",
     ),
     (
         "ordering sequence",
         [f"GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO {LOADER}"],
         [f"REVOKE USAGE ON SEQUENCE public.kb_status_event_order_seq FROM {LOADER}"],
-        22,
+        "has a privilege on the status-event ordering sequence",
     ),
     (
         "execute a knowledge function",
         [f"GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO {LOADER}"],
         [f"REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM {LOADER}"],
-        23,
+        "can EXECUTE a knowledge function",
     ),
     (
         "assessments",
         [f"GRANT SELECT ON public.assessments TO {LOADER}"],
         [f"REVOKE SELECT ON public.assessments FROM {LOADER}"],
-        25,
+        "has a privilege on assessments",
     ),
     (
         "pending_runs",
         [f"GRANT SELECT ON public.pending_runs TO {LOADER}"],
         [f"REVOKE SELECT ON public.pending_runs FROM {LOADER}"],
-        26,
+        "has a privilege on pending_runs",
     ),
     (
         "run_failure_counts",
         [f"GRANT SELECT ON public.run_failure_counts TO {LOADER}"],
         [f"REVOKE SELECT ON public.run_failure_counts FROM {LOADER}"],
-        27,
+        "has a privilege on run_failure_counts",
     ),
     (
         "schema_migrations",
         [f"GRANT SELECT ON public.schema_migrations TO {LOADER}"],
         [f"REVOKE SELECT ON public.schema_migrations FROM {LOADER}"],
-        28,
+        "has a privilege on schema_migrations",
     ),
     (
         # every other check would judge the target role; the session could RESET ROLE
@@ -443,25 +459,29 @@ CASES: list[tuple[str, list[str], list[str], int]] = [
             f"REVOKE {_X_ROLE} FROM {LOADER}",
             f"DROP ROLE {_X_ROLE}",
         ],
-        kb_privileges._checks().index(
-            (kb_privileges._SESSION_ROLE_CHECK, "runs as a different role from its login role")
-        ),
+        "runs as a different role from its login role",
     ),
 ]
 
 
+def test_every_case_names_a_real_check() -> None:
+    """Labels, not positions: a reordered check list cannot point a case at another check."""
+    real = {label for _, label in kb_privileges._checks()}
+    assert [c[0] for c in CASES if c[3] not in real] == []
+
+
 @pytest.mark.parametrize(
-    ("setup", "undo", "index"), [c[1:] for c in CASES], ids=[c[0] for c in CASES]
+    ("setup", "undo", "label"), [c[1:] for c in CASES], ids=[c[0] for c in CASES]
 )
 def test_each_provoked_problem_is_reported_with_its_label(
-    loader_dsn: str, setup: list[str], undo: list[str], index: int
+    loader_dsn: str, setup: list[str], undo: list[str], label: str
 ) -> None:
     try:
         _admin(*setup)
         problems = _problems(loader_dsn)
     finally:
         _admin(*undo)
-    assert _label(index) in problems  # other labels may join it (membership implies more)
+    assert label in problems  # other labels may join it (membership implies more)
 
 
 def test_the_loader_is_clean_again_after_the_grants_are_undone(loader_dsn: str) -> None:
@@ -534,6 +554,10 @@ def test_temporary_reached_only_through_a_noinherit_role_is_reported_as_check_16
         _admin(f"ALTER ROLE {LOADER} INHERIT")
         with psycopg.connect(DSN, autocommit=True) as admin:
             _drop_role(admin, _T_ROLE)  # DROP OWNED revokes its grants, then the role goes
-    assert _label(16) in problems
-    assert _label(15) not in problems  # the loader itself has no TEMPORARY
-    assert _label(9) in problems  # and it is, of course, a member of another role
+    assert "can reach TEMPORARY through a role it is a member of" in problems
+    assert (
+        "has TEMPORARY on the database (directly or through PUBLIC)" not in problems
+    )  # the loader itself has no TEMPORARY
+    assert (
+        "is a member of a role other than itself" in problems
+    )  # and it is, of course, a member of another role

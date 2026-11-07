@@ -833,7 +833,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   owner's INSERT goes through the same trigger. **This is a deliberate departure from ADR 0022 decision 11**, which has each subcommand take the
   global lock; ADR 0022 is annotated (decision 11 and its test list) and **`risk-reviewer` must look
   at it.** Safety argument, for the reviewer to check: a WITHDRAWN event is final whatever its order
-  (ADR 0022 decision 3), the trigger validates it under the per-document lock, and the global lock
+  (ADR 0022 decision 3; enforced by the selection query, not built yet, see ADR 0022 Known gaps
+  on a sequence setback), the trigger validates it under the per-document lock, and the global lock
   exists to serialise the per-site chunk-bound check and the version inserts of loads, which a
   withdrawal does not do.
   - **Transaction shape.** `withdraw` opens its transaction with `ISOLATION LEVEL READ

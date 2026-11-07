@@ -30,7 +30,8 @@ def _printed(exc: BaseException) -> str:
 
 def _sql(statement: str, params: tuple[object, ...] = ()) -> None:
     assert DSN is not None
-    with psycopg.connect(DSN) as conn:
+    # A lock wait fails within 5 s instead of hanging, so the caller's `finally` still runs.
+    with psycopg.connect(DSN, options="-c lock_timeout=5000") as conn:
         conn.execute(statement, params)  # type: ignore[call-overload]
 
 

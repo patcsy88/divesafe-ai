@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import warnings
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -72,6 +73,32 @@ def drop_knowledge_objects() -> None:
             conn.execute(f"DROP FUNCTION IF EXISTS public.{function}()")  # type: ignore[call-overload]
 
 
+def _repair_guard_triggers_left_disabled() -> None:
+    """A test that disables a guard and is killed (or fails) before re-enabling it would leave the
+    test database refused by `migrate()`'s post-check for every later run. Re-enable before the
+    install, and warn when something was actually repaired so the earlier run is noticed. The
+    post-check still judges `migrate()`'s own statements afterwards."""
+    assert TEST_DSN is not None
+    with psycopg.connect(TEST_DSN) as conn:
+        if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
+            return
+        disabled = [
+            row[0]
+            for row in conn.execute(
+                "SELECT tgname FROM pg_trigger WHERE tgrelid = 'public.assessments'::regclass "
+                "AND tgname = ANY(%s) AND tgenabled <> 'A'",
+                (list(GUARD_TRIGGERS),),
+            ).fetchall()
+        ]
+        for trigger in disabled:
+            conn.execute(f"ALTER TABLE assessments ENABLE ALWAYS TRIGGER {trigger}")  # type: ignore[call-overload]
+    if disabled:
+        warnings.warn(
+            f"re-enabled guard triggers left disabled by an earlier run: {sorted(disabled)}",
+            stacklevel=2,
+        )
+
+
 def reset_test_database() -> None:
     """Install the guard as the owner and empty the table. Refuses any database whose name does
     not end in `_test`, so a copied production DSN can never be wiped."""
@@ -80,6 +107,7 @@ def reset_test_database() -> None:
     if not str(name).endswith("_test"):
         raise RuntimeError("DIVESAFE_TEST_DATABASE_URL must point at a database named *_test")
     _forget_knowledge_store_without_history()
+    _repair_guard_triggers_left_disabled()
     install_schema(TEST_DSN)
     with psycopg.connect(TEST_DSN) as conn:
         for trigger in GUARD_TRIGGERS:
