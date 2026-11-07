@@ -1,6 +1,13 @@
 # ADR 0016: Ollama adapter and the evaluation harness
 
-Status: accepted
+Status: accepted; the Ollama adapter was removed on 2026-11-03 (see Amendment). The evaluation harness remains.
+
+## Amendment 2026-11-03: Ollama adapter removed
+
+Owner decision: `divesafe.models.ollama`, the `ollama` provider value, `DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS`
+and the plain-http production check are gone. The shared limits and budget checks moved to
+`divesafe.models.limits` and are used by the OpenAI-compatible adapter (ADR 0018). The text below is
+kept as history. `DIVESAFE_LLM_ALLOWED_HOSTS` stays: the OpenAI-compatible adapter uses it.
 
 ## Context
 
@@ -16,7 +23,9 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
   Amended by ADR 0023: a loopback server is still refused at start-up unless the operator sets
   `DIVESAFE_LLM_SERVER_IS_LOCAL=true` (or the external opt-in), and the connected peer is checked
   over http and https.
-  A remote server must use https (see the amendments for the one exception) and is then refused unless `DIVESAFE_ALLOW_EXTERNAL_LLM=true`.
+  A remote server must use https (see the amendments for the one exception) and is then refused unless `DIVESAFE_ALLOW_EXTERNAL_LLM=true`. Amended
+  (see ADR 0018): the host must also be listed by exact name in `DIVESAFE_LLM_ALLOWED_HOSTS`; the
+  plain-http list does not stand in for it.
   Base URLs with credentials, a query, a fragment or an invalid port are refused. A look-alike
   such as `localhost.evil.example` is not loopback.
 - **Safety of the call:**
@@ -45,8 +54,8 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
     engine result or the proposal; must be 0), over-severe cases (reported), downgrade attempts,
     proposals obtained, schema-failure rate, and injection echoes in injected vs clean scenarios.
   - Offline tests use scripted providers (compliant, always-GO, always-NO-GO, prose, invented
-    evidence, echoing) and gate in CI. They show the metrics would notice a failure; the guarantee
-    itself comes from `reconcile` and the record validator.
+    evidence, echoing) and gate in CI. They show the metrics would notice a failure; the tighten-only
+    property itself is enforced by `reconcile` and the record validator.
   - The live test is opt-in (`DIVESAFE_EVAL_OLLAMA_MODEL`), marked `integration`, writes raw
     records with run time, code SHA and temperature, and fails if no proposal was obtained, so a
     dead model cannot pass.
@@ -116,7 +125,10 @@ behaviour was unmeasured. Hosted adapters send evidence and plan fields off-mach
     echo. Runs of the same model at temperature 0 differed, so small gaps are noise.
   - Invented hazards: with `2026-10-11.2` replies added "heat stress" and "eddies" (not in the
     evidence). With `2026-10-13.1` "heat stress" disappeared but "eddies" stayed in 6 of 7 cases,
-    now worded as a gap. Nothing checks for this; it can only add caution. Accepted for now.
+    now worded as a gap. Nothing checks for this. An invented hazard cannot relax the recommendation
+    (`reconcile` only tightens), but it can mislead the reader of the explanation, and the same gap
+    covers invented reassurance and dropped caveats (see the 2026-10-16 amendment below). Accepted for
+    now.
   - Not measured: other servers (vLLM, LM Studio), repeat runs, and whether a reply keeps its
     caveats beyond a hand-read sample of 4 cases.
 - The scenarios are not reviewed by a diving professional and do not measure real-world safety or

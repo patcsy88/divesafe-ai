@@ -45,8 +45,8 @@ export default function DecisionForm({
         <Link href={`/assessments/${encodeURIComponent(id)}/evidence`}>Read the evidence first.</Link>
       </p>
       <p className="hint">
-        You may accept it or choose a different outcome, including a less severe one. A different
-        outcome needs a reason. This is recorded against your name and cannot be changed.
+        You may accept it or choose a more severe outcome. A less severe outcome needs the overrider
+        role. A different outcome needs a reason. This is recorded against your name and cannot be changed.
       </p>
       <input type="hidden" name="assessment_id" value={id} />
       <label htmlFor="decision">Your decision</label>

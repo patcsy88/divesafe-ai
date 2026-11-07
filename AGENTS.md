@@ -38,7 +38,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 
 ## 3. Coding standards
 
-- Python >= 3.11, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
+- Python >= 3.14, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
   `frozen=True` and `extra="forbid"` for domain values. Domain values use the `Frozen` base.
 - Configuration only through `Settings`; secrets are `SecretStr`, never logged or committed.
 - Code against `LLMProvider`, never a vendor SDK, outside `models/` adapters.
@@ -72,8 +72,8 @@ Severity order: `GO < CAUTION < INSUFFICIENT EVIDENCE < NO-GO`.
 ## 6. Human-in-the-loop requirement
 
 - Every assessment is `PENDING_HUMAN` until a human decides; it MUST NOT be acted on before.
-- A human may accept or override, including to a less severe outcome (ADR 0004). An override
-  MUST carry a rationale and an authenticated actor; `is_override` is derived, never supplied.
+- A human may accept or override (ADR 0004); a less severe outcome needs the `overrider` role
+  (ADR 0026). An override MUST carry a rationale and an authenticated actor; `is_override` is derived, never supplied.
 - Decisions are write-once. The system's own recommendation is never changed by a decision.
 - Record: recommendation, evidence, confidence, timestamps, model/ruleset/data versions, human
   decision, override rationale, and the later actual conditions.

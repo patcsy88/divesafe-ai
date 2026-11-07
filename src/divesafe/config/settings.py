@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from divesafe.config.roles import RESERVED_ROLE_NAMES
+
 
 def _require_tls(dsn: str) -> None:
     """Refuse a production database connection that may fall back to plaintext. The message never
@@ -27,6 +29,23 @@ def _require_tls(dsn: str) -> None:
 # The longest the connectors may take together (their own per-request timeout is below this).
 CONNECTOR_BUDGET_SECONDS = 30.0
 RUN_MARGIN_SECONDS = 30.0
+# The agent stage's model-call cap without cross-examination (5 specialists, 3 scenarios, 1
+# proposal) and with it (one more specialist round). Structural counts, not safety limits.
+AGENT_CALL_CAP = 9
+CROSS_EXAMINATION_CALL_CAP = 14
+AGENT_STAGE_CEILING_SECONDS = 1800.0
+
+
+def agent_stage_budget(
+    stage_seconds: float, call_seconds: float, *, cross_examination: bool
+) -> tuple[int, float]:
+    """(maximum model calls, agent stage deadline in seconds). Off returns the inputs unchanged.
+    On adds one parallel call wave (`call_seconds`) to the stage deadline, capped at the settings
+    ceiling. Used wherever the call cap or the run deadline is derived (ADR 0025 item 5)."""
+    if not cross_examination:
+        return AGENT_CALL_CAP, stage_seconds
+    stage = min(stage_seconds + call_seconds, AGENT_STAGE_CEILING_SECONDS)
+    return CROSS_EXAMINATION_CALL_CAP, stage
 
 
 class Settings(BaseSettings):
@@ -46,8 +65,10 @@ class Settings(BaseSettings):
     # schema; the running application never needs it.
     admin_database_url: SecretStr | None = None
     app_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    # Knowledge loader role (ADR 0022 decision 11). Only `db_init` reads it; unset skips its grants.
+    loader_db_role: str | None = Field(default=None, pattern=r"^[a-z_][a-z0-9_]{0,62}$")
 
-    llm_provider: Literal["openai", "anthropic", "ollama", "openai_compatible", "fake"] = "fake"
+    llm_provider: Literal["openai", "anthropic", "openai_compatible", "fake"] = "fake"
     llm_model: str | None = None
     llm_api_key: SecretStr | None = None
     llm_base_url: AnyHttpUrl | None = None
@@ -58,9 +79,6 @@ class Settings(BaseSettings):
     # can forward everything to a hosted model. Never inferred from the URL, and it cannot be
     # combined with DIVESAFE_ALLOW_EXTERNAL_LLM or used with a non-loopback server.
     llm_server_is_local: bool = False
-    # Comma-separated exact hostnames of non-loopback Ollama servers that may be used over plain
-    # http (ADR 0016). The prompt then crosses the network unencrypted. Empty: https is required.
-    ollama_plain_http_hosts: str | None = None
     # Time budgets for a slow self-hosted model (ADR 0016). The defaults are the original values.
     # One call, the whole agent stage, the wait for a server's first byte, and parallel calls.
     llm_call_timeout_seconds: float = Field(default=60.0, gt=0, le=600, allow_inf_nan=False)
@@ -69,18 +87,40 @@ class Settings(BaseSettings):
     llm_max_concurrent_calls: int = Field(default=4, ge=1, le=8)
     # Output tokens per call. A reasoning model spends part of it thinking, so it may need more.
     llm_max_output_tokens: int = Field(default=1500, ge=256, le=8000)
+    # ADR 0025 item 5: a second, bounded round of specialist calls. Off by default. Read by the
+    # caller only; it is not a parameter of `assess_dive`, not in the API request. When on, the
+    # call cap and the run deadline change (see `agent_stage_budget`).
+    agent_cross_examination: bool = False
 
     # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
-    # may call (ADR 0018). They must use https. Empty: only a loopback server is allowed.
+    # may call (ADR 0018). Empty: only a loopback server is allowed.
     llm_allowed_hosts: str | None = None
 
-    def plain_http_host_set(self) -> frozenset[str]:
-        return _host_set(self.ollama_plain_http_hosts, "DIVESAFE_OLLAMA_PLAIN_HTTP_HOSTS")
+    @field_validator("loader_db_role")
+    @classmethod
+    def _loader_role_acceptable(cls, value: str | None) -> str | None:
+        # Same reserved names as services.postgres.check_loader_role_name; never echoed.
+        if value is not None and (
+            value == "public" or value.startswith("pg_") or value in RESERVED_ROLE_NAMES
+        ):
+            raise ValueError("DIVESAFE_LOADER_DB_ROLE is not an acceptable role name")
+        return value
+
+    @model_validator(mode="after")
+    def _loader_differs_from_app(self) -> Settings:
+        if self.loader_db_role is not None and self.loader_db_role == self.app_db_role:
+            raise ValueError("DIVESAFE_LOADER_DB_ROLE is not an acceptable role name")
+        return self
 
     def effective_run_deadline_seconds(self) -> float:
         if self.run_deadline_seconds is not None:
             return self.run_deadline_seconds
-        return self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+        _, stage = agent_stage_budget(
+            self.llm_stage_timeout_seconds,
+            self.llm_call_timeout_seconds,
+            cross_examination=self.agent_cross_examination,
+        )
+        return stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
 
     def llm_allowed_host_set(self) -> frozenset[str]:
         return _host_set(self.llm_allowed_hosts, "DIVESAFE_LLM_ALLOWED_HOSTS")
@@ -110,7 +150,7 @@ class Settings(BaseSettings):
 
     auth_mode: Literal["api_key", "dev"] = "api_key"
     # JSON object mapping sha256 hex digest of an API key -> actor name. Never store raw keys.
-    # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"]}}
+    # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"|"overrider"]}}
     api_key_hashes: SecretStr | None = None
 
     # Per-actor operational limits (abuse and upstream-quota protection, not safety limits).
@@ -151,10 +191,14 @@ class Settings(BaseSettings):
             )
         if self.max_runs_per_actor > self.max_runs_in_flight:
             raise ValueError("DIVESAFE_MAX_RUNS_PER_ACTOR cannot exceed the in-flight cap")
+        _, stage = agent_stage_budget(
+            self.llm_stage_timeout_seconds,
+            self.llm_call_timeout_seconds,
+            cross_examination=self.agent_cross_examination,
+        )
         if (
             self.run_deadline_seconds is not None
-            and self.run_deadline_seconds
-            < self.llm_stage_timeout_seconds + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+            and self.run_deadline_seconds < stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
         ):
             raise ValueError(
                 "DIVESAFE_RUN_DEADLINE_SECONDS must cover the LLM stage timeout plus the "
@@ -167,13 +211,12 @@ class Settings(BaseSettings):
                 "other; set only one"
             )
         self.llm_allowed_host_set()
-        plain_hosts = self.plain_http_host_set()
-        if self.environment == "production" and plain_hosts:
-            raise ValueError("plain-http Ollama hosts cannot be used in production")
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
             raise ValueError("dev authentication cannot be used in production")
+        if self.auth_mode == "dev" and self.database_url is not None:
+            raise ValueError("dev authentication cannot be used with durable storage")
         keys = (
             "".join(self.api_key_hashes.get_secret_value().split()) if self.api_key_hashes else ""
         )

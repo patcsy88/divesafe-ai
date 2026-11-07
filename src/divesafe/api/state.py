@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from divesafe.api.auth import Authenticator, build_authenticator
 from divesafe.api.ratelimit import Limit, RateLimiter
 from divesafe.config import Settings
+from divesafe.config.loader_settings import LOADER_FIELD, LOADER_URL_KEY, SECRETS_DIR_KEY
+from divesafe.config.secret_files import secret_file_name
 from divesafe.data import (
     MET_API_HOSTS,
     MET_API_QUOTA,
@@ -28,6 +32,7 @@ from divesafe.data import (
     UrllibFormPostJsonGetter,
     UrllibJsonGetter,
 )
+from divesafe.data.http import HTTP_POOL_CEILING, configure_http_pool, http_pool_size
 from divesafe.domain import DataCategory, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
 from divesafe.models.egress import check_egress
@@ -208,11 +213,41 @@ def build_repository(settings: Settings) -> RunAwareRepository:
     return repository
 
 
+def refuse_loader_credentials(environ: Mapping[str, str]) -> None:
+    """ADR 0024 A4: the API never holds the knowledge loader's connection string. `Settings` has
+    no field for it (extra="ignore" would drop it silently), so look for it by name, in the
+    environment and in the secrets directory. A `.env` file is not read (recorded gap, A8)."""
+    if environ.get(LOADER_URL_KEY):
+        raise RuntimeError(
+            "refusing to start in production with the knowledge loader's connection string "
+            "in the environment; it belongs to the loader only"
+        )
+    location = environ.get(SECRETS_DIR_KEY)
+    if location and os.path.lexists(Path(location) / secret_file_name(LOADER_FIELD)):
+        raise RuntimeError(
+            "refusing to start in production with the knowledge loader's connection string "
+            "in the secrets directory; it belongs to the loader only"
+        )
+
+
 def build_default_state(settings: Settings) -> AppState:
     if settings.environment == "production" and settings.admin_database_url is not None:
         raise RuntimeError(
             "refusing to start in production with the owner-role database URL "
             "(DIVESAFE_ADMIN_DATABASE_URL); it belongs to db_init only"
+        )
+    if settings.environment == "production":
+        refuse_loader_credentials(os.environ)
+    leftover = sorted(k for k in os.environ if k.startswith("DIVESAFE_OLLAMA_"))
+    if leftover:
+        logger.warning(
+            "DIVESAFE_OLLAMA_* variables are set but the Ollama adapter was removed; ignored",
+            extra={"count": len(leftover)},
+        )
+    if "DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP" in os.environ:
+        logger.warning(
+            "DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP is set but the guard was removed "
+            "(ADR 0026); ignored"
         )
     getter = CachingRateLimitedGetter(UrllibJsonGetter())
     connectors: list[Connector] = [
@@ -248,6 +283,17 @@ def build_default_state(settings: Settings) -> AppState:
                 )
             )
         )
+    pool_size = http_pool_size(len(connectors), settings.max_runs_in_flight)
+    configure_http_pool(pool_size)
+    logger.info(
+        "connector HTTP pool sized",
+        extra={
+            "http_pool_workers": pool_size,
+            "connectors": len(connectors),
+            "max_runs_in_flight": settings.max_runs_in_flight,
+            "http_pool_ceiling": HTTP_POOL_CEILING,
+        },
+    )
     if settings.environment == "production" and not settings.trusted_proxy_set():
         logger.warning(
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "

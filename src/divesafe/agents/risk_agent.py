@@ -12,6 +12,7 @@ from divesafe.agents.prompts import (
     evidence_payload,
     missing_note,
     tide_note,
+    warning_note,
 )
 from divesafe.agents.runner import call_structured
 from divesafe.agents.schemas import ProposalOutput
@@ -47,6 +48,7 @@ async def propose(
             "contradictory evidence prefer INSUFFICIENT EVIDENCE."
             + missing_note(missing)
             + tide_note(evidence)
+            + warning_note(evidence)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

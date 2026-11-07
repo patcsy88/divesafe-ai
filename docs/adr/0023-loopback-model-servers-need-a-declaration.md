@@ -7,8 +7,14 @@ commit messages, not in a history section. **Text amended 2026-10-20/21 after ac
 ADR 0022 (typed record fields, the `no_agent_stage` value); acceptance of the decision itself is
 unchanged; not re-accepted.** Amends ADR 0007, 0016 and 0018. Closes the start-up part
 of the gap recorded in ADR 0022 decision 15. **ADR 0022 requires typed record fields `egress_basis`
-and `model_host` (not a string in `model_version`); they are not yet built**, and using the basis
-in the knowledge filter is not done either.
+and `model_host` (not a string in `model_version`); the fields and their validator are built
+(2026-11-06, ADR 0022 condition 7) but no run sets them yet**, and using the basis in the knowledge
+filter is not done either.
+
+> Amendment 2026-11-03: the Ollama adapter was removed (ADR 0016 amendment). Every mention of Ollama
+> below, including "both adapters", the Ollama tests and mutations, is history. The OpenAI-compatible
+> adapter keeps the peer check; `tests/unit/test_loopback_peer.py` and `tests/safety/test_llm_egress_declaration.py`
+> cover it.
 
 ## Context
 
@@ -235,8 +241,9 @@ plan and evidence data left the machine. The address cannot show where the promp
   IPv4-mapped conversion in `is_loopback` changes nothing on Python 3.14.8 or 3.11.17 (checked on
   2026-10-18 in a throwaway environment: the 63 loopback and egress tests pass with and without
   it). Both standard libraries already treat `::ffff:127.0.0.1` as loopback inside
-  `IPv6Address.is_loopback`, so the conversion is redundant there. **Python 3.12 (the container
-  image) and 3.13 were not tested.** An earlier note said CI's 3.11 would catch it; that was
+  `IPv6Address.is_loopback`, so the conversion is redundant there. **Python 3.12 and 3.13 were not
+  tested.** Since 2026-11-06 the project requires Python 3.14 and the container image is
+  `python:3.14-slim`, so the image's minor version is the one checked (patch release not checked). An earlier note said CI's 3.11 would catch it; that was
   wrong for the patch release tested. Which patch releases lack the standard-library handling was
   not checked. Without the conversion a mapped loopback address would be refused, which fails
   closed, and a mapped non-loopback address is refused on every version checked. The

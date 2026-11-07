@@ -54,14 +54,22 @@ APPLICATION             Dive Assessment API (FastAPI) | Human decision interface
 
 ## Agentic lifecycle
 
+The run-time stages are data: `orchestration.graph.STAGES` (ADR 0025) names each stage, what it
+requires and produces, and which outcome lets the run continue. `assess_dive` walks that graph;
+tests assert its properties without running it. Stage names as stored on the record
+(`domain.StageName`): `observe`, `retrieve`, `assess`, `reason`, `rejudge`, `propose`,
+`supervise`, `gate`.
+
 | Stage | What happens | Primary components |
 | --- | --- | --- |
-| Observe | Receive the dive plan; fetch live conditions as structured evidence. | Connectors, Provenance |
-| Retrieve | Fetch site knowledge, guidance, history. | RAG, Historical data |
-| Diagnose / Reason | Specialist agents interpret evidence; bounded ToT compares scenarios. | Agents, Orchestrator |
-| Assess Risk | Rules engine (authoritative) and risk model score the plan. | Risk Rules Engine, Risk Model |
-| Propose | Agents propose a recommendation with evidence IDs, confidence, uncertainty. `reconcile` fixes the final recommendation. | Risk Assessment Agent, `reconcile` |
-| Human Gate | Human reviews evidence, risk factors and uncertainty; accepts or overrides with rationale. Nothing is final until this step. | API, Human interface |
+| Observe | Receive the dive plan; fetch live conditions as structured evidence. Failed sources become issues, never an abort. | Connectors, Provenance |
+| Retrieve | Fetch site knowledge, guidance, history. Placeholder (`not_configured`) until RAG stage 1 (ADR 0022). | RAG, Historical data |
+| Assess | Rules engine (authoritative) scores the plan; connector issues become a rule result. Must complete or the run fails. | Risk Rules Engine |
+| Reason | Specialist agents interpret evidence; bounded ToT compares scenarios; the risk agent proposes with evidence IDs. A failed or rejected task, or a deadline, degrades to "no proposal"; an unexpected crash stops the run (fails closed). | Agents |
+| Rejudge | Rules engine again at the later clock, keeping every earlier result; a started window or expired rule can only add problems. Must complete. | Risk Rules Engine |
+| Propose | `reconcile` fixes the final recommendation from the deterministic result and the proposal. The only producer of `final_recommendation`. Must complete. | `reconcile` |
+| Supervise | Code-only checks (no LLM): tighten-only, severity order, citations, prompt-version pin, required categories. An invariant breach raises and stores nothing; the other checks add a `supervisor.<check>` rule result and `reconcile` runs again. Must complete. | `orchestration.supervisor` |
+| Human Gate | The record is `PENDING_HUMAN`. Human reviews evidence, risk factors and uncertainty; accepts or overrides with rationale. Nothing is final until this step. | API, Human interface |
 | Validate | Check the decision record is complete and consistent; later compare against actual conditions. | Provenance, Feedback |
 | Learn | Store actual conditions and outcomes; feed evaluation and calibration. Learning never edits rules automatically. | Feedback/Learning |
 
@@ -93,6 +101,15 @@ project's concept names map onto it like this:
 | HumanDecision | decider, decision, time, derived `is_override`, rationale |
 | PostDiveObservation | `ActualConditions` (alias `PostDiveObservation`) |
 
+**Terms: "withheld" has three meanings.**
+
+- `withheld_evidence`: conflicting evidence dropped before the rules run, kept in the record and
+  shown to the human, not in the main result and only read by the variant search to add severity ([ADR 0008](adr/0008-evidence-usability.md)).
+- `decision_withheld` / `DECISION_WITHHELD`: the human decision hidden from a create-only key
+  ([ADR 0019](adr/0019-asynchronous-assessment-creation.md)).
+- `withheld_knowledge`: knowledge items not sent to a model because of the egress basis
+  ([ADR 0022](adr/0022-rag-knowledge-retrieval.md)).
+
 ## Data provenance
 
 Every `EvidenceItem` carries: `source` and `source_version`; `location` (`GeoPoint`, the data's
@@ -107,12 +124,22 @@ timezone inference. Provenance is stored in the audit record with the evidence.
 
 Each assessment persists an `AssessmentRecord` (`divesafe.domain.models`): plan, evidence,
 rule results, deterministic / proposed / final recommendation, downgrade flag, confidence,
-scenarios, explanation, model / ruleset / data versions, human decision, override rationale,
-and later actual conditions.
+scenarios, explanation, model / ruleset / data versions, the Supervise stage's verdict
+(`supervisor_verdict`, ADR 0025; `None` on older records; serialised on the record view as enum
+names and a recommendation only, no dedicated view yet), the per-stage trace (`stages`, ADR 0025
+item 3: one `StageTrace` per executed stage in graph order with outcome, `next_stage`, timing,
+the evidence ids the stage used and fixed issue codes such as `observe.connector_failed:<name>`;
+empty on older records; never prompts, model text or provider error text), the egress fields
+(ADR 0022 decision 15: `egress_basis`, one of five fixed values; `model_host`, a host name only;
+`withheld_knowledge`, the `kb:` items not sent to a model, by document id, version and chunk; all
+absent on older records and, until the knowledge filter is wired, on new ones; the record refuses
+`kb:` evidence that is not withheld unless the basis is `declared_local`), human
+decision, override rationale, and later actual conditions. `deterministic_recommendation` is
+the most severe of every rule result, including any `supervisor.<check>` result.
 
 ## Technology
 
-Python 3.11+, FastAPI, Pydantic v2, PostgreSQL (+ pgvector for RAG), pytest, Docker Compose,
+Python 3.14+, FastAPI, Pydantic v2, PostgreSQL (+ pgvector for RAG), pytest, Docker Compose,
 stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 `divesafe.models.LLMProvider` ([ADR 0002](adr/0002-llm-provider-abstraction.md)).
 
@@ -126,6 +153,13 @@ stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 
 See [docs/adr/](adr/).
 
+- Orchestration stays plain Python with the lifecycle as an explicit, testable stage graph, a
+  code-only Supervisor stage and a per-stage trace on the record; no agent framework
+  ([ADR 0025](adr/0025-plain-python-orchestration.md), accepted 2026-11-03; the graph, Supervise and the
+  trace are built).
+
+- Who may write what, and which test proves it: [authority-map.md](authority-map.md).
+
 ## Rule definitions
 
 Signed-off limits are data (`domain.RuleDefinition`, ADR 0009), applied by `risk.DefinitionRule`,
@@ -136,24 +170,51 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
+- **Evidence-id conflicts (closed by ADR 0026, 2026-11-05):** the most severe variant decides, by
+  the deterministic engine (`orchestration/conflict_variants.py`). Left open: the capacity bounds
+  (4 ids, 3 variants, 64 combinations) leave a larger conflict at INSUFFICIENT EVIDENCE
+  (`evidence.conflict_unbounded`). The start-up guard `DIVESAFE_ACCEPT_EVIDENCE_CONFLICT_GAP` is
+  removed. The record has no field of its own for the worst combination.
+
+- **`kb_screen` id-screen gaps (accepted by the owner, 2026-11-03):** 9 strict xfails in
+  `tests/safety/test_kb_screen.py` (`_fold` bypasses: punctuation inside `kb:` and a connector
+  prefix dropped, spaced or percent-encoded). The id screen is a screen, not a control
+  (ADR 0022 decision 9). Closing it would flag ordinary prose ("Dock B:" folds to `kb:`), so the
+  gap stays; the xfails stay strict so closing it later turns them red. Retrieved text remains
+  untrusted and delimited, and citations are checked against real evidence ids.
+- **ADR 0025 open findings** (accepted 2026-11-03; Supervise's self-comparison, duplicate JSON
+  keys, Supervise's `produces` and the citation metric are fixed): a crash in Reason outside the
+  per-task handlers stops the run and stores nothing (fails closed; a bug in Reason's own code
+  also loses the deterministic result, visibly). `conflicting_signals` are wording-screened and
+  marked, not dropped; other model text on the page is not screened. See the ADR's Known gaps.
+- **Connector HTTP limits** (2026-10-26): the total deadline and the dedicated thread pool leave
+  gaps (connect/DNS/TLS/header stalls, private socket access, no per-host thread limit, unbounded
+  queue, shared module-level pool); see
+  [data-sources.md](data-sources.md).
+- **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
+  interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
+  see [risk-model.md](risk-model.md) Known gaps.
 - **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
   Still open: a migration tool, record hashing for tamper evidence, connection pooling.
-- **Roles and authorization:** API keys identify an actor but grant no roles (a production gate;
-  see ADR 0006). Who may override,
-  and whether a less severe override needs stronger authority, is not enforced. Key rotation and
-  revocation are manual (edit the configured hashes).
+- **Roles and authorization:** keys carry explicit roles (ADR 0013); a less severe human outcome
+  needs `overrider` (ADR 0026, built) and each decision records its `key_id` and
+  `decided_by_creator`. `admin` moves a pending assessment to another decider (ADR 0026, built,
+  migration 5). `groups` scope what a viewer key may read (ADR 0026, built). Key rotation and revocation are manual (edit the
+  configured hashes).
 - **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
   No request-size or per-client rate limits beyond the provider-limit guard.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
-  egress flag exist (ADR 0007). An Ollama adapter and an offline-tested evaluation harness exist
-  (ADR 0016) and an OpenAI-compatible one (ADR 0018). Small live runs on a synthetic set have been
-  made (Ollama, `qwen3.5:9b`; and `claude-sonnet-5-5` through the OpenAI-compatible adapter, see
+  egress flag exist (ADR 0007). An offline-tested evaluation harness (ADR 0016) and an OpenAI-compatible
+  adapter (ADR 0018) exist; the Ollama adapter was removed (ADR 0016 amendment). Small live runs on
+  a synthetic set were made (Ollama `qwen3.5:9b` before its removal; and `claude-sonnet-5-5` through the OpenAI-compatible adapter, see
   evaluation-strategy.md); vendor-specific OpenAI and Anthropic adapters are not built, and
   real-model behaviour is largely unmeasured. Each adapter needs an ADR for its dependency and a documented note on what data the vendor sees.
-- **Contradiction detection and validity-window coverage** (see [risk-model.md](risk-model.md)).
-- **Supply chain:** pinned image digests and a lock file; dependency audit in CI.
-- **Per-category evidence quality policy and engine-level validity-window coverage**
-  (see risk-model.md).
+- **Contradiction detection** (see [risk-model.md](risk-model.md)).
+- **Supply chain:** CI builds the image and checks its Python and Unicode versions, audits runtime
+  Python (`pip-audit`) and npm dependencies (not dev tools), and pins actions by commit SHA (ADR 0024). Still open: image
+  digests, a Python lock file with hashes, an image scan.
+- **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
+  instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry

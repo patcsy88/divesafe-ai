@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from divesafe.domain import Recommendation
 
-ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 Summary = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 Rationale = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 

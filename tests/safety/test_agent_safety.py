@@ -263,7 +263,9 @@ def test_llm_forced_severity_is_attributed_not_presented_as_a_rule_result() -> N
     from divesafe.api.schemas import AssessmentView
 
     note = AssessmentView.of(record).outcome_note
-    assert note.startswith("Rules alone: GO. An unverified LLM proposal raised this to NO-GO.")
+    assert note.startswith(
+        "Deterministic checks: GO. An unverified LLM proposal raised this to NO-GO."
+    )
 
 
 def test_missing_specialists_are_disclosed_to_later_prompts_and_to_the_user() -> None:

@@ -33,12 +33,17 @@ A small in-house runner, `divesafe.services.migrations`, with no new dependency.
   `DROP TRIGGER`, `ALTER FUNCTION`, `DROP FUNCTION`, `DISABLE ROW LEVEL` or
   `session_replication_role` (`FORBIDDEN_IN_LATER_MIGRATIONS`). This is a word scan, not a SQL
   parser; it stops accidents and obvious attacks, and review is still the control.
-- **One reviewed exception: migration 3.** It sets the three guard triggers to `ENABLE ALWAYS`
+- **Reviewed exceptions: migration 3, and migration 4 as the second.** Migration 3 sets the three
+  guard triggers to `ENABLE ALWAYS`
   (so they fire in every `session_replication_role`, including `replica`), and so it has to name
   them. `REVIEWED_GUARD_MIGRATIONS` skips the word scan for a migration only when both its version
   and its SHA-256 match (3 and the pinned checksum). Any edit to its text, or the same text under
   another version, is scanned again. Its text is also pinned statement by statement in
-  `tests/safety/test_migration_guard.py`.
+  `tests/safety/test_migration_guard.py`. **Migration 4 (the knowledge store) is the second
+  reviewed exception**, pinned by version and checksum in the same way, with its knowledge triggers
+  `ENABLE ALWAYS`; its whole word scan is skipped and compensated by the checksum pin, the SQL-text
+  test and the post-migration trigger check. See ADR 0022 decision 10 for what is and is not
+  checked.
 - After migrating, and before commit, the runner checks the three guard triggers are `ENABLE
   ALWAYS` (`tgenabled = 'A'`) and rolls back if not. `verify()` checks the same.
 - `migrate` refuses to run as the application role and sets a lock timeout.

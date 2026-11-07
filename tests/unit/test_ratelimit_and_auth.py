@@ -110,7 +110,14 @@ def test_dev_mode_grants_every_role_and_api_key_mode_only_the_configured_ones() 
 
 def test_dev_mode_is_refused_in_production() -> None:
     with pytest.raises(ValueError):
-        Settings(environment="production", auth_mode="dev", llm_provider="ollama")
+        Settings(environment="production", auth_mode="dev", llm_provider="openai_compatible")
+
+
+def test_dev_mode_is_refused_with_durable_storage_in_any_environment() -> None:
+    for env in ("development", "test"):
+        with pytest.raises(ValueError, match="durable storage"):
+            Settings(environment=env, auth_mode="dev", database_url="postgresql://u:p@h/db")
+    Settings(environment="development", auth_mode="dev")  # in-memory dev stays possible
 
 
 @pytest.mark.parametrize(

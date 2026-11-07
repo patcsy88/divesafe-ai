@@ -11,10 +11,15 @@ import asyncio
 import contextlib
 import http.client
 import json
+import logging
+import socket
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any, Protocol
 
 from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
@@ -31,6 +36,8 @@ PHN_MAX_BYTES = 512 * 1024
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
 MAX_JSON_DEPTH = 32  # a parsing bound for hostile bodies, not a safety limit
+_READ_CHUNK = 16 * 1024
+logger = logging.getLogger(__name__)
 
 
 class JsonGetter(Protocol):
@@ -56,11 +63,210 @@ def check_url(url: str, allowed_hosts: Collection[str]) -> None:
         raise ConnectorTransportError(f"refusing a non-standard port or userinfo for {_label(url)}")
 
 
-def read_limited(response: IO[bytes], max_bytes: int) -> bytes:
-    body = response.read(max_bytes + 1)
+class _DeadlineExceeded(Exception):
+    """The total deadline passed inside the worker thread (converted to a fixed-text error)."""
+
+
+_socket_warned = False
+
+
+def _socket_of(response: Any) -> Any:
+    """The response's socket, or None. It is reached through private http.client/urllib
+    attributes, so a Python change can break it; that is reported once, with fixed text."""
+    global _socket_warned
+    try:
+        return response.fp.raw._sock
+    except AttributeError:
+        if not _socket_warned:
+            _socket_warned = True
+            logger.warning(
+                "connector HTTP socket not reachable: the per-read deadline and the "
+                "cancel-time socket close are inactive",
+                extra={"http_socket_access": "unavailable"},
+            )
+        return None
+
+
+def _tighten_socket_timeout(response: Any, remaining: float) -> None:
+    """Only ever lowers the socket timeout, to what is left of the total deadline."""
+    sock = _socket_of(response)
+    if sock is None:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        get = getattr(sock, "gettimeout", None)
+        current = get() if callable(get) else None
+        sock.settimeout(max(remaining if current is None else min(current, remaining), 0.001))
+
+
+def read_limited(response: IO[bytes], max_bytes: int, deadline_at: float | None = None) -> bytes:
+    """Read at most max_bytes (refusing more), stopping at the deadline or when cancelled.
+
+    With a deadline, each pass makes one receive (`read1`, which does not loop to fill the
+    request), so a slow drip cannot stretch one call into many socket timeouts.
+    """
+    if deadline_at is None:
+        body = response.read(max_bytes + 1)
+    else:
+        job = getattr(_local, "job", None)
+        read_some = getattr(response, "read1", None) or response.read
+        chunks: list[bytes] = []
+        size = 0
+        while size <= max_bytes:
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0 or (job is not None and job.cancelled.is_set()):
+                raise _DeadlineExceeded
+            _tighten_socket_timeout(response, remaining)
+            chunk = read_some(min(_READ_CHUNK, max_bytes + 1 - size))
+            if not chunk:  # b"" is end of stream; a short chunk just loops
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        body = b"".join(chunks)
     if len(body) > max_bytes:
         raise ConnectorResponseError(f"response exceeds the {max_bytes}-byte limit")
+    # The stream ended (the cap was not hit). http.client leaves `length` as the Content-Length
+    # still owed on a fixed-length body, so a positive value means the connection dropped early.
+    # A missing, None or non-int length (chunked, or a fake) is unknown: no check.
+    owed = getattr(response, "length", None)
+    if isinstance(owed, int) and not isinstance(owed, bool) and owed > 0:
+        raise ConnectorResponseError("response was truncated")
     return body
+
+
+class _Job:
+    """One call's deadline and cancel flag, shared by the awaiting task and its worker thread.
+
+    The worker registers its response socket once; the event-loop side closes it on cancel so a
+    blocked read ends. Registering after cancel closes at once; closing twice is harmless."""
+
+    def __init__(self, label: str, deadline_seconds: float) -> None:
+        self.label = label
+        self.deadline_at = time.monotonic() + deadline_seconds
+        self.cancelled = threading.Event()
+        self._lock = threading.Lock()
+        self._sock: Any = None
+
+    def attach(self, sock: Any) -> None:
+        if sock is None:
+            return
+        with self._lock:
+            if not self.cancelled.is_set():
+                self._sock = sock
+                return
+        _close_socket(sock)
+
+    def detach(self) -> None:
+        """Forget the socket once reading has ended (http.client closes it itself), so a later
+        abort cannot touch a descriptor the OS may have reused. Idempotent; never closes."""
+        with self._lock:
+            self._sock = None
+
+    def abort(self) -> None:
+        """Set the cancel flag (before taking the lock, so attach cannot miss it) and close.
+
+        The close happens under the lock, so detach cannot return while a close is in progress."""
+        self.cancelled.set()
+        with self._lock:
+            sock, self._sock = self._sock, None
+            if sock is not None:
+                _close_socket(sock)
+
+
+def _close_socket(sock: Any) -> None:
+    with contextlib.suppress(OSError, ValueError):
+        sock.shutdown(socket.SHUT_RDWR)
+    with contextlib.suppress(OSError, ValueError):
+        sock.close()
+
+
+_local = threading.local()
+# A dedicated pool shared by all connectors: a stuck upstream can use at most these threads and
+# never the default asyncio pool that asyncio.to_thread users rely on.
+# HTTP_POOL_WORKERS is the small default, used by direct callers and tests that build getters
+# without an app (threads start lazily, so an unused default pool costs nothing). The app replaces
+# it at startup with a pool sized from its settings (configure_http_pool).
+HTTP_POOL_WORKERS = 8
+# Upper bound for a sized pool. Each worker is an OS thread with its own stack and (at most) one
+# open upstream connection; the providers rate-limit us anyway (CachingRateLimitedGetter), so
+# beyond this a larger pool buys little and only raises memory use and upstream concurrency.
+HTTP_POOL_CEILING = 64
+_THREAD_PREFIX = "divesafe-http"
+_DEFAULT_POOL = ThreadPoolExecutor(
+    max_workers=HTTP_POOL_WORKERS, thread_name_prefix="divesafe-http"
+)
+_POOL = _DEFAULT_POOL
+
+
+def http_pool_size(connectors: int, max_runs_in_flight: int) -> int:
+    """Calls that can overlap (connectors x runs in flight), within [1, HTTP_POOL_CEILING]."""
+    return max(1, min(HTTP_POOL_CEILING, connectors * max_runs_in_flight))
+
+
+def configure_http_pool(workers: int) -> ThreadPoolExecutor:
+    """Install (and return) a pool of `workers` threads (floored at 1, capped at the ceiling).
+
+    Replaces any earlier sized pool without waiting for it; the shared default pool is never shut
+    down here. Calls already running on a replaced pool finish there (each is deadline-bound).
+    """
+    global _POOL
+    previous = _POOL
+    _POOL = ThreadPoolExecutor(
+        max_workers=max(1, min(HTTP_POOL_CEILING, workers)), thread_name_prefix=_THREAD_PREFIX
+    )
+    if previous is not _DEFAULT_POOL:
+        previous.shutdown(wait=False)
+    return _POOL
+
+
+def shutdown_http_pool() -> None:
+    """Shut the sized pool down without waiting for blocked workers and fall back to the default.
+
+    Queued, not-yet-started calls are cancelled; running ones end at their own deadline.
+    """
+    global _POOL
+    pool, _POOL = _POOL, _DEFAULT_POOL
+    if pool is not _DEFAULT_POOL:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _timed_out(label: str) -> ConnectorTransportError:
+    return ConnectorTransportError(f"request to {label} timed out")
+
+
+def _run_job(job: _Job, fn: Callable[[str, Mapping[str, str]], Any], url: str, params: Any) -> Any:
+    # Queued work whose caller already gave up (or whose deadline passed) never starts.
+    if job.cancelled.is_set() or time.monotonic() >= job.deadline_at:
+        raise _timed_out(job.label)
+    _local.job = job
+    try:
+        return fn(url, params)
+    finally:
+        _local.job = None
+
+
+async def _call_in_pool(
+    fn: Callable[[str, Mapping[str, str]], Any],
+    url: str,
+    params: Mapping[str, str],
+    deadline_seconds: float,
+) -> Any:
+    job = _Job(_label(url), deadline_seconds)
+    future = asyncio.get_running_loop().run_in_executor(_POOL, _run_job, job, fn, url, params)
+    try:
+        return await asyncio.wait_for(future, timeout=deadline_seconds)
+    except TimeoutError as exc:
+        raise _timed_out(job.label) from exc
+    finally:
+        # Also covers caller cancellation: a worker not yet started will not start, and one
+        # blocked on its socket is unblocked by closing that socket from here.
+        job.abort()
+
+
+def _current_deadline(fallback_seconds: float) -> float:
+    job = getattr(_local, "job", None)
+    if job is not None:
+        return float(job.deadline_at)
+    return time.monotonic() + fallback_seconds
 
 
 class _SafeRedirect(urllib.request.HTTPRedirectHandler):
@@ -112,11 +318,9 @@ class UrllibJsonGetter:
     async def get_json(self, url: str, params: Mapping[str, str]) -> Any:
         check_url(url, self._allowed)
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._get, url, params), timeout=self._deadline
-            )
+            return await _call_in_pool(self._get, url, params, self._deadline)
         except TimeoutError as exc:
-            raise ConnectorTransportError(f"request to {_label(url)} timed out") from exc
+            raise _timed_out(_label(url)) from exc
 
     def _get(self, url: str, params: Mapping[str, str]) -> Any:
         full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
@@ -140,17 +344,41 @@ def _open_json(
     timeout: float,
     max_bytes: int,
 ) -> Any:
+    deadline_at = _current_deadline(timeout)
+    job: _Job | None = getattr(_local, "job", None)
+
+    def gave_up() -> bool:
+        return time.monotonic() >= deadline_at or (job is not None and job.cancelled.is_set())
+
+    if gave_up():
+        raise _timed_out(_label(url))
     try:
-        with opener.open(request, timeout=timeout) as response:
-            body = read_limited(response, max_bytes)
+        # The socket timeout never exceeds what is left of the total deadline.
+        with opener.open(request, timeout=min(timeout, deadline_at - time.monotonic())) as response:
+            try:
+                if job is not None:
+                    job.attach(_socket_of(response))  # closes it at once if already cancelled
+                body = read_limited(response, max_bytes, deadline_at)
+            finally:
+                if job is not None:
+                    job.detach()
+    except _DeadlineExceeded as exc:
+        raise _timed_out(_label(url)) from exc
     except urllib.error.HTTPError as exc:
         with contextlib.suppress(OSError):
             exc.close()
+        if gave_up():
+            raise _timed_out(_label(url)) from exc
         raise ConnectorTransportError(f"HTTP {exc.code} from {_label(url)}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # A socket closed by the caller's cancel surfaces here (or below) as an ordinary error.
+        if gave_up():
+            raise _timed_out(_label(url)) from exc
         raise ConnectorTransportError(f"request to {_label(url)} failed") from exc
     except (http.client.HTTPException, ValueError):
         # The text of these can echo a header value, so it is dropped.
+        if gave_up():
+            raise _timed_out(_label(url)) from None
         echoed = True
     else:
         echoed = False
@@ -206,11 +434,9 @@ class UrllibFormPostJsonGetter:
     async def get_json(self, url: str, params: Mapping[str, str]) -> Any:
         check_url(url, self._allowed)
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(self._post, url, params), timeout=self._deadline
-            )
+            return await _call_in_pool(self._post, url, params, self._deadline)
         except TimeoutError as exc:
-            raise ConnectorTransportError(f"request to {_label(url)} timed out") from exc
+            raise _timed_out(_label(url)) from exc
 
     def _post(self, url: str, params: Mapping[str, str]) -> Any:
         request = urllib.request.Request(  # noqa: S310 (scheme and host checked above)

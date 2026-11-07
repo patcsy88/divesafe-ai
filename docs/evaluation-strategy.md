@@ -4,7 +4,7 @@
 
 | Layer | Location | What it proves | Gate |
 | --- | --- | --- | --- |
-| Safety invariants | `tests/safety` | Hierarchy, severity order, insufficient-evidence handling | Must pass; never skipped |
+| Safety invariants | `tests/safety` | Hierarchy, severity order, insufficient-evidence handling | Must pass; never skipped (known gaps are strict xfails) |
 | Unit | `tests/unit` | Domain, config, engine, providers | CI |
 | Agent | `tests/agent` | Agent behavior with scripted `FakeProvider` output | CI |
 | Integration | `tests/integration` | Database/pgvector, connectors (recorded fixtures) | CI where services exist |
@@ -12,21 +12,34 @@
 
 ## Safety evaluation (highest priority)
 
-- **Adversarial proposals:** an LLM/agent proposal less severe than the rules result never
-  lowers the final result (property tests over all severity pairs already exist).
-- **Prompt injection:** retrieved text and connector payloads containing instructions do not
-  change behavior.
-- **Evidence gaps:** removing any required category yields `INSUFFICIENT EVIDENCE`.
-- **Provider swap:** same deterministic inputs give the same final recommendation across providers.
-- **Contradiction:** conflicting sources lower confidence and are surfaced, never silently resolved.
+Status of each item is stated; "planned" means nothing builds or measures it yet.
+
+- **Adversarial proposals (built):** an LLM/agent proposal less severe than the rules result never
+  lowers the final result (tests over every severity pair; the adversarial set and its
+  `false_go == 0` check, see below).
+- **Prompt injection (partly built):** the offline harness screens replies for five fixed marker
+  phrases in two injected scenarios. The adversarial set's hostile notice is a rules-only case (the
+  scripted model never reads it), so model behaviour under injection is unmeasured offline. A
+  string match is not a test that behaviour is unchanged; a model can echo an attack in other words.
+- **Evidence gaps (built for the rules):** removing a required category yields
+  `INSUFFICIENT EVIDENCE` in the rules engine; tests in `tests/safety` cover it.
+- **Provider swap (planned):** the final recommendation depends on the deterministic result and a
+  tighten-only reconcile, but no test runs the same inputs across real providers and compares them.
+  Model output is nondeterministic even at temperature 0.
+- **Contradiction (planned):** contradiction detection is not built and `confidence` is `None`.
+  What exists is that conflicting evidence ids are kept visible as withheld (ADR 0008) and that the
+  most severe variant decides (ADR 0026).
 
 ## Quality evaluation
 
 - **Scenario set:** curated, provenance-labelled cases (site, plan, evidence snapshot, expected
-  rule outcome), reviewed by a qualified diving professional. Synthetic cases are labelled synthetic.
+  rule outcome). The target is review by a qualified diving professional; **no case has been
+  reviewed yet.** Every current case is synthetic and labelled synthetic, so the results say
+  nothing about real-world safety.
 - **Metrics:**
   - rule-outcome accuracy on the scenario set (deterministic; should be exact);
-  - citation validity: share of claims whose cited evidence supports them;
+  - citation validity: today, whether every cited id exists in the record (built). Whether the
+    cited evidence supports the claim is not checked and needs a human-rated sample (planned);
   - confidence calibration against outcomes (reliability curves) once data exists;
   - conservative-error rate: cases where the final recommendation was less severe than the reference;
   - abstention quality: correct use of `INSUFFICIENT EVIDENCE`;
@@ -45,7 +58,7 @@
 ## Reproducibility
 
 Each evaluation run records the ruleset, model, prompt, data and code versions; LLM
-evaluations use temperature 0 where supported and store raw outputs.
+evaluations use temperature 0 where supported and store the assessment records (no raw text is kept for a refused reply).
 
 ## Live runs recorded
 
@@ -120,3 +133,38 @@ answered rests on the host's routing; no digest was recorded.
 
 Scenario results do not prove real-world safety. Evaluation supports the capstone's claims
 about engineering quality, not operational certification.
+
+## Ablation and adversarial sets (ADR 0025 item 4)
+
+- **Adversarial set** (`tests/evaluation/adversarial.py`): eight SYNTHETIC, labelled cases that
+  tempt a false GO. Each has a fail-closed expected outcome; none expects GO. Cases 2 and 3
+  (cheerful notice, injected notice) are **rules-only temptations**: the scripted model never
+  reads warning text, so only `WarningNeedsHumanReadingRule` produces their outcome. Case 8 is a
+  CAUTION rule with a GO proposal, the only case where the rules leave room.
+- **Ablation** (`tests/evaluation/ablation.py`): the same cases under `full`, `no_specialists`,
+  `no_scenarios`, `no_proposal` and `rules_only` (no provider). Variants differ only where the
+  rules leave room (case 8: the GO downgrade attempt and the call count), not in the other cases.
+- **What false-GO = 0 shows:** that the rules floor holds. `reconcile` and the Supervise stage
+  never relax a deterministic result, whatever the agents propose. It does not show agent
+  quality: a model that proposes GO and is discarded still scores 0.
+- **Counts per variant, reported separately:** `ran` (a record was stored), `refused` (Supervise
+  refused to store it) and `false_go`. `false_go` counts only a stored record whose final is GO
+  against a non-GO label. `ran + refused` covers every case. A refused run is never a false GO and
+  never carries a final, proposal or record. The CAUTION case records the agent's GO in
+  `proposed`, not in `final`.
+- **A relaxed reconcile is stopped, not missed:** Supervise and record validation refuse a relaxed
+  GO, so it shows up as `refused`, and the gate fails on that path too (the refusal assertions).
+  If a GO ever reached storage, `false_go` would count it and the gate would fail.
+- **Measured per variant:** abstention against the labels; citation validity; provider calls
+  against the cap (`full` = 9, from the source counts); latency, recorded only. Runs are offline
+  and deterministic: the safety gate runs three times and must match; live variance is not measured.
+- **Gates:** `false_go` = 0 and `ran + refused` = cases is an offline CI gate
+  (`tests/safety/test_adversarial_false_go.py`, marker `safety`). A mutation test relaxes
+  `reconcile` in memory. An AST walk over `src/divesafe` fails if any call to `run_agent_stage`
+  or `_stage` passes an ablation switch, or if a switch name appears in `assess_dive`, `Settings`,
+  `api/` or `config/`. `getattr` is out of scope.
+- **Private switches:** `specialists`, `scenarios` and `proposal` are keyword-only arguments of
+  `run_agent_stage`, used only through the test-only `switched()` wrapper.
+- **Synthetic, not reviewed:** no case has been reviewed by a diving professional; none is a real
+  conditions record. Ablation measures this pipeline on labelled cases, not real-world safety or
+  a model's reliability.

@@ -5,7 +5,7 @@
 
 ## Context
 
-The project must switch between OpenAI, Anthropic, Ollama/local and other compatible
+The project must switch between OpenAI, Anthropic, Ollama/local (the Ollama adapter was later removed, ADR 0016 amendment) and other compatible
 providers, and results must not depend on one vendor.
 
 ## Decision

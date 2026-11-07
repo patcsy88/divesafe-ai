@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
 
 from divesafe.models.egress import EgressBasis
-from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 pytestmark = pytest.mark.safety
@@ -25,15 +24,12 @@ def _remote() -> OpenAICompatibleProvider:
     )
 
 
+FIXED_REFUSAL = "egress refused: the LLM server is not declared"
+
+
 def test_an_undeclared_loopback_server_is_skipped() -> None:
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_loopback(), allow_external=False, server_is_local=False)
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
-        egress_gate(
-            OllamaProvider("m", "http://localhost:11434"),
-            allow_external=False,
-            server_is_local=False,
-        )
 
 
 def test_a_declared_or_opted_in_loopback_server_runs_and_reports_why() -> None:
@@ -45,9 +41,9 @@ def test_a_declared_or_opted_in_loopback_server_runs_and_reports_why() -> None:
 
 
 def test_a_remote_server_needs_the_opt_in_and_refuses_the_declaration() -> None:
-    with pytest.raises(pytest.skip.Exception, match="off-machine"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_remote(), allow_external=False, server_is_local=False)
-    with pytest.raises(pytest.skip.Exception, match="not on this machine"):
+    with pytest.raises(pytest.skip.Exception, match=FIXED_REFUSAL):
         egress_gate(_remote(), allow_external=False, server_is_local=True)
     assert (
         egress_gate(_remote(), allow_external=True, server_is_local=False)
@@ -87,3 +83,43 @@ def test_an_output_path_never_replaces_an_existing_record(tmp_path: Path) -> Non
     assert second != first and not second.exists()
     assert second.name.startswith("tide_check_x_") and second.suffix == ".json"
     assert first.read_text() == "earlier record"
+
+
+def test_raw_evaluation_records_are_refused_inside_the_repository(tmp_path: Path) -> None:
+    """The live evaluation writes full assessment records and raw model replies. `.gitignore` is
+    only a backstop, so a directory inside the repository fails the run."""
+    from tests.evaluation.capture_item6 import REPO, CaptureRefused
+    from tests.evaluation.egress_gate import eval_output_dir
+
+    with pytest.raises(CaptureRefused, match="inside the repository"):
+        eval_output_dir(str(REPO), tmp_path)
+    with pytest.raises(CaptureRefused, match="inside the repository"):
+        eval_output_dir(str(REPO / "tests" / "evaluation"), tmp_path)
+    with pytest.raises(CaptureRefused, match="inside the repository"):
+        eval_output_dir(None, REPO / "tests")
+    assert eval_output_dir(None, tmp_path) == tmp_path.resolve()
+    assert eval_output_dir(str(tmp_path), REPO) == tmp_path.resolve()
+
+
+def test_a_raw_record_is_written_for_the_owner_only_and_never_replaced(tmp_path: Path) -> None:
+    import stat
+
+    from tests.evaluation.egress_gate import write_private
+
+    path = tmp_path / "record.json"
+    write_private(path, "raw")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    with pytest.raises(FileExistsError):
+        write_private(path, "second")
+    assert path.read_text() == "raw"
+
+
+def test_a_missing_output_directory_is_created_privately_before_any_prompt(tmp_path: Path) -> None:
+    import stat
+
+    from tests.evaluation.egress_gate import eval_output_dir
+
+    target = tmp_path / "a" / "b"
+    assert eval_output_dir(str(target), tmp_path) == target.resolve()
+    assert target.is_dir()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700

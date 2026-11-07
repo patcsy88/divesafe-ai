@@ -12,7 +12,7 @@ import inspect
 import logging
 import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated
@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from divesafe import __version__
-from divesafe.agents.runner import stage_timeout
+from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
 from divesafe.api.runner import RunManager
@@ -34,26 +34,36 @@ from divesafe.api.schemas import (
     CreateAssessmentRequest,
     DecisionRequest,
     EvidenceView,
+    ReassignRequest,
     RunStatusView,
     SiteListView,
     SiteView,
 )
 from divesafe.api.state import AppState, build_default_state
 from divesafe.config import configure_logging, get_settings
-from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, RUN_MARGIN_SECONDS
-from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan
+from divesafe.config.settings import (
+    CONNECTOR_BUDGET_SECONDS,
+    RUN_MARGIN_SECONDS,
+    agent_stage_budget,
+)
+from divesafe.data.http import shutdown_http_pool
+from divesafe.domain import ActualConditions, AssessmentRecord, DivePlan, severity
 from divesafe.orchestration import (
     AlreadyDecidedError,
     DecisionRequiredError,
     NotAssignedDeciderError,
+    NotReassignableError,
+    RunOptions,
     assess_dive,
     check_assigned,
     decide,
+    reassign,
     report_actual_conditions,
 )
 from divesafe.services import (
     ConflictError,
     InMemoryAssessmentRepository,
+    InvalidSuccessorError,
     RecordNotFoundError,
     RepositoryIntegrityError,
     RepositoryUnavailableError,
@@ -70,8 +80,17 @@ from divesafe.services.runs import (
 
 logger = logging.getLogger(__name__)
 
+_NOT_UPDATABLE = "the assessment could not be updated; reload it"
 _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
+)
+
+_NOT_REASSIGNABLE = (
+    "nothing was changed; only a pending assessment can move, to a different decider"
+)
+_NOT_OVERRIDER = (
+    "nothing was recorded; choosing a less severe outcome than the system's needs the overrider "
+    "role, and the assessment is still pending"
 )
 
 AssessmentId = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
@@ -93,6 +112,7 @@ READ = require_role(Role.VIEWER, limit_key="read")
 READ_OWN = require_any_role((Role.VIEWER, Role.ASSESSOR), limit_key="read")
 CREATE = require_role(Role.ASSESSOR, limit_key="create")
 DECIDE = require_role(Role.DECIDER, limit_key="decide")
+REASSIGN = require_role(Role.ADMIN, limit_key="decide")
 
 
 def _messages(exc: ValidationError) -> list[str]:
@@ -116,7 +136,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.warning("DIVESAFE_DECISION_MAX_AGE_MINUTES is unset: decisions have no age limit")
 
     if app_state.provider is not None:
-        needed = stage_timeout(app_state.provider) + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
+        _, stage = agent_stage_budget(
+            stage_timeout(app_state.provider),
+            call_timeout(app_state.provider),
+            cross_examination=settings.agent_cross_examination,
+        )
+        needed = stage + CONNECTOR_BUDGET_SECONDS + RUN_MARGIN_SECONDS
         if app_state.runs.deadline.total_seconds() < needed:
             raise RuntimeError(
                 "the run deadline is shorter than the model provider's stage timeout plus the "
@@ -137,6 +162,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 await runner.shutdown()  # before the provider closes, so cancelled runs end first
             except Exception:
                 logger.error("running assessments did not stop cleanly")
+            shutdown_http_pool()
             close = getattr(app_state.provider, "close", None)
             if callable(close):
                 try:
@@ -204,22 +230,51 @@ def create_app(state: AppState | None = None) -> FastAPI:
         logger.exception("unhandled error", extra={"path": request.url.path})
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
+    def _in_scope(names: Iterable[str | None], principal: Principal, *, pending: bool) -> bool:
+        """Read scope (ADR 0026). A key with no groups reads everything, and so does an admin
+        for an assessment with no decision yet. Otherwise a key reads what it created, holds or
+        was moved off, and what shares a group with any of those people."""
+        if not principal.groups or (pending and Role.ADMIN in principal.roles):
+            return True
+        people = [n for n in names if n]
+        if principal.actor.strip().casefold() in {n.strip().casefold() for n in people}:
+            return True
+        return any(principal.groups & app_state.authenticator.groups_of(n) for n in people)
+
+    def _record_in_scope(record: AssessmentRecord, principal: Principal) -> bool:
+        moves = [n for m in record.reassignments for n in (m.from_decider, m.to_decider)]
+        names = [record.created_by, record.assigned_decider, *moves]
+        return _in_scope(names, principal, pending=record.human_decision is None)
+
     def _may_see(run: PendingRun, principal: Principal) -> bool:
         return (
             Role.VIEWER in principal.roles
+            and _in_scope((run.created_by, run.assigned_decider), principal, pending=True)
             or run.created_by == principal.actor
             or run.assigned_decider == principal.actor
         )
 
-    def _load(assessment_id: str, principal: Principal | None = None) -> AssessmentRecord:
+    def _hidden(assessment_id: str, principal: Principal) -> HTTPException:
+        # Logged so probing shows up; the caller gets exactly the answer for a missing id.
+        logger.warning(
+            "read refused: out of scope",
+            extra={
+                "assessment_id": assessment_id,
+                "actor": principal.actor,
+                "caller_label": principal.key_id,
+            },
+        )
+        return HTTPException(status_code=404, detail="assessment not found")
+
+    def _load(assessment_id: str, principal: Principal) -> AssessmentRecord:
         record = app_state.repository.get(assessment_id)
         if record is None:
             run = app_state.repository.get_run(assessment_id)
             if run is None:
                 record = app_state.repository.get(assessment_id)  # finished between the reads
                 if record is not None:
-                    return record
-            if run is not None and principal is not None and _may_see(run, principal):
+                    return _scoped(record, principal)
+            if run is not None and _may_see(run, principal):
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -228,7 +283,21 @@ def create_app(state: AppState | None = None) -> FastAPI:
                         else "nothing was recorded; this assessment did not finish"
                     ),
                 )
+            if run is not None:
+                raise _hidden(assessment_id, principal)
             raise HTTPException(status_code=404, detail="assessment not found")
+        return _scoped(record, principal)
+
+    def _scoped(record: AssessmentRecord, principal: Principal) -> AssessmentRecord:
+        # Unreadable looks exactly like missing, so ids cannot be probed.
+        if Role.VIEWER in principal.roles:
+            visible = _record_in_scope(record, principal)
+        else:  # no viewer role: only what this key created or holds
+            visible = principal.actor.strip().casefold() in {
+                n.strip().casefold() for n in (record.created_by, record.assigned_decider) if n
+            }
+        if not visible:
+            raise _hidden(record.id, principal)
         return record
 
     def _require_assigned(record: AssessmentRecord, principal: Principal) -> None:
@@ -299,7 +368,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             # The same key must mean the same request; anything else is refused, not reinterpreted.
             if (
                 existing.plan != plan
-                or existing.assigned_decider != decider
+                or existing.original_decider != decider
                 or existing.created_by != principal.actor
             ):
                 raise HTTPException(
@@ -392,6 +461,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                     now=clock(),
                     provider=app_state.provider,
                     clock=clock,
+                    options=RunOptions(cross_examination=settings.agent_cross_examination),
                 )
 
             try:
@@ -422,13 +492,18 @@ def create_app(state: AppState | None = None) -> FastAPI:
             record = app_state.repository.get(assessment_id)
         if record is not None:
             if viewer:
-                return AssessmentView.of(record)
+                return AssessmentView.of(_scoped(record, principal))
             if record.created_by != principal.actor:
-                raise HTTPException(status_code=404, detail="assessment not found")
+                raise _hidden(assessment_id, principal)
             # A create-only key sees the record as it was created, as a replay does.
             return AssessmentView.withheld(record)
-        if run is None or not (viewer or run.created_by == principal.actor):
+        if run is None:
             raise HTTPException(status_code=404, detail="assessment not found")
+        if not (
+            (viewer and _in_scope((run.created_by, run.assigned_decider), principal, pending=True))
+            or run.created_by == principal.actor
+        ):
+            raise _hidden(assessment_id, principal)
         return RunStatusView.of(run)
 
     @app.get("/v1/assessments/{assessment_id}/evidence", tags=["assessments"])
@@ -492,6 +567,18 @@ def create_app(state: AppState | None = None) -> FastAPI:
             if same_decision(record):
                 return replay(record)
             raise HTTPException(status_code=409, detail="this assessment already has a decision")
+        if not principal.key_id:
+            logger.error("authenticator set no key id", extra={"actor": principal.actor})
+            raise HTTPException(status_code=500, detail="internal error")
+        if (
+            severity(body.decision) < severity(record.final_recommendation)
+            and Role.OVERRIDER not in principal.roles
+        ):
+            logger.warning(
+                "decision refused: a less severe outcome needs the overrider role",
+                extra={"assessment_id": assessment_id, "actor": principal.actor},
+            )
+            raise HTTPException(status_code=403, detail=_NOT_OVERRIDER)
         now = app_state.clock()
         max_age = app_state.decision_max_age
         if max_age is not None and now - record.created_at > max_age:
@@ -507,6 +594,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 decision=body.decision,
                 decided_at=now,
                 rationale=body.rationale,
+                key_id=principal.key_id,
             )
             app_state.repository.replace(record, updated)
         except NotAssignedDeciderError as exc:
@@ -535,6 +623,11 @@ def create_app(state: AppState | None = None) -> FastAPI:
             ) from exc
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "decision refused: invalid successor", extra={"assessment_id": assessment_id}
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
         logger.info(
             "human decision recorded",
             extra={
@@ -542,6 +635,53 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 "actor": principal.actor,
                 "override": body.decision != record.final_recommendation,
             },
+        )
+        return AssessmentView.of(updated)
+
+    @app.post("/v1/assessments/{assessment_id}/reassign", tags=["human gate"])
+    def reassign_assessment(
+        assessment_id: AssessmentId,
+        body: ReassignRequest,
+        principal: Annotated[Principal, Depends(REASSIGN)],
+    ) -> AssessmentView:
+        record = _load(assessment_id, principal)
+        if record.human_decision is not None:
+            raise HTTPException(status_code=409, detail=_NOT_REASSIGNABLE)
+        if not principal.key_id:
+            logger.error("authenticator set no key id", extra={"actor": principal.actor})
+            raise HTTPException(status_code=500, detail="internal error")
+        target = app_state.authenticator.canonical_decider(body.to_decider)
+        if target is None:
+            logger.warning(
+                "reassignment refused: unknown decider", extra={"actor": principal.actor}
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="name a known key holder with the decider role to take over the decision",
+            )
+        try:
+            updated = reassign(
+                record,
+                to_decider=target,
+                reassigned_by=principal.actor,
+                reassigned_at=app_state.clock(),
+                key_id=principal.key_id,
+            )
+            app_state.repository.replace(record, updated)
+        except NotReassignableError as exc:
+            raise HTTPException(status_code=409, detail=_NOT_REASSIGNABLE) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail="assessment changed; reload it") from exc
+        except RecordNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "reassignment refused: invalid successor", extra={"assessment_id": assessment_id}
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
+        logger.info(
+            "assessment reassigned",
+            extra={"assessment_id": assessment_id, "actor": principal.actor},
         )
         return AssessmentView.of(updated)
 
@@ -582,6 +722,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="assessment changed; reload it") from exc
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail="assessment not found") from exc
+        except InvalidSuccessorError as exc:
+            logger.error(
+                "actual conditions refused: invalid successor",
+                extra={"assessment_id": assessment_id},
+            )
+            raise HTTPException(status_code=409, detail=_NOT_UPDATABLE) from exc
         logger.info(
             "actual conditions recorded",
             extra={"assessment_id": assessment_id, "actor": principal.actor},

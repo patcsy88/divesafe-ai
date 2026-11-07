@@ -1,10 +1,10 @@
 """Live evaluation against a real model server. Skipped unless you opt in:
 
-    DIVESAFE_EVAL_OLLAMA_MODEL=<model> .venv/bin/pytest tests/evaluation/test_evaluation_live.py -s
+    DIVESAFE_EVAL_MODEL=<model> .venv/bin/pytest tests/evaluation/test_evaluation_live.py -s
 
-Set DIVESAFE_EVAL_PROVIDER=openai_compatible to use the OpenAI-compatible adapter (ADR 0018) with
-DIVESAFE_EVAL_MODEL, DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a
-remote server DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). Set
+It uses the OpenAI-compatible adapter (ADR 0018) with DIVESAFE_EVAL_MODEL,
+DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a remote server
+DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). Set
 DIVESAFE_EVAL_OUT to a directory outside the repository: it holds raw model replies, and
 .gitignore covers the default file names only as a backstop. The tide check also needs
 DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true unless the server is declared local; when it is skipped
@@ -27,16 +27,21 @@ from urllib.parse import urlparse
 
 import pytest
 from pydantic import SecretStr
-from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
+from tests.evaluation.egress_gate import (
+    egress_gate,
+    eval_output_dir,
+    output_path,
+    tide_check_allowed,
+    write_private,
+)
 from tests.evaluation.harness import evaluate
 from tests.evaluation.tide_check import run_tide_check
 
 from divesafe.agents import PROMPT_VERSION
 from divesafe.config import Settings
-from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
-PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "ollama")
+PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "openai_compatible")
 # Read at import, before the per-test environment isolation in tests/conftest.py removes it.
 ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") or "false"
 SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
@@ -44,12 +49,10 @@ SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
 # (ADR 0021), so the check runs only against a server declared local, or with this acknowledgement.
 # Deliberately strict: only the exact text "true" counts, so any other value leaves it off.
 ACCEPT_PHN_TERMS_OPEN = os.environ.get("DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN") == "true"
-MODEL = os.environ.get("DIVESAFE_EVAL_MODEL") or os.environ.get("DIVESAFE_EVAL_OLLAMA_MODEL")
+MODEL = os.environ.get("DIVESAFE_EVAL_MODEL")
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(
-        MODEL is None, reason="DIVESAFE_EVAL_MODEL (or DIVESAFE_EVAL_OLLAMA_MODEL) not set"
-    ),
+    pytest.mark.skipif(MODEL is None, reason="DIVESAFE_EVAL_MODEL not set"),
 ]
 
 
@@ -65,16 +68,13 @@ def _sha() -> str:
 
 def _host() -> str:
     """The model server's host name only: no scheme, path, port or credentials."""
-    if PROVIDER == "ollama":
-        url = os.environ.get("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
-    else:
-        url = os.environ.get("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+    url = os.environ.get("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
     return urlparse(url).hostname or "unknown"
 
 
-def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatibleProvider], str]:
+def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
     assert MODEL is not None
-    assert PROVIDER in ("ollama", "openai_compatible"), "DIVESAFE_EVAL_PROVIDER is not known"
+    assert PROVIDER == "openai_compatible", "DIVESAFE_EVAL_PROVIDER is not known"
     env = os.environ.get
     budgets = Settings(
         _env_file=None,
@@ -83,7 +83,6 @@ def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatiblePr
         llm_first_byte_timeout_seconds=env("DIVESAFE_EVAL_FIRST_BYTE", "15"),  # type: ignore[arg-type]
         llm_max_concurrent_calls=env("DIVESAFE_EVAL_CONCURRENCY", "4"),  # type: ignore[arg-type]
         llm_max_output_tokens=env("DIVESAFE_EVAL_MAX_OUTPUT_TOKENS", "1500"),  # type: ignore[arg-type]
-        ollama_plain_http_hosts=env("DIVESAFE_EVAL_OLLAMA_PLAIN_HTTP_HOSTS"),
         llm_allowed_hosts=env("DIVESAFE_EVAL_ALLOWED_HOSTS"),
     )
     options: dict[str, object] = {
@@ -93,20 +92,13 @@ def _setup() -> tuple[Settings, Callable[[], OllamaProvider | OpenAICompatiblePr
         "max_concurrent_calls": budgets.llm_max_concurrent_calls,
         "max_output_tokens": budgets.llm_max_output_tokens,
     }
-    if PROVIDER == "ollama":
-        base = env("DIVESAFE_EVAL_OLLAMA_URL", "http://localhost:11434")
-        options["plain_http_hosts"] = budgets.plain_http_host_set()
+    options["allowed_hosts"] = budgets.llm_allowed_host_set()
+    base = env("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+    key = env("DIVESAFE_EVAL_API_KEY")
+    options["api_key"] = SecretStr(key) if key else None
 
-        def make() -> OllamaProvider | OpenAICompatibleProvider:
-            return OllamaProvider(MODEL, base, **options)  # type: ignore[arg-type]
-    else:
-        base = env("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
-        key = env("DIVESAFE_EVAL_API_KEY")
-        options["allowed_hosts"] = budgets.llm_allowed_host_set()
-        options["api_key"] = SecretStr(key) if key else None
-
-        def make() -> OllamaProvider | OpenAICompatibleProvider:
-            return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
+    def make() -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
 
     basis = egress_gate(make(), allow_external=ALLOW_EXTERNAL, server_is_local=SERVER_IS_LOCAL)
     return budgets, make, basis
@@ -116,11 +108,11 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
     tmp_path: Path,
 ) -> None:
     budgets, make, basis = _setup()
+    out_dir = eval_output_dir(os.environ.get("DIVESAFE_EVAL_OUT"), tmp_path)
     report = evaluate(make)
-    out = output_path(
-        Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"evaluation_{PROVIDER}.json"
-    )
-    out.write_text(
+    out = output_path(out_dir, f"evaluation_{PROVIDER}.json")
+    write_private(
+        out,
         json.dumps(
             {
                 "provider": PROVIDER,
@@ -143,7 +135,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
                 "cases": [c.raw_record for c in report.cases],
             },
             indent=1,
-        )
+        ),
     )
     print("\nEVALUATION", MODEL, report.summary(), "raw records:", out)
     assert report.proposals_obtained >= 1, "model unusable: no case produced a valid proposal"
@@ -157,15 +149,15 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
     Hits on slack-water or current phrases are reported for a human to read, not gated (a denial
     matches too)."""
     _, make, basis = _setup()
+    out_dir = eval_output_dir(os.environ.get("DIVESAFE_EVAL_OUT"), tmp_path)
     if not tide_check_allowed(basis, phn_terms_acknowledged=ACCEPT_PHN_TERMS_OPEN):
         reason = (
             "the tide item would leave the machine while PHN's terms are not on file (ADR 0021); "
             "set DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true to accept that"
         )
-        skipped = output_path(
-            Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"tide_check_{PROVIDER}.json"
-        )
-        skipped.write_text(
+        skipped = output_path(out_dir, f"tide_check_{PROVIDER}.json")
+        write_private(
+            skipped,
             json.dumps(
                 {
                     "status": "skipped",
@@ -178,14 +170,13 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
                     "code_sha": _sha(),
                 },
                 indent=1,
-            )
+            ),
         )
         pytest.skip(reason)
     result = run_tide_check(make())
-    out = output_path(
-        Path(os.environ.get("DIVESAFE_EVAL_OUT") or tmp_path), f"tide_check_{PROVIDER}.json"
-    )
-    out.write_text(
+    out = output_path(out_dir, f"tide_check_{PROVIDER}.json")
+    write_private(
+        out,
         json.dumps(
             {
                 "provider": PROVIDER,
@@ -201,7 +192,7 @@ def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_pa
                 "record": json.loads(result.record.model_dump_json()),
             },
             indent=1,
-        )
+        ),
     )
     print("\nTIDE CHECK", MODEL, "marker hits:", result.hits, "raw record:", out)
     assert (

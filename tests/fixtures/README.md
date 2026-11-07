@@ -14,6 +14,34 @@ run offline; they must not be treated as current conditions.
 | `data_gov_my_forecast_tioman_recorded_2026-10-11.json` | data.gov.my Weather API (MET Malaysia) 7-day forecast, `Rc024` Pulau Tioman, `limit=100` | 2026-10-11 | Unmodified; 7 daily rows (2026-10-11 to 2026-10-17). |
 | `met_api_marine_tioman_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/data`, `FORECAST`/`MARINE`, `LOCATION:499` (TIOMAN waters), today only | 2026-10-16 | Unmodified; 7 daily values. Contains no token. |
 | `met_api_locations_waters_recorded_2026-10-16.json` | MET Malaysia API v2.1 `/locations?locationcategoryid=WATERS` | 2026-10-16 | Unmodified; 30 waters zones, none with coordinates. |
+| `item6/item6_trace_run5_recorded_2026-10-29.json` | ADR 0025 item 6 live capture (run 5), `my-pahang-pulau-tioman`, planned 2026-10-30 03:00 UTC, 60 min; five connector payloads (data.gov.my, MET Malaysia marine, Open-Meteo marine and wind) and eight model replies | 2026-10-29 | Recorded live through the loopback model server; owner-approved fixture. Outcome `PENDING_HUMAN`, `INSUFFICIENT EVIDENCE`. Two specialist replies were rejected after return (see stage trace). Scrubbed by `tests/evaluation/item6_scrub.py`; not current conditions. |
+| `item6/item6_trace_run6_recorded_2026-10-30.json` | ADR 0025 item 6 live capture (run 6, captured as `item6_run6d`), `my-pahang-pulau-tioman`, planned 2026-10-30 11:00 UTC, 60 min, `captured_at_utc` 2026-10-30 10:20:10 UTC; five connector payloads (data.gov.my, MET Malaysia marine, Open-Meteo marine and wind) and eight model replies | 2026-10-30 | Recorded live through the loopback model server; owner-approved fixture. Outcome `PENDING_HUMAN`, `INSUFFICIENT EVIDENCE` (deterministic, proposed and final). No call failed and no reply was rejected. Contains no token. Reviewed by the security and risk reviewers. Scrubbed by `tests/evaluation/item6_scrub.py`; not current conditions. See the model-reply note below. |
+
+**Item 6 model replies are recorded input, not expected output.** The `replies` in the `item6/`
+fixtures are what the model returned on one live run. Tests feed them back through the pipeline;
+no test treats their wording as correct, and none should.
+
+- **Warning applicability.** Neither code nor a model decides whether a marine warning applies to
+  a site; a human must read it (`WarningNeedsHumanReadingRule`). In run 6, the
+  `scenario:favourable` summary nonetheless concludes the warnings do not apply because they name
+  other areas. That is a judgement the model was not asked to make, and it contradicts the same
+  reply's own risk factor (applicability undetermined). It was also wrong on the facts: Pulau
+  Tioman is in Rompin district, Pahang (owner, 2026-10-31), and the run 6 thunderstorm warning
+  names Rompin. The specialist and other replies say only that Tioman is "not named", which is
+  true of the text but does not mean the warning leaves the island out. Whether a warning applies
+  remains the human's reading. At capture time
+  (prompt `2026-10-17.2`) the scenario prompt had no rule against stating applicability (the
+  specialist prompt had one); this reply is an example of that gap. Prompt `2026-10-30.1` adds
+  the ban to the scenario and risk prompts, so these recorded replies predate it. Scenario
+  text cannot relax the outcome: rules and the supervisor never read it, and the risk agent that
+  does read it can only keep or tighten the result through `reconcile`.
+- **`confidence`.** Each reply's `confidence` is the model's own uncalibrated estimate. It is not
+  a probability, not a measure of dive safety, and never shown as confidence (AGENTS.md section 11).
 
 Edge cases (nulls, wrong units, missing hours, truncation) are built in tests by mutating these
 files in code and are labelled synthetic there.
+
+**Licences and provenance (owner, 2026-11-03).** The owner has confirmed that the two `item6/`
+fixtures may stay although they show a hosted model sat behind a loopback proxy (`model_version`,
+`egress_basis`; no host, port, URL or key). The licence and terms of use of the bundled Open-Meteo,
+MET Malaysia and data.gov.my payloads are the owner's to check; this repository does not assert them.

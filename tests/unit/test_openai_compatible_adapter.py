@@ -400,21 +400,13 @@ def test_more_than_the_line_cap_of_harmless_lines_is_refused() -> None:
         join_sse(body)
 
 
-def test_the_output_token_cap_comes_from_settings_for_both_adapters() -> None:
-    from divesafe.models.ollama import OllamaProvider
-
+def test_the_output_token_cap_comes_from_settings() -> None:
     s = _settings(llm_base_url="http://localhost:8000/v1", llm_max_output_tokens=4000)
     assert create_provider(s).max_output_tokens == 4000  # type: ignore[attr-defined]
     assert _settings(llm_base_url="http://localhost:8000/v1").llm_max_output_tokens == 1500
-    assert (
-        OllamaProvider("m", "http://localhost:11434", max_output_tokens=3000).max_output_tokens
-        == 3000
-    )
     for bad in (0, -1, 8001, True, 1.5):
         with pytest.raises(ValueError):
             OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=bad)  # type: ignore[arg-type]
-        with pytest.raises(ValueError):
-            OllamaProvider("m", "http://localhost:11434", max_output_tokens=bad)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("bad", [0, 255, 8001])
@@ -423,22 +415,18 @@ def test_the_settings_bound_the_output_token_cap(bad: int) -> None:
         Settings(llm_max_output_tokens=bad)
 
 
-def test_a_closed_provider_refuses_new_calls_for_both_adapters() -> None:
+def test_a_closed_provider_refuses_new_calls() -> None:
     import asyncio
 
     from divesafe.models import ChatMessage, LLMRequest
-    from divesafe.models.ollama import OllamaError, OllamaProvider
     from divesafe.models.openai_compatible import OpenAICompatibleError
 
     request = LLMRequest(messages=(ChatMessage(role="user", content="x"),))
-    for provider, error in (
-        (OpenAICompatibleProvider("m", "http://localhost:8000/v1"), OpenAICompatibleError),
-        (OllamaProvider("m", "http://localhost:11434"), OllamaError),
-    ):
-        provider.close()
-        with pytest.raises(error, match="closed"):
-            asyncio.run(provider.complete(request))
-        provider.close()  # closing twice is harmless
+    provider = OpenAICompatibleProvider("m", "http://localhost:8000/v1")
+    provider.close()
+    with pytest.raises(OpenAICompatibleError, match="closed"):
+        asyncio.run(provider.complete(request))
+    provider.close()  # closing twice is harmless
 
 
 def test_close_shuts_the_executor_and_cancels_a_queued_call() -> None:
@@ -480,3 +468,322 @@ def test_a_reply_stopped_by_the_token_limit_is_refused_with_its_own_error() -> N
         join_sse(raw)
     assert isinstance(caught.value, OpenAICompatibleError)
     assert str(caught.value) == "the model stopped at the output-token limit"
+
+
+# ---- fixed failure labels per refusal shape (group E-3 item 4; new tests only) -----------------
+
+
+def _reason_of(raw: bytes) -> str:
+    from divesafe.models.openai_compatible import failure_reason
+
+    with pytest.raises(OpenAICompatibleError) as info:
+        join_sse(raw)
+    return failure_reason(info.value)
+
+
+def test_an_error_event_is_labelled_error_event() -> None:
+    raw = b'data: {"error": {"message": "x"}}\n\ndata: [DONE]\n\n'
+    assert _reason_of(raw) == "error_event"
+
+
+def test_a_stream_with_no_done_marker_is_labelled_no_done_marker() -> None:
+    raw = _event("hi") + _event(None, "stop")
+    assert _reason_of(raw.encode()) == "no_done_marker"
+
+
+def test_an_event_line_is_labelled_event_line() -> None:
+    raw = b"event: message\n" + _ok("hi")
+    assert _reason_of(raw) == "event_line"
+
+
+def test_non_json_data_is_labelled_bad_event_json() -> None:
+    raw = b"data: {not json\n\ndata: [DONE]\n\n"
+    assert _reason_of(raw) == "bad_event_json"
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "event",
+    [
+        # The last `finish_reason` would win and hide a token-limit stop.
+        '{"choices": [{"index": 0, "delta": {"content": "hi"},'
+        ' "finish_reason": "length", "finish_reason": "stop"}]}',
+        # The first `content` would be silently dropped.
+        '{"choices": [{"index": 0, "delta": {"content": "a", "content": "b"}}]}',
+        '{"choices": [], "choices": [{"index": 0, "delta": {"content": "x"}}]}',
+    ],
+)
+def test_an_event_that_repeats_a_key_is_labelled_bad_event_json(event: str) -> None:
+    from divesafe.models.openai_compatible import OpenAICompatibleError
+
+    raw = f"data: {event}\n\ndata: [DONE]\n\n".encode()
+    assert _reason_of(raw) == "bad_event_json"
+    with pytest.raises(OpenAICompatibleError) as caught:
+        join_sse(raw)
+    assert event not in str(caught.value)
+
+
+def test_a_tool_call_delta_is_labelled_tool_or_refusal() -> None:
+    chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"id": "t"}]}}]}
+    raw = f"data: {json.dumps(chunk)}\n\n".encode() + _event(None, "stop").encode()
+    raw += b"data: [DONE]\n\n"
+    assert _reason_of(raw) == "tool_or_refusal"
+
+
+def test_an_empty_body_is_labelled_empty_stream() -> None:
+    assert _reason_of(b"") == "empty_stream"
+
+
+def test_a_length_finish_is_labelled_token_limit() -> None:
+    raw = _event("partial", "length").encode() + b"data: [DONE]\n\n"
+    assert _reason_of(raw) == "token_limit"
+
+
+def test_the_normal_stream_gives_no_error() -> None:
+    assert join_sse(_ok("hello")) == "hello"
+
+
+def test_failure_reasons_contains_every_label_the_adapter_uses() -> None:
+    from divesafe.models.openai_compatible import FAILURE_REASONS
+
+    for label in (
+        "event_line",
+        "error_event",
+        "no_done_marker",
+        "bad_event_json",
+        "tool_or_refusal",
+        "empty_stream",
+        "bad_shape",
+        "token_limit",
+        "unreachable",
+        "http_error",
+        "read_timeout",
+        "connection_error",
+        "deadline",
+        "too_large",
+        "slots_full",
+        "closed",
+        "unclassified",
+    ):
+        assert label in FAILURE_REASONS, label
+
+
+def test_failure_reason_of_a_plain_exception_is_unclassified() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    assert failure_reason(RuntimeError("anything at all")) == "unclassified"
+    assert failure_reason(OpenAICompatibleError("x", reason="not-a-label")) == "unclassified"
+
+
+def test_a_data_line_after_done_is_labelled_data_after_done() -> None:
+    # A finished event and [DONE], then one more data line: refused with its own label, not as a
+    # missing [DONE] (the stream does have one).
+    raw = _event("hi") + _event(None, "stop") + "data: [DONE]\n\n" + _event("late")
+    assert _reason_of(raw.encode()) == "data_after_done"
+
+
+def test_a_stream_that_ends_with_no_done_marker_stays_no_done_marker() -> None:
+    raw = _event("hi") + _event(None, "stop")
+    assert _reason_of(raw.encode()) == "no_done_marker"
+
+
+def test_a_subclass_that_never_sets_reason_is_unclassified_and_does_not_raise() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    class _NoReason(OpenAICompatibleError):
+        def __init__(self) -> None:
+            # Skips OpenAICompatibleError.__init__, so `reason` is never set on the instance.
+            RuntimeError.__init__(self, "fixed message")
+
+    exc = _NoReason()
+    assert not hasattr(exc, "reason")
+    assert failure_reason(exc) == "unclassified"
+
+
+def test_a_reason_outside_the_label_set_is_unclassified() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    exc = OpenAICompatibleError("fixed message", reason="sk-SECRET")
+    assert failure_reason(exc) == "unclassified"
+
+
+# ---- failure_reason reads only a plain str label from the instance (hardening) -----------------
+
+
+def test_a_str_subclass_with_a_label_text_is_unclassified_and_the_result_is_plain_str() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    class _Tagged(str):
+        pass
+
+    exc = OpenAICompatibleError("fixed message")
+    exc.reason = _Tagged("event_line")  # type: ignore[assignment]
+    result = failure_reason(exc)
+    assert result == "unclassified"
+    assert type(result) is str
+
+
+def test_an_unhashable_reason_is_unclassified_and_does_not_raise() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    exc = OpenAICompatibleError("fixed message")
+    exc.reason = ["event_line"]  # type: ignore[assignment]
+    assert failure_reason(exc) == "unclassified"
+
+
+def test_a_reason_property_that_raises_is_unclassified_and_does_not_raise() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    class _Raising(OpenAICompatibleError):
+        def __init__(self) -> None:
+            # Bypasses the parent __init__, which would assign `reason` and fail on the property.
+            RuntimeError.__init__(self, "fixed message")
+
+        @property  # type: ignore[misc]
+        def reason(self) -> str:
+            raise RuntimeError("reading the reason failed")
+
+    assert failure_reason(_Raising()) == "unclassified"
+
+
+class _AlwaysEqual:
+    """Equal to every label: a `==` test on it would pass for any label."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [3, None, b"event_line", ("event_line",), _AlwaysEqual()],
+    ids=["int", "none", "bytes", "tuple", "always_equal"],
+)
+def test_a_non_string_reason_is_unclassified(value: object) -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    exc = OpenAICompatibleError("fixed message")
+    exc.reason = value  # type: ignore[assignment]
+    assert failure_reason(exc) == "unclassified"
+
+
+def test_a_valid_label_set_on_the_instance_is_returned_as_plain_str() -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    exc = OpenAICompatibleError("fixed message")
+    exc.reason = "event_line"
+    result = failure_reason(exc)
+    assert result == "event_line"
+    assert type(result) is str
+
+
+# ---- _post labels a transport failure by its class (read_timeout, connection_error) ------------
+
+_FIXED_TRANSPORT_MESSAGE = "the model server could not be reached or refused the request"
+
+
+class _RaisingOpener:
+    """Stands in for the urllib opener: `open` raises the given exception, nothing is sent."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def open(self, *_args: object, **_kwargs: object) -> object:
+        raise self._exc
+
+
+def _post_raising(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> OpenAICompatibleError:
+    """Calls _post with a fake opener that raises `exc`; returns the error _post raised."""
+    import threading
+
+    from divesafe.models import openai_compatible as module
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda *_a: _RaisingOpener(exc))
+    with pytest.raises(OpenAICompatibleError) as info:
+        module._post(
+            "http://127.0.0.1:1/v1/chat/completions",
+            b"{}",
+            5.0,
+            api_key=None,
+            loopback=False,
+            slots=threading.BoundedSemaphore(1),
+            socket_timeout=5.0,
+        )
+    return info.value
+
+
+def test_a_bare_timeout_is_labelled_read_timeout_with_the_fixed_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    error = _post_raising(monkeypatch, TimeoutError("socket read timed out"))
+    assert failure_reason(error) == "read_timeout"
+    assert str(error) == _FIXED_TRANSPORT_MESSAGE
+    assert "timed out" not in str(error)
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+
+
+def test_a_url_error_is_labelled_connection_error_and_hides_its_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    from divesafe.models.openai_compatible import failure_reason
+
+    error = _post_raising(monkeypatch, urllib.error.URLError("refused"))
+    assert failure_reason(error) == "connection_error"
+    # The fixed message is the only text; the URLError's own text is not carried.
+    assert str(error) == _FIXED_TRANSPORT_MESSAGE
+    assert str(error) != "refused"
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+
+
+def test_a_connection_reset_is_labelled_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from divesafe.models.openai_compatible import failure_reason
+
+    error = _post_raising(monkeypatch, ConnectionResetError("reset by peer"))
+    assert failure_reason(error) == "connection_error"
+    assert str(error) == _FIXED_TRANSPORT_MESSAGE
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+
+
+def test_a_non_loopback_peer_is_labelled_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from divesafe.models.loopback import NotOnThisMachineError
+    from divesafe.models.openai_compatible import failure_reason
+
+    error = _post_raising(monkeypatch, NotOnThisMachineError())
+    assert failure_reason(error) == "unreachable"
+    assert str(error) == "the model server is not on this machine"
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+
+
+def test_an_http_error_is_labelled_http_error_with_the_fixed_message_and_no_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import urllib.error
+
+    from divesafe.models.openai_compatible import failure_reason
+
+    http_error = urllib.error.HTTPError(
+        "http://127.0.0.1:1/v1/chat/completions", 500, "SERVER-DETAIL", {}, io.BytesIO(b"x")
+    )
+    error = _post_raising(monkeypatch, http_error)
+    assert failure_reason(error) == "http_error"
+    assert str(error) == _FIXED_TRANSPORT_MESSAGE
+    assert "SERVER-DETAIL" not in str(error)
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("index", ["false", "0.0", '"0"', "1", "null", "[]"])
+def test_a_choice_index_that_is_not_the_integer_zero_is_refused(index: str) -> None:
+    chunk = f'{{"choices": [{{"index": {index}, "delta": {{"content": "x"}}}}]}}'
+    raw = f"data: {chunk}\n\n".encode() + _event(None, "stop").encode() + b"data: [DONE]\n\n"
+    assert _reason_of(raw) == "bad_shape"

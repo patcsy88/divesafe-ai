@@ -1,6 +1,7 @@
 """Platform services: evidence/provenance, historical data, feedback/learning, persistence."""
 
 from divesafe.services.evidence import (
+    ConnectorOutcome,
     DuplicateEvidenceError,
     EvidenceSet,
     build_evidence_set,
@@ -45,6 +46,7 @@ __all__ = [
     "AssessmentRepository",
     "ConflictError",
     "DuplicateEvidenceError",
+    "ConnectorOutcome",
     "EvidenceSet",
     "InMemoryAssessmentRepository",
     "InvalidSuccessorError",

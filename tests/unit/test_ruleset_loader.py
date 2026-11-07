@@ -338,7 +338,11 @@ def test_unreadable_or_corrupt_files_stop_startup_with_a_fixed_message(tmp_path:
 def test_the_pinned_hash_must_match_or_startup_fails(tmp_path: Path) -> None:
     path = _write(tmp_path, _file(tioman()))
     digest = load_ruleset_bytes(path.read_bytes(), NOW).sha256
-    ok = Settings(evidence_max_age_minutes=60, ruleset_path=path, ruleset_sha256=digest)
+    ok = Settings(
+        evidence_max_age_minutes=60,
+        ruleset_path=path,
+        ruleset_sha256=digest,
+    )
     assert build_engine(ok, now=NOW) is not None
     wrong = Settings(evidence_max_age_minutes=60, ruleset_path=path, ruleset_sha256="0" * 64)
     with pytest.raises(RuntimeError, match="does not match"):
@@ -386,13 +390,13 @@ def test_production_requires_a_pinned_ruleset(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="pinned"):
         Settings(
             environment="production",
-            llm_provider="ollama",
+            llm_provider="openai_compatible",
             ruleset_path=path,
             api_key_hashes=_KEYS,  # type: ignore[arg-type]
         )
     Settings(
         environment="production",
-        llm_provider="ollama",
+        llm_provider="openai_compatible",
         ruleset_path=path,
         ruleset_sha256="a" * 64,
         api_key_hashes=_KEYS,  # type: ignore[arg-type]

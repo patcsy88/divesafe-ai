@@ -15,6 +15,7 @@ export interface Finding {
   summary: string;
   risk_factors: string[];
   conflicting_signals: string[];
+  flagged_signals?: number[];
 }
 
 export interface ScenarioItem {
@@ -22,6 +23,7 @@ export interface ScenarioItem {
   summary: string;
   risk_factors: string[];
   conflicting_signals: string[];
+  flagged_signals?: number[];
 }
 
 export interface AssessmentRecord {
@@ -41,12 +43,21 @@ export interface AssessmentRecord {
   unevaluated_factors: string[];
   evidence_issues: string[];
   findings: Finding[];
+  cross_examination_findings: Finding[];
   scenarios: ScenarioItem[];
   explanation: string;
   agent_issues: string[];
   ruleset_version: string;
+  model_version: string | null;
   created_by: string | null;
   assigned_decider: string | null;
+  reassignments?: {
+    from_decider: string;
+    to_decider: string;
+    reassigned_by: string;
+    reassigned_at: string;
+    key_id: string;
+  }[];
   actual_conditions: {
     reported_at: string;
     reported_by: string;
@@ -58,6 +69,8 @@ export interface AssessmentRecord {
     decided_at: string;
     is_override: boolean;
     override_rationale: string | null;
+    key_id?: string | null;
+    decided_by_creator?: boolean | null;
   } | null;
 }
 
@@ -116,6 +129,9 @@ export interface EvidenceView {
   assessed_at: string;
   evidence: EvidenceEntry[];
   evidence_issues: string[];
+  // Items that were NOT used or evaluated; absent in an older API response.
+  withheld_evidence?: EvidenceItem[];
+  withheld_note?: string;
   unevaluated_factors: string[];
   evidence_note: string;
   notice: string;

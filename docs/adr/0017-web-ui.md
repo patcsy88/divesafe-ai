@@ -40,6 +40,17 @@ actual-conditions form (shown once the planned start has passed).
 - On a 409 from a write, the action goes to the record only after a fresh read shows it was recorded.
 - Evidence items are labelled by `data_kind`: only an observation is "measured". Notices and
   knowledge are "text, not a measurement". Quality tags are not sufficiency, and the page says so.
+- **Withheld evidence box.** When the evidence response carries `withheld_evidence` (items dropped
+  because two sources disagreed under one id, ADR 0008), the evidence page shows a separate,
+  labelled box above the evidence list: "Withheld evidence - NOT used, NOT evaluated, may hold a
+  more severe result", the server's `withheld_note`, then each item. Everything is plain text: no
+  link, no anchor, no DOM id from an item, no raw HTML; ids are shown as text; raw values sit in a
+  collapsed block through the same `shown()` helper (cut at 20,000 characters). At most 50 items are
+  shown, ordered by id, followed by "N more withheld items not shown". Source, source version,
+  category and each quality note are cut at 1,000 characters (the normal evidence list is not).
+  An older response without
+  the field renders nothing. (Not to be confused with `DECISION_WITHHELD`; see the terms block in
+  [architecture.md](../architecture.md).)
 - Actual conditions are free reports. Nothing is compared to a limit. Sea temperature may be
   negative; other values may not.
 
@@ -88,7 +99,7 @@ third-party text; the id pattern matches the API's; extra headers, `object-src '
 - API responses are cast, not validated, and not size-capped.
 - The boundary test is a tripwire: it misses extension-less imports, transitive imports and many
   sinks. No tests for headers, cookie attributes or the action origin check.
-- CI (`web` job: `npm ci`, `npm audit --omit=dev`, typecheck, tests, build on Node 24) has not run on GitHub yet. A new advisory can fail an unrelated change. Not yet run in a container or behind a proxy. Tested against a
+- CI (`web` job: `npm audit --omit=dev --package-lock-only`, a check that no locked package has an install script, `npm ci --ignore-scripts`, typecheck, tests, build on Node 24; see ADR 0024 "CI and supply chain"). It ran green on GitHub from run #62 (2026-11-06). A new advisory can fail an unrelated change. Not yet run in a container or behind a proxy. Tested against a
   fixture-backed API only, not a deployed one.
 
 ## Review changes (risk and security review of the decision pages, 2026-10-11)
@@ -109,4 +120,9 @@ Gaps added:
   rejected by the UI but stored raw if sent to the API directly. `notes` is untrusted human text and
   must be delimited if it is ever used in a prompt, the corpus or history.
 - The evidence page does not show the planned dive window against each item's validity.
+- **Withheld box gaps.** Web tests are source-level checks plus one offline render test
+  (`web/tests/withheld.test.ts` renders `WithheldBox` with `renderToStaticMarkup`); there is no
+  browser test, and the page itself is checked by reading its source. `plain()` strips control and
+  bidi characters but leaves lookalike letters, combining marks and U+2028/U+2029. The withheld
+  items' dates have no "after assessment" marker.
 - The web actions themselves have no tests (ID tampering, a 401 mid-write). Only the library is tested.

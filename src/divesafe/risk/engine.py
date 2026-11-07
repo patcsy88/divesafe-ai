@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from divesafe.domain import (
+    SUPERVISOR_RULE_PREFIX,
     DataCategory,
     DataKind,
     DataQuality,
@@ -82,8 +83,14 @@ def _covers(items: Sequence[EvidenceItem], start: datetime, end: datetime) -> bo
     Intervals (valid_until set) must chain without a gap, which needs no invented number. Instants
     can only be bracketed: a hole inside a series of instants is NOT detected (docs/adr/0008).
     """
+    # An interval that ended before the window starts cannot help cover [start, end]; left in, it
+    # would set the chain's reach too early and hide a later interval that covers the dive.
     intervals = sorted(
-        ((e.valid_at, e.valid_until) for e in items if e.valid_until is not None),
+        (
+            (e.valid_at, e.valid_until)
+            for e in items
+            if e.valid_until is not None and e.valid_until >= start
+        ),
         key=lambda pair: pair[0],
     )
     if intervals:
@@ -110,9 +117,18 @@ EVIDENCE_REQUIRED_PREFIX: Final = "evidence.required."
 EVIDENCE_QUALITY_PREFIX: Final = "evidence.quality"
 CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
+CONFLICT_VARIANT_RULE: Final = "evidence.conflict_variant"
+CONFLICT_UNBOUNDED_RULE: Final = "evidence.conflict_unbounded"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
-# Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
-RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.", "rule.")
+# Rule ids a configured rule may not use: the engine, the pipeline and the Supervise stage emit
+# these themselves.
+RESERVED_RULE_PREFIXES: Final = (
+    "assessment.",
+    "evidence.",
+    "ruleset.",
+    "rule.",
+    SUPERVISOR_RULE_PREFIX,
+)
 # A signed-off definition id may be 100 characters and is prefixed with "definition.".
 RULE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9._-]{1,128}")
 # Problems with a named rule: it failed, its review expired, or it declares no expiry.
@@ -138,6 +154,8 @@ ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_QUALITY_PREFIX,
     CITES_UNUSABLE_PREFIX,
     DUPLICATE_IDS_RULE,
+    CONFLICT_VARIANT_RULE,
+    CONFLICT_UNBOUNDED_RULE,
 )
 
 
@@ -461,19 +479,25 @@ class RiskRulesEngine:
                     pool.add(max(before, key=lambda e: e.valid_at).id)
                 if after:
                     pool.add(min(after, key=lambda e: e.valid_at).id)
+        # A GO or CAUTION that cites nothing rests on nothing: `set() <= pool` is always true, so
+        # the empty case is flagged explicitly.
         return [
             RuleResult(
                 rule_id=f"{CITES_UNUSABLE_PREFIX}{r.rule_id}",
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale=(
-                    "The rule cites evidence that is stale, of unaccepted quality or outside "
-                    "the dive window."
+                    "The rule cites no evidence."
+                    if not r.evidence_ids
+                    else (
+                        "The rule cites evidence that is stale, of unaccepted quality or outside "
+                        "the dive window."
+                    )
                 ),
                 factor=RiskFactorKind.DATA_QUALITY,
             )
             for r in results
             if r.outcome in (Recommendation.GO, Recommendation.CAUTION)
-            and not set(r.evidence_ids) <= pool
+            and (not r.evidence_ids or not set(r.evidence_ids) <= pool)
         ]
 
 

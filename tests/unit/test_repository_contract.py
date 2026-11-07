@@ -30,10 +30,46 @@ from divesafe.services import (
     RecordExistsError,
     RecordNotFoundError,
 )
+from divesafe.services.migrations import MIGRATIONS
 from divesafe.services.postgres import GUARD_TRIGGERS, install_schema
 
 R = Recommendation
 TEST_DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
+
+
+def _forget_knowledge_store_without_history() -> None:
+    """Some integration tests drop `schema_migrations` to look like a fresh database, then call
+    reset_test_database(), which replays every migration. The knowledge tables can never be
+    emptied (ADR 0022), so a replay of migration 4 would collide with them. A database with no
+    history (missing, or not 1..N) is treated as one with no knowledge objects, so they are
+    removed here, and only then, in the *_test database this module already insists on."""
+    assert TEST_DSN is not None
+    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+        if conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() != (None,):
+            rows = conn.execute("SELECT version FROM public.schema_migrations").fetchall()
+            if sorted(r[0] for r in rows) == list(range(1, len(MIGRATIONS) + 1)):
+                return
+            # An incomplete or edited history is replayed from scratch, like a fresh database.
+            conn.execute("DROP TABLE public.schema_migrations")
+    drop_knowledge_objects()
+
+
+def drop_knowledge_objects() -> None:
+    """Remove the migration-4 objects (test databases only; see the function above)."""
+    assert TEST_DSN is not None
+    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+        conn.execute(
+            "DROP TABLE IF EXISTS public.kb_status_events, public.kb_chunks, public.kb_documents"
+        )
+        conn.execute("DROP SEQUENCE IF EXISTS public.kb_status_event_order_seq")
+        for function in (
+            "kb_no_update_delete",
+            "kb_no_truncate",
+            "kb_documents_insert",
+            "kb_chunks_insert",
+            "kb_status_events_insert",
+        ):
+            conn.execute(f"DROP FUNCTION IF EXISTS public.{function}()")  # type: ignore[call-overload]
 
 
 def reset_test_database() -> None:
@@ -43,6 +79,7 @@ def reset_test_database() -> None:
     name = psycopg.conninfo.conninfo_to_dict(TEST_DSN).get("dbname", "")
     if not str(name).endswith("_test"):
         raise RuntimeError("DIVESAFE_TEST_DATABASE_URL must point at a database named *_test")
+    _forget_knowledge_store_without_history()
     install_schema(TEST_DSN)
     with psycopg.connect(TEST_DSN) as conn:
         for trigger in GUARD_TRIGGERS:
@@ -201,3 +238,147 @@ def test_unvalidated_successor_is_rejected(repo: AssessmentRepository) -> None:
     )
     with pytest.raises(InvalidSuccessorError):
         repo.replace(pending, forged)
+
+
+# --- ADR 0026: a pending assessment may be reassigned, append-only ------------------------------
+
+
+def _assigned(record: AssessmentRecord, who: str = "ann") -> AssessmentRecord:
+    return AssessmentRecord.model_validate({**record.model_dump(), "assigned_decider": who})
+
+
+def _moved(record: AssessmentRecord, to: str = "bob", *, at: int = 1) -> AssessmentRecord:
+    from datetime import timedelta as _td
+
+    from divesafe.domain import Reassignment
+
+    move = Reassignment(
+        from_decider=str(record.assigned_decider),
+        to_decider=to,
+        reassigned_by="root",
+        reassigned_at=NOW + _td(minutes=at),
+        key_id="0123456789ab",
+    )
+    return AssessmentRecord.model_validate(
+        {
+            **record.model_dump(),
+            "assigned_decider": to,
+            "reassignments": (*record.reassignments, move),
+        }
+    )
+
+
+def test_a_pending_record_can_be_reassigned_and_then_again(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    assert repo.get("r1") == first
+    second = _moved(first, "cara", at=2)
+    repo.replace(first, second)
+    stored = repo.get("r1")
+    assert stored is not None and stored.assigned_decider == "cara"
+    assert [m.to_decider for m in stored.reassignments] == ["bob", "cara"]
+
+
+def test_a_reassigned_record_can_still_be_decided_by_the_new_assignee(
+    repo: AssessmentRepository,
+) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    moved = _moved(pending, "bob")
+    repo.replace(pending, moved)
+    later = HumanDecision(
+        decided_by="bob",
+        decision=R.INSUFFICIENT_EVIDENCE,
+        decided_at=NOW + timedelta(minutes=10),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**moved.model_dump(), "human_decision": later.model_dump()}
+    )
+    repo.replace(moved, decided)
+    assert repo.get("r1") == decided
+
+
+def test_a_decided_record_cannot_be_reassigned(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    decided = _decided(pending, "ann")
+    repo.replace(pending, decided)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(decided, _moved(decided, "bob", at=0))
+    assert repo.get("r1") == decided
+
+
+def test_the_assignee_cannot_change_without_a_recorded_move(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    sneaky = AssessmentRecord.model_validate({**pending.model_dump(), "assigned_decider": "bob"})
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, sneaky)
+    assert repo.get("r1") == pending
+
+
+def test_a_reassignment_cannot_be_removed_rewritten_or_stacked(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    two_at_once = _moved(_moved(first, "cara", at=2), "dan", at=3)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, two_at_once)
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, pending)  # undoing a move
+    rewritten = _moved(pending, "cara")  # a different history ending elsewhere
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, rewritten)
+    assert repo.get("r1") == first
+
+
+def test_a_reassignment_cannot_carry_another_change(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    moved = _moved(pending, "bob")
+    altered = AssessmentRecord.model_validate({**moved.model_dump(), "ruleset_version": "other"})
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, altered)
+    assert repo.get("r1") == pending
+
+
+def test_a_move_must_start_from_the_current_assignee(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    from divesafe.domain import Reassignment
+
+    forged = Reassignment(
+        from_decider="zed",
+        to_decider="bob",
+        reassigned_by="root",
+        reassigned_at=NOW + timedelta(minutes=1),
+        key_id="0123456789ab",
+    )
+    wrong = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "assigned_decider": "bob", "reassignments": (forged,)}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, wrong)
+    assert repo.get("r1") == pending
+
+
+def test_an_earlier_move_cannot_be_rewritten_in_place(repo: AssessmentRepository) -> None:
+    pending = _assigned(_record())
+    repo.create(pending)
+    first = _moved(pending, "bob")
+    repo.replace(pending, first)
+    second = _moved(first, "cara", at=2)
+    rewritten_first = first.reassignments[0].model_copy(update={"reassigned_by": "mallory"})
+    forged = AssessmentRecord.model_validate(
+        {
+            **second.model_dump(),
+            "reassignments": (rewritten_first, second.reassignments[1]),
+        }
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(first, forged)
+    assert repo.get("r1") == first

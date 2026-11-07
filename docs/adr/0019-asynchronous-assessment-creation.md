@@ -195,12 +195,14 @@ service may run several workers. Option 2 is acceptable only for a single-worker
     The conflict handling in `failed()` and the polling back-off moved into `web/lib/conflict.ts`
     and `web/lib/polling.ts`, where they are tested directly.
 - **Review round 2 (built):**
-  - A key without the viewer role gets `status: "DECISION_WITHHELD"` and
+  - A key without the viewer role gets `status: "DECISION_WITHHELD"` (one of three meanings of
+    "withheld"; see the terms block in [architecture.md](../architecture.md)) and
     `overrides_to_less_severe: null`, so no field says whether a decision exists. A test asserts the
     reply is identical before and after a decision. The web allow-list requires the status, the
     flag and the null override to agree, and refuses a withheld reply carrying a decision or later
     conditions. Older web builds refuse the new status and show an error screen. The Evidence link
-    is hidden for withheld keys, which cannot read evidence.
+    is hidden for withheld keys, which cannot open the `/evidence` endpoint. That is not a
+    confidentiality guarantee: the create-only view still embeds the evidence (see "Not solved").
   - `PostgresAssessmentRepository.verify` counts membership in the owning role as ownership for
     all three tables, flags an application role that owns or is a member of the owner of a guard
     function, checks each guard trigger calls its own function, and reports a missing run table as
@@ -224,6 +226,12 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 
 ## Not solved
 
+- **Known gap: the create-only view is not a confidentiality boundary for evidence.**
+  `AssessmentView.withheld` embeds the whole record minus the decision and actual conditions, so it
+  includes `evidence` and `withheld_evidence`, although `/evidence` needs the viewer role. The role
+  split hides the decision, not the evidence. The owner has not decided to fix this. Later option:
+  a creator view without `evidence` and `withheld_evidence`. (The web hides the Evidence link for
+  such keys; that is display only.)
 - Cancelling a run. Worker threads for model calls cannot be cancelled (ADR 0016).
 - Notifying the user when a run ends; the UI only polls.
 - The web page stops polling after 6 minutes, fixed in code, while the run deadline can be set up
@@ -234,6 +242,6 @@ service may run several workers. Option 2 is acceptable only for a single-worker
 - The application role can still reset `run_failure_counts` rows it is allowed to update. Nothing
   reads the counts yet.
 - Rendering of `RunProgress` itself is checked by reading its source, not by a renderer; the web
-  package has no browser or React test tooling.
+  package has no browser test tooling (later, `WithheldBox` got an offline render test; see ADR 0017).
 - Reviewers: this changes the API, persistence and the web flow, so it needs the security-reviewer
   and the risk-reviewer before it is built.

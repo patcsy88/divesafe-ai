@@ -21,8 +21,8 @@ for Pulau Tioman, Malaysia (Open-Meteo marine model data, MET Malaysia warnings 
 the MET API) with an evidence/provenance service, an assessment pipeline, the human decision gate,
 an authenticated FastAPI interface, a PostgreSQL assessment repository with migrations (ADR 0012,
 0015), a web UI (ADR 0017), and an agent stage (five specialists, three bounded Tree-of-Thought
-scenarios and a risk proposal). Two LLM adapters exist: Ollama (ADR 0016) and an OpenAI-compatible
-one (ADR 0018). The agent stage has had only small live runs on synthetic scenarios (see
+scenarios and a risk proposal). One LLM adapter exists: an OpenAI-compatible one (ADR 0018; the Ollama
+adapter of ADR 0016 was removed). The agent stage has had only small live runs on synthetic scenarios (see
 [docs/evaluation-strategy.md](docs/evaluation-strategy.md)). Reviewed rules, the `openai` and
 `anthropic` vendor adapters and RAG are not built. With `DIVESAFE_LLM_PROVIDER=fake` (the default)
 the agent stage is off.
@@ -55,7 +55,7 @@ ruff check . && mypy        # lint and types
 uvicorn divesafe.api.app:create_app --factory --reload
 ```
 
-> **Upgrade note (ADR 0023):** a loopback model server (`ollama`, `openai_compatible`) now needs
+> **Upgrade note (ADR 0023):** a loopback model server (`openai_compatible`) now needs
 > `DIVESAFE_LLM_SERVER_IS_LOCAL=true` or `DIVESAFE_ALLOW_EXTERNAL_LLM=true`, or the application
 > refuses to start. The default (`fake`) is unaffected.
 

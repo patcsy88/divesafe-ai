@@ -86,17 +86,20 @@ def test_the_prompt_forbids_hazards_no_input_mentions_but_keeps_the_gap_remedy()
     assert "does not cover a hazard" in TEXT[TEXT.index("8. Keep") :]
 
 
-PINNED = ("2026-10-17.2", "b402ea729dcabf06d7a73897b99b057d3664b78cffdf60e8680df41820cf1926")
+PINNED = ("2026-10-30.1", "fdee19b62324addce3bbea2a541c8b9645a58df10e2124d742fb44681242770c")
 
 
 def test_the_prompt_text_is_pinned_to_its_version() -> None:
+    """Pins the system prompt and the trusted notes appended to task instructions. The per-task
+    instruction text itself is not pinned (a known gap, ADR 0007)."""
     import hashlib
 
-    from divesafe.agents.prompts import PROMPT_VERSION
+    from divesafe.agents.prompts import PROMPT_VERSION, TIDE_NOTE, WARNING_NOTE
 
-    digest = hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()
+    pinned_text = "\x00".join((SYSTEM_PROMPT, TIDE_NOTE, WARNING_NOTE))
+    digest = hashlib.sha256(pinned_text.encode()).hexdigest()
     assert (PROMPT_VERSION, digest) == PINNED, (
-        "the system prompt changed: bump PROMPT_VERSION and update PINNED"
+        "the system prompt or a trusted note changed: bump PROMPT_VERSION and update PINNED"
     )
 
 

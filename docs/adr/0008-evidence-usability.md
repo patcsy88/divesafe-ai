@@ -80,8 +80,27 @@ and recorded in this ADR, together with the compensating controls.
 
 - **Per category, not per variable or location:** a covering item with a different variable or
   grid cell satisfies the category. A reviewed required-variable and location rule is needed.
-- **A GO citing nothing** passes the citation guard; real rules must cite evidence.
-- **Duplicate evidence ids** are reported as INSUFFICIENT EVIDENCE (`evidence.duplicate_ids`).
+- **A GO or CAUTION citing nothing** is now refused (fixed 2026-10-26: flagged `CITES_UNUSABLE`, so the result is INSUFFICIENT EVIDENCE); real rules must cite evidence. A citation of a knowledge item is not yet flagged (ADR 0022 decision 8).
+- **Duplicate evidence ids** are reported as INSUFFICIENT EVIDENCE (`evidence.duplicate_ids`);
+  since 2026-10-25 that rule can fire only for direct engine callers.
+  Update (2026-10-25, owner decision): `gather_evidence` and `build_evidence_set` no longer raise on
+  two different items under one id; every item with that id is dropped and a fixed
+  `evidence.conflict` issue is recorded, then `evidence.connector_issues`, so the result is
+  INSUFFICIENT EVIDENCE. **A conflict can hide a more severe result** (an item that would have
+  crossed a signed-off limit, or a marine warning): the result is INSUFFICIENT EVIDENCE instead of
+  NO-GO. This is latent while the repository ships no validated ruleset. A human can override
+  INSUFFICIENT EVIDENCE, so the dropped items are kept in the audit record as withheld evidence
+  (not cited, not evaluated, not passed to the engine, agents or prompts) and shown clearly
+  labelled to the human; the conflict issue names the category and says the withheld evidence was
+  not in the main result (ADR 0026 reads them only to add severity). A source whose only items were dropped is left out of `data_versions`; the
+  withheld items keep their own `source_version`. **Built later (ADR 0026, 2026-11-05):** the
+  most severe variant decides; the engine runs on each combination and adds an
+  `evidence.conflict_variant` rule result, so a hidden NO-GO stays NO-GO (this closes the gap
+  above). **Known gaps:** the record validator checks shape only (an
+  `evidence.conflict:` issue exists and each withheld id is on at least two different items), not
+  that the items match the issue's categories or connectors, and sets no count limit on withheld
+  items. "Withheld" has three meanings; see the terms block in
+  [architecture.md](../architecture.md).
 
 - **Gaps inside a series of instants:** an instant has no extent, so detecting a hole needs a
   maximum gap, a number that must come from a reviewed source. The marine connector guarantees

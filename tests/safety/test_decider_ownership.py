@@ -176,7 +176,7 @@ def _h(key: str) -> str:
 def test_production_refuses_to_start_without_api_keys(keys: str | None) -> None:
     kwargs: dict[str, Any] = {"api_key_hashes": keys} if keys is not None else {}
     with pytest.raises(ValueError, match="API keys"):
-        Settings(environment="production", llm_provider="ollama", **kwargs)
+        Settings(environment="production", llm_provider="openai_compatible", **kwargs)
 
 
 def test_development_may_start_without_keys() -> None:

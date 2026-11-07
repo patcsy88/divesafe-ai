@@ -60,6 +60,8 @@ class _Fixed:
             rationale="synthetic",
             factor=self._factor,
             threshold_status=self._status,
+            # a GO or CAUTION that cites nothing is flagged, so cite what was supplied
+            evidence_ids=tuple(e.id for e in evidence),
         )
 
 
@@ -102,7 +104,7 @@ def test_stale_required_evidence_is_detected(plan: DivePlan) -> None:
 
 def test_assessment_has_the_documented_structure(plan: DivePlan) -> None:
     engine: RiskEngine = _engine(_Fixed("a", R.CAUTION), required=set())
-    result = engine.assess(plan, [], NOW)
+    result = engine.assess(plan, [make_evidence(WAVES)], NOW)  # the rule cites it
     assert isinstance(result, RiskAssessment)
     assert result.recommendation == R.CAUTION
     assert [r.rule_id for r in result.rule_results] == ["a"]
@@ -326,7 +328,7 @@ def test_caution_is_held_to_the_same_coverage_rule(plan: DivePlan) -> None:
 
 def test_go_is_possible_once_every_threshold_factor_has_a_validated_rule(plan: DivePlan) -> None:
     rules = [_validated(f) for f in sorted(THRESHOLD_FACTORS, key=lambda k: k.value)]
-    result = _strict_engine(*rules).assess(plan, [], NOW)
+    result = _strict_engine(*rules).assess(plan, [make_evidence(WAVES)], NOW)  # rules cite it
     assert result.unevaluated_factors == ()
     assert result.recommendation == R.GO
 

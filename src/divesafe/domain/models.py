@@ -6,10 +6,19 @@ result, mislabels an override or cites unknown evidence cannot be constructed.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StringConstraints,
+    model_validator,
+)
 
 from divesafe.domain.base import Frozen as _Frozen
 from divesafe.domain.provenance import (
@@ -20,6 +29,7 @@ from divesafe.domain.provenance import (
     TransformationStep,
 )
 from divesafe.domain.risk_types import THRESHOLD_FACTORS, RiskFactorKind, ThresholdStatus
+from divesafe.domain.stages import MAX_EVIDENCE_ITEMS, STAGE_ORDER, StageName, StageTrace
 
 
 class Recommendation(StrEnum):
@@ -167,6 +177,11 @@ class ScenarioKind(StrEnum):
     DETERIORATING = "deteriorating"
 
 
+def _check_flagged_positions(flagged: tuple[int, ...], signals: tuple[str, ...]) -> None:
+    if len(set(flagged)) != len(flagged) or any(not 0 <= i < len(signals) for i in flagged):
+        raise ValueError("flagged_signals must be distinct positions within conflicting_signals")
+
+
 class Scenario(_Frozen):
     """One bounded Tree-of-Thought branch. A summary with references, not a reasoning trace."""
 
@@ -175,6 +190,10 @@ class Scenario(_Frozen):
     evidence_ids: tuple[str, ...] = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[StrictInt, ...] = Field(
+        default=(),
+        description="Positions in conflicting_signals the code's wording screen flagged.",
+    )
     confidence: float = Field(
         ge=0.0,
         le=1.0,
@@ -184,6 +203,11 @@ class Scenario(_Frozen):
         ),
     )
 
+    @model_validator(mode="after")
+    def _flags_within_signals(self) -> Scenario:
+        _check_flagged_positions(self.flagged_signals, self.conflicting_signals)
+        return self
+
 
 class Finding(_Frozen):
     """One specialist agent's evidence-referenced reading of its domain. Not a recommendation."""
@@ -192,6 +216,10 @@ class Finding(_Frozen):
     summary: str = Field(min_length=1)
     risk_factors: tuple[str, ...] = ()
     conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[StrictInt, ...] = Field(
+        default=(),
+        description="Positions in conflicting_signals the code's wording screen flagged.",
+    )
     evidence_ids: tuple[str, ...] = ()
     confidence: float | None = Field(
         default=None,
@@ -203,6 +231,7 @@ class Finding(_Frozen):
 
     @model_validator(mode="after")
     def _evidence_matches_flag(self) -> Finding:
+        _check_flagged_positions(self.flagged_signals, self.conflicting_signals)
         if self.no_evidence and (self.evidence_ids or self.confidence is not None):
             raise ValueError("a no-evidence finding cannot cite evidence or claim confidence")
         if not self.no_evidence and not self.evidence_ids:
@@ -210,9 +239,30 @@ class Finding(_Frozen):
         return self
 
 
+MAX_REASSIGNMENTS = 10
+
+
+class Reassignment(_Frozen):
+    """One move of a still-pending assessment to another decider (ADR 0026). Appended by an
+    `admin`, never edited. Names are the configured actor names; `key_id` labels the admin's key."""
+
+    from_decider: str = Field(min_length=1, max_length=100)
+    to_decider: str = Field(min_length=1, max_length=100)
+    reassigned_by: str = Field(min_length=1, max_length=100)
+    reassigned_at: AwareDatetime
+    key_id: str = Field(pattern=r"^(?:[0-9a-f]{12}|dev)$")
+
+    @model_validator(mode="after")
+    def _moves_to_someone_else(self) -> Reassignment:
+        if self.from_decider.strip().casefold() == self.to_decider.strip().casefold():
+            raise ValueError("a reassignment must name a different decider")
+        return self
+
+
 class HumanDecision(_Frozen):
-    """The human's decision. Any override, including to a less severe outcome, is allowed
-    (ADR 0004) but needs an identified decision-maker and a non-blank rationale.
+    """The human's decision. Any override is allowed (ADR 0004); a less severe one needs the
+    `overrider` role (ADR 0026, enforced by the API). It needs an identified decision-maker and a
+    non-blank rationale.
     """
 
     decided_by: str
@@ -220,6 +270,10 @@ class HumanDecision(_Frozen):
     decided_at: AwareDatetime
     is_override: bool
     override_rationale: str | None = None
+    # Set by code, never by a caller (ADR 0026). None = not recorded (a decision made before
+    # these fields existed). `key_id` is a non-secret label of the key used, or "dev".
+    key_id: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{12}|dev)$")
+    decided_by_creator: bool | None = None
 
     @model_validator(mode="after")
     def _require_rationale_for_override(self) -> HumanDecision:
@@ -236,12 +290,154 @@ class ActualConditions(_Frozen):
     observations: dict[str, Any]
 
 
+class SupervisorCheck(StrEnum):
+    """The code-only Supervise stage's checks (ADR 0025 item 2). Fixed names, no free text."""
+
+    RECONCILE_TIGHTEN_ONLY = "reconcile_tighten_only"
+    SEVERITY_MONOTONIC = "severity_monotonic"
+    CITATIONS_VALID = "citations_valid"
+    PROMPT_VERSION_PINNED = "prompt_version_pinned"
+    REQUIRED_CATEGORIES_PRESENT = "required_categories_present"
+
+
+# A breach of these is an invariant failure: the run raises and nothing is stored, so a stored
+# record can never show one of them as failed.
+INVARIANT_CHECKS: frozenset[SupervisorCheck] = frozenset(
+    {SupervisorCheck.RECONCILE_TIGHTEN_ONLY, SupervisorCheck.SEVERITY_MONOTONIC}
+)
+SUPERVISOR_RULE_PREFIX = "supervisor."
+
+
+def supervisor_rule_id(check: SupervisorCheck) -> str:
+    """The rule id Supervise appends for a failed tightening check."""
+    return f"{SUPERVISOR_RULE_PREFIX}{check.value}"
+
+
+class SupervisorVerdict(_Frozen):
+    """What the Supervise stage found. `tightened_to` is the final recommendation `reconcile`
+    produced after a failed check added its rule result, or None when nothing changed."""
+
+    passed: tuple[SupervisorCheck, ...]
+    failed: tuple[SupervisorCheck, ...] = ()
+    tightened_to: Recommendation | None = None
+
+    @model_validator(mode="after")
+    def _each_check_once(self) -> SupervisorVerdict:
+        seen = (*self.passed, *self.failed)
+        if len(seen) != len(set(seen)):
+            raise ValueError("each supervisor check appears at most once")
+        if INVARIANT_CHECKS & set(self.failed):
+            raise ValueError("an invariant check cannot be recorded as failed")
+        if self.tightened_to is not None and not self.failed:
+            raise ValueError("tightened_to requires a failed check")
+        return self
+
+
+class RecordEgressBasis(StrEnum):
+    """Why the run's model server could receive a prompt, as stored on the record (ADR 0022
+    decision 15). A superset of `models.egress.EgressBasis`: `no_agent_stage` comes only from the
+    no-provider case and never from `check_egress`. Knowledge may reach a prompt only under
+    `declared_local`."""
+
+    DECLARED_LOCAL = "declared_local"
+    LOOPBACK_EXTERNAL_OPT_IN = "loopback_external_opt_in"
+    REMOTE_EXTERNAL_OPT_IN = "remote_external_opt_in"
+    NONE = "none"
+    NO_AGENT_STAGE = "no_agent_stage"
+
+
+# The bases with no model server, so no host (ADR 0022 decision 15).
+_NO_HOST_BASES: frozenset[RecordEgressBasis] = frozenset(
+    {RecordEgressBasis.NONE, RecordEgressBasis.NO_AGENT_STAGE}
+)
+KNOWLEDGE_ID_PREFIX = "kb:"
+# ADR 0022 decision 6: the strict document id grammar, and version / chunk 1..999999.
+KB_DOCUMENT_ID_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+){0,2}$"
+_KB_DOCUMENT_ID = re.compile(KB_DOCUMENT_ID_PATTERN)
+_KB_NUMBER = re.compile(r"^[1-9][0-9]{0,5}$")
+# ADR 0022 decision 12: at most 20 retrieved chunks per run.
+MAX_KNOWLEDGE_ITEMS = 20
+# A DNS name (as `config.settings._host_set` accepts) or an IP literal, lowercase, no brackets.
+_HOST_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
+
+
+class KnowledgeRef(_Frozen):
+    """One knowledge chunk by id only (document, version, chunk), never by title."""
+
+    document_id: str = Field(max_length=40, pattern=KB_DOCUMENT_ID_PATTERN)
+    version: StrictInt = Field(ge=1, le=999999)
+    chunk: StrictInt = Field(ge=1, le=999999)
+
+
+def knowledge_ref(evidence_id: str) -> KnowledgeRef | None:
+    """The chunk a `kb:<document_id>:<version>:<chunk>` evidence id names, or None for an id
+    outside the reserved `kb:` prefix (compared case-insensitively). Raises `ValueError` for a
+    reserved id that does not follow the decision 6 grammar."""
+    if evidence_id[: len(KNOWLEDGE_ID_PREFIX)].casefold() != KNOWLEDGE_ID_PREFIX:
+        return None
+    parts = evidence_id.split(":")
+    if (
+        len(parts) != 4
+        or parts[0] != "kb"
+        or len(parts[1]) > 40
+        or not _KB_DOCUMENT_ID.fullmatch(parts[1])
+        or not _KB_NUMBER.fullmatch(parts[2])
+        or not _KB_NUMBER.fullmatch(parts[3])
+    ):
+        raise ValueError("a kb: evidence id must be kb:<document_id>:<version>:<chunk>")
+    return KnowledgeRef(document_id=parts[1], version=int(parts[2]), chunk=int(parts[3]))
+
+
+# Mirrors `models.loopback.is_loopback`, which `domain` may not import.
+_LOOPBACK_NAMES = frozenset({"localhost"})
+
+
+def _valid_host(host: str) -> bool:
+    """A lowercase DNS name or an IP literal: no scheme, port, userinfo, path, brackets or zone
+    id, and no `0x` label or all-digit last label (an address disguised as a name)."""
+    if len(host) > 253 or "%" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return host == host.lower()
+    return (
+        bool(_HOST_NAME.fullmatch(host))
+        and not host.rsplit(".", 1)[-1].isdigit()
+        and not any(label.startswith("0x") or len(label) > 63 for label in host.split("."))
+    )
+
+
+def _is_loopback(host: str) -> bool:
+    if host in _LOOPBACK_NAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
+
+
+# A basis `check_egress` gives only for a loopback server (`external` false), and the one it gives
+# only for a remote one.
+_LOOPBACK_BASES: frozenset[RecordEgressBasis] = frozenset(
+    {RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.LOOPBACK_EXTERNAL_OPT_IN}
+)
+
+
 class AssessmentRecord(_Frozen):
     """Immutable audit record of one assessment and what the human did with it.
 
     `final_recommendation` is the system's recommendation, not an action. Until a
     `HumanDecision` is attached the record is `PENDING_HUMAN` and must not be acted on.
     """
+
+    # A validation error must not carry record content (decision text, model output) into a log.
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     id: str = Field(min_length=1)
     created_at: AwareDatetime
@@ -271,7 +467,23 @@ class AssessmentRecord(_Frozen):
     evidence_issues: tuple[str, ...] = Field(
         default=(), description="Sources or categories that failed or were rejected."
     )
+    withheld_evidence: tuple[EvidenceItem, ...] = Field(
+        default=(),
+        description=(
+            "Items dropped because different items shared one id. For the human reviewer only: "
+            "Not in the main result, NOT citable, never given to agents or prompts; only the "
+            "deterministic variant search reads them, to add severity (ADR 0026). If that "
+            "search was not possible they may hold a more severe result than anything evaluated."
+        ),
+    )
     findings: tuple[Finding, ...] = ()
+    cross_examination_findings: tuple[Finding, ...] = Field(
+        default=(),
+        description=(
+            "Second-round specialist findings (ADR 0025 item 5), only when cross-examination is "
+            "on. They feed the proposal and never the scenarios; each cites evidence ids only."
+        ),
+    )
     scenarios: tuple[Scenario, ...] = ()
     proposal_evidence_ids: tuple[str, ...] = Field(
         default=(), description="Evidence the LLM proposal cited. Empty when there is no proposal."
@@ -299,8 +511,60 @@ class AssessmentRecord(_Frozen):
         ),
         max_length=100,
     )
+    reassignments: tuple[Reassignment, ...] = Field(
+        default=(),
+        max_length=MAX_REASSIGNMENTS,
+        description=(
+            "Moves of this assessment between deciders before it was decided, oldest first "
+            "(ADR 0026). `assigned_decider` is the last one's target."
+        ),
+    )
     human_decision: HumanDecision | None = None
     actual_conditions: ActualConditions | None = None
+    supervisor_verdict: SupervisorVerdict | None = Field(
+        default=None,
+        description=(
+            "The code-only Supervise stage's checks (ADR 0025). None on records made before it "
+            "existed. A failed check is also a `supervisor.<check>` rule result."
+        ),
+    )
+    egress_basis: RecordEgressBasis | None = Field(
+        default=None,
+        description=(
+            "Why the model server could receive a prompt (ADR 0022 decision 15, ADR 0023). None "
+            "on records made before it existed. Knowledge (`kb:` evidence) may reach a prompt "
+            "only under `declared_local`; under any other value, or None, every knowledge item "
+            "is listed in `withheld_knowledge`."
+        ),
+    )
+    model_host: str | None = Field(
+        default=None,
+        max_length=253,
+        description=(
+            "Host name of the model server only: no scheme, port, path or userinfo. None when "
+            "the basis is `none` or `no_agent_stage`, or the basis is absent."
+        ),
+    )
+    withheld_knowledge: tuple[KnowledgeRef, ...] = Field(
+        default=(),
+        max_length=MAX_KNOWLEDGE_ITEMS,
+        description=(
+            "Knowledge items in the evidence that were NOT sent to a model because of the egress "
+            "basis, by id only (ADR 0022 decision 15). Not `withheld_evidence` (ADR 0008)."
+        ),
+    )
+
+    stages: tuple[StageTrace, ...] = Field(
+        default=(),
+        description=(
+            "One entry per executed stage, in graph order (ADR 0025 item 3): outcome, "
+            "evidence ids used and fixed issue codes. Empty on records made before it existed. "
+            "Not a reasoning trace. started_at/finished_at are coarse bounds (the run's now and "
+            "one later clock reading taken in Rejudge), not per-stage measurements; duration_ms "
+            "is the stage's own monotonic wall time."
+        ),
+        max_length=len(STAGE_ORDER),
+    )
 
     @property
     def status(self) -> Literal["PENDING_HUMAN", "DECIDED"]:
@@ -328,10 +592,23 @@ class AssessmentRecord(_Frozen):
         if len(ids) != len(set(ids)):
             raise ValueError("evidence ids must be unique")
 
+        if {e.id for e in self.withheld_evidence} & set(ids):
+            raise ValueError("withheld evidence ids must not appear in the evidence")
+        if self.withheld_evidence:
+            if not any(s.startswith("evidence.conflict:") for s in self.evidence_issues):
+                raise ValueError("withheld evidence requires an evidence.conflict issue")
+            by_id: dict[str, list[EvidenceItem]] = {}
+            for held in self.withheld_evidence:
+                by_id.setdefault(held.id, []).append(held)
+            if any(all(x == items[0] for x in items) for items in by_id.values()):
+                raise ValueError("each withheld id must appear on at least two different items")
+
         cited = {i for r in self.rule_results for i in r.evidence_ids}
         cited |= {i for s in self.scenarios for i in s.evidence_ids}
         cited |= {i for f in self.findings for i in f.evidence_ids}
+        cited |= {i for f in self.cross_examination_findings for i in f.evidence_ids}
         cited |= set(self.proposal_evidence_ids)
+        cited |= {i for t in self.stages for i in t.evidence_ids}
         if self.proposal_evidence_ids and self.proposed_recommendation is None:
             raise ValueError("proposal_evidence_ids require a proposal")
         unknown = cited - set(ids)
@@ -362,12 +639,27 @@ class AssessmentRecord(_Frozen):
         ):
             raise ValueError("evidence issues require at least INSUFFICIENT EVIDENCE")
 
+        self._check_supervisor()
+        self._check_stages()
+        self._check_egress()
+
+        self._check_reassignments()
         if self.human_decision is not None:
             if self.human_decision.decided_at < self.created_at:
                 raise ValueError("decided_at is before the assessment was created")
             is_override = self.human_decision.decision != self.final_recommendation
             if self.human_decision.is_override != is_override:
                 raise ValueError("is_override must equal (human decision != recommendation)")
+            flag = self.human_decision.decided_by_creator
+            if flag is not None and (
+                self.created_by is None
+                or flag
+                != (
+                    self.created_by.strip().casefold()
+                    == self.human_decision.decided_by.strip().casefold()
+                )
+            ):
+                raise ValueError("decided_by_creator must equal (decided_by == created_by)")
             if self.actual_conditions is not None:
                 reported = self.actual_conditions.reported_at
                 if reported < self.human_decision.decided_at:
@@ -377,3 +669,126 @@ class AssessmentRecord(_Frozen):
         elif self.actual_conditions is not None:
             raise ValueError("actual conditions require a recorded human decision")
         return self
+
+    def _check_egress(self) -> None:
+        """ADR 0022 decision 15, checkable from the record alone: knowledge in a prompt implies
+        `declared_local`. Knowledge here means evidence with a `kb:` id (owner decision
+        2026-11-06); a KNOWLEDGE item without one is not covered (ADR 0022 Known gaps)."""
+        basis, host = self.egress_basis, self.model_host
+        if basis is None or basis in _NO_HOST_BASES:
+            if host is not None:
+                raise ValueError("model_host requires an egress basis with a model server")
+        elif host is None or not _valid_host(host):
+            raise ValueError("model_host must be the model server's host name only")
+        elif (basis in _LOOPBACK_BASES) != _is_loopback(host):
+            raise ValueError("model_host does not match the egress basis")
+
+        knowledge = {ref: e.id for e in self.evidence if (ref := knowledge_ref(e.id)) is not None}
+        if len(knowledge) > MAX_KNOWLEDGE_ITEMS:
+            raise ValueError("a record holds at most 20 knowledge items")
+        if knowledge and basis is None:
+            raise ValueError("a record with knowledge evidence needs an egress basis")
+        withheld = self.withheld_knowledge
+        if len(withheld) != len(set(withheld)):
+            raise ValueError("each withheld knowledge item appears at most once")
+        if set(withheld) - knowledge.keys():
+            raise ValueError("withheld knowledge must name knowledge evidence in the record")
+        if basis is not RecordEgressBasis.DECLARED_LOCAL and knowledge.keys() - set(withheld):
+            raise ValueError("knowledge may reach a prompt only under egress basis declared_local")
+        held_ids = {knowledge[ref] for ref in withheld if ref in knowledge}
+        model_cited = {
+            i for f in (*self.findings, *self.cross_examination_findings) for i in f.evidence_ids
+        }
+        model_cited |= {i for s in self.scenarios for i in s.evidence_ids}
+        model_cited |= set(self.proposal_evidence_ids)
+        model_cited |= {
+            i for t in self.stages if t.name is StageName.REASON for i in t.evidence_ids
+        }
+        if held_ids & model_cited:
+            raise ValueError("withheld knowledge cannot be cited by model output")
+
+    @property
+    def original_decider(self) -> str | None:
+        """Who the assessment was assigned to when it was created."""
+        return self.reassignments[0].from_decider if self.reassignments else self.assigned_decider
+
+    def _check_reassignments(self) -> None:
+        """A chain: each move starts where the last ended, in time order, and the current
+        assignee is where the last one ended. Nothing moves after the decision."""
+        previous_to: str | None = None
+        previous_at = self.created_at
+        for move in self.reassignments:
+            if previous_to is not None and move.from_decider != previous_to:
+                raise ValueError("reassignments must form a chain")
+            if move.reassigned_at < previous_at:
+                raise ValueError("a reassignment is dated before the one before it")
+            previous_to, previous_at = move.to_decider, move.reassigned_at
+        if previous_to is not None:
+            if self.assigned_decider != previous_to:
+                raise ValueError("assigned_decider must be where the last reassignment ended")
+            if self.human_decision is not None and previous_at > self.human_decision.decided_at:
+                raise ValueError("a reassignment is dated after the decision")
+
+    def _check_stages(self) -> None:
+        """At most one trace per stage, in graph order, each pointing at the next entry (None
+        only on the last). Evidence ids are checked with the other cited ids above, which also
+        keeps withheld ids out (they may not appear in the evidence)."""
+        names = [t.name for t in self.stages]
+        if len(names) != len(set(names)):
+            raise ValueError("at most one stage trace per stage")
+        positions = [STAGE_ORDER.index(n) for n in names]
+        if positions != sorted(positions):
+            raise ValueError("stage traces must be in graph order")
+        expected = [*(t.name for t in self.stages[1:]), None]
+        if [t.next_stage for t in self.stages] != expected[: len(self.stages)]:
+            raise ValueError("each stage trace must name the following entry as next_stage")
+        by_name = {t.name: t for t in self.stages}
+        observe = by_name.get(StageName.OBSERVE)
+        if observe is not None:
+            kept = tuple(e.id for e in self.evidence)[:MAX_EVIDENCE_ITEMS]
+            if observe.evidence_ids != kept:
+                raise ValueError("the observe trace must list the record's kept evidence ids")
+        supervise = by_name.get(StageName.SUPERVISE)
+        if supervise is not None:
+            tightened = {
+                code.partition(":")[2]
+                for code in supervise.issues
+                if code.startswith("supervise.tightened:")
+            }
+            failed = set() if self.supervisor_verdict is None else self.supervisor_verdict.failed
+            if tightened != {check.value for check in failed}:
+                raise ValueError("supervise.tightened codes must match the verdict's failed checks")
+        propose = by_name.get(StageName.PROPOSE)
+        if propose is not None:
+            downgrade_codes = {
+                "propose.llm_attempted_downgrade",
+                "supervise.llm_attempted_downgrade",
+            }
+            later = supervise.issues if supervise is not None else ()
+            flagged = bool(downgrade_codes & {*propose.issues, *later})
+            if flagged != self.llm_attempted_downgrade:
+                raise ValueError(
+                    "a downgrade code must appear exactly when a downgrade was flagged"
+                )
+
+    def _check_supervisor(self) -> None:
+        """Every failed check is exactly one `supervisor.<check>` INSUFFICIENT EVIDENCE rule
+        result, and no such result exists without its failed check. The verdict's own validator
+        already refuses a failed invariant check."""
+        supervisor_results = [
+            r for r in self.rule_results if r.rule_id.startswith(SUPERVISOR_RULE_PREFIX)
+        ]
+        failed = () if self.supervisor_verdict is None else self.supervisor_verdict.failed
+        expected = {supervisor_rule_id(check) for check in failed}
+        found = [r.rule_id for r in supervisor_results]
+        if len(found) != len(set(found)):
+            raise ValueError("each supervisor rule result must appear once")
+        if set(found) != expected:
+            raise ValueError("supervisor rule results must match the verdict's failed checks")
+        for result in supervisor_results:
+            if result.outcome is not Recommendation.INSUFFICIENT_EVIDENCE:
+                raise ValueError("a supervisor rule result must be INSUFFICIENT EVIDENCE")
+        verdict = self.supervisor_verdict
+        tightened = None if verdict is None else verdict.tightened_to
+        if tightened is not None and tightened is not self.final_recommendation:
+            raise ValueError("tightened_to must be the final recommendation")

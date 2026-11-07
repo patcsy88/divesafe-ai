@@ -492,8 +492,8 @@ revision, which the reviewers read, is the second, `72dad38`; they accepted it a
 design. This third revision folded in their minors, and both reviewers have since accepted it as a
 recorded design (no blockers). Changes: "already withdrawn" is decided by the trigger, not outside the lock, and
 the self-check runs after the commit, with an exit-status table (A3); the `hash_checked` column is
-specified, **proposed by `risk-reviewer`, owner not yet asked** (A3, A7; ADR 0022 decisions 3 and
-10); the "text psql sends" sentence is corrected, and the script's logging settings and psql flags
+specified, **proposed by `risk-reviewer`; the owner answered YES on 2026-10-21** (A3, A7; ADR 0022
+decisions 3 and 10); the "text psql sends" sentence is corrected, and the script's logging settings and psql flags
 are pinned (A1); timeouts for `kb_load` and `connect_timeout` (A3); `kb_withdraw`'s environment and
 the code rule for the subcommand (A3); the narrow settings model's secrets-directory rule (A3); the
 API refusal's `.env` gap (A4); a mandatory `.dockerignore` line (A3, A5); the stage-1 accident is
@@ -508,8 +508,8 @@ still counts as approved for choosing the governing version and for hiding lower
 family returns nothing and raises an evidence issue** (A3; ADR 0022 decision 3), which fixes a
 literal reading of "counts as NOT approved" that would let a lower version's text back in;
 `hash_checked` on other event statuses and in the fallback INSERT (A3); **the owner's answer on
-`hash_checked` gates the stage-1 migration** (A3, A6; **proposed by `risk-reviewer`, the owner has
-not been asked**); stage-1 recovery uses the old scripts and image (A6); "not found" and "missing
+`hash_checked` gated the stage-1 migration** (A3, A6; **proposed by `risk-reviewer`; the owner
+answered YES on 2026-10-21**); stage-1 recovery uses the old scripts and image (A6); "not found" and "missing
 from the archive" are one message, an exact SQLSTATE for "already withdrawn", "outcome unknown:
 re-run", the self-check's own `statement_timeout`, `recorded_at` printed before the self-check, and
 the next step after "already withdrawn" (A3); `connect_timeout` in the connection string (A1, A3);
@@ -648,6 +648,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   requires the value to `fullmatch` `[1-9][0-9]*` (no sign, no spaces, no leading zero) and to be
   at most the fixed value. Mutations: the encoded duplicate must be refused; a keyword/value
   string `host=... connect_timeout=0` must be refused.
+  **Slice 1 note (A1/A3):** the code also passes `connect_timeout=5` to the driver as a keyword
+  argument, **in addition to** the string validation above. Which value wins when the string and
+  the keyword both carry `connect_timeout` (libpq/psycopg precedence) is stated **from memory,
+  not checked**; a test pins the parameters actually passed to the driver, so a change of
+  precedence or of the keyword is caught.
   **The same question for the existing checks, answered as far as known:** `_require_tls` in
   `settings.py` (L17-24) already reads `sslmode` through `psycopg.conninfo.conninfo_to_dict`, so
   the **encoding half** of the `sslmode` question is answered (it sees the decoded key). The
@@ -777,7 +782,7 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     approval record.
   - **The explicit development flag (owner decision, 2026-10-21; ADR 0022 condition 1).** In
     production the hash is required for `load` and `approve`. It is skipped **only when the
-    operator passes the explicit flag `--development-no-manifest-hash` (name fixed at code time)
+    operator passes the explicit flag `--development-no-manifest-hash` (name fixed by the owner, 2026-10-23)
     AND `DIVESAFE_ENVIRONMENT` is not `production`.** The flag alone in production is refused, and
     `docker compose run -e DIVESAFE_ENVIRONMENT=development` **alone does not skip the hash**: a
     bypass takes both a development environment and the flag. Each is a separate deliberate act.
@@ -789,9 +794,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     read the flag from an environment variable; each must fail. The case **"environment unset"**
     (the default is `development`) is its own test: without the flag the hash is still required.
     This still does not stop an operator who overrides the environment **and** passes the flag
-    (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; the owner has not been
-    asked):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
-    included in the loader's column-level INSERT grant (ADR 0022 decision 10). **In every
+    (gap 4). **The bypass leaves a trace (proposed by `risk-reviewer`; owner decision, 2026-10-21:
+    YES):** the status-event row has a column `hash_checked`, **`NOT NULL` with no default**,
+    included in the loader's column-level INSERT grant (ADR 0022 decision 10). **The DB accepts an
+    APPROVED event with `hash_checked = false`** (the development flag leaves it `false`; `approve`
+    with a compared hash writes `true`); **selection, not the DB, handles it.** **In every
     environment** (not only production; a test runs with the environment unset),
     **an APPROVED event with `hash_checked = false` still counts as approved for choosing the
     governing version and for hiding lower versions, and the family returns NOTHING with an
@@ -800,10 +807,11 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     checked, in-force approved version (current status APPROVED, no WITHDRAWN event) clears it; withdrawing does not. The A7 report and the
     post-restore check list such versions. **It records a client claim, not proof**: a raw `psql`
     insert by the loader credential can claim `true`. **Other statuses:** selection reads the column
-    only from the APPROVED event; `load` writes the fixed value for DRAFT and `withdraw` for
-    WITHDRAWN (values fixed at code time and stated then; a CHECK or the trigger enforces them),
-    and **the owner `psql` fallback INSERT includes the column** (pinned in the runbook scan).
-    **The owner's answer gates the stage-1 migration** (A6). Tests and mutations: an unchecked
+    only from the APPROVED event; DRAFT and WITHDRAWN rows carry the fixed value `false`
+    (`load` and `withdraw` write it), enforced by a DB CHECK `status = 'APPROVED' OR hash_checked =
+    false`, and **the owner `psql` fallback INSERT includes the column** (pinned in the runbook
+    scan). **The owner answered YES (2026-10-21), so the stage-1 migration includes the column**
+    (A6). Tests and mutations: an unchecked
     approval is stored as `false`; the unchecked family returns nothing and raises the issue, never
     the lower version (mutation: treat it as not approved); an unchecked v2 that is withdrawn still
     hides v1 (mutation: read it as never approved); `withdraw` and the fallback INSERT succeed with
@@ -834,12 +842,254 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     `connect_timeout` in the connection string and these timeouts it does not wait without limit;
     a server that accepts the connection and then stops answering is bounded by the statement
     timeout, and a dead network by `connect_timeout` (tested).
+  - **Operational limits of `withdraw`: APPROVED by the owner, 2026-10-23.**
+    The owner approved all five values in the table below. **Only these five values are approved
+    here;** the open items after the table (slice 2) are not. The values come from no standard and
+    no measurement; each rests only on
+    things in this repository: `withdraw` only tightens and an operator waits at a terminal; the
+    runbook below is a human action (stop the load, or terminate the backend), so waiting longer
+    than a short time for a lock gives the runbook nothing; and the production compose defaults
+    (120 s LLM call, 300 s stage) show the longest wait this project already treats as tolerable
+    (they are LLM limits, **not** a basis for database timeouts, and are used here only as a
+    ceiling on the whole run).
+
+    | # | Limit | APPROVED (owner, 2026-10-23) | Rationale | Too short | Too long |
+    | --- | --- | --- | --- | --- | --- |
+    | 1 | `connect_timeout` in the loader string | **5 s** (the value `make-secrets.sh` writes and the ceiling the narrow model accepts) | Compose-internal network to `db`; a healthy connect (TLS and password exchange) is quick, and a dead network should fail while the operator is still looking at the terminal. libpq reads `0` as no limit and raises `1` to 2 s, so the value is a positive integer of at least 2. | False "connection refused" under a loaded `db` or slow start; the operator retries, no state change. | Operator stares at a hung terminal during a network fault; the validation ceiling would let a larger loader string through. |
+    | 2 | `SET LOCAL lock_timeout` (per-document advisory lock) | **10 s** | The lock is taken inside the status-event trigger, so a healthy holder keeps it only for one insert. A holder that keeps it longer is a long or stuck load, and only the runbook (stop the container, terminate the backend) clears that, which a human does. | Spurious `55P03` "lock busy" when a load commits a moment later; cost is one retry. | The operator waits on a load that may be stuck, and the withdrawal is delayed while the API still serves the text; no benefit, since the runbook is manual anyway. |
+    | 3 | `SET LOCAL statement_timeout` of the withdraw transaction | **30 s** | Must be **greater than** `lock_timeout`: the lock wait happens inside the INSERT statement, so a statement timeout at or below it would fire first and turn the lock refusal into `57014`. 30 s leaves 20 s over the lock wait for a single-row insert and its triggers. | `57014` pre-empts `55P03`, so the "lock busy" message and its runbook step are lost, or a slow but healthy `db` is cut off. | A stalled server holds the operator at the terminal; only the 120 s ceiling above limits it. |
+    | 4 | `statement_timeout` of the new transaction that reads the existing WITHDRAWN event's `recorded_at` | **10 s** | One single-row read by the loader's SELECT (index use not checked); it takes no advisory lock, so it does not wait behind a load. | Falsely reaches "already withdrawn; recorded_at unavailable" (its own exit status), and the operator must find the time with `psql` for the withdrawal log. | Operator waits after a refusal that already wrote nothing; the only gain is a log time. |
+    | 5 | `statement_timeout` of the post-commit privilege self-check transaction | **15 s** | Runs after the commit and after `recorded_at` is printed, read-only, over catalog privilege checks (more work than item 4, no lock). The withdrawal is already durable, so a long wait costs only terminal time. | False "withdrawn; self-check incomplete" (non-zero exit), which makes the operator doubt a role that may be fine. | Operator waits after the safety action is done; a stalled check is only reported, never changes the withdrawal. |
+
+    **Whole-run check:** connect 5 s + statement 30 s + read 10 s + self-check 15 s is 60 s in the
+    worst case on one connection (about 70 s if each phase reconnects), under the 120 s the
+    compose file allows for one LLM call. **Pinned relation:** `lock_timeout` < `statement_timeout`
+    (10 s < 30 s) is part of the approved decision, not only each number; a test pins the relation
+    (mutation: set them equal or reversed).
+    **Caveats that remain despite approval:** the libpq floor in item 1 (`1` raised to 2 s) is
+    stated from memory and not checked against the libpq version in the image; the self-check
+    workload in item 5 ("more work than item 4") is assumed, not measured.
+    **Slice 2 values (`idle_in_transaction_session_timeout` for `withdraw` and for `kb_load`, and
+    the `kb_load` `lock_timeout` and `statement_timeout`) are APPROVED by the owner, 2026-10-23
+    (table P1 to P6 below).** Because a load holds the family lock until its commit, "lock busy"
+    is the normal result of withdrawing during a load, and runbook step (1) is the normal
+    response (Q1, accepted below); the approved withdraw `lock_timeout` of 10 s stays.
+
+    **Slice 2 limits: APPROVED by the owner, 2026-10-23 (P1 to P6, as proposed by the architect;
+    the approved withdraw table above is unchanged).** No standard and
+    no measurement backs any number; they rest on the same repository facts as the approved table
+    and on the ADR 0022 decision 12 parsing limits (manifest and text at most 1 MiB, at most 50
+    documents and 200 chunks per load, a chunk at most 1500 characters, at most 20 chunks per
+    run). A load is inserts only (the loader has no route out and no LLM key), so a load is at
+    most about 1 + 50 documents + 200 chunks + status events in one transaction; how long that
+    takes is **not measured**.
+
+    | # | Limit | APPROVED (owner, 2026-10-23) | Rationale | Too short | Too long |
+    | --- | --- | --- | --- | --- | --- |
+    | P1 | `idle_in_transaction_session_timeout`, `withdraw` | **10 s** (`SET LOCAL` in the withdraw transaction; now applies to the withdraw transaction too) | The transaction is one INSERT and a commit with no human input inside it, so the client is never legitimately idle for seconds. A stalled client holds the family's per-document lock, which blocks the very action this command exists for, so it should be the shortest of the idle limits. | A slow terminal or GC pause between statements kills a healthy withdrawal: "failed, nothing written" or "outcome unknown"; retry is safe. | A hung client keeps the lock, and a second withdrawal of that family meets "lock busy" for this long. |
+    | P2 | `idle_in_transaction_session_timeout`, `kb_load` and `approve` | **30 s**; **differs from P1 on purpose** | Between statements a load does client work (row building, per-chunk checks) over up to 250 rows; `approve` is a few statements. One value for both keeps the settings model simple. | A load that is only slow is killed and rolled back; nothing is written, retry costs the operator time. | A stalled load holds the global lock (1220002) and every touched family's lock for this long, so later loads and withdrawals of those families fail on `lock_timeout`. |
+    | P3 | `SET LOCAL lock_timeout`, global lock (class 1220002) and per-document lock (class 1220001), `kb_load` | **10 s for both** | A second load is an operator mistake or a stuck run; waiting longer than a terminal wait gives the runbook (stop the container, terminate the backend) nothing. Same value as the approved withdraw 10 s, so one number to remember. **Caveat:** the locks are transaction-scoped, so a holder keeps them until its **commit**, not for one insert; the approved item 2 rationale ("only for one insert") holds for a withdraw holder, not for a load holder (see question Q1). | Spurious "lock busy" when another run commits a moment later; one retry. | The operator waits on a stuck holder; delay of a load costs little. |
+    | P4 | `SET LOCAL statement_timeout`, each `kb_load` statement | **30 s** | Must exceed `lock_timeout` (same pinned relation 10 s < 30 s) because the lock wait is inside a statement. A single-row insert plus its triggers, and the per-site chunk check over a store of at most a few hundred chunks, should take far less; 30 s is chosen to match the approved withdraw item 3, not derived from a measurement. | `57014` pre-empts `55P03`, or a healthy slow `db` cuts off a valid load (rolled back, nothing written). | A stalled server holds the operator and the locks; bounded only by P6 below. |
+    | P5 | `lock_timeout` and `statement_timeout`, `approve` | **10 s and 30 s** (same as P3 and P4) | Same shape as withdraw: one status-event INSERT under the per-document lock (plus the refusal for a version with no chunks). The same relation applies. | As P3 and P4. | As P3 and P4. |
+    | P6 | Overall wall-clock bound, `kb_load` | **Yes. 120 s for `load`, 60 s for `approve`** | Statement and idle limits bound each step, not the sum: 250 statements at 30 s each would be hours while holding the global lock. 120 s is the longest wait this project already tolerates (the LLM call limit; a ceiling, not a basis); 60 s for `approve` equals the approved withdraw whole-run figure. | A valid but slow load is rolled back whole; the operator must raise the limit by a reviewed change. | A stuck load blocks other loads and withdrawals of its families for minutes. |
+
+    **P1 to P6 are constants in code (owner decision Q2, 2026-10-23): no environment key and no
+    compose setting.**
+
+    **How P6 is enforced (approved with P6).** The image is PostgreSQL 16 (`pgvector/pgvector:pg16`), which
+    to my recollection has no `transaction_timeout` (added in 17; **not checked**), so the server
+    cannot cap the transaction. Approved design: a **client-side monotonic deadline in the `kb_load` process**,
+    started before the connection and checked between statements; when exceeded it rolls back,
+    prints a fixed message and exits with its own "failed, nothing written" status. Server-side
+    backstops are P2 and P4. **Limit of this design:** the client check cannot interrupt a
+    statement already running, so the worst case is the deadline plus one `statement_timeout`
+    plus `connect_timeout` (about 155 s for `load`), and a process that is killed leaves the
+    server to roll back at its idle or statement limit. Options not chosen: a host `timeout`
+    wrapper (outside the repository, not a pinned control) and a compose-level limit (compose has
+    no run timeout). Tests (to be written): a stalled client is ended by the server within P2
+    (mutation: drop the setting); a load past the deadline writes nothing and exits with the
+    status (mutation: remove the check); the pinned relation `lock_timeout` < `statement_timeout`
+    holds for load and approve. The loader's self-check, pre-write role check and recorded-at
+    style reads need their own `statement_timeout` in each new transaction (values APPROVED, Q8
+    below: 15 s for the checks, 10 s for `load`'s own reads).
+
+    **Owner decisions on the slice 2 questions, 2026-10-23.**
+    - Q1. **ACCEPTED.** "Lock busy" for a withdrawal during a load is normal and runbook step (1)
+      is the response. The withdraw `lock_timeout` stays 10 s; the load deadline (P6) bounds the
+      wait.
+    - Q2. **APPROVED.** P1 to P6 are constants in code (no environment key, no compose setting).
+    - Q3. **DECIDED.** The corpus-target setting name stays `DIVESAFE_CORPUS_TARGET`.
+    - Q4. **DECIDED.** The development flag is exactly `--development-no-manifest-hash`.
+    - Q7. **DECIDED.** The ADR 0022 manifest limits stand for slice 2: 1 MiB, 50 documents, 200
+      chunks per load, 1500 characters per chunk (and the 20 per run of decision 12).
+    - Q9. **DECIDED.** `kb_load` and `approve` never retry on `55P03` or `40P01`; they exit and
+      the operator re-runs. (The stop grace period of a stuck run container, runbook step 1, is
+      not part of this decision and was not checked.)
+
+    **Further owner decisions, 2026-10-23.**
+    - Q8. **APPROVED.** For `load` and `approve`: the privilege self-check and the pre-write
+      privilege (owner/app role) check each run with `statement_timeout` **15 s**, and `load`'s own
+      reads (the conflict read and the per-site chunk check's read) with **10 s**, in each new
+      transaction. These are the same values as the approved withdraw items 5 and 4. This also
+      settles the previously open reuse of 15 s for **withdraw's** pre-write role check (A3, "Slice 1
+      review outcomes"; pre-load item 5). Worst case with the pre-write check on one connection is
+      still about 75 s for `withdraw` (60 s whole-run figure plus 15 s); for `load` and `approve` the
+      P6 deadlines (120 s, 60 s) apply on top of the checks. As with every value here, no
+      measurement backs 15 s or 10 s. *Code note (2026-10-23):* `kb_common.py` has
+      `LOAD_SELF_CHECK_STATEMENT_TIMEOUT_MS = None` (refuses until set) and no constant yet for
+      `load`'s own reads; the engineer sets 15_000 and adds a 10_000 constant. Tests and mutations
+      as for P1 to P6 (drop the setting; swap 15 and 10).
+    - Q5. **APPROVED.** The `load` and `approve` exit-status table below, one fixed message per
+      row. Numbers 2 to 12 keep `withdraw`'s meanings; precedence is "failed, nothing written" rows
+      first, then 12, then 0.
+
+      | Exit | Meaning |
+      | --- | --- |
+      | 0 | OK (`load`: loaded as DRAFT; `approve`: approved) |
+      | 2 | argument refused |
+      | 3 | loader configuration refused |
+      | 4 | database connection failed |
+      | 5 | role has owner or application write privileges |
+      | 6 | lock busy (`55P03`; never retried, Q9) |
+      | 7 | statement timeout (`57014`) |
+      | 8 | isolation level (defensive mapping; see Slice 1 review outcomes) |
+      | 9 | deadlock (`40P01`; never retried, Q9) |
+      | 10 | version not found |
+      | 11 | any other database refusal |
+      | 12 | outcome unknown: check the status, then re-run if needed |
+      | 13 | manifest or corpus not valid |
+      | 14 | manifest hash does not match the approved hash |
+      | 15 | approved manifest hash required |
+      | 16 | zero chunks |
+      | 17 | size or count limit exceeded |
+      | 18 | overall deadline exceeded (P6) |
+      | 19 | loader role over-privileged |
+      | 20 | self-check incomplete |
+      | 21 | version not in DRAFT status (`approve`) |
+      | 22 | file hash does not match |
+      | 23 | chunk hash does not match |
+
+      **Any document with zero chunks is refused before anything is written**, not only a manifest
+      whose total is zero: a single empty document in a load of several refuses the whole load
+      (exit 16). A DRAFT with no chunks could never be approved (ADR 0022 decision 7 and the
+      trigger), so it is not created. `kb_manifest.read_corpus` does this (`total == 0 or any
+      document has no chunks`). Test and mutation: a two-document manifest with one empty
+      document writes nothing and exits 16 (mutation: check only the total). There is no "nothing
+      to do" outcome. `load` run twice reaches the existing-version refusal of the database (exit
+      11) rather than a success.
+
+    **APPROVED by the owner, 2026-10-23. Q6: manifest format and `load`/`approve` argument grammar.**
+    The owner approved the format and grammar as proposed below, with no change. The block records
+    what `src/divesafe/services/kb_manifest.py` and `kb_load.py` do (the engineer chose the names
+    where ADR 0022 gives none; the list of names that differ from ADR 0022 is kept below).
+    `MANIFEST_FILENAME` in code is still `None` and `read_corpus` refuses until the engineer sets it
+    to `manifest.json`.
+    - **File.** One file at the root of the corpus mount (`DIVESAFE_CORPUS_TARGET`, Q3): name
+      **`manifest.json`**. JSON only, UTF-8, no YAML, no comments, no new dependency (ADR 0022
+      decision 13: plain text only). `NaN` and `Infinity` are refused. Corpus files are named by
+      relative `path` from the same root.
+    - **Top level** (`extra="forbid"`; unknown keys refused): `format` (integer, exactly `1`);
+      `attests_no_generated_text` (boolean, exactly `true`); `attests_no_personal_names` (boolean,
+      exactly `true`); `documents` (array of 1 to 50 objects). *ADR 0022 decision 7 asks for one
+      owner attestation covering both statements; the code splits it into two fields, and adds
+      `format`, which the ADR does not mention.*
+    - **Document** (`extra="forbid"`): `document_id` (string, `[a-z0-9]+(-[a-z0-9]+){0,2}`, at most
+      40; decision 6 grammar); `version` (integer 1 to 999999); `title` (1 to 200 characters);
+      `origin` (`dive_professional` or `published_document`); `author_role` (`dive_professional` or
+      `published_source`); `effective_date`, `review_by_date` (ISO dates; effective <= review-by <=
+      effective + 12 calendar months, clamped to the last day of the month); `licence` (1 to 500);
+      `licence_reference` (1 to 500; checked and discarded, decision 7); `attribution` (optional, 1
+      to 300; decision 7 limits it to title and organisation); `licence_requires_personal_name`
+      (boolean, exactly `false`); `site_id` (string or null, must be in `SITES`); `all_sites`
+      (boolean; must be the opposite of `site_id` being null); `display_permitted` (boolean, exactly
+      `true`); `display_permission_reference` (1 to 500; checked and discarded); `supersedes`
+      (integer or null, 1 to 999999, below `version`); `file` (object). `approver_role` is **not** a
+      manifest field: code fixes it to `dive_professional` (decision 7: always that value). No
+      approval date field exists (decision 7). *Differences from the ADR text: `format`,
+      `supersedes`, `attribution` as an optional field with a 300 limit, `all_sites` as an explicit
+      boolean, the 200/500/300 text limits, and the separate attestation fields are the engineer's;
+      the ADR names the concepts but no field names or text lengths.*
+    - **File entry:** `path` (string, relative, `/`-separated, 1 to 200, no empty, `.` or `..`
+      component, no leading `/`); `sha256` (64 lower-case hex, of the file's bytes); `chunks`
+      (array, at most 200); `gaps` (array, default empty, at most 200). A path may appear for one
+      document only; an id and version pair may appear once.
+    - **Chunk entry:** `chunk` (integer from 1, consecutive in file order); `section` (1 to 200
+      characters); `start`, `end` (byte offsets `[start, end)` in the file, decision 7 "Text span");
+      `sha256` (64 lower-case hex of the chunk's bytes). *The ADR says "section, text span or
+      separate file, chunk number from 1, own SHA-256"; the code supports spans only, not a
+      separate file per chunk.* **Gap entry:** `start`, `end`, `reason` (`heading` or
+      `licence_notice`; decision 7 says "a reason code, for example"; these two are the engineer's
+      list).
+    - **Limits** (ADR 0022 decision 12, Q7): manifest and all files together at most 1,048,576
+      bytes (the manifest is read first; each file is read against the remaining budget); 50
+      documents and 200 chunks per load; a chunk at most 1,500 characters. Character rules:
+      NFC, no `\r`, no control, format, private-use, unassigned, surrogate, combining or line/
+      paragraph separator character, and only Latin-script letters. **Known difference:** decision
+      13 also asks for a default-ignorable code point table; the code says it has not built it
+      (`clean_text` is an approximation). **Owner decision, 2026-10-23: the table is a gate for
+      the first production load** (see "Remaining questions", item 7); slice 2 uses a
+      `unicodedata`-based approximation until then.
+    - **Hash computation.** `manifest_sha256` is the SHA-256 (lower-case hex) of the manifest
+      file's raw bytes as read, before parsing (ADR 0022 decision 7). Each file hash covers the
+      whole file's bytes; each chunk hash covers `data[start:end]`. The three mismatches are three
+      refusals (exit 14, 22, 23). The operator never computes the approved hash from the
+      corpus mount (decision 7); the dive professional supplies it.
+    - **Argument grammar (APPROVED).**
+      ```
+      python -m divesafe.services.kb_load load    [--approved-manifest-sha256 <64 hex>] | [--development-no-manifest-hash]
+      python -m divesafe.services.kb_load approve <document_id> <version> [same two options]
+      ```
+      `load` takes no positional argument and loads every document in the manifest as DRAFT.
+      `approve` takes the document id and version as `withdraw` does (decision 6 grammar, checked
+      with `fullmatch`). The two options are mutually exclusive; each may appear once; any other
+      option, a missing or malformed hash, or a repeated option exits 2. In production one of the
+      two is required (exit 15; the development flag alone is refused there, Q4). The module
+      names are `divesafe.services.kb_load` (entry), `kb_manifest`, `kb_common`, `kb_privileges`.
+      *`approve` has no manifest argument: the version to approve is looked up in the database and
+      its stored `manifest_sha256` is compared with the supplied hash.*
+    - **Q6 sub-questions: owner answers, 2026-10-23.** Sub-questions 1 to 6 and 8 are answered by
+      approving the proposal as written; sub-question 7 is decided separately.
+      1. **File name: `manifest.json`** at the mount root. Approved.
+      2. **`format` stays** (it versions the manifest); the attestation **stays as two fields**
+         (`attests_no_generated_text`, `attests_no_personal_names`). Approved.
+      3. **The text limits stand** (title 200, licence and references 500, attribution 300,
+         section 200, path 200). Approved.
+      4. **Gap reasons stay `heading` and `licence_notice`; chunks are spans only.** A chunk as a
+         separate file is not supported; ADR 0022 decision 7 is to be read that way. Approved.
+      5. **Both `licence_reference` and `display_permission_reference` are required**, covered by
+         the manifest hash, checked and not stored. Approved.
+      6. **`approve` takes both hash options exactly as `load` does** (mutually exclusive; one is
+         required in production). Approved.
+      7. **The default-ignorable table (ADR 0022 decision 13) is a GATE for the first production
+         load.** It joins the other first-production-load gates (withdrawal-log location, the
+         decision 11 re-acknowledgement, the A7 hand run, ADR 0022 condition 10, licence and
+         `display_permitted` evidence per source). **Slice 2 uses a `unicodedata`-based
+         approximation until the table exists**; the approximation is not accepted for production.
+      8. **A repeated `load` is left to the database refusal (exit 11);** no separate exit status.
+         Approved.
+    - Q10. The compose profile name (A3 says "for example `knowledge`"), and the process and
+      memory limit values for both services ("as `api` has" is a reference, not numbers); decided
+      at the docker stage.
   - **Runbook when it refuses on the lock:** (1) stop the `kb_load` run container (the server rolls
     the load back) and retry; (2) or the bootstrap superuser finds the stuck loader backend in
     `pg_stat_activity` and runs `pg_terminate_backend`; (3) else fallback (b) below.
   - Refusals that **apply**: the argument grammar (ADR 0022 decision 6), the TLS requirement on the
     connection, the refusal to run as the owner or app role, that the version exists, and fixed
     messages that never echo input.
+  - **Slice 1 review outcomes (2026-10-23; recorded, none of them owner-approved except where
+    stated).**
+    - **The 25001 / isolation row is effectively unreachable.** The status-event trigger raises a
+      plain `P0001` for a non-READ-COMMITTED transaction, so that case exits with the "any other
+      trigger refusal" status (exit 11), not the isolation status (exit 8). Both mean "failed,
+      nothing written". Migration 4's checksum is pinned, so the trigger cannot change without a
+      new migration; the row stays in the table as a defensive mapping only.
+    - **The not-found pre-check relies on documents being append-only.** A version with no
+      status events at all falls through to the trigger's `P0001` (exit 11), not the "version not
+      found" message.
+    - **The pre-write owner/app-role check reuses the 15 s self-check `statement_timeout`.
+      APPROVED by the owner, 2026-10-23, with Q8 (above).** The original five-value approval did
+      not cover this sixth use of item 5; Q8 does. Worst case with the reuse: about 75 s on one
+      connection (60 s whole-run figure plus 15 s).
   - Refusals that **do not** apply: the manifest and corpus checks, the manifest hash, the per-site
     chunk check and the global lock.
   - **The privilege self-check reports but does not refuse (owner-delegated default; confirmed by
@@ -897,6 +1147,12 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     over-privileged text appears only for a run that committed. Each error code maps to one fixed
     message so the runbook step is obvious (`55P03` and `57014` go to the runbook above). A table
     test pins code to message to status, and a mutation that swaps two statuses must fail.
+  - **Runbook: a broken stdout after a durable commit looks like a failure.** If the commit
+    succeeded but writing to stdout then fails (closed pipe, terminal gone), the operator sees an
+    error although the withdrawal is durable. Re-running `withdraw` gives "already withdrawn" with
+    the original `recorded_at`, which is the check. Any exception after the INSERT has been sent
+    maps to "outcome unknown" (exit 12), never to "failed, nothing written". (Recorded from the
+    slice 1 review; not separately owner-approved.)
   - **A missing `DIVESAFE_CORPUS_DIR` variable still blocks `compose run kb_withdraw`** and the
     role-script `exec`: Compose interpolates the whole file, so the missing *variable* stops every
     compose command, even though `kb_withdraw` mounts no directory. Only the `docker exec`
@@ -908,7 +1164,12 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     event, **and the same per-document lock applies**, so (a) does not help against a stuck
     load of that family; use the runbook above. The exact INSERT is written in the runbook when the
     table exists; or (b) stop the API (`docker compose ... stop api`; a plain `docker stop` if the
-    variable is missing) until `withdraw` works. **Recorded as gap 5.**
+    variable is missing) until `withdraw` works. **Recorded as gap 5.** **Sequence case
+    (2026-11-07):** if `withdraw` exits 11 and no load of that family is running, the ordering
+    sequence may have been set back onto used values (`UNIQUE(event_order)`) or near MAXVALUE
+    (ADR 0022 Known gaps). Fallback (a) fails the same way, because its INSERT goes through the
+    same trigger; use (b), then, as the owner, `setval` the sequence above `max(event_order)` and
+    run `withdraw` again.
   - **Pins.** The test that `withdraw` succeeds while another session holds the global lock, and
     its mutation (make `withdraw` take the global lock), are in ADR 0022's test list, with: a
     withdrawal behind a load that holds the **same family's** lock refuses within the timeout
@@ -1072,7 +1333,7 @@ condition; the mutation check is to break the compose file once and watch it fai
 ### A6. Stage order
 
 - **May be built before this amendment is made** (and are, per ADR 0022 "Conditions of acceptance"),
-  **except the schema migration, which waits for the owner's answer on `hash_checked`** (A3): `db_init`
+  **including the schema migration with `hash_checked`** (the owner answered YES on 2026-10-21; A3): `db_init`
   grants and its loader-role check, the loader code, and a
   **development-only** `kb_load` against a developer database with a developer-created role.
 - **Wait for this amendment** (made, and reviewed by both reviewers): everything under `docker/`
@@ -1094,10 +1355,57 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
-- **The owner's answer on `hash_checked` gates the stage-1 MIGRATION, not only shipping.**
+- **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
+  (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
+  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
+  (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
+  remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
+  each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
+  tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
+  `unicodedata`-based approximation, which is for development only. **Added by the slice 2
+  review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
+  id screen was bypassable by lookalike characters.** Colons written as
+  U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
+  capitals such as U+1D0B and U+0299 (for `k` and `b`) passed, because the allow-list accepted every
+  `P*`, `Sm` and `Sk` character and every `LATIN ...` letter. **Owner decision 2026-10-23: the
+  ADR 0022 decision 13 allow-list is narrowed to a fixed set** (ASCII letters and digits, space,
+  newline where allowed, `LATIN SMALL/CAPITAL LETTER` accented letters, and only
+  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`; the prefix rule already refuses `œ` (U+0153, `LATIN
+  SMALL LIGATURE OE`) and modifier letters; the name fragments `LIGATURE` and `MODIFIER` are
+  defence in depth with no effect under Unicode 16.0.0, and only `SMALL CAPITAL` does work). **Re-reviewed 2026-10-23: closed for the reported vectors**
+  (colon, hyphen and minus lookalikes, LATIN LETTER small capitals, modifier letters, ligatures,
+  fullwidth and mathematical forms, combining marks, other scripts). **RESIDUAL, OWNER-ACCEPTED
+  2026-10-23 as a recorded gap:** Latin-named letters that look like ASCII id letters and that
+  NFKC does not fold (for example U+0138, U+0185, U+0131, U+0269, U+0251, U+0261, accented k and
+  b forms) pass both screens; U+A78B and U+A78C (saltillo) instead imitate an apostrophe (ASCII
+  punctuation), not an id letter. UTS #39 and wildcard matching were not adopted. Escaping
+  non-ASCII as `\uXXXX` is transport protection only (a model may still read the escaped form);
+  the real mitigation is the citation check. `reconcile` only tightens covers the recommendation,
+  not the explanation text a human reads, which a spoofed citation could steer. Partial mitigations
+  elsewhere, **none on the knowledge path yet (not built)**: `prompts.neutralize`, and `runner.py`
+  exact-match rejection of top-level `evidence_ids` not in `allowed_ids` (nested `evidence_ids` and
+  a spoof of a REAL id in the same run are unchecked). Impact limit: `reconcile` only tightens the
+  recommendation and rules never read LLM values. **Must
+  be revisited when the knowledge connector and citation guard are built.** Consequence:
+  typographic quotes and dashes in corpus text are refused and must be ASCII; no data exists yet.
+  (8) **A newline inside `kb:`** was a gap; it is **closed in code** (not yet re-reviewed).
+  (9) **Stays OPEN:** the **"and similar" tail of the word list** and separators: hyphens dropped
+  or replaced in connector prefixes (`openmeteomarine:x`), percent-encoding (`kb%3Aabc`, since
+  `%` is allowed) and every allowed ASCII punctuation character as a separator between `k` and `b`
+  (`. , ; : ! ? ' " ( ) [ ] - / % + = < >`, including the comma: `k.b:`, `k,b:`, `k-b:`, `k/b:`,
+  `k'b:`, `k(b:`, `k=b:`), and the colon itself replaced by allowed ASCII (`kb;abc`, `kb=abc`,
+  `kb/abc`). `k_b:` is no longer an open vector (underscore is refused by the allow-list).
+  Instruction wording is screened only in `document_id`, and fields joined at
+  display could form an id (to check when the prompt path is built).
+  (10) **Unicode version (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14").** The
+  reviewed character set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection), and
+  `docker/Dockerfile` moves to Python 3.14 first (A1 to A7 build list item below; Dockerfile done 2026-11-06). No
+  production load until both are done.
+- **`hash_checked` (owner decision, 2026-10-21: YES) is part of the stage-1 migration.**
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
-  column with no default cannot be added later. **The column is not written (the migration is not
-  made) until the owner answers** (proposed by `risk-reviewer`; the owner has not been asked).
+  column with no default could not be added later; it goes into the migration (proposed by
+  `risk-reviewer`).
 - **Order on the owner's host once this is built:** add the corpus line to `docker/production.env`;
   take a backup with the **old** scripts; pull; `make-secrets.sh`; `up -d --wait db`; the role
   script; **`up -d --build`** (without `--build` the old image runs the old `db_init`, the knowledge
@@ -1215,6 +1523,49 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 
 ### A8. Documented gaps recorded by this amendment
 
+- **Narrowed character allow-list (owner decision, 2026-10-23; ADR 0022 decision 13).** Corpus
+  text with typographic quotes or dashes (and any other non-ASCII punctuation or symbol) is
+  refused and must use the ASCII forms; no data exists yet, so no known break. Consequences of
+  the name rules: ß æ ø ð þ ı are accepted, `œ` (U+0153, `LATIN SMALL LIGATURE OE`) and modifier
+  letters are refused by the prefix rule (`LATIN SMALL/CAPITAL LETTER `), and the DŽ, LJ, NJ
+  and DZ digraphs are accepted (harmless for id matching). The `LIGATURE` and `MODIFIER` fragments
+  are defence in depth with no effect under Unicode 16.0.0; only `SMALL CAPITAL` does work
+  (U+A7AE). A test goes red if a future Unicode version makes the other two reachable. The
+  accepted set follows the Python `unicodedata` version; a safety test pins `unidata_version` and
+  the count and hash of accepted non-ASCII code points, and any change needs an ADR review.
+  **Runtime control (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14"):** the reviewed
+  set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any connection). The
+  safety test pins the set on 16.0.0 and, on any other interpreter, asserts that the loader
+  refuses (it does not skip). Since 2026-11-06 (owner ruling) the project requires Python 3.14,
+  CI runs 3.14 only and `docker/Dockerfile` is `python:3.14-slim`; the 3.11 leg had failed 111
+  load-flow safety tests because the loader refused there. Local Python 3.14.10 reports
+  `unidata_version` 16.0.0; since 2026-11-06 the CI `image` job builds `docker/Dockerfile` and
+  asserts Python 3.14, `unidata_version` 16.0.0 and uid 10001 inside it (locally: 3.14.10). A6 gate (7) was re-reviewed
+  2026-10-23: closed for the reported vectors, with an **owner-accepted residual** (Latin-named
+  look-alike letters NFKC does not fold, such as U+0138, U+0131, U+0269, U+0251, U+0261; U+A78B
+  and U+A78C imitate an apostrophe instead; see A6). Escaping non-ASCII as `\uXXXX` is transport
+  protection only; the real mitigation is the citation check; `reconcile` only tightens covers the
+  recommendation, not the explanation text a human reads, which a spoofed citation could steer;
+  the partial mitigations (`prompts.neutralize`, the `runner.py` exact match of top-level
+  `evidence_ids`) are elsewhere, none on the knowledge path yet (not built). UTS #39 is not
+  adopted. Gate (9) stays open: connector prefixes with hyphens dropped
+  or replaced, percent-encoding (`kb%3Aabc`), every allowed ASCII punctuation character
+  (including the comma) as a separator (`k.b:`, `k,b:` and kin), the colon replaced by allowed
+  ASCII (`kb;abc`, `kb=abc`, `kb/abc`), plus the "and similar" word-list tail. `k_b:` is no
+  longer open (underscore is refused).
+- **Amendment 1 build list, REQUIRED before the first production load: move `docker/Dockerfile`
+  from `python:3.12-slim` to Python 3.14** (Unicode 16.0.0; see the runtime control above).
+  Done 2026-11-06, ahead of A1 to A7, because `requires-python` became `>=3.14` and the old image
+  could no longer install the package. Only the base image changed. **Safety test change, on the owner's explicit
+  approval (2026-11-06):** the base-image pin in `test_the_image_runs_as_the_unprivileged_user`
+  went from `python:3.12-slim` to `python:3.14-slim`; the test is otherwise unchanged.
+- **Loader attribute checks (ADR 0022 condition 10)** are implemented in slice 1 (committed
+  `b1d636f`) and live-tested. Remaining gap: the privilege checks run in separate transactions, and
+  `withdraw` checks role names only.
+- **`_fold` false positives (known usability gap).** Prose such as "Dock B:" folds to `kb:` and is
+  refused, and the refusal message gives no position, so the author must hunt for the cause.
+  Not fixed; recorded here.
 - **The loader credential can stall advisory locks.** Any loader connection can take the existing
   `_RUNS_LOCK_KEY` and `_LOCK_KEY` advisory locks and stall runs or migrations; stored per-role
   settings cannot cap it, because `hardening` requires none (ADR 0022 "Not solved"). The global
@@ -1238,8 +1589,84 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **A load that holds a family's per-document lock can block a withdrawal of that family**, and so
   can the owner `INSERT` fallback; the runbook is stop the run container, terminate the backend,
   or stop the API (A3).
-- **The development flag's trace (`hash_checked`)** is a `risk-reviewer` proposal the owner has not
-  been asked about; it records a client claim, not proof (A3).
+- **The development flag's trace (`hash_checked`)** was a `risk-reviewer` proposal; the owner
+  decided YES on 2026-10-21. It records a client claim, not proof (A3). The DB accepts APPROVED
+  with `false`; selection handles it.
+- **Loader role handling in `db_init` (owner decision, 2026-10-22).** If `DIVESAFE_LOADER_DB_ROLE`
+  is unset, `db_init` skips the loader grants and the loader check (the production pin comes with
+  the compose stage, A5). On a missing loader role the check runs **after** the migration: the
+  schema stays migrated, `db_init` exits non-zero with a fixed message and the loader grants are
+  not applied. **Changing the loader role name (2026-11-07):** `db_init` revokes only from the
+  roles it is given, so the old loader keeps INSERT and the next start-up refuses with "more than
+  one role other than the owner may INSERT into the knowledge tables" (ADR 0022 condition 11.5;
+  fails closed). The runbook step is to revoke the old loader's grants on the three knowledge
+  tables by hand as the owner (`docs/first-run-on-the-real-host.md`); live-tested by
+  `test_a_renamed_loader_is_refused_until_the_old_loader_loses_its_grants`. Revoking from every
+  other grantee automatically was not chosen: it would also silently remove a grant someone made
+  on purpose, which the refusal makes visible instead.
+- **`REVIEWED_GUARD_MIGRATIONS` entry for migration 4** skips the whole forbidden-word scan for
+  that version; it is compensated by the checksum pin and the `migrate()` check that the nine named
+  knowledge triggers are present and `ENABLE ALWAYS` (a subset check; "exactly nine, no tenth" is
+  enforced for migration 4 by the SQL-text test only, and in the database by ADR 0022 condition 9;
+  ADR 0022 decision 10). Any lasting database that applied an earlier migration-4 text will refuse
+  with "migration 4 was changed after it was applied"; migration 4 has only ever been applied to
+  throwaway test databases.
+- **Not solved by the loader design:** `LOCK TABLE` denial of service by the loader; default
+  privileges for the owner role are not checked; the post-migration check looks at trigger names
+  and `tgenabled` only until `migrate()` and `verify()` are extended (must land before migration 5
+  or the connector stage, whichever is first; ADR 0022 condition 9).
+- **No approval of an empty version (owner decision, 2026-10-22).** The database refuses an APPROVED
+  event for a version with no chunks (`kb_status_events_insert`; fixed message; ordinary `P0001`).
+  The `approve` runbook should expect that refusal, not treat it as an outage (ADR 0022 decision 10).
+- **`guarded()` is a conservative word screen, not the control.** The control is review of every
+  migration plus the checksum pin. Known uncaught shapes (strict xfails in
+  `tests/safety/test_knowledge_guarded_rules.py`) are listed in ADR 0022 "Not solved": `ALTER TABLE
+  kb_*` (`SET SCHEMA`, `ADD COLUMN`, `ADD CONSTRAINT`, `SET (...)`, `NO FORCE ROW LEVEL SECURITY`),
+  `GRANT ALL ON ALL TABLES IN SCHEMA`, `DROP SCHEMA public CASCADE`, a `;` in a comment or string, an
+  extra BEFORE trigger on a `kb_*` table, `DO` blocks with dynamic `EXECUTE`, row-level security
+  with policies, `CREATE RULE ... DO INSTEAD`, `INHERITS (kb_*)`, `REASSIGN OWNED BY`,
+  `ALTER TABLE public.kb_status_events SET UNLOGGED` (a crash empties an unlogged table without
+  firing the TRUNCATE guard, losing status history), `ALTER SCHEMA public OWNER TO` / `RENAME TO`
+  and `CREATE EVENT TRIGGER`. ADR 0022 condition 9 adds `relpersistence = 'p'`, table owner and
+  schema owner checks.
+- **Loader role attributes and memberships are not all checked yet** (superuser, membership of the
+  owner or app role, CREATEROLE, BYPASSRLS, NOINHERIT/`SET ROLE` paths to a role holding TEMP).
+  `db_init` checks the TEMP path at install time (TEMP read-back, member clause); `kb_load`'s
+  self-check MUST repeat it at load time, because memberships can change after install, and carry
+  the other checks, before the first production load (ADR 0022 condition 10).
+- **Pre-load requirements from the slice 1 review (A3; only items 3 and 5 are owner-approved).** Before `load` or
+  `approve` ship: (1) the owner/app refusal must become **privilege-based**: refuse when the
+  role, or any role it belongs to, can write `assessments` or `pending_runs`, or compare against
+  a configured app-role name; with a **live test using a custom-named app role** (a name-only
+  check is not enough). (2) **OPEN decision for the owner and `risk-reviewer`:** whether
+  `withdraw`'s behaviour for an over-privileged loader changes (today it reports but still
+  withdraws). (3) `idle_in_transaction_session_timeout` for `withdraw`: 10 s, APPROVED by the owner, 2026-10-23 (A3, P1). (4) The
+  self-check must have **live failure coverage for each check** before `load` and `approve` rely
+  on it. (5) ~~The pre-write role check's reuse of the 15 s timeout is also open.~~ Settled: 15 s,
+  APPROVED by the owner with Q8, 2026-10-23 (A3).
+- **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
+  - **Stored `manifest_sha256` is a client claim**, like `hash_checked`: the database cannot
+    recompute it.
+  - **Privileges are checked in separate transactions before the write.** There is a
+    time-of-check gap, and the check is not repeated inside the write transaction.
+  - **A missing application table gives exit 5, whose message names privileges** (the wrong
+    cause). The exit table is approved, so this is documented, not changed.
+  - **A missing ordering sequence is not flagged** by the app/owner check.
+  - **`withdraw` still checks role names only** (see the privilege-based pre-load item above).
+  - **libpq fallbacks.** The code now refuses the `service`, `hostaddr` and `passfile`
+    connection keys. It does **not** refuse the environment-variable case (`PG*` variables such as
+    `PGSERVICE`, `PGHOSTADDR`, `PGPASSFILE`, `PGSSLMODE`), which libpq reads when the string omits a key.
+  - **Unverified from memory:** that libpq applies TLS on Unix-socket connections, and libpq's
+    keyword precedence (connection string vs environment vs service file).
+  - **The CPU cost of a huge integer literal is unchecked.**
+- **Runbook note, advisory-lock denial of service:** it is not only the loader. The **app role** can
+  also call `pg_advisory_lock(1220001, ...)` and make `kb_load` fail on `lock_timeout`. A stuck or
+  hostile holder is cleared the same way (find the backend in `pg_locks`/`pg_stat_activity`, then
+  terminate it or stop the API); the cause may be the app role, not the loader.
+- **Test roles:** integration tests create `divesafe_kb_app_test` and `divesafe_kb_loader_test` on the
+  test server, which MUST stay bound to loopback and must not be a shared or production server.
+- **Chunks are inserted only before a version's first status event** (`kb_chunks_insert`); `kb_load`
+  writes document and chunks before the DRAFT event in one transaction (ADR 0022 decision 7).
 - **The existing role script does not set `log_statement = 'none'`**, so a server with
   `log_statement = ddl` would log `CREATE ROLE ... PASSWORD` from `10-create-app-role.sh`. The
   loader script sets it (A1); the existing one is not changed here.
@@ -1255,7 +1682,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
 - **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
-  ADR 0022 decision 11 (A6).
+  ADR 0022 decision 11 (A6). The first production load has further gates, including the
+  default-ignorable code point table (A6, "First-production-load gates").
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Nothing in this amendment is built or run.** Every pin above is a description of a test to be
   written, with its mutation check to be run when it is.
@@ -1414,8 +1842,31 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **Port binding on older engines.** A port published to `127.0.0.1` was reachable from the local
   network on some older Docker Engine versions (recalled, not checked). State a minimum version
   once one is chosen.
-- **Base images float.** `python:3.12-slim` and `pgvector/pgvector:pg16` are tags, not digests.
+- **Base images float.** `python:3.14-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
+- **CI and supply chain (security review, 2026-11-06; partly closed the same day):** CI now builds
+  `docker/Dockerfile` (job `image`) and checks Python 3.14, `unidata_version` 16.0.0 and uid 10001
+  in the image, with no network; runs `pip-audit` 2.10.1 (pinned, CI-only, in its own venv, not a
+  project dependency, so no ADR of its own) on the runtime dependencies (`[project].dependencies`);
+  pins every action to a full commit SHA (tag in a comment) with `persist-credentials: false`; and
+  runs `npm audit --omit=dev --package-lock-only` before `npm ci --ignore-scripts`, failing if any
+  locked package has an install script (none today). The pip-audit pin and the action SHAs are
+  updated by hand by whoever changes CI, with the reviewers. An `--ignore-vuln` or any other
+  advisory exception needs an ADR note and the owner's approval. Still open: both audits use live
+  advisory databases (CI can turn red with no code change); only runtime dependencies are audited
+  (dev and CI tools such as pytest, mypy, ruff, httpx, typescript, and pip-audit itself, are not);
+  `pip-audit` checks what it resolves at audit time, not the test venv or a later image build (no
+  Python lock file, no hashes); pip-audit's own dependencies are not hash-pinned, so a compromised
+  one could run code in CI (limited by `contents: read` and no saved credentials);
+  the image is built but not scanned (OS packages) and not published; SHA pins need manual
+  updates (no Dependabot); the `pgvector/pgvector:pg16` service image is a tag. The base-image pin
+  test asserts the exact tag, so pinning a digest later needs another owner-approved safety-test
+  change.
+- **Next.js 16.4.0 exposure (fixed in 16.4.5, 2026-11-06):** the web app's `login` server action is
+  callable before sign-in, so a 16.4.0 instance was exposed to the Server Actions DoS
+  (GHSA-p3m5-59mp-jv5r); images are unoptimised and `use cache` is unused, so the two RCE
+  advisories very likely did not apply (not proven). Any running 16.4.0 instance must be
+  redeployed. The production compose has no web service.
 - **Not run:** a complete first run (one assessment went through; see condition 1 for what was and
   was not seen), the 30-day certificate
   renewal, and the stack on Linux (the run was on Docker Desktop for macOS, where file ownership

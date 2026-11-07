@@ -7,7 +7,7 @@ name = "divesafe"
 version = "0.1.0"
 description = "Agentic environmental risk assessment and decision support for recreational diving."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
   "fastapi>=0.110,<1",
   "pydantic>=2.6,<3",
@@ -38,6 +38,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+# Syntax style only; the runtime floor is requires-python (3.14, ADR 0022 Unicode gate).
 target-version = "py311"
 src = ["src", "tests"]
 
@@ -49,7 +50,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 "docs/domain-validation/build_form.py" = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 strict = true
 files = ["src"]
 plugins = ["pydantic.mypy"]

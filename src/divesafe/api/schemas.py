@@ -4,18 +4,21 @@ identity fields can never be supplied by a client."""
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import (
+    SUPERVISOR_RULE_PREFIX,
     AssessmentRecord,
     DataQuality,
     DiveSite,
     EvidenceItem,
     Recommendation,
+    ScenarioKind,
     effective_quality,
 )
 from divesafe.risk import NOT_EVALUATED_MARKER
@@ -26,7 +29,10 @@ from divesafe.risk.engine import (
     RULE_PROBLEM_WORDING,
     WINDOW_STARTED_RULE,
 )
+from divesafe.services import RepositoryIntegrityError
 from divesafe.services.runs import FailureCode, PendingRun, RunState
+
+logger = logging.getLogger(__name__)
 
 DISCLAIMER = (
     "Decision support only. The final decision belongs to the diver, dive master or dive leader. "
@@ -122,6 +128,10 @@ class CreateAssessmentRequest(_Request):
     )
 
 
+class ReassignRequest(_Request):
+    to_decider: str = Field(min_length=1, max_length=100)
+
+
 class DecisionRequest(_Request):
     decision: Recommendation
     rationale: str | None = Field(default=None, max_length=5000)
@@ -161,8 +171,83 @@ _WITHHELD_NOTE = (
 )
 
 
+_MAX_ATTRIBUTION_CHARS = 300
+
+_SELF_ESTIMATE = (
+    "The model's own uncalibrated guess about this item. It is NOT a confidence, is not "
+    "calibrated and is not a measure of dive safety. Do not read it as how safe a dive is."
+)
+
+
+class ScenarioView(BaseModel):
+    """A scenario as clients see it. Same fields and bounds as `Scenario`, but the stored
+    `confidence` is presented as `uncalibrated_self_estimate`; no field here is called
+    `confidence`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ScenarioKind
+    summary: str
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+    risk_factors: tuple[str, ...] = ()
+    conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = ()
+    uncalibrated_self_estimate: float = Field(ge=0.0, le=1.0, description=_SELF_ESTIMATE)
+
+
+class FindingView(BaseModel):
+    """A finding as clients see it; see `ScenarioView`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    risk_factors: tuple[str, ...] = ()
+    conflicting_signals: tuple[str, ...] = ()
+    flagged_signals: tuple[int, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    uncalibrated_self_estimate: float | None = Field(
+        default=None, ge=0.0, le=1.0, description=_SELF_ESTIMATE
+    )
+    no_evidence: bool = False
+
+
+class AssessmentRecordView(AssessmentRecord):
+    """The audit record as clients see it. Identical to `AssessmentRecord` except that scenarios
+    and findings carry `uncalibrated_self_estimate` instead of `confidence`. The record-level
+    `confidence` (None until a documented method exists) is unchanged. Built from a valid record
+    by `of`; nothing here is stored."""
+
+    scenarios: tuple[ScenarioView, ...] = ()  # type: ignore[assignment]
+    findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
+    cross_examination_findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
+
+    @classmethod
+    def of(cls, record: AssessmentRecord) -> AssessmentRecordView:
+        data = record.model_dump()
+        for key in ("scenarios", "findings"):
+            data[key] = [_renamed(item) for item in data[key]]
+        data["cross_examination_findings"] = [
+            _renamed(item) for item in data["cross_examination_findings"]
+        ]
+        try:
+            return cls.model_validate(data)
+        except ValidationError:
+            # pydantic's message carries input values (model or decision text). It is neither
+            # logged nor kept: the except block only logs a fixed line and the error is raised
+            # after it, so the new exception has no __cause__ and no __context__.
+            logger.error("record could not be presented", extra={"assessment_id": record.id})
+        raise RepositoryIntegrityError("the record could not be presented")
+
+
+def _renamed(item: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in item.items() if k != "confidence"}
+    out["uncalibrated_self_estimate"] = item["confidence"]
+    return out
+
+
 class AssessmentView(BaseModel):
-    record: AssessmentRecord
+    record: AssessmentRecordView
     # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
     status: Literal["PENDING_HUMAN", "DECIDED", "DECISION_WITHHELD"]
     overrides_to_less_severe: bool | None
@@ -179,7 +264,14 @@ class AssessmentView(BaseModel):
     def withheld(cls, record: AssessmentRecord) -> AssessmentView:
         """The record as a create-only key may see it: a human decision and later reports are
         not shown, and neither the status nor the override flag says whether one exists."""
-        stripped = record.model_copy(update={"human_decision": None, "actual_conditions": None})
+        stripped = record.model_copy(
+            update={
+                "human_decision": None,
+                "actual_conditions": None,
+                "reassignments": (),
+                "assigned_decider": record.original_decider,
+            }
+        )
         view = cls.of(stripped)
         return view.model_copy(
             update={
@@ -192,8 +284,13 @@ class AssessmentView(BaseModel):
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentView:
+        # Only strings, stripped and cut to a bound before deduplicating; anything else is ignored.
         attributions = sorted(
-            {str(e.value["attribution"]) for e in record.evidence if "attribution" in e.value}
+            {
+                text[:_MAX_ATTRIBUTION_CHARS]
+                for e in (*record.evidence, *record.withheld_evidence)
+                if isinstance(raw := e.value.get("attribution"), str) and (text := raw.strip())
+            }
         )
         problems = [
             r.rationale for r in record.rule_results if r.rule_id.startswith(ENGINE_RULE_PREFIXES)
@@ -213,13 +310,23 @@ class AssessmentView(BaseModel):
             )
         if record.llm_tightened:
             outcome_note = (
-                f"Rules alone: {record.deterministic_recommendation.value}. An unverified LLM "
-                f"proposal raised this to {record.final_recommendation.value}. "
+                f"Deterministic checks: {record.deterministic_recommendation.value}. "
+                f"An unverified LLM proposal raised this to {record.final_recommendation.value}. "
             ) + outcome_note
         if problems:
             outcome_note += " Evidence problems: " + " ".join(problems)
         if rule_problems:
             outcome_note += " Rule problems: " + " ".join(sorted(set(rule_problems)))
+        supervisor_checks = sorted(
+            {
+                r.rule_id.removeprefix(SUPERVISOR_RULE_PREFIX)
+                for r in record.rule_results
+                if r.rule_id.startswith(SUPERVISOR_RULE_PREFIX)
+            }
+        )
+        for check in supervisor_checks:
+            # Fixed wording; the check name is an enum value, never free text.
+            outcome_note += f" A supervisor check failed: {check}. The result was tightened."
         partial = sorted(
             {
                 f"{r.factor.value}: {_aspects_not_evaluated(r.rationale)}"
@@ -244,7 +351,7 @@ class AssessmentView(BaseModel):
                 "can currently return GO. More data alone will not change that."
             )
         return cls(
-            record=record,
+            record=AssessmentRecordView.of(record),
             outcome_note=outcome_note,
             agent_note=_agent_note(record),
             status_note=(
@@ -316,6 +423,17 @@ class EvidenceView(BaseModel):
     assessed_at: AwareDatetime
     evidence: tuple[EvidenceEntry, ...]
     evidence_issues: tuple[str, ...]
+    # Plain data, labelled by the field name and the note: dropped because different items shared
+    # one id. Not in the main result and NOT cited; checked separately for a more severe reading.
+    withheld_evidence: tuple[EvidenceItem, ...] = ()
+    withheld_note: str = (
+        "The items listed here were NOT used: sources sent conflicting information that could not "
+        "be reconciled, so none of it was cited and the main result does not include it. The "
+        "rules also tried each reading of it and added a rule result when one gave a worse "
+        "outcome; where they could not (too many conflicts), it may hold a "
+        "more severe result than anything that was evaluated, so check these sources yourself "
+        "before deciding. Read it as plain text only."
+    )
     unevaluated_factors: tuple[str, ...]
     evidence_note: str = (
         "This lists only what was retrieved. Anything absent was not assessed, and absence is "
@@ -346,6 +464,7 @@ class EvidenceView(BaseModel):
             assessed_at=record.created_at,
             evidence=entries,
             evidence_issues=record.evidence_issues,
+            withheld_evidence=record.withheld_evidence,
             unevaluated_factors=tuple(k.value for k in record.unevaluated_factors),
         )
 

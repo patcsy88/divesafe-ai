@@ -157,7 +157,12 @@ export async function getAssessment(key: string, id: string): Promise<Fetched> {
 
 export async function getEvidence(key: string, id: string): Promise<EvidenceView> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
-  return (await call(`/v1/assessments/${encodeURIComponent(id)}/evidence`, key)) as EvidenceView;
+  const body = await call(`/v1/assessments/${encodeURIComponent(id)}/evidence`, key);
+  // A reply about some other assessment must never be shown under this address.
+  if (typeof body !== "object" || body === null || (body as { assessment_id?: unknown }).assessment_id !== id) {
+    throw new ApiError(0, UNREADABLE);
+  }
+  return body as EvidenceView;
 }
 
 export async function listSites(key: string): Promise<SiteListView> {

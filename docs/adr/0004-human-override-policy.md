@@ -33,6 +33,15 @@ result (ADR 0001); `reconcile` is unchanged.
   less severe override, and the API must authenticate the actor (see Known gaps in
   [architecture.md](../architecture.md)). Without authentication the recorded identity is not trustworthy.
 
+## Amendment (ADR 0026, 2026-11-05)
+
+Choosing a LESS severe outcome than the system's now needs the `overrider` role as well as
+`decider`. Without it the API answers 403 and records nothing. Accepting the recommendation or
+choosing a more severe outcome still needs only `decider`. A rationale and an authenticated
+identity are still required. The decision also records which key was used (`key_id`) and whether
+the requester decided their own assessment (`decided_by_creator`). Self-approval stays allowed; it
+is recorded and shown, never blocked. No second approver.
+
 ## Revisit if
 
 Evaluation shows frequent unjustified less severe overrides, or the product is used by
