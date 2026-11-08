@@ -741,6 +741,38 @@ def test_a_non_utf8_client_encoding_from_outside_never_reaches_the_apps_sessions
             owner.execute("ALTER ROLE divesafe_app_test RESET client_encoding")
 
 
+@pytest.mark.parametrize(
+    ("setting", "stored", "shown"),
+    [
+        ("default_transaction_read_only", "on", ("off",)),
+        ("default_transaction_isolation", "serializable", ("read committed",)),
+    ],
+)
+def test_a_stored_transaction_default_never_reaches_the_apps_sessions(
+    app_role_dsn: str, setting: str, stored: str, shown: tuple[str]
+) -> None:
+    """A stored read-only default would refuse every write; a serializable one would turn a
+    certain refusal at commit into an unknown outcome. `_connect` sets both back for the session.
+    Positive control: a plain connection does get the stored value."""
+    assert DSN is not None
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    record = _record()
+    with psycopg.connect(DSN, autocommit=True) as owner:
+        owner.execute(f"ALTER ROLE divesafe_app_test SET {setting} = '{stored}'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute(f"SHOW {setting}").fetchone() == (stored,)
+            with app._connect() as conn:
+                assert conn.execute(f"SHOW {setting}").fetchone() == shown
+            app.create(record)
+            app.replace(record, _decided(record))
+            decided = app.get(record.id)
+            assert decided is not None and decided.human_decision is not None
+        finally:
+            owner.execute(f"ALTER ROLE divesafe_app_test RESET {setting}")
+
+
 def test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded(
     app_role_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -214,10 +214,11 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @app.exception_handler(RepositoryUnavailableError)
     async def store_unavailable(request: Request, exc: RepositoryUnavailableError) -> JSONResponse:
-        logger.error("storage unavailable", extra={"path": request.url.path})
         if isinstance(exc, RepositoryOutcomeUnknownError):
             # The commit failed: the server may have recorded the write before the reply was lost.
+            logger.error("storage outcome unknown", extra={"path": request.url.path})
             return JSONResponse({"detail": _OUTCOME_UNKNOWN}, status_code=503)
+        logger.error("storage unavailable", extra={"path": request.url.path})
         if request.method in {"GET", "HEAD"}:
             # A read records nothing the caller asked for, so "nothing was recorded" would mislead:
             # a run may well still finish.
@@ -347,7 +348,8 @@ def create_app(state: AppState | None = None) -> FastAPI:
             )
         if app_state.engine is None:
             raise HTTPException(
-                status_code=503, detail="the evidence policy is not configured on this server"
+                status_code=503,
+                detail="the evidence policy is not configured on this server; nothing was recorded",
             )
         site = app_state.sites.get(body.site_id)
         if site is None:
@@ -408,7 +410,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
         engine = app_state.engine
         if not engine.policy.required_categories:
-            raise HTTPException(status_code=503, detail="server configuration is unsafe")
+            raise HTTPException(
+                status_code=503, detail="server configuration is unsafe; nothing was recorded"
+            )
         if plan.planned_start < app_state.clock():
             raise HTTPException(
                 status_code=422, detail="planned_start is in the past; assess a future dive window"

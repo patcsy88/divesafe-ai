@@ -40,11 +40,16 @@ export function describeFailure(status: number, detail: unknown, retryAfter: str
     return "The request was not accepted.";
   }
   if (status === 503) {
-    // The API says so when a write's commit failed: it may have been recorded after all.
-    if (typeof detail === "string" && detail.includes("outcome is unknown")) {
-      return "The service is unavailable and the outcome is unknown: check whether it was recorded before trying again.";
+    // Only the API's own text may say nothing was recorded; a proxy's 503 or a lost commit reply
+    // may follow a write that landed.
+    if (
+      typeof detail === "string" &&
+      !detail.includes("outcome is unknown") &&
+      detail.includes("nothing was recorded")
+    ) {
+      return "The service is unavailable. Nothing was recorded.";
     }
-    return "The service is unavailable. Nothing was recorded.";
+    return "The service is unavailable and the outcome is unknown: check whether it was recorded before trying again.";
   }
   return "Something went wrong. The outcome is unknown: check whether it was recorded before trying again.";
 }

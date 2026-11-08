@@ -1636,7 +1636,20 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   sources, positive control): a record with `’` and an emoji is stored and read back on 16 and
   17; removing the `SET` or making it `SET LOCAL` fails both cases. Offline: the statement,
   its order and three mutants.
-  Both are session settings, so a future transaction-mode pooler (PgBouncer and the like;
+  A stored `default_transaction_isolation` or `default_transaction_read_only` gets through the
+  same way (probed live: `serializable` and `on` reached the app). Serializable would turn a
+  certain refusal at commit into an unknown outcome; read-only would refuse every write.
+  `_connect` also sends `SET default_transaction_isolation = 'read committed'` and
+  `SET default_transaction_read_only = off` (review of 740b091). Live
+  (`test_a_stored_transaction_default_never_reaches_the_apps_sessions`, positive control on a
+  plain connection, a create and a decision): removing the `SET`s fails both cases on 16 and 17.
+  Offline: the statements, their order, failure at each step, and six mutants.
+  `SET client_encoding = 'UTF8'` converts nothing for a `SQL_ASCII` database (probed live:
+  `server_encoding` stays `SQL_ASCII`), and another server encoding refuses or loses some
+  characters, so `verify()` reports "the database encoding is not UTF8 (create it with UTF8)"
+  and the app refuses to start (`test_verify_refuses_a_database_whose_encoding_is_not_utf8`,
+  mutation-checked).
+  These are session settings, so a future transaction-mode pooler (PgBouncer and the like;
   pooling is an open gap, see architecture.md) must keep session state or the settings must
   move into each transaction; otherwise the `_fetch_run` backstop fires and requests fail
   closed.
@@ -1671,8 +1684,28 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   method, both API texts; mutation-checked), live by
   `test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded`
   (the decision is stored; fails on 16 and 17 if the commit error is re-raised as is) and in
-  `web/tests/forms.test.ts`. Retries stay safe: decisions are write-once and an admission with
-  the same key joins its run.
+  `web/tests/forms.test.ts`. A write refused after its statement ran (a record that would not
+  read back identical, a capacity or conflict error) commits nothing and keeps its error; a
+  failing `close()` is suppressed so it never replaces the outcome; only reads and
+  `_transaction` itself call `_connect()` directly (each pinned, with a mutant). The API logs
+  a separate fixed line, "storage outcome unknown" (path only), so an operator can find writes
+  that may have landed.
+  The web app reverses its default (review of 740b091): a 503 says "Nothing was recorded" only
+  when the API's detail says "nothing was recorded" (the write, shutdown and both
+  configuration 503s do) and not "outcome is unknown"; any other 503, including a proxy's own
+  page, shows the outcome as unknown (mutation-checked).
+  Retries stay safe but are not free. Decisions are write-once, so a retry is a replay or a
+  409. If an admission committed and its reply was lost, no worker was started: the run stays
+  `RUNNING` and holds a server and per-actor capacity slot until its lease expires (cleanup
+  then marks it a timeout); a retry with the same key gets 409 "use a new Idempotency-Key",
+  and a request without a key leaves the client no id to reload. Both fail closed.
+  An early return that only read (an admission that joined or found its run completed,
+  `complete` finding nothing to do, `fail` matching no row) still commits, since `_expire` may
+  have written; if that commit fails the outcome is shown as unknown, and for `complete` the
+  runner then records `STORAGE` rather than `TIMEOUT`. After a committed `complete` the
+  runner's `fail` changes nothing, because `complete` deleted the run row in the same
+  transaction; this is why `STORAGE` after a lost commit reply leaves the stored assessment
+  intact.
   **Pinned in `tests/safety/test_app_connection_options.py`:**
   - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
   - `make_conninfo` replaces a string's `options`;

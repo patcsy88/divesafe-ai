@@ -1298,6 +1298,7 @@ class VerifyConnection:
     def __init__(self, catalog: Catalog, missing: tuple[str, ...] = ()) -> None:
         self.catalog = catalog
         self.missing = missing
+        self.server_encoding = "UTF8"
         self.calls: list[str] = []
         self.transaction_log = Transaction()
 
@@ -1317,6 +1318,8 @@ class VerifyConnection:
         self.calls.append(text)
         if text.startswith("SET search_path"):
             return Rows([])
+        if "current_setting('server_encoding')" in text:
+            return Rows([(self.server_encoding,)])
         if text.startswith("SET ") and not text.startswith("SET search_path"):
             return self.catalog.answer(text, params) or Rows([])
         if text.startswith("SELECT to_regclass(%s)"):

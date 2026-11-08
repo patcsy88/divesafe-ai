@@ -611,3 +611,15 @@ def test_every_trigger_gets_a_type_and_a_shape_check_even_when_the_function_pin_
         trig.qual = True
         found = knowledge_problems(CatalogConnection(catalog), owner_is_current_user=True)
         assert found == [fake.not_plain(name)], name
+
+
+@pytest.mark.parametrize("encoding", ["SQL_ASCII", "LATIN1", "EUC_JP"])
+def test_verify_refuses_a_database_whose_encoding_is_not_utf8(
+    monkeypatch: pytest.MonkeyPatch, encoding: str
+) -> None:
+    """A UTF8 client encoding converts nothing for SQL_ASCII, and any other server encoding
+    refuses or loses characters a record may hold: the app must not start on one."""
+    conn = VerifyConnection(Catalog())
+    conn.server_encoding = encoding
+    problems = repository(monkeypatch, conn).verify(least_privilege=False)
+    assert problems == ["the database encoding is not UTF8 (create it with UTF8)"]

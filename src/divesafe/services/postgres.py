@@ -18,7 +18,7 @@ import logging
 import re
 import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import timedelta
 from typing import Any
 
@@ -72,6 +72,12 @@ _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_T
 # cannot load a timestamp in another DateStyle, nor encode every character in another encoding.
 _DATE_STYLE = "SET DateStyle = 'ISO, MDY'"
 _CLIENT_ENCODING = "SET client_encoding = 'UTF8'"
+# A stored serializable default would turn a certain refusal at commit into an unknown outcome,
+# and a stored read-only default would refuse every write.
+_ISOLATION = "SET default_transaction_isolation = 'read committed'"
+_READ_WRITE = "SET default_transaction_read_only = off"
+_SERVER_ENCODING = "SELECT current_setting('server_encoding')"
+_SESSION_SETUP = (_DATE_STYLE, _CLIENT_ENCODING, _ISOLATION, _READ_WRITE)
 
 logger = logging.getLogger(__name__)
 
@@ -449,8 +455,8 @@ class PostgresAssessmentRepository:
     def _connect(self) -> psycopg.Connection[Any]:
         conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
         try:
-            conn.execute(_DATE_STYLE)
-            conn.execute(_CLIENT_ENCODING)
+            for statement in _SESSION_SETUP:
+                conn.execute(statement)
             conn.commit()  # each caller then starts its own transaction, as before
         except BaseException:
             conn.close()
@@ -470,7 +476,9 @@ class PostgresAssessmentRepository:
             except psycopg.Error:
                 raise RepositoryOutcomeUnknownError("storage unavailable") from None
         finally:
-            conn.close()
+            # A failing close must never replace the outcome being raised.
+            with suppress(Exception):
+                conn.close()
 
     def verify(self, *, least_privilege: bool, owner_not_superuser: bool = False) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
@@ -490,6 +498,10 @@ class PostgresAssessmentRepository:
             conn.execute("SET search_path = pg_catalog, pg_temp")
             if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
                 return ["the assessments table does not exist (run db_init as the owner role)"]
+            # The session's UTF8 client encoding converts nothing for a SQL_ASCII database, and
+            # another server encoding refuses or loses some characters a record may hold.
+            if conn.execute(_SERVER_ENCODING).fetchone() != ("UTF8",):
+                problems.append("the database encoding is not UTF8 (create it with UTF8)")
             try:
                 with conn.transaction():
                     problems += schema_problems(conn)

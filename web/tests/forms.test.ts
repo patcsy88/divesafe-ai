@@ -46,10 +46,24 @@ test("third-party text loses control and bidi characters but keeps newlines", ()
 });
 
 test("an unknown outcome on a failed write is not reported as nothing recorded", () => {
-  for (const status of [0, 500, 502, 504]) {
+  for (const status of [0, 500, 502, 503, 504]) {
     assert.ok(!/Nothing was recorded/.test(describeFailure(status, null, null)), String(status));
   }
-  assert.match(describeFailure(503, null, null), /Nothing was recorded/);
+});
+
+test("a 503 says nothing was recorded only when the API itself says so", () => {
+  for (const detail of [
+    "storage is unavailable; nothing was recorded",
+    "the server is shutting down; nothing was recorded",
+    "server configuration is unsafe; nothing was recorded",
+  ]) {
+    assert.match(describeFailure(503, detail, null), /Nothing was recorded/, detail);
+  }
+  for (const detail of [null, "", "Service Unavailable", "<html>503</html>", [{ msg: "nothing was recorded" }]]) {
+    const text = describeFailure(503, detail, null);
+    assert.match(text, /outcome is unknown/, String(detail));
+    assert.ok(!/Nothing was recorded/i.test(text), String(detail));
+  }
 });
 
 test("a 503 whose commit may have landed is never reported as nothing recorded", () => {

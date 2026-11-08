@@ -106,7 +106,13 @@ def session_setup(module: Any, monkeypatch: pytest.MonkeyPatch, fail_on: str | N
     return [*conn.log, "RETURNED" if returned is conn else "OTHER"]
 
 
-SESSION = [postgres._DATE_STYLE, postgres._CLIENT_ENCODING, "COMMIT"]
+SESSION = [
+    postgres._DATE_STYLE,
+    postgres._CLIENT_ENCODING,
+    postgres._ISOLATION,
+    postgres._READ_WRITE,
+    "COMMIT",
+]
 
 
 def test_every_app_connection_sets_datestyle_and_encoding_for_the_session_before_use(
@@ -118,6 +124,9 @@ def test_every_app_connection_sets_datestyle_and_encoding_for_the_session_before
     both; it is committed so it outlives the caller's own transactions."""
     assert postgres._DATE_STYLE == "SET DateStyle = 'ISO, MDY'"
     assert postgres._CLIENT_ENCODING == "SET client_encoding = 'UTF8'"
+    # A stored serializable or read-only default reaches the app the same way.
+    assert postgres._ISOLATION == "SET default_transaction_isolation = 'read committed'"
+    assert postgres._READ_WRITE == "SET default_transaction_read_only = off"
     assert session_setup(postgres, monkeypatch) == [*SESSION, "RETURNED"]
 
 
@@ -132,7 +141,7 @@ def test_a_connection_whose_session_cannot_be_set_up_is_closed_and_never_returne
 @pytest.mark.parametrize(
     "edit",
     [
-        ("            conn.execute(_DATE_STYLE)\n", ""),
+        ("_SESSION_SETUP = (_DATE_STYLE, ", "_SESSION_SETUP = ("),
         ("            conn.commit()  # each", "            pass  # each"),
         ("_DATE_STYLE = \"SET DateStyle = 'ISO, MDY'\"", "_DATE_STYLE = \"SET DateStyle = 'ISO'\""),
         (
@@ -140,7 +149,13 @@ def test_a_connection_whose_session_cannot_be_set_up_is_closed_and_never_returne
             "_DATE_STYLE = \"SET LOCAL DateStyle = 'ISO, MDY'\"",
         ),
         ("            conn.close()\n            raise\n", "            raise\n"),
-        ("            conn.execute(_CLIENT_ENCODING)\n", ""),
+        ("(_DATE_STYLE, _CLIENT_ENCODING, ", "(_DATE_STYLE, "),
+        (", _ISOLATION, _READ_WRITE)", ", _READ_WRITE)"),
+        (", _ISOLATION, _READ_WRITE)", ", _ISOLATION)"),
+        ('_ISOLATION = "SET default_', '_ISOLATION = "SET LOCAL default_'),
+        ('_READ_WRITE = "SET default_', '_READ_WRITE = "SET LOCAL default_'),
+        ('read_only = off"', 'read_only = on"'),
+        ("isolation = 'read committed'\"", "isolation = 'serializable'\""),
         (
             "_CLIENT_ENCODING = \"SET client_encoding = 'UTF8'\"",
             "_CLIENT_ENCODING = \"SET client_encoding = 'LATIN1'\"",
@@ -157,6 +172,12 @@ def test_a_connection_whose_session_cannot_be_set_up_is_closed_and_never_returne
         "set-local",
         "not-closed-on-failure",
         "no-encoding",
+        "no-isolation",
+        "no-read-write",
+        "isolation-set-local",
+        "read-write-set-local",
+        "read-only",
+        "serializable",
         "other-encoding",
         "encoding-set-local",
     ],
