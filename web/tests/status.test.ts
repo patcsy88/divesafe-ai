@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAssessment, getAssessment, getEvidence, listSites } from "../lib/api.ts";
+import {
+  createAssessment,
+  getAssessment,
+  getEvidence,
+  isRead,
+  listSites,
+  recordActualConditions,
+  recordDecision,
+} from "../lib/api.ts";
 import { classify, failureText } from "../lib/status.ts";
 
 const ID = "a".repeat(32);
@@ -155,22 +163,66 @@ test("a 503 on a read does not claim that nothing was recorded", async () => {
   );
 });
 
-test("a 503 on any read asks to try again, and a write keeps the API's own wording", async () => {
+const down = () => {
+  globalThis.fetch = (async () => {
+    throw new Error("down");
+  }) as typeof fetch;
+};
+
+test("a server error or no answer on any read asks to try again", async () => {
+  const fair = (error: Error) =>
+    /could not be checked right now/.test(error.message) && !/Nothing was recorded|whether it was recorded/i.test(error.message);
   for (const read of [() => getEvidence("k-12345678", ID), () => listSites("k-12345678")]) {
-    for (const body of [{ detail: "storage is unavailable; nothing was recorded" }, { detail: "x" }, null]) {
-      reply(body, 503);
-      await assert.rejects(
-        read,
-        (error: Error) =>
-          /could not be checked right now/.test(error.message) &&
-          !/Nothing was recorded|whether it was recorded/i.test(error.message),
-      );
+    for (const status of [500, 502, 503, 504]) {
+      for (const body of [{ detail: "storage is unavailable; nothing was recorded" }, { detail: "x" }, null]) {
+        reply(body, status);
+        await assert.rejects(read, fair, String(status));
+      }
     }
+    down();
+    await assert.rejects(read, fair);
   }
-  reply({ detail: "storage is unavailable; nothing was recorded" }, 503);
-  await assert.rejects(() => createAssessment("k-12345678", body), /Nothing was recorded/);
-  reply({ detail: "x" }, 503);
-  await assert.rejects(() => createAssessment("k-12345678", body), /outcome is unknown/);
+  for (const status of [500, 502, 504]) {
+    reply({ detail: "x" }, status);
+    await assert.rejects(
+      () => getAssessment("k-12345678", ID),
+      (error: Error) => /outcome is unknown. Try again/.test(error.message) && !/Nothing was recorded/i.test(error.message),
+    );
+  }
+  down();
+  await assert.rejects(() => getAssessment("k-12345678", ID), /outcome is unknown. Try again/);
+});
+
+test("only a GET without a body is a read, in any case", () => {
+  for (const init of [{}, { method: "GET" }, { method: "get" }, { method: "Get" }]) assert.equal(isRead(init), true, JSON.stringify(init));
+  for (const init of [
+    { method: "POST" },
+    { method: "post" },
+    { method: "PUT" },
+    { body: "{}" },
+    { method: "GET", body: "{}" },
+    { method: "get", body: "" },
+  ]) {
+    assert.equal(isRead(init), false, JSON.stringify(init));
+  }
+});
+
+test("every write keeps the write wording for a server error or no answer", async () => {
+  const writes = [
+    () => createAssessment("k-12345678", body),
+    () => recordDecision("k-12345678", ID, { decision: "NO-GO" }),
+    () => recordActualConditions("k-12345678", ID, { note: "calm" }),
+  ];
+  for (const write of writes) {
+    reply({ detail: "storage is unavailable; nothing was recorded" }, 503);
+    await assert.rejects(write, /Nothing was recorded/);
+    for (const status of [500, 502, 503, 504]) {
+      reply({ detail: "x" }, status);
+      await assert.rejects(write, (error: Error) => /outcome is unknown: check whether it was recorded/.test(error.message));
+    }
+    down();
+    await assert.rejects(write, /did not answer, so the outcome is unknown/);
+  }
 });
 
 test("a create takes only the id, from a run or from a replayed record", async () => {

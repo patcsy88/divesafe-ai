@@ -1641,14 +1641,22 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   READ COMMITTED is that the writes rely on it: `admit` takes its advisory lock and then reads
   the run, the record and the counts, each with a fresh snapshot. Under REPEATABLE READ or
   SERIALIZABLE the snapshot is taken before the lock is granted, so those reads could miss
-  what the previous lock holder committed: the in-flight limits could be exceeded and a second
-  run started for an id that had just completed. `replace`'s `FOR UPDATE` would raise a
+  what the previous lock holder committed: the in-flight limits could be exceeded, and a
+  same-id admission could fail with a 503 instead of joining (or, in a narrow window, start a
+  run whose record `complete` then refuses; fails closed). `replace`'s `FOR UPDATE` would raise a
   serialization error instead of `ConflictError`, and a certain refusal at commit would become
   an unknown outcome. A read-only default would refuse every write.
   `default_transaction_read_only` is a per-session default that any role may change, not an
   access control, and the app now ignores a stored value. To freeze writes, revoke INSERT and
-  UPDATE from the app role, set it `NOLOGIN` and end its sessions, or stop the API; a revoked
-  grant fails before the commit, with the true "nothing was recorded" 503.
+  UPDATE from the app role and check that `has_table_privilege` is false for it on each table
+  (a grant to `PUBLIC` or to a role it belongs to also counts), set it `NOLOGIN` (the app opens
+  a new connection for each operation, so this stops the next request; ending its sessions only
+  matters for statements already running), or stop the API. A revoked grant fails before the
+  commit, with the true "nothing was recorded" 503, and `verify()` checks only for excess
+  privileges, so a restart during the freeze still starts. During a freeze some reads fail too:
+  a `GET` of a running or missing assessment runs `get_run`'s `_expire` UPDATE and gets the read
+  503, and runs in progress can neither complete nor fail; they stay `RUNNING` until the freeze
+  ends and cleanup marks them timed out.
   `_connect` also sends `SET default_transaction_isolation = 'read committed'` and
   `SET default_transaction_read_only = off` (review of 740b091). Live
   (`test_a_stored_transaction_default_never_reaches_the_apps_sessions`, positive control on a
@@ -1663,10 +1671,13 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   the app then refuses it.
   These are session settings, so a future transaction-mode pooler (PgBouncer and the like;
   pooling is an open gap, see architecture.md) must keep session state or the settings must
-  move into each transaction. Otherwise each lost setting fails in its own way, all closed or
-  visible: a lost `DateStyle` fires the `_fetch_run` backstop (503); a lost `client_encoding`
-  makes psycopg raise `UnicodeEncodeError`, which is not a `psycopg.Error`, so a logged 500; a
-  lost read-only default makes every write a 503 "nothing was recorded"; a lost isolation level
+  move into each transaction. Otherwise, where a stored non-default value applies, each lost
+  setting fails in its own way, all closed or visible: a lost `DateStyle` fires the
+  `_fetch_run` backstop (503); a lost `client_encoding` makes psycopg raise
+  `UnicodeEncodeError` on a write, which is not a `psycopg.Error`, so a logged 500, and on a
+  read of a character the client encoding lacks the server raises SQLSTATE 22P05, a
+  `DataError`, which becomes the 422 "the content cannot be stored", even on a `GET`; a lost
+  read-only default makes every write a 503 "nothing was recorded"; a lost isolation level
   brings back the snapshot problem in `admit` and the commit-time ambiguity described above.
   Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
   `pending_runs` holds the timestamps): the repository catches `NotImplementedError` only
@@ -1709,10 +1720,16 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   recorded" only when the API's detail is exactly one of its four texts that say so (storage,
   shutdown and the two configuration 503s; `NOTHING_RECORDED_503` in `web/lib/api.ts`); any
   other 503, including a proxy's own page or a text that merely mentions the phrase, shows the
-  outcome as unknown. A 503 on any read (sign-in check, sites, evidence, an assessment) says it
-  could not be checked and to try again, since a read records nothing (review of 6b2aa6f;
-  `forms.test.ts`, `login.test.ts`, `status.test.ts`, mutation-checked). A new API text that
-  certainly recorded nothing must be added to that set, or the web app over-warns.
+  outcome as unknown. A read (a `GET`, in any case, with no body: `isRead`) that gets any 5xx
+  or no answer (sign-in check, sites, evidence) says it could not be checked and to try again,
+  since a read records nothing (reviews of 6b2aa6f and a34f8c9). The assessment page's text
+  for the same failures also says "the outcome is unknown": that is the run's result, which
+  may still finish, not a write by the reader. A request with a body is never a read, so a
+  write that lost its method still gets the write wording. Pinned by `forms.test.ts`,
+  `login.test.ts` and `status.test.ts` (every write path, mutation-checked).
+  `tests/safety/test_web_nothing_recorded_texts.py` reads both files and fails if the web set
+  differs from the API's 503 texts that say "nothing was recorded", so drift fails CI instead
+  of silently over-warning (mutation-checked on both sides).
   Retries stay safe but are not free. Decisions are write-once, so a retry is a replay or a
   409. If an admission committed and its reply was lost, no worker was started: the run stays
   `RUNNING` and holds a server and per-actor capacity slot until its lease expires (cleanup
