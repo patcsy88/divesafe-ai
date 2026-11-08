@@ -115,29 +115,85 @@ def _is_connection_call(call: ast.Call) -> bool:
     return isinstance(owner, ast.Attribute) and owner.attr in {"crdb", *_CONNECTION_CLASSES}
 
 
-def _string_constants(tree: ast.Module) -> set[str]:
-    """Module-level names bound once to a string literal or an f-string."""
-    bound: dict[str, int] = {}
-    strings: set[str] = set()
+def _bindings(tree: ast.Module) -> dict[str, int]:
+    """Every binding of every name anywhere in the module: assignment targets (any nesting,
+    augmented, unpacked, walrus, loop and `with` targets), parameters, imports, `global`, and
+    function and class names. A name counted once is bound once in the whole module."""
+    count: dict[str, int] = {}
+
+    def add(name: str) -> None:
+        count[name] = count.get(name, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+            add(node.id)
+        elif isinstance(node, ast.arg):
+            add(node.arg)
+        elif isinstance(node, ast.alias):
+            add((node.asname or node.name).split(".")[0])
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            for name in node.names:
+                add(name)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) or (
+            isinstance(node, ast.ExceptHandler) and node.name
+        ):
+            add(node.name)  # type: ignore[arg-type]
+    return count
+
+
+def _constants(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """(strings, scalars): names bound exactly once in the whole module, by a top-level
+    assignment to a fixed string, or to an int or str literal."""
+    bindings = _bindings(tree)
+    once: dict[str, ast.expr] = {}
     for node in tree.body:
-        targets = node.targets if isinstance(node, ast.Assign) else []
-        if isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-        value = node.value if isinstance(node, ast.Assign | ast.AnnAssign) else None
-        for target in targets:
-            if isinstance(target, ast.Name):
-                bound[target.id] = bound.get(target.id, 0) + 1
-                if _is_fixed_string(value, set()):
-                    strings.add(target.id)
-    return {name for name in strings if bound[name] == 1}
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and bindings.get(target.id) == 1:
+            once[target.id] = value
+    scalars = {
+        name
+        for name, value in once.items()
+        if isinstance(value, ast.Constant)
+        and isinstance(value.value, int | str)
+        and not isinstance(value.value, bool)
+    }
+    strings = {name for name, value in once.items() if _is_fixed_string(value, set(), scalars)}
+    return strings, scalars
 
 
-def _is_fixed_string(value: ast.expr | None, constants: set[str]) -> bool:
+def _is_fixed_string(value: ast.expr | None, strings: set[str], scalars: set[str]) -> bool:
+    """A non-empty string literal; an f-string with a non-blank literal part whose every
+    interpolation is a literal or a module constant bound once; or a string constant."""
     if isinstance(value, ast.Constant):
         return isinstance(value.value, str) and value.value.strip() != ""
     if isinstance(value, ast.JoinedStr):
-        return True
-    return isinstance(value, ast.Name) and value.id in constants
+        literal = "".join(
+            v.value
+            for v in value.values
+            if isinstance(v, ast.Constant) and isinstance(v.value, str)
+        )
+        parts_ok = all(
+            isinstance(v, ast.Constant)
+            or (
+                isinstance(v, ast.FormattedValue)
+                and v.format_spec is None
+                and (
+                    (isinstance(v.value, ast.Constant) and isinstance(v.value.value, int | str))
+                    or (isinstance(v.value, ast.Name) and v.value.id in scalars)
+                )
+            )
+            for v in value.values
+        )
+        return literal.strip() != "" and parts_ok
+    return isinstance(value, ast.Name) and value.id in strings
+
+
+_LOADER_MODULE = "divesafe.services.kb_common"
 
 
 def _refused_import(node: ast.Import | ast.ImportFrom) -> str | None:
@@ -150,6 +206,8 @@ def _refused_import(node: ast.Import | ast.ImportFrom) -> str | None:
                 return "imports psycopg.crdb"
             if alias.name == "psycopg" and alias.asname not in (None, "psycopg"):
                 return "imports psycopg under another name"
+            if alias.name == _LOADER_MODULE:
+                return "imports kb_common by its dotted name"
         return None
     module = node.module or ""
     if module.split(".")[0] == "psycopg_pool":
@@ -159,20 +217,26 @@ def _refused_import(node: ast.Import | ast.ImportFrom) -> str | None:
         return f"imports a connection from {module}"
     if module == "psycopg" and "crdb" in names:
         return "imports psycopg.crdb"
-    if module == "divesafe.services.kb_common" and names & {"connect", "*"}:
+    if module == _LOADER_MODULE and names & {"connect", "*"}:
         return "imports the loader's connect"
+    if node.level and (module.split(".")[-1] == "kb_common" or "kb_common" in names):
+        return "imports kb_common relatively"
+    if module == "divesafe.services":
+        for alias in node.names:
+            if alias.name == "kb_common" and alias.asname not in (None, "kb_common"):
+                return "imports kb_common under another name"
     return None
 
 
 def connections_without_options(relative: str, source: str) -> list[str]:
-    """Every database connection in `source` that does not pass a fixed `options` string (a
-    non-empty literal, an f-string, or a module-level string constant) and is not allowed; any
-    import that would let a connection escape the call shapes above; any use of
-    `psycopg.connect` other than calling it; and any use of the loader's connection outside the
-    loader's commands."""
+    """Every database connection in `source` that does not pass a fixed `options` string (see
+    `_is_fixed_string`) and is not allowed; any import that would let a connection escape the
+    call shapes above; any connection function used other than by calling it, or a connection
+    class bound to a name; and any use of the loader's connection outside the loader's
+    commands."""
     found: list[str] = []
     tree = ast.parse(source)
-    constants = _string_constants(tree)
+    strings, scalars = _constants(tree)
     called: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -191,23 +255,33 @@ def connections_without_options(relative: str, source: str) -> list[str]:
                     found.append(f"{relative}:{child.lineno} {refused}")
             if (
                 isinstance(child, ast.Attribute)
-                and child.attr == "connect"
-                and isinstance(child.value, ast.Name)
-                and child.value.id == "psycopg"
+                and _is_connection_call(ast.Call(func=child, args=[], keywords=[]))
                 and id(child) not in called
             ):
-                found.append(f"{relative}:{child.lineno} uses psycopg.connect without calling it")
+                found.append(f"{relative}:{child.lineno} uses a connection without calling it")
+            if (
+                isinstance(child, ast.Assign | ast.AnnAssign | ast.NamedExpr)
+                and isinstance(child.value, ast.Attribute)
+                and child.value.attr in _CONNECTION_CLASSES
+            ):
+                found.append(f"{relative}:{child.lineno} binds a connection class to a name")
             if (
                 isinstance(child, ast.Attribute)
                 and child.attr == "connect"
                 and isinstance(child.value, ast.Name)
                 and child.value.id == "kb_common"
                 and relative not in LOADER_CONNECT_USERS
+            ) or (
+                isinstance(child, ast.Attribute)
+                and child.attr == "connect"
+                and isinstance(child.value, ast.Attribute)
+                and child.value.attr == "kb_common"
+                and relative not in LOADER_CONNECT_USERS
             ):
                 found.append(f"{relative}:{child.lineno} uses the loader's connect")
             if isinstance(child, ast.Call) and _is_connection_call(child):
                 options = [k.value for k in child.keywords if k.arg == "options"]
-                fixed = len(options) == 1 and _is_fixed_string(options[0], constants)
+                fixed = len(options) == 1 and _is_fixed_string(options[0], strings, scalars)
                 if not fixed and (relative, name) not in NO_OPTIONS_ALLOWED:
                     found.append(f"{relative}:{child.lineno} in {name}")
             visit(child, name)
@@ -306,6 +380,39 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
             "import psycopg\nclass X:\n"
             "    def install_schema(self, d):\n        return psycopg.connect(d)\n"
         ),
+        "import psycopg\ndef h(d, cfg):\n    return psycopg.connect(d, options=f'{cfg}')\n",
+        "import psycopg\ndef h(d, c):\n    return psycopg.connect(d, options=f'-c {c.x}')\n",
+        "import psycopg\ndef h(d):\n    return psycopg.connect(d, options=f'')\n",
+        (
+            "import os, psycopg\nO = f\"-c {os.environ['X']}\"\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\nO += ' -c role=x'\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\nif X:\n    O = None\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\nA, O = 1, None\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\ndef s():\n    global O\n    O = None\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\n"
+            "def h(d, O=None):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        "import psycopg\nC = psycopg.Connection\ndef h(d):\n    return C.connect(d)\n",
+        "import psycopg\nc = psycopg.Connection.connect\n",
+        "from divesafe.services import kb_common as k\n",
+        "import divesafe.services.kb_common\n",
+        "from .kb_common import SYNCHRONOUS_COMMIT\n",
+        "from . import kb_common\n",
     ],
     ids=[
         "bare-connect",
@@ -335,6 +442,21 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
         "nested-in-allowed",
         "lambda-in-allowed",
         "method-named-like-allowed",
+        "fstring-parameter",
+        "fstring-attribute",
+        "fstring-empty",
+        "fstring-constant-from-config",
+        "augmented-constant",
+        "constant-rebound-in-if",
+        "constant-rebound-by-unpacking",
+        "constant-rebound-by-global",
+        "constant-shadowed-by-parameter",
+        "class-reference",
+        "classmethod-reference",
+        "kb_common-alias",
+        "kb_common-dotted",
+        "kb_common-relative",
+        "kb_common-relative-module",
     ],
 )
 def test_mutation_a_connection_without_options_is_found(source: str) -> None:
@@ -347,10 +469,14 @@ def test_mutation_a_connection_without_options_is_found(source: str) -> None:
         "import psycopg\ndef h(d):\n    return psycopg.connect(d, options='-c a=1')\n",
         "import psycopg\nO = '-c a=1'\ndef h(d):\n    return psycopg.connect(d, options=O)\n",
         "import psycopg\nN = 5\ndef h(d):\n    return psycopg.connect(d, options=f'-c a={N}')\n",
+        (
+            "import psycopg\nN = 'x'\nO = f'-c a={N}'\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
         "import psycopg\ndef install_schema(d):\n    return psycopg.connect(d)\n",
         "from psycopg import sql\nimport psycopg\nx: psycopg.Connection[int]\n",
     ],
-    ids=["literal", "constant", "f-string", "allowed", "sql-import-and-annotation"],
+    ids=["literal", "constant", "f-string", "f-string-constant", "allowed", "sql-and-annotation"],
 )
 def test_the_scan_accepts_fixed_options_and_ordinary_code(source: str) -> None:
     assert connections_without_options("services/postgres.py", source) == []

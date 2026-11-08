@@ -99,7 +99,8 @@ def check_load_order(fake: LoadFakeConnection) -> None:
     lock_t = fake.position("SET LOCAL lock_timeout = 10000")
     stmt_t = fake.position("SET LOCAL statement_timeout = 30000", lock_t)
     idle_t = fake.position("SET LOCAL idle_in_transaction_session_timeout = 30000")
-    sync = fake.position("SET LOCAL synchronous_commit = on")
+    sync = fake.position("set_config('synchronous_commit', 'on', true)")
+    dates = fake.position("SET LOCAL DateStyle = 'ISO, MDY'")
     glob = fake.position("(1220002, 0)")
     doc_lock = fake.position("(1220001, 'site-guide')")
     read_t = fake.position("SET LOCAL statement_timeout = 10000")
@@ -109,12 +110,12 @@ def check_load_order(fake: LoadFakeConnection) -> None:
     ins_chunk = fake.position("INSERT INTO public.kb_chunks")
     ins_draft = fake.position("'DRAFT', false")
     commit = fake.position("COMMIT", ins_draft)
-    assert (
-        iso < path < lock_t < stmt_t < idle_t < sync < glob < doc_lock < read_t < sites < restored
-    )
+    assert iso < path < lock_t < stmt_t < idle_t < sync < dates < glob < doc_lock < read_t < sites
+    assert sites < restored
     assert restored < ins_doc < ins_chunk < ins_draft < commit
     txns = {
-        fake.log[i][0] for i in (iso, sync, glob, doc_lock, sites, ins_doc, ins_chunk, ins_draft)
+        fake.log[i][0]
+        for i in (iso, sync, dates, glob, doc_lock, sites, ins_doc, ins_chunk, ins_draft)
     }
     assert len(txns) == 1  # documents, chunks and DRAFT in ONE transaction with the locks
     assert fake.log[commit][1] == "COMMIT"
@@ -146,8 +147,15 @@ def test_load_statement_order_and_one_write_transaction(
         ('sql.Identifier("pg_temp")', 'sql.Identifier("public")'),
         ('sql.Identifier("pg_catalog"), sql.Identifier("pg_temp")', 'sql.Identifier("pg_temp")'),
         ("    conn.execute(kb_common.SYNCHRONOUS_COMMIT)\n", ""),
+        ("    conn.execute(kb_common.DATE_STYLE)\n", ""),
     ],
-    ids=["no-idle-timeout", "public-not-pg_temp", "no-pg_catalog", "no-synchronous-commit"],
+    ids=[
+        "no-idle-timeout",
+        "public-not-pg_temp",
+        "no-pg_catalog",
+        "no-synchronous-commit",
+        "no-date-style",
+    ],
 )
 def test_mutation_in_begin_is_caught_by_the_load_statement_order(
     old: str, new: str, monkeypatch: pytest.MonkeyPatch, env: Env
@@ -862,13 +870,15 @@ def test_approve_statement_order(monkeypatch: pytest.MonkeyPatch, env: Env) -> N
     fake = LoadFakeConnection()
     go(monkeypatch, fake, approve_args(), env.settings())
     iso = fake.position("ISOLATION LEVEL READ COMMITTED")
+    sync = fake.position("set_config('synchronous_commit', 'on', true)")
+    dates = fake.position("SET LOCAL DateStyle = 'ISO, MDY'")
     glob = fake.position("(1220002, 0)")
     doc = fake.position("(1220001, 'site-guide')")
     stored = fake.position("SELECT manifest_sha256")
     status = fake.position("SELECT status FROM public.kb_status_events")
     insert = fake.position("INSERT INTO public.kb_status_events")
-    assert iso < glob < doc < stored < status < insert
-    assert len({fake.log[i][0] for i in (iso, glob, doc, stored, status, insert)}) == 1
+    assert iso < sync < dates < glob < doc < stored < status < insert
+    assert len({fake.log[i][0] for i in (iso, sync, dates, glob, doc, stored, status, insert)}) == 1
     assert not fake.has("INSERT INTO public.kb_documents")
     assert not fake.has("INSERT INTO public.kb_chunks")
 

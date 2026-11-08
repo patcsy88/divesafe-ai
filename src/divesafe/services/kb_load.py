@@ -219,6 +219,7 @@ def _begin(conn: psycopg.Connection[Any]) -> None:
         require_limit(kb_common.LOAD_IDLE_IN_TRANSACTION_TIMEOUT_MS),
     )
     conn.execute(kb_common.SYNCHRONOUS_COMMIT)
+    conn.execute(kb_common.DATE_STYLE)
     conn.execute(
         "SELECT pg_advisory_xact_lock(%s, %s)",
         (kb_common.KB_LOAD_GLOBAL_LOCK_CLASS, kb_common.KB_LOAD_GLOBAL_LOCK_OBJECT),

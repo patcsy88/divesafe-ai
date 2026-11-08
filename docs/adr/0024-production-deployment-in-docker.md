@@ -1652,8 +1652,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   `-c role=X` needs membership of `X`, which the loader's self-check flags; with the session-role
   check this refuses for `load` and `approve`, but `withdraw` only reports after the commit
   (exit 13), so its WITHDRAWN event is written with `X`'s privileges. Its timeouts, `search_path`
-  and `synchronous_commit = on` are `SET LOCAL`, so `-c synchronous_commit=off` cannot lose a
-  reported write. Check 17's live test provokes `session_replication_role` through `PGOPTIONS`;
+  and `DateStyle` are `SET LOCAL`, and `synchronous_commit` is raised to at least `on` for the
+  transaction (never lowered from `remote_apply`), so `-c synchronous_commit=off` cannot lose a
+  reported write through this setting (durability still depends on the server's `fsync` and
+  storage). Check 17's live test provokes `session_replication_role` through `PGOPTIONS`;
   it must change when this lands. The `kb_load` settings model should pass a fixed `options` the same
   way, with a live test like the app's.
 - **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**

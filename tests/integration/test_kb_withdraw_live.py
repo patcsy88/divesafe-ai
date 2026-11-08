@@ -519,12 +519,19 @@ def test_a_session_replication_role_set_through_pgoptions_is_reported(
     assert "runs with session_replication_role other than origin" in problems
 
 
-def test_withdraw_commits_with_synchronous_commit_on_whatever_pgoptions_says(
-    loader_dsn: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("pgoptions", "expected"),
+    [("-c synchronous_commit=off", "on"), ("-c synchronous_commit=remote_apply", "remote_apply")],
+    ids=["off-raised", "remote_apply-kept"],
+)
+def test_withdraw_commits_with_synchronous_commit_at_least_on_whatever_pgoptions_says(
+    loader_dsn: str, monkeypatch: pytest.MonkeyPatch, pgoptions: str, expected: str
 ) -> None:
-    """`-c synchronous_commit=off` in PGOPTIONS reaches the loader's session (the positive
-    control); the write transaction sets it back before the INSERT, so a reported withdrawal is
-    flushed before it is reported."""
+    """A `synchronous_commit` and a non-ISO DateStyle from the environment reach the loader's
+    session (the positive control). The write transaction raises the first to at least `on`,
+    never lowering a stronger level, and sets DateStyle to ISO, so the withdrawal commits and its
+    recorded_at is read. The setting is checked before the INSERT; SET LOCAL holds until
+    commit."""
     did = _fresh_id()
     _draft(did)
     seen: list[object] = []
@@ -536,13 +543,16 @@ def test_withdraw_commits_with_synchronous_commit_on_whatever_pgoptions_says(
 
     monkeypatch.setattr(kb_withdraw, "_send_insert", spy)
     with monkeypatch.context() as m:
-        m.setenv("PGOPTIONS", "-c synchronous_commit=off")
+        m.setenv("PGOPTIONS", pgoptions)
+        m.setenv("PGDATESTYLE", "SQL, DMY")
         with psycopg.connect(loader_dsn) as plain:
             control = plain.execute("SHOW synchronous_commit").fetchone()
+            dates = plain.execute("SHOW DateStyle").fetchone()
         outcome = _withdraw(loader_dsn, did)
-    assert control == ("off",)
+    assert control == (pgoptions.rsplit("=", 1)[1],)
+    assert dates == ("SQL, DMY",)
     assert outcome.status in EXACT_OK
-    assert seen == [("on",)]
+    assert seen == [(expected,)]
     assert [e[0] for e in _events(did)] == ["DRAFT", "WITHDRAWN"]
 
 

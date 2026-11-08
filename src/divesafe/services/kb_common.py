@@ -115,8 +115,15 @@ def parse_document_version(args: Sequence[str]) -> tuple[str, int]:
 
 # The loader's connection takes `options` and PGOPTIONS from its environment (ADR 0024 A3), so a
 # `-c synchronous_commit=off` could let a reported write be lost in a crash. Every write
-# transaction sets it back; any role may.
-SYNCHRONOUS_COMMIT = "SET LOCAL synchronous_commit = on"
+# transaction raises it to `on` for the transaction (any role may), never lowering a stronger
+# configured level such as `remote_apply`.
+SYNCHRONOUS_COMMIT = (
+    "SELECT set_config('synchronous_commit', 'on', true) "
+    "WHERE current_setting('synchronous_commit') IN ('off', 'local', 'remote_write')"
+)
+# psycopg cannot parse timestamps in a non-ISO DateStyle (PGDATESTYLE or `-c DateStyle=`), which
+# would turn a committed-or-not RETURNING into an unknown outcome. Set per write transaction.
+DATE_STYLE = "SET LOCAL DateStyle = 'ISO, MDY'"
 
 
 def connect(dsn: str) -> psycopg.Connection[Any]:

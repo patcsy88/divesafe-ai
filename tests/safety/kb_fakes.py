@@ -138,6 +138,8 @@ class FakeConnection:
     def _answer(self, text: str) -> Any:
         if text.startswith("SET "):
             return None
+        if "set_config('synchronous_commit'" in text:
+            return ("on",)
         if "INSERT INTO public.kb_status_events" in text:
             if self.insert_error is not None:
                 raise self.insert_error

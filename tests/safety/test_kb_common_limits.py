@@ -115,6 +115,15 @@ def test_connect_with_an_unset_timeout_refuses_before_connecting(
         kb_common.connect("postgresql://never-used/x_test")
 
 
+def test_the_durability_and_date_style_statements_are_exact() -> None:
+    """Raise-only: `off`, `local` and `remote_write` become `on`; `on` and `remote_apply` stay."""
+    assert kb_common.SYNCHRONOUS_COMMIT == (
+        "SELECT set_config('synchronous_commit', 'on', true) "
+        "WHERE current_setting('synchronous_commit') IN ('off', 'local', 'remote_write')"
+    )
+    assert kb_common.DATE_STYLE == "SET LOCAL DateStyle = 'ISO, MDY'"
+
+
 def test_the_generated_set_local_statements_are_exact() -> None:
     conn = _Conn()
     kb_withdraw._timeout(conn, "lock_timeout", kb_common.WITHDRAW_LOCK_TIMEOUT_MS or 0)  # type: ignore[arg-type]
