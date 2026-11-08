@@ -14,6 +14,7 @@ pytestmark = pytest.mark.safety
 COMPOSE = Path(__file__).resolve().parents[2] / "docker" / "docker-compose.production.yml"
 SECRET_WORDS = ("PASSWORD", "API_KEY", "TOKEN", "KEY_HASHES", "DATABASE_URL")
 TOKEN_BUDGET_KEY = "DIVESAFE_LLM_MAX_OUTPUT_TOKENS"
+LOADERS = ("kb_load", "kb_withdraw")
 
 
 def _blocks(text: str, top: str) -> dict[str, list[str]]:
@@ -50,7 +51,9 @@ def text() -> str:
 @pytest.fixture(scope="module")
 def services(text: str) -> dict[str, list[str]]:
     found = _blocks(text, "services")
-    assert set(found) == {"db-tls", "db", "db-init", "api"}, "a service was added or removed"
+    assert set(found) == {"db-tls", "db", "db-init", "api", "kb_load", "kb_withdraw"}, (
+        "a service was added or removed"
+    )
     return found
 
 
@@ -123,6 +126,12 @@ def test_the_secret_name_check_rejects_each_way_round_the_one_exception() -> Non
         "the key in lower case": {"api": {TOKEN_BUDGET_KEY.lower(): "abc123"}},
         "a near-name literal": {"api": {TOKEN_BUDGET_KEY + "_X": "abc123"}},
         "a credential named like the secret files": {"api": {"DIVESAFE_MET_API_TOKEN": "abc"}},
+        "the loader string as a literal": {
+            "kb_load": {
+                "DIVESAFE_LOADER_DATABASE_URL": "postgresql://divesafe_loader:x@db/divesafe"
+            }
+        },
+        "the loader string on kb_withdraw": {"kb_withdraw": {"DIVESAFE_LOADER_DATABASE_URL": "x"}},
     }
     for label, environments in bad.items():
         assert _secret_name_problems(environments), label
@@ -138,6 +147,7 @@ def test_the_api_never_sees_the_owner_credentials(services: dict[str, list[str]]
         "api_key_hashes",
         "met_api_token",
     }
+    assert "loader" not in api.lower(), "the API never receives the loader credential (A4)"
 
 
 def test_only_the_schema_job_sees_the_owner_url(services: dict[str, list[str]]) -> None:
@@ -152,6 +162,7 @@ def test_the_api_runs_in_production_with_the_agent_stage_on(
     assert env["DIVESAFE_ENVIRONMENT"] == "production"
     assert env["DIVESAFE_LLM_PROVIDER"] not in ("fake", "")
     assert env["DIVESAFE_ALLOW_EXTERNAL_LLM"] == '"true"'
+    # Also ADR 0022 decision 15: without the declaration every knowledge item is withheld.
     assert "DIVESAFE_LLM_SERVER_IS_LOCAL" not in env, "contradicts the external opt-in (ADR 0023)"
     assert "DIVESAFE_AUTH_MODE" not in env or "dev" not in env["DIVESAFE_AUTH_MODE"]
     assert env["DIVESAFE_SECRETS_DIR"] == "/run/secrets"
@@ -174,12 +185,13 @@ def test_the_model_host_and_the_evidence_age_have_no_default(
 def test_the_database_is_not_published_and_the_data_network_has_no_route_out(
     text: str, services: dict[str, list[str]]
 ) -> None:
-    for name in ("db", "db-tls", "db-init"):
+    for name in ("db", "db-tls", "db-init", *LOADERS):
         assert not any(line.strip() == "ports:" for line in services[name]), name
     networks = _blocks(text, "networks")
     assert "internal: true" in "\n".join(networks["data"])
     assert "internal: true" not in "\n".join(networks["egress"])
-    assert "egress" not in "\n".join(services["db"] + services["db-init"] + services["db-tls"])
+    for name in ("db", "db-init", "db-tls", *LOADERS):
+        assert "egress" not in "\n".join(services[name]), name
 
 
 def test_the_api_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
@@ -208,7 +220,7 @@ def test_every_service_drops_capabilities_and_blocks_privilege_gain(
 def test_the_api_and_the_schema_job_have_a_read_only_filesystem(
     services: dict[str, list[str]],
 ) -> None:
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         assert "read_only: true" in "\n".join(services[name]), name
 
 
@@ -260,13 +272,15 @@ def test_each_service_is_on_exactly_the_networks_it_should_be(
 ) -> None:
     assert _value(services["db"], "networks") == "[data]"
     assert _value(services["db-init"], "networks") == "[data]"
+    for name in LOADERS:
+        assert _value(services[name], "networks") == "[data]", name
     assert _value(services["api"], "networks") == "[data, egress]"
     assert _value(services["db-tls"], "network_mode") == "none"
     assert _value(services["db-tls"], "networks") is None
 
 
 def test_no_database_service_publishes_a_port_in_any_form(services: dict[str, list[str]]) -> None:
-    for name in ("db", "db-tls", "db-init"):
+    for name in ("db", "db-tls", "db-init", *LOADERS):
         assert _value(services[name], "ports") is None, name
         assert _value(services[name], "expose") is None, name
 
@@ -276,6 +290,8 @@ def test_capabilities_are_the_expected_ones_and_nothing_adds_more(
 ) -> None:
     assert _value(services["api"], "cap_add") is None
     assert _value(services["db-init"], "cap_add") is None
+    for name in LOADERS:
+        assert _value(services[name], "cap_add") is None, name
     assert _value(services["db"], "cap_add") == "[CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]"
     assert _value(services["db-tls"], "cap_add") == "[CHOWN, DAC_OVERRIDE, FOWNER]"
     for name, block in services.items():
@@ -288,8 +304,9 @@ def test_capabilities_are_the_expected_ones_and_nothing_adds_more(
 def test_the_api_and_the_schema_job_do_not_run_as_root_or_write_to_the_image(
     services: dict[str, list[str]],
 ) -> None:
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         assert _value(services[name], "read_only") == "true", name
+    for name in ("api", "db-init", "kb_withdraw"):
         assert _value(services[name], "volumes") is None, name
 
 
@@ -299,6 +316,11 @@ def test_the_api_has_resource_limits_and_a_non_executable_tmp(
     assert _value(services["api"], "mem_limit")
     assert _value(services["api"], "pids_limit")
     assert "noexec" in (_value(services["api"], "tmpfs") or "")
+    for (
+        name
+    ) in LOADERS:  # ADR 0024 A3: "memory and process limits as api has" (Q10: the same values)
+        for key in ("mem_limit", "pids_limit"):
+            assert _value(services[name], key) == _value(services["api"], key), (name, key)
 
 
 def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> None:
@@ -360,11 +382,13 @@ def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> No
         "db_bootstrap_password": "db_bootstrap_password",
         "db_owner_password": "db_owner_password",
         "db_app_password": "db_app_password",
+        "db_loader_password": "db_loader_password",
         "admin_database_url": "divesafe_admin_database_url",
         "database_url": "divesafe_database_url",
         "llm_api_key": "divesafe_llm_api_key",
         "api_key_hashes": "divesafe_api_key_hashes",
         "met_api_token": "divesafe_met_api_token",
+        "loader_database_url": "divesafe_loader_database_url",
     }
 
 
@@ -501,7 +525,7 @@ def test_no_service_loosens_its_isolation_in_a_way_the_other_checks_do_not_see(
         for key in ("ipc", "userns_mode", "cgroup", "cgroup_parent", "devices", "uts", "sysctls"):
             assert _value(block, key) is None, (name, key)
         assert _value(block, "security_opt") == '["no-new-privileges:true"]', name
-        if name in ("api", "db-init"):
+        if name in ("api", "db-init", *LOADERS):
             user = _value(block, "user")
             parts = (user or "10001").strip('"').split(":")
             assert all(part not in ("root", "0") and not part.startswith("0") for part in parts), (
@@ -567,8 +591,10 @@ def test_the_image_runs_as_the_unprivileged_user() -> None:
 
 def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
     services = _blocks(_strip_comments(COMPOSE.read_text()), "services")
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         block = services[name]
+        assert _value(block, "image") == "divesafe-api:local", name
+        assert _value(block, "target") is None, name
         start = block.index("    build:")
         build = []
         for line in block[start + 1 :]:
@@ -848,3 +874,207 @@ def test_the_secrets_script_writes_files_only_through_write_new() -> None:
     assert 'cat >"$target"' in function
     assert not re.search(r">>?\s*\"?\$(dir|\{dir\})", rest), "only write_new writes a file"
     assert not re.search(r"\btee\b", rest)
+
+
+# --- the knowledge loader services (ADR 0024 Amendment 1, A3 and A5) -----------------------------
+
+
+def _list(block: list[str], key: str) -> list[str] | None:
+    """The items of a block-style list under a service key, exactly as written."""
+    try:
+        start = block.index(f"    {key}:")
+    except ValueError:
+        return None
+    items: list[str] = []
+    for line in block[start + 1 :]:
+        if not line.startswith("      "):
+            break
+        items.append(line)
+    return items
+
+
+def _corpus_mount_problems(lines: list[str] | None) -> list[str]:
+    """ADR 0024 A5 item 4: one bind in the long form, read-only, never creating the host path,
+    the source only from the required variable. The pin sees the form, not the path."""
+    if lines is None:
+        return ["no volumes"]
+    expected = [
+        "      - type: bind",
+        "        source: ${DIVESAFE_CORPUS_DIR:?set DIVESAFE_CORPUS_DIR in docker/production.env}",
+        "        target: /corpus",
+        "        read_only: true",
+        "        bind:",
+        "          create_host_path: false",
+    ]
+    return [] if lines == expected else ["the corpus mount is not exactly the long read-only bind"]
+
+
+def test_the_loaders_start_only_under_their_profile_and_nothing_waits_for_them(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 items 1 and 18: `up` never starts a loader, and starts every other service."""
+    for name, block in services.items():
+        if name in LOADERS:
+            assert _value(block, "profiles") == "[knowledge]", name
+        else:
+            assert _value(block, "profiles") is None, name
+        depends = "\n".join(_list(block, "depends_on") or [])
+        for loader in LOADERS:
+            assert loader not in depends, (name, loader)
+
+
+def test_the_loaders_wait_only_for_a_healthy_database(services: dict[str, list[str]]) -> None:
+    """A5 item 2: `run` starts the whole dependency chain (checked with Compose: a one-off job
+    further down the chain is started too), so never db-init."""
+    for name in LOADERS:
+        assert _list(services[name], "depends_on") == [
+            "      db:",
+            "        condition: service_healthy",
+        ], name
+
+
+def test_kb_load_mounts_only_the_corpus_read_only_in_the_long_form(
+    services: dict[str, list[str]],
+) -> None:
+    assert _corpus_mount_problems(_list(services["kb_load"], "volumes")) == []
+    assert _value(services["kb_load"], "tmpfs") is None
+
+
+def test_the_corpus_mount_check_rejects_each_weaker_form() -> None:
+    good = _list(_blocks(_strip_comments(COMPOSE.read_text()), "services")["kb_load"], "volumes")
+    assert good is not None and _corpus_mount_problems(good) == []
+    source = "${DIVESAFE_CORPUS_DIR:?set DIVESAFE_CORPUS_DIR in docker/production.env}"
+    bad = {
+        "short syntax": [f"      - {source}:/corpus:ro"],
+        "no read_only": [x for x in good if "read_only" not in x],
+        "read_only false": [x.replace("true", "false") for x in good],
+        "creates the host path": [
+            x.replace("create_host_path: false", "create_host_path: true") for x in good
+        ],
+        "no bind options": good[:4],
+        "a literal path": [x.replace(source, "/srv/corpus") for x in good],
+        "a relative path": [x.replace(source, "./corpus") for x in good],
+        "a default instead of :?": [x.replace(":?", ":-") for x in good],
+        "a second volume": [*good, "      - /var/run/docker.sock:/var/run/docker.sock"],
+        "a writable second bind": [*good, "      - type: bind"],
+        "another target": [x.replace("target: /corpus", "target: /app") for x in good],
+        "a volume, not a bind": [x.replace("type: bind", "type: volume") for x in good],
+    }
+    for label, lines in bad.items():
+        assert _corpus_mount_problems(lines), label
+
+
+def test_kb_withdraw_has_no_volumes_and_no_corpus_setting(services: dict[str, list[str]]) -> None:
+    """A3/A5 item 4: nothing about the corpus can stop a withdrawal."""
+    block = services["kb_withdraw"]
+    assert _value(block, "volumes") is None and _value(block, "tmpfs") is None
+    assert "CORPUS" not in "\n".join(block).upper()
+
+
+def test_the_database_mounts_exactly_these_and_no_loader_script(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 4: A1 runs its script by hand on purpose, never from the init directory."""
+    assert _list(services["db"], "volumes") == [
+        "      - db-data:/var/lib/postgresql/data",
+        "      - db-tls:/tls:ro",
+        "      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro",
+        "      - ./db/10-create-app-role.sh:/docker-entrypoint-initdb.d/10-create-app-role.sh:ro",
+    ]
+
+
+def test_each_loader_gets_only_the_loader_connection_string(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 items 6 and 14: one secret per loader; the string reaches no other service, and the
+    loader password reaches only the database."""
+    for name in LOADERS:
+        assert _list(services[name], "secrets") == [
+            "      - source: loader_database_url",
+            "        target: divesafe_loader_database_url",
+        ], name
+    holders = {n for n, b in services.items() if "loader_database_url" in "\n".join(b)}
+    assert holders == set(LOADERS)
+    assert {n for n, b in services.items() if "db_loader_password" in "\n".join(b)} == {"db"}
+    assert _list(services["db"], "secrets") == [
+        "      - db_bootstrap_password",
+        "      - db_owner_password",
+        "      - db_app_password",
+        "      - db_loader_password",
+    ]
+
+
+def test_the_loaders_get_exactly_these_settings(services: dict[str, list[str]]) -> None:
+    """A5 item 7 (ADR 0022 condition 1): production, the secrets directory and, for kb_load
+    only, the corpus target. No model setting, hash, manifest or development flag."""
+    assert _environment(services["kb_load"]) == {
+        "DIVESAFE_ENVIRONMENT": "production",
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+        "DIVESAFE_CORPUS_TARGET": "/corpus",
+    }
+    assert _environment(services["kb_withdraw"]) == {
+        "DIVESAFE_ENVIRONMENT": "production",
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+    }
+
+
+def test_the_schema_job_gets_exactly_these_settings_and_the_loader_name_matches_hba(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 8."""
+    env = _environment(services["db-init"])
+    assert env == {
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+        "DIVESAFE_APP_DB_ROLE": "divesafe_app",
+        "DIVESAFE_LOADER_DB_ROLE": "divesafe_loader",
+    }
+    assert ["hostssl", "divesafe", env["DIVESAFE_LOADER_DB_ROLE"], "samenet", "scram-sha-256"] in (
+        _hba_rules()
+    )
+
+
+def test_the_loaders_run_one_fixed_module_with_no_shell(services: dict[str, list[str]]) -> None:
+    """A5 items 9 and 10: exec form, no `command`, kb_withdraw's list ends in `withdraw`; the
+    subcommand and its arguments come from `compose run` as process arguments."""
+    expected = {
+        "kb_load": '["python", "-m", "divesafe.services.kb_load"]',
+        "kb_withdraw": '["python", "-m", "divesafe.services.kb_withdraw", "withdraw"]',
+    }
+    for name, entrypoint in expected.items():
+        block = services[name]
+        assert _value(block, "entrypoint") == entrypoint, name
+        assert _value(block, "command") is None, name
+        assert _value(block, "restart") == '"no"', name
+        assert "${" not in entrypoint and "sh" not in entrypoint.split('"')
+
+
+def test_no_approved_hash_or_development_flag_can_come_from_compose(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 12: the approved hash is an operator argument only, so whoever can change the
+    corpus or this file cannot also supply the hash that approves it."""
+    for name in LOADERS:
+        joined = "\n".join(services[name]).lower()
+        for word in ("manifest", "sha256", "approved", "development", "hash"):
+            assert word not in joined, (name, word)
+
+
+def test_every_required_compose_variable_has_a_line_in_the_example_file(text: str) -> None:
+    """A5 item 15: once the corpus variable is required, every compose command needs it."""
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", text))
+    assert "DIVESAFE_CORPUS_DIR" in required
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    names = {line.partition("=")[0] for line in lines if line and not line.startswith("#")}
+    assert required <= names, sorted(required - names)
+
+
+def test_the_example_corpus_path_is_an_obvious_placeholder() -> None:
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert "DIVESAFE_CORPUS_DIR=/set/me/outside/the/repository" in lines
+
+
+def test_the_corpus_staging_location_is_ignored_by_git_and_the_build() -> None:
+    """A5 item 19: `up -d --build` must never bake licensed text into the image."""
+    root = COMPOSE.parents[1]
+    assert "corpus" in [x.strip() for x in (root / ".dockerignore").read_text().splitlines()]
+    assert "/corpus/" in [x.strip() for x in (root / ".gitignore").read_text().splitlines()]

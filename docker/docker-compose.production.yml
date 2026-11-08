@@ -45,8 +45,9 @@ services:
       POSTGRES_USER: divesafe_bootstrap
       POSTGRES_DB: divesafe
       POSTGRES_PASSWORD_FILE: /run/secrets/db_bootstrap_password
-    # Only TLS connections from two named roles are accepted (db/pg_hba.conf). Those roles are
-    # created on the first start of an empty volume by db/10-create-app-role.sh.
+    # Only TLS connections from three named roles are accepted (db/pg_hba.conf). The owner and app
+    # roles are created on the first start of an empty volume by db/10-create-app-role.sh; the
+    # loader role by hand with db/20-create-loader-role.sql (docs/knowledge-loader.md), never here.
     command:
       - postgres
       - -c
@@ -61,6 +62,7 @@ services:
       - db_bootstrap_password
       - db_owner_password
       - db_app_password
+      - db_loader_password
     volumes:
       - db-data:/var/lib/postgresql/data
       - db-tls:/tls:ro
@@ -91,6 +93,7 @@ services:
     environment:
       DIVESAFE_SECRETS_DIR: /run/secrets
       DIVESAFE_APP_DB_ROLE: divesafe_app
+      DIVESAFE_LOADER_DB_ROLE: divesafe_loader
     secrets:
       - source: admin_database_url
         target: divesafe_admin_database_url
@@ -161,6 +164,68 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
+  # One-off, never started by `up` (ADR 0024 Amendment 1, A3; docs/knowledge-loader.md):
+  #   docker compose ... --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash>
+  # The approved hash is an argument only: no setting, secret or file here may carry it.
+  kb_load:
+    profiles: [knowledge]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: divesafe-api:local
+    restart: "no"
+    entrypoint: ["python", "-m", "divesafe.services.kb_load"]
+    environment:
+      DIVESAFE_ENVIRONMENT: production
+      DIVESAFE_SECRETS_DIR: /run/secrets
+      DIVESAFE_CORPUS_TARGET: /corpus
+    secrets:
+      - source: loader_database_url
+        target: divesafe_loader_database_url
+    # The long form refuses a missing host directory; the short form would create it as root.
+    volumes:
+      - type: bind
+        source: ${DIVESAFE_CORPUS_DIR:?set DIVESAFE_CORPUS_DIR in docker/production.env}
+        target: /corpus
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [data]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    mem_limit: 1g
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # One-off, never started by `up`: withdraw only, with no corpus mount, so nothing about the
+  # corpus can stop a withdrawal. docker compose ... --profile knowledge run --rm kb_withdraw <id> <version>
+  kb_withdraw:
+    profiles: [knowledge]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: divesafe-api:local
+    restart: "no"
+    entrypoint: ["python", "-m", "divesafe.services.kb_withdraw", "withdraw"]
+    environment:
+      DIVESAFE_ENVIRONMENT: production
+      DIVESAFE_SECRETS_DIR: /run/secrets
+    secrets:
+      - source: loader_database_url
+        target: divesafe_loader_database_url
+    networks: [data]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    mem_limit: 1g
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
 networks:
   # No route out: the database and the one-off schema job live here.
   data:
@@ -179,6 +244,8 @@ secrets:
     file: ./secrets/db_owner_password
   db_app_password:
     file: ./secrets/db_app_password
+  db_loader_password:
+    file: ./secrets/db_loader_password
   admin_database_url:
     file: ./secrets/divesafe_admin_database_url
   database_url:
@@ -189,3 +256,5 @@ secrets:
     file: ./secrets/divesafe_api_key_hashes
   met_api_token:
     file: ./secrets/divesafe_met_api_token
+  loader_database_url:
+    file: ./secrets/divesafe_loader_database_url
