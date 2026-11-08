@@ -138,6 +138,12 @@ def _bindings(tree: ast.Module) -> dict[str, int]:
             isinstance(node, ast.ExceptHandler) and node.name
         ):
             add(node.name)  # type: ignore[arg-type]
+        elif isinstance(node, ast.MatchAs | ast.MatchStar) and node.name:
+            add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            add(node.rest)
+        elif isinstance(node, ast.TypeVar | ast.ParamSpec | ast.TypeVarTuple):
+            add(node.name)
     return count
 
 
@@ -213,6 +219,8 @@ def _refused_import(node: ast.Import | ast.ImportFrom) -> str | None:
     if module.split(".")[0] == "psycopg_pool":
         return "imports psycopg_pool"
     names = {alias.name for alias in node.names}
+    if "*" in names:
+        return "imports *"
     if module in _PSYCOPG_MODULES and names & {"connect", "crdb", "*", *_CONNECTION_CLASSES}:
         return f"imports a connection from {module}"
     if module == "psycopg" and "crdb" in names:
@@ -228,19 +236,50 @@ def _refused_import(node: ast.Import | ast.ImportFrom) -> str | None:
     return None
 
 
+def _is_kb_common(owner: ast.expr) -> bool:
+    return (isinstance(owner, ast.Name) and owner.id == "kb_common") or (
+        isinstance(owner, ast.Attribute) and owner.attr == "kb_common"
+    )
+
+
+def _is_super_call(owner: ast.expr) -> bool:
+    return (
+        isinstance(owner, ast.Call)
+        and isinstance(owner.func, ast.Name)
+        and owner.func.id == "super"
+    )
+
+
 def connections_without_options(relative: str, source: str) -> list[str]:
     """Every database connection in `source` that does not pass a fixed `options` string (see
     `_is_fixed_string`) and is not allowed; any import that would let a connection escape the
-    call shapes above; any connection function used other than by calling it, or a connection
-    class bound to a name; and any use of the loader's connection outside the loader's
-    commands."""
+    call shapes above; any connection function used other than by calling it; a connection
+    class anywhere but an annotation or its own `.connect(...)` call; a `.connect` on any other
+    owner but `super()` (called) and the loader's `kb_common`; and any use of the loader's
+    connection outside the loader's commands. Any fixed text is accepted as `options`: the scan
+    stops settings injected from outside, while `_connect`'s own value is pinned above."""
     found: list[str] = []
     tree = ast.parse(source)
     strings, scalars = _constants(tree)
     called: set[int] = set()
+    annotation: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             called.add(id(node.func))
+        roots: list[ast.expr | None] = []
+        if isinstance(node, ast.arg):
+            roots.append(node.annotation)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            roots.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            roots.append(node.annotation)
+        for root in roots:
+            if root is not None:
+                annotation.update(id(n) for n in ast.walk(root))
+
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child._parent = node  # type: ignore[attr-defined]
 
     def visit(node: ast.AST, scope: str) -> None:
         for child in ast.iter_child_nodes(node):
@@ -260,22 +299,28 @@ def connections_without_options(relative: str, source: str) -> list[str]:
             ):
                 found.append(f"{relative}:{child.lineno} uses a connection without calling it")
             if (
-                isinstance(child, ast.Assign | ast.AnnAssign | ast.NamedExpr)
-                and isinstance(child.value, ast.Attribute)
-                and child.value.attr in _CONNECTION_CLASSES
+                isinstance(child, ast.Attribute)
+                and child.attr in _CONNECTION_CLASSES
+                and id(child) not in annotation
+                and not (
+                    isinstance(parent := getattr(child, "_parent", None), ast.Attribute)
+                    and parent.attr == "connect"
+                    and id(parent) in called
+                )
             ):
-                found.append(f"{relative}:{child.lineno} binds a connection class to a name")
+                found.append(f"{relative}:{child.lineno} uses a connection class as a value")
             if (
                 isinstance(child, ast.Attribute)
                 and child.attr == "connect"
-                and isinstance(child.value, ast.Name)
-                and child.value.id == "kb_common"
-                and relative not in LOADER_CONNECT_USERS
-            ) or (
+                and not _is_connection_call(ast.Call(func=child, args=[], keywords=[]))
+                and not _is_kb_common(child.value)
+                and not (_is_super_call(child.value) and id(child) in called)
+            ):
+                found.append(f"{relative}:{child.lineno} calls connect on an unrecognised owner")
+            if (
                 isinstance(child, ast.Attribute)
                 and child.attr == "connect"
-                and isinstance(child.value, ast.Attribute)
-                and child.value.attr == "kb_common"
+                and _is_kb_common(child.value)
                 and relative not in LOADER_CONNECT_USERS
             ):
                 found.append(f"{relative}:{child.lineno} uses the loader's connect")
@@ -413,6 +458,34 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
         "import divesafe.services.kb_common\n",
         "from .kb_common import SYNCHRONOUS_COMMIT\n",
         "from . import kb_common\n",
+        "import psycopg\nC, D = psycopg.Connection, 1\ndef h(d):\n    return C.connect(d)\n",
+        "import psycopg\ndef h(d, C=psycopg.Connection):\n    return C.connect(d)\n",
+        "import psycopg\ndef h(d):\n    return g(psycopg.Connection)\n",
+        "def h(conn, d):\n    return type(conn).connect(d)\n",
+        "def h(conn, d):\n    return conn.__class__.connect(d)\n",
+        (
+            "from divesafe.services.kb_load import kb_common as k\n"
+            "def h(d):\n    return k.connect(d)\n"
+        ),
+        "import psycopg\ndef h():\n    return psycopg.Connection\n",
+        "import psycopg\ndef h(d):\n    return [psycopg.Connection][0].connect(d)\n",
+        (
+            "import psycopg\nO = '-c a=1'\nmatch X:\n    case O:\n        pass\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\nmatch X:\n    case [*O]:\n        pass\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\nmatch X:\n    case {**O}:\n        pass\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        (
+            "import psycopg\nO = '-c a=1'\ndef f[O]():\n    pass\n"
+            "def h(d):\n    return psycopg.connect(d, options=O)\n"
+        ),
+        "from divesafe.config import *\n",
     ],
     ids=[
         "bare-connect",
@@ -457,6 +530,19 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
         "kb_common-dotted",
         "kb_common-relative",
         "kb_common-relative-module",
+        "class-in-tuple",
+        "class-as-default",
+        "class-as-argument",
+        "type-of-connection",
+        "dunder-class",
+        "kb_common-re-export",
+        "class-returned",
+        "class-in-list",
+        "match-capture-rebinds",
+        "match-star-rebinds",
+        "match-rest-rebinds",
+        "type-parameter-rebinds",
+        "star-import",
     ],
 )
 def test_mutation_a_connection_without_options_is_found(source: str) -> None:
@@ -475,11 +561,40 @@ def test_mutation_a_connection_without_options_is_found(source: str) -> None:
         ),
         "import psycopg\ndef install_schema(d):\n    return psycopg.connect(d)\n",
         "from psycopg import sql\nimport psycopg\nx: psycopg.Connection[int]\n",
+        "import http.client\nclass C(http.client.HTTPConnection):\n    def connect(self):\n"
+        "        super().connect()\n",
+        (
+            "import psycopg\ndef h(c: psycopg.Connection[Any]) -> psycopg.AsyncConnection[Any]:\n"
+            "    x: psycopg.Connection[Any] = c\n    return x\n"
+        ),
+        "import psycopg\ndef h(d):\n    return psycopg.Connection.connect(d, options='-c a=1')\n",
     ],
-    ids=["literal", "constant", "f-string", "f-string-constant", "allowed", "sql-and-annotation"],
+    ids=[
+        "literal",
+        "constant",
+        "f-string",
+        "f-string-constant",
+        "allowed",
+        "sql-and-annotation",
+        "super-connect",
+        "annotations",
+        "classmethod-connect-with-options",
+    ],
 )
 def test_the_scan_accepts_fixed_options_and_ordinary_code(source: str) -> None:
     assert connections_without_options("services/postgres.py", source) == []
+
+
+def test_an_unloadable_timestamp_is_storage_unavailable_never_a_runtime_error() -> None:
+    """psycopg raises NotImplementedError (a RuntimeError, not a psycopg.Error) for a timestamp
+    in a non-ISO DateStyle, and PGDATESTYLE reaches the app over `options`. The app must see a
+    typed storage error with no driver text (a 503), never an error it may read as shutdown."""
+    from divesafe.services import RepositoryUnavailableError
+
+    with pytest.raises(RepositoryUnavailableError) as raised, postgres._storage_errors():
+        raise NotImplementedError("can't parse timestamptz with DateStyle 'SQL, DMY': '07/11'")
+    assert str(raised.value) == "storage unavailable"
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
 
 
 def test_mutation_the_repository_connect_without_options_is_found() -> None:

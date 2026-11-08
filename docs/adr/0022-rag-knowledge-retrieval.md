@@ -1614,9 +1614,15 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   apply; `PGUSER` and `PGSERVICE` can choose the login role when the string omits one, which
   `verify()` then judges, but none can make `current_user` differ from the login role.
   `PGDATESTYLE` wins over a `-c DateStyle=` in `options` (probed live), so `options` cannot
-  pin it: a non-ISO DateStyle makes psycopg raise `NotImplementedError` (not a `psycopg.Error`)
-  on the first timestamp it reads, so the app's reads and writes fail rather than misread a
-  date (fails closed, self-inflicted by the operator; not pinned by a test).
+  pin it. A non-ISO DateStyle makes psycopg raise `NotImplementedError` (a `RuntimeError`, not a
+  `psycopg.Error`) on the first timestamp it loads. Assessments are stored and read as JSON
+  text and are unaffected; asynchronous run admission and run reads (`pending_runs`
+  timestamps) fail. `_storage_errors` turns it into `RepositoryUnavailableError` (a 503
+  "storage unavailable", no driver text), and `admit`'s INSERT is rolled back. Fails closed,
+  self-inflicted by the operator. Pinned offline (`test_an_unloadable_timestamp_is_storage_
+  unavailable_never_a_runtime_error`, mutation-checked by removing the branch) and live
+  (`test_a_non_iso_datestyle_from_the_environment_fails_admission_closed`, positive control;
+  mutation-checked).
   **Pinned in `tests/safety/test_app_connection_options.py`:**
   - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
   - `make_conninfo` replaces a string's `options`;
@@ -1627,14 +1633,21 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     constant counts only if its name is bound exactly once anywhere in the module (augmented
     assignment, a rebinding in a block, unpacking, `global`, a shadowing parameter all
     disqualify it). A literal `None` or `""`, or any other expression, counts as missing.
+    Any fixed text is accepted: the scan stops settings injected from outside, and only
+    `_connect`'s own value is pinned by content.
     Outside a two-entry allow-list keyed by qualified function name (`install_schema`, the
     loader's `kb_common.connect`), each holding exactly one connection, it fails. It also
     refuses any `psycopg_pool` or `psycopg.crdb` import, `from psycopg import
-    connect`/`Connection`, `import psycopg as <other>`, any connection function used other
-    than by calling it, a connection class bound to a name, and any use of `kb_common.connect`
-    outside `kb_load` and `kb_withdraw` (aliased, dotted and relative imports of `kb_common`
-    are refused). Out of reach (left to code review): `getattr`, `importlib`, `psycopg.pq`,
-    and the owner-role `psql` calls in `docker/`.
+    connect`/`Connection`, `import psycopg as <other>`, any star import, any connection
+    function used other than by calling it, a connection class anywhere but an annotation or
+    its own `.connect(...)` call, a `.connect` on any other owner (`type(conn)`,
+    `conn.__class__`, a variable) except a called `super().connect()` and the loader's
+    `kb_common`, and any use of `kb_common.connect` outside `kb_load` and `kb_withdraw`
+    (aliased, dotted and relative imports of `kb_common` are refused). Bindings counted
+    include `match` captures and type parameters. Out of reach (left to code review):
+    `getattr`, `importlib`, `exec`, `globals()`, `setattr`, rebinding from another module
+    (`postgres._OPTIONS = None`), `psycopg.pq`, and the owner-role `psql` calls in
+    `docker/`.
 
   **Live:** `test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server`
   in `tests/integration/test_postgres_guard.py` (role granted, both places; a plain connection
@@ -1651,8 +1664,9 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `ALTER DATABASE ... SET` or the server configuration still applies to the app's writes: after
   a server crash, an assessment or a human decision the API already reported can be lost (a
   lost decision leaves the record `PENDING_HUMAN`, which fails closed, but the audit trail
-  loses it). Durability is the server owner's setting; a client `on` would also lower a server
-  configured for `remote_apply`.
+  loses it). Durability is the server owner's setting. Raising it per transaction is possible
+  without lowering `remote_apply` (the loader does it with one raise-only `set_config`
+  statement per write transaction); for the app that was not chosen.
   **Not covered: the loader.** `kb_common.connect` passes no `options`, so the loader's
   connection string and `PGOPTIONS` do reach the server.
   - A `-c role=X` needs the loader to be a member of `X`, which the self-check already flags
@@ -1665,20 +1679,22 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     `withdraw` reports after the commit (exit 13). The knowledge triggers are `ENABLE ALWAYS`,
     so the write still goes through them.
   - `-c synchronous_commit=off`, which any role may set, would let a reported write be lost in
-    a crash. Both write transactions (load and approve share one) raise it with
+    a crash. The two write transactions, `load`/`approve`'s and `withdraw`'s, raise it with
     `set_config('synchronous_commit', 'on', true)` when it is `off`, `local` or `remote_write`,
     leaving `on` and `remote_apply` alone, before the first INSERT. This also overrides a stored
     role or database setting for the loader.
   - A non-ISO `DateStyle` (`PGDATESTYLE` or `-c DateStyle=`) would make psycopg fail to read
     `RETURNING recorded_at`, turning a write into OUTCOME_UNKNOWN with nothing committed. Both
-    write transactions run `SET LOCAL DateStyle = 'ISO, MDY'`, as `migrations._harden` does.
+    write transactions run `SET LOCAL DateStyle = 'ISO, MDY'`, as `migrations._harden` does,
+    and so does `withdraw`'s separate read of an earlier `recorded_at` (live: an already
+    withdrawn version under `PGDATESTYLE` still exits 16 with its time; 15 without the line).
     Both items: offline order tests for load, approve and withdraw with removal mutations; live
     for `withdraw` with positive controls (`off`, `remote_apply`, `SQL, DMY` reach a plain
     connection), mutation-checked on 16 and 17 (each line removed; the conditional replaced by
     an unconditional `SET LOCAL ... = on`).
   - Other user-settable parameters fail closed, are overridden by the `SET LOCAL` statements
-    (timeouts, `search_path`, `DateStyle`), or only affect performance or formatting. A fixed `options` for the loader belongs to ADR 0024
-    A3 (the `kb_load` settings model).
+    (timeouts, `search_path`, `DateStyle`), or only affect performance or formatting. A fixed
+    `options` for the loader belongs to ADR 0024 A3 (the `kb_load` settings model).
 
   The admin connection in `install_schema` passes none either; it is the owner role and needs no
   protection from itself.

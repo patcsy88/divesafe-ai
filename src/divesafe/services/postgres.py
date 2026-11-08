@@ -354,6 +354,10 @@ def _storage_errors() -> Iterator[None]:
         raise RepositoryUnavailableError("storage unavailable") from None
     except ValidationError:
         raise RepositoryIntegrityError("a stored record failed validation") from None
+    except NotImplementedError:
+        # psycopg cannot load a timestamp in a non-ISO DateStyle (PGDATESTYLE reaches the app and
+        # `options` cannot override it). Typed, so it is never mistaken for a RuntimeError.
+        raise RepositoryUnavailableError("storage unavailable") from None
 
 
 # has_parameter_privilege() exists from PostgreSQL 15.

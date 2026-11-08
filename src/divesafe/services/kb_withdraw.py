@@ -148,6 +148,7 @@ def _existing_recorded_at(
             "statement_timeout",
             require_limit(kb_common.RECORDED_AT_READ_STATEMENT_TIMEOUT_MS),
         )
+        conn.execute(kb_common.DATE_STYLE)
         row = conn.execute(
             "SELECT recorded_at FROM public.kb_status_events "
             "WHERE document_id = %s AND version = %s AND status = 'WITHDRAWN' "

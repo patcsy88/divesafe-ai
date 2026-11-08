@@ -679,6 +679,29 @@ def test_installing_again_takes_back_write_access_to_the_migration_history(
 # --- pending runs (ADR 0019) -----------------------------------------------------------------
 
 
+def test_a_non_iso_datestyle_from_the_environment_fails_admission_closed(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PGDATESTYLE reaches the app (`options` cannot override it); psycopg cannot load the run's
+    timestamps, so admission is a typed storage error and its INSERT is rolled back."""
+    from datetime import timedelta
+
+    from tests.unit.test_run_store_contract import _run
+
+    from divesafe.services import RepositoryUnavailableError
+
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    run = _run()
+    with monkeypatch.context() as m:
+        m.setenv("PGDATESTYLE", "SQL, DMY")
+        with app._connect() as plain:
+            assert plain.execute("SHOW DateStyle").fetchone() == ("SQL, DMY",)
+        with pytest.raises(RepositoryUnavailableError):
+            app.admit(run, max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5))
+    assert app.get_run(run.id) is None
+
+
 def test_the_application_role_can_use_runs_but_cannot_touch_assessments_through_them(
     app_role_dsn: str,
 ) -> None:

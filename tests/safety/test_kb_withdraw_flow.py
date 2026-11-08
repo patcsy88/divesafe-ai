@@ -359,6 +359,8 @@ def check_already_withdrawn(monkeypatch: pytest.MonkeyPatch, run: Run | None = N
     assert fake.log[read][0] > fake.log[insert][0]  # a NEW transaction
     own = fake.index_of("SET LOCAL statement_timeout = 10000", insert)
     assert fake.log[own][0] == fake.log[read][0] and own < read
+    dates = fake.index_of("SET LOCAL DateStyle = 'ISO, MDY'", insert)
+    assert fake.log[dates][0] == fake.log[read][0] and dates < read
     assert fake.committed_inserts == 0 and not fake.selfcheck_ran()
 
 
@@ -388,6 +390,13 @@ def test_already_withdrawn_prints_the_existing_recorded_at_from_a_new_transactio
                 "        _timeout(",
             ),
             id="reuses the aborted transaction",
+        ),
+        pytest.param(
+            (
+                "        conn.execute(kb_common.DATE_STYLE)\n        row = conn.execute(",
+                "        row = conn.execute(",
+            ),
+            id="no DateStyle for the read",
         ),
         pytest.param(
             (

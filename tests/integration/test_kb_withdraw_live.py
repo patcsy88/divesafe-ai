@@ -126,6 +126,23 @@ def test_withdrawing_an_already_withdrawn_version_exits_16_with_the_existing_rec
     assert [e[0] for e in _events(did)] == ["DRAFT", "WITHDRAWN"]  # nothing was written
 
 
+def test_already_withdrawn_under_a_non_iso_datestyle_still_exits_16_with_the_time(
+    loader_dsn: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recorded_at read runs in a NEW transaction, so it sets its own DateStyle; without it,
+    PGDATESTYLE makes the read fail and the result is 15, "recorded_at unavailable"."""
+    did = _fresh_id()
+    _draft(did)
+    assert _withdraw(loader_dsn, did).status in EXACT_OK
+    first = _events(did)[1][2]
+    capsys.readouterr()
+    with monkeypatch.context() as m:
+        m.setenv("PGDATESTYLE", "SQL, DMY")
+        outcome = _withdraw(loader_dsn, did)
+    assert outcome == kb_withdraw.ALREADY_WITHDRAWN
+    assert _recorded_lines(capsys.readouterr().out) == [f"recorded_at={first.isoformat()}"]
+
+
 def test_a_missing_version_exits_10_and_writes_nothing(loader_dsn: str) -> None:
     assert _withdraw(loader_dsn, _fresh_id()) == kb_withdraw.FAILED_NOT_FOUND
 

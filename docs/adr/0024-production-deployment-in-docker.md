@@ -1655,7 +1655,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   and `DateStyle` are `SET LOCAL`, and `synchronous_commit` is raised to at least `on` for the
   transaction (never lowered from `remote_apply`), so `-c synchronous_commit=off` cannot lose a
   reported write through this setting (durability still depends on the server's `fsync` and
-  storage). Check 17's live test provokes `session_replication_role` through `PGOPTIONS`;
+  storage). Raising `local` or `remote_write` to `on` makes `COMMIT` wait for a synchronous
+  standby when `synchronous_standby_names` is set (none in the single-node Compose deployment).
+  Check 17's live test provokes `session_replication_role` through `PGOPTIONS`;
   it must change when this lands. The `kb_load` settings model should pass a fixed `options` the same
   way, with a live test like the app's.
 - **Gaps from the slice 2 review (2026-10-23; recorded, not owner-decided unless stated).**
