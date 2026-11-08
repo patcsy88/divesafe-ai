@@ -66,6 +66,9 @@ CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
+# `options` cannot pin DateStyle (PGDATESTYLE wins over it, and a stored role or database
+# setting also applies); a session SET wins over both. psycopg cannot load a timestamp otherwise.
+_DATE_STYLE = "SET DateStyle = 'ISO, MDY'"
 
 logger = logging.getLogger(__name__)
 
@@ -441,7 +444,14 @@ class PostgresAssessmentRepository:
         self._dsn = dsn
 
     def _connect(self) -> psycopg.Connection[Any]:
-        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
+        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
+        try:
+            conn.execute(_DATE_STYLE)
+            conn.commit()  # each caller then starts its own transaction, as before
+        except BaseException:
+            conn.close()
+            raise
+        return conn
 
     def verify(self, *, least_privilege: bool, owner_not_superuser: bool = False) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
@@ -737,15 +747,15 @@ class PostgresAssessmentRepository:
     @staticmethod
     def _fetch_run(conn: psycopg.Connection[Any], run_id: str) -> tuple[Any, ...] | None:
         """psycopg raises NotImplementedError (not a psycopg.Error) when it cannot load the run's
-        timestamps, as under a non-ISO DateStyle from PGDATESTYLE or a stored setting, which
-        `options` cannot override. Caught only here, so other bugs stay logged 500s."""
+        timestamps, as under a non-ISO DateStyle. `_connect` sets DateStyle, so this is a
+        backstop. Caught only here, so other bugs stay logged 500s."""
         try:
             return conn.execute(
                 f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
             ).fetchone()
         except NotImplementedError:
             logger.error(
-                "the driver could not load a stored run (check DateStyle)",
+                "the driver could not load a stored run (check DateStyle or the column types)",
                 extra={"error_type": "NotImplementedError"},
             )
             raise RepositoryUnavailableError("storage unavailable") from None

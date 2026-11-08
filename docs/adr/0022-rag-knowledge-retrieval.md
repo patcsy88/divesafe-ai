@@ -1617,18 +1617,31 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   pin it; a stored `ALTER ROLE ... SET DateStyle` or `ALTER DATABASE ... SET DateStyle` (any
   role may store one for itself) gets through the same way. A non-ISO DateStyle makes psycopg
   raise `NotImplementedError` (a `RuntimeError`, not a `psycopg.Error`) on the first timestamp
-  it loads. Assessments are stored and read as JSON text and are unaffected; asynchronous run
-  admission and run reads (`pending_runs` timestamps) fail. The repository catches it only
+  it loads. **Owner decision (2026-11-08): the app sets it itself.** `_connect` sends
+  `SET DateStyle = 'ISO, MDY'` (a session setting, which wins over `PGDATESTYLE` and stored
+  settings) and commits it before returning the connection, one extra round trip per
+  connection; a connection on which it fails is closed and the error is the usual typed
+  storage error. Live (`test_a_non_iso_datestyle_from_outside_never_reaches_the_apps_sessions`,
+  `PGDATESTYLE` and a stored `ALTER ROLE ... SET DateStyle`, positive control on a plain
+  connection): runs are admitted and read back, on 16 and 17; removing the `SET` or making it
+  `SET LOCAL` fails both cases. Offline: the exact statement, the commit and the close on
+  failure, each with a mutant.
+  Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
+  `pending_runs` holds the timestamps): the repository catches `NotImplementedError` only
   where it loads a run row (`_fetch_run`), logs one fixed line ("the driver could not load a
-  stored run (check DateStyle)", `error_type` only, no driver text) and raises
-  `RepositoryUnavailableError`; the client sees a 503 "storage is unavailable; nothing was
-  recorded", and `admit`'s INSERT is rolled back. A `NotImplementedError` anywhere else stays
-  an unexpected error (logged 500). Fails closed, self-inflicted by the operator. Pinned
-  offline (`test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text`,
+  stored run (check DateStyle or the column types)", `error_type` only, no driver text) and
+  raises `RepositoryUnavailableError`, a 503, and `admit`'s INSERT is rolled back. That
+  includes a `GET` of an assessment still running or not found (503, not 409 or 404);
+  completed assessments stay readable. A `NotImplementedError` anywhere else stays an
+  unexpected error (logged 500). Pinned offline
+  (`test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text`,
   `test_a_not_implemented_error_elsewhere_stays_an_unexpected_error`; mutation-checked by
-  removing the catch, moving it back into `_storage_errors` and logging the exception) and
-  live (`test_a_non_iso_datestyle_from_the_environment_fails_admission_closed`, positive
-  control; mutation-checked on 16 and 17).
+  removing the catch, moving it back into `_storage_errors` and logging the exception).
+  **Owner decision (2026-11-08): reads get their own 503 text.** A `GET` or `HEAD` that meets
+  unavailable storage returns "storage is unavailable; try again later" (a read changes
+  nothing, so "nothing was recorded" would be untrue); writes keep "storage is unavailable;
+  nothing was recorded" (`test_a_503_on_a_read_never_claims_that_nothing_was_recorded`, both
+  directions mutation-checked).
   **Pinned in `tests/safety/test_app_connection_options.py`:**
   - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
   - `make_conninfo` replaces a string's `options`;
@@ -1648,7 +1661,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     function used other than by calling it, a connection class anywhere but an annotation or
     its own `.connect(...)` call, a `.connect` on any other owner (`type(conn)`,
     `conn.__class__`, a variable, `psycopg.pq.PGconn`) except the loader's `kb_common` and a
-    called `super().connect()` in the two named `models/loopback.py` methods, and any use of
+    called `super().connect()` with no arguments in the two named `models/loopback.py` methods
+    (each pinned: one module-level class with an `http.client` base, one bare call; a
+    `super().connect` elsewhere in that file, in a nested function or with arguments is
+    refused, mutation-checked), and any use of
     `kb_common.connect` outside `kb_load` and `kb_withdraw` (aliased, dotted and relative
     imports of `kb_common` are refused). Bindings counted include `match` captures and type
     parameters. The rules are deliberately broad: "a connection class" is any attribute named

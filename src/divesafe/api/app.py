@@ -81,6 +81,8 @@ from divesafe.services.runs import (
 logger = logging.getLogger(__name__)
 
 _NOT_UPDATABLE = "the assessment could not be updated; reload it"
+_WRITE_UNAVAILABLE = "storage is unavailable; nothing was recorded"
+_READ_UNAVAILABLE = "storage is unavailable; try again later"
 _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
 )
@@ -209,9 +211,11 @@ def create_app(state: AppState | None = None) -> FastAPI:
     @app.exception_handler(RepositoryUnavailableError)
     async def store_unavailable(request: Request, exc: RepositoryUnavailableError) -> JSONResponse:
         logger.error("storage unavailable", extra={"path": request.url.path})
-        return JSONResponse(
-            {"detail": "storage is unavailable; nothing was recorded"}, status_code=503
-        )
+        if request.method in {"GET", "HEAD"}:
+            # A read changes nothing, so "nothing was recorded" would be untrue: a run may well
+            # still finish.
+            return JSONResponse({"detail": _READ_UNAVAILABLE}, status_code=503)
+        return JSONResponse({"detail": _WRITE_UNAVAILABLE}, status_code=503)
 
     @app.exception_handler(RepositoryIntegrityError)
     async def store_integrity(request: Request, exc: RepositoryIntegrityError) -> JSONResponse:

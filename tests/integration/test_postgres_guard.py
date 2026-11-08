@@ -679,27 +679,37 @@ def test_installing_again_takes_back_write_access_to_the_migration_history(
 # --- pending runs (ADR 0019) -----------------------------------------------------------------
 
 
-def test_a_non_iso_datestyle_from_the_environment_fails_admission_closed(
-    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("source", ["environment", "stored-role-setting"])
+def test_a_non_iso_datestyle_from_outside_never_reaches_the_apps_sessions(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
-    """PGDATESTYLE reaches the app (`options` cannot override it); psycopg cannot load the run's
-    timestamps, so admission is a typed storage error and its INSERT is rolled back."""
+    """PGDATESTYLE wins over `options`, and a stored ALTER ROLE ... SET DateStyle applies too;
+    psycopg cannot load a timestamp in either. `_connect` sets the session's DateStyle, so runs
+    are admitted and read back. Positive control: a plain connection does get the other style."""
     from datetime import timedelta
 
     from tests.unit.test_run_store_contract import _run
 
-    from divesafe.services import RepositoryUnavailableError
-
+    assert DSN is not None
     _postgres()
     app = PostgresAssessmentRepository(app_role_dsn)
     run = _run()
-    with monkeypatch.context() as m:
-        m.setenv("PGDATESTYLE", "SQL, DMY")
-        with app._connect() as plain:
-            assert plain.execute("SHOW DateStyle").fetchone() == ("SQL, DMY",)
-        with pytest.raises(RepositoryUnavailableError):
-            app.admit(run, max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5))
-    assert app.get_run(run.id) is None
+    with monkeypatch.context() as m, psycopg.connect(DSN, autocommit=True) as owner:
+        if source == "environment":
+            m.setenv("PGDATESTYLE", "SQL, DMY")
+        else:
+            owner.execute("ALTER ROLE divesafe_app_test SET DateStyle = 'SQL, DMY'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute("SHOW DateStyle").fetchone() == ("SQL, DMY",)
+            with app._connect() as conn:
+                assert conn.execute("SHOW DateStyle").fetchone() == ("ISO, MDY",)
+            admission = app.admit(run, max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5))
+            assert admission.kind == "started" and admission.run is not None
+            stored = app.get_run(run.id)
+            assert stored is not None and stored.created_at == admission.run.created_at
+        finally:
+            owner.execute("ALTER ROLE divesafe_app_test RESET DateStyle")
 
 
 def test_the_application_role_can_use_runs_but_cannot_touch_assessments_through_them(

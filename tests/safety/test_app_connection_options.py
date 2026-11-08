@@ -25,9 +25,29 @@ from divesafe.services import postgres
 pytestmark = pytest.mark.safety
 
 CONNECT = (
-    "        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, "
+    "        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, "
     "options=_OPTIONS)\n"
 )
+
+
+class _SessionConnection:
+    """Records what `_connect` sends on a new connection, in order."""
+
+    def __init__(self, fail_on: str | None = None) -> None:
+        self.log: list[str] = []
+        self.fail_on = fail_on
+
+    def execute(self, query: str, *_: object) -> _SessionConnection:
+        self.log.append(query)
+        if query == self.fail_on:
+            raise psycopg.OperationalError("server closed the connection")
+        return self
+
+    def commit(self) -> None:
+        self.log.append("COMMIT")
+
+    def close(self) -> None:
+        self.log.append("CLOSE")
 
 
 def options_used(module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -35,7 +55,7 @@ def options_used(module: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     def connect(dsn: str, **kwargs: Any) -> object:
         seen.append(kwargs)
-        return object()
+        return _SessionConnection()
 
     monkeypatch.setattr(module.psycopg, "connect", connect)
     module.PostgresAssessmentRepository(
@@ -60,8 +80,8 @@ def test_the_repository_connection_passes_its_own_options(monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     "new",
     [
-        "        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)\n",
-        "        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, "
+        "        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)\n",
+        "        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, "
         "options=None)\n",
     ],
     ids=["options-dropped", "options-none"],
@@ -71,6 +91,63 @@ def test_mutation_a_connection_without_its_own_options_is_caught(
 ) -> None:
     mutant = mutated_module(postgres, (CONNECT, new))
     assert options_used(mutant, monkeypatch) != postgres._OPTIONS
+
+
+def session_setup(module: Any, monkeypatch: pytest.MonkeyPatch, fail_on: str | None = None) -> Any:
+    conn = _SessionConnection(fail_on)
+    monkeypatch.setattr(module.psycopg, "connect", lambda dsn, **kwargs: conn)
+    repo = module.PostgresAssessmentRepository("postgresql://u@db.invalid/x_test")
+    try:
+        returned = repo._connect()
+    except psycopg.OperationalError:
+        return [*conn.log, "RAISED"]
+    return [*conn.log, "RETURNED" if returned is conn else "OTHER"]
+
+
+def test_every_app_connection_sets_iso_datestyle_for_the_session_before_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`options` cannot pin DateStyle (PGDATESTYLE wins over it, and a stored role or database
+    setting applies too), and psycopg cannot load a timestamp in any other style. A session SET
+    wins over both; it is committed so it outlives the caller's own transactions."""
+    assert postgres._DATE_STYLE == "SET DateStyle = 'ISO, MDY'"
+    assert session_setup(postgres, monkeypatch) == [postgres._DATE_STYLE, "COMMIT", "RETURNED"]
+
+
+def test_a_connection_whose_datestyle_cannot_be_set_is_closed_and_never_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = session_setup(postgres, monkeypatch, fail_on=postgres._DATE_STYLE)
+    assert log == [postgres._DATE_STYLE, "CLOSE", "RAISED"]
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        ("            conn.execute(_DATE_STYLE)\n", ""),
+        ("            conn.commit()  # each", "            pass  # each"),
+        ("_DATE_STYLE = \"SET DateStyle = 'ISO, MDY'\"", "_DATE_STYLE = \"SET DateStyle = 'ISO'\""),
+        (
+            "_DATE_STYLE = \"SET DateStyle = 'ISO, MDY'\"",
+            "_DATE_STYLE = \"SET LOCAL DateStyle = 'ISO, MDY'\"",
+        ),
+        ("            conn.close()\n            raise\n", "            raise\n"),
+    ],
+    ids=["no-set", "not-committed", "other-value", "set-local", "not-closed-on-failure"],
+)
+def test_mutation_of_the_session_datestyle_is_caught(
+    monkeypatch: pytest.MonkeyPatch, edit: tuple[str, str]
+) -> None:
+    mutant = mutated_module(postgres, edit)
+    with monkeypatch.context() as m:
+        good = session_setup(mutant, m) == [postgres._DATE_STYLE, "COMMIT", "RETURNED"]
+    with monkeypatch.context() as m:
+        closed = session_setup(mutant, m, fail_on=postgres._DATE_STYLE) == [
+            postgres._DATE_STYLE,
+            "CLOSE",
+            "RAISED",
+        ]
+    assert not (good and closed)
 
 
 def test_the_options_keyword_replaces_options_in_the_connection_string() -> None:
@@ -250,6 +327,12 @@ def _is_kb_common(owner: ast.expr) -> bool:
     )
 
 
+def _is_bare_call(call: ast.AST | None, func: ast.expr) -> bool:
+    """`func()` with no arguments: a psycopg `connect()` with none still connects, from the
+    environment, while `HTTPConnection.connect` takes none."""
+    return isinstance(call, ast.Call) and call.func is func and not call.args and not call.keywords
+
+
 def _is_super_call(owner: ast.expr) -> bool:
     return (
         isinstance(owner, ast.Call)
@@ -290,6 +373,9 @@ def connections_without_options(relative: str, source: str) -> list[str]:
         for child in ast.iter_child_nodes(node):
             child._parent = node  # type: ignore[attr-defined]
 
+    # A function's decorators, defaults and annotations are scanned under the function's own scope
+    # though they run in the enclosing one. Nothing exploits that: `_calls_in` counts a second
+    # call in an allowed function, and a bare `super()` outside a method fails when defined.
     def visit(node: ast.AST, scope: str) -> None:
         for child in ast.iter_child_nodes(node):
             name = scope
@@ -325,7 +411,7 @@ def connections_without_options(relative: str, source: str) -> list[str]:
                 and not _is_kb_common(child.value)
                 and not (
                     _is_super_call(child.value)
-                    and id(child) in called
+                    and _is_bare_call(getattr(child, "_parent", None), child)
                     and (relative, scope) in SUPER_CONNECT_ALLOWED
                 )
             ):
@@ -575,6 +661,77 @@ def test_mutation_a_connection_without_options_is_found(source: str) -> None:
 @pytest.mark.parametrize(
     "source",
     [
+        (
+            "def h(conn, d):\n    class C(type(conn)):\n        @classmethod\n"
+            "        def mk(cls, d):\n            return super().connect(d)\n    return C.mk(d)\n"
+        ),
+        (
+            "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+            "    def other(self):\n        super().connect()\n"
+        ),
+        (
+            "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+            "    def connect(self):\n        def inner():\n            super().connect()\n"
+        ),
+        (
+            "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+            "    def connect(self):\n        super().connect('postgresql://x')\n"
+        ),
+        (
+            "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+            "    def connect(self):\n        f = super().connect\n        f()\n"
+        ),
+    ],
+    ids=[
+        "type-of-connection-subclass-in-a-function",
+        "another-method-of-the-allowed-class",
+        "nested-function-in-the-allowed-method",
+        "arguments-in-the-allowed-method",
+        "not-called-directly",
+    ],
+)
+def test_mutation_a_super_connect_in_loopback_outside_the_named_methods_is_found(
+    source: str,
+) -> None:
+    """The allow-list's place half: the same file as the allowed methods, but not their code."""
+    assert connections_without_options("models/loopback.py", source) != []
+
+
+@pytest.mark.parametrize(("relative", "qualified"), sorted(SUPER_CONNECT_ALLOWED))
+def test_each_allowed_super_connect_is_one_http_connection_method_with_one_bare_call(
+    relative: str, qualified: str
+) -> None:
+    """Guards `SUPER_CONNECT_ALLOWED` against a stale entry or a second class of the same name:
+    the class is defined once at module level, its only base is an http.client connection, and
+    the method makes exactly one `super().connect()` call with no arguments."""
+    tree = ast.parse((SRC / relative).read_text(encoding="utf-8"))
+    class_name, method_name = qualified.split(".")
+    classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name]
+    assert len(classes) == 1
+    [cls] = classes
+    assert [ast.unparse(b) for b in cls.bases] in (
+        ["http.client.HTTPConnection"],
+        ["http.client.HTTPSConnection"],
+    )
+    assert not cls.keywords and not cls.decorator_list
+    methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method_name]
+    assert len(methods) == 1
+    calls = [
+        n
+        for n in ast.walk(methods[0])
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "connect"
+    ]
+    [call] = calls
+    assert isinstance(call.func, ast.Attribute) and _is_super_call(call.func.value)
+    assert _is_bare_call(call, call.func)
+    assert isinstance(call.func.value, ast.Call) and not call.func.value.args
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         "import psycopg\ndef h(d):\n    return psycopg.connect(d, options='-c a=1')\n",
         "import psycopg\nO = '-c a=1'\ndef h(d):\n    return psycopg.connect(d, options=O)\n",
         "import psycopg\nN = 5\ndef h(d):\n    return psycopg.connect(d, options=f'-c a={N}')\n",
@@ -638,7 +795,10 @@ def test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text(
     assert str(raised.value) == "storage unavailable"
     assert raised.value.__cause__ is None and raised.value.__suppress_context__
     [record] = caplog.records
-    assert record.getMessage() == "the driver could not load a stored run (check DateStyle)"
+    assert (
+        record.getMessage()
+        == "the driver could not load a stored run (check DateStyle or the column types)"
+    )
     assert record.error_type == "NotImplementedError"  # type: ignore[attr-defined]
     assert record.exc_info is None and _DRIVER_TEXT not in caplog.text
 
@@ -656,7 +816,7 @@ def test_mutation_the_repository_connect_without_options_is_found() -> None:
     line = source[: source.index(CONNECT)].count("\n") + 1
     mutant = source.replace(
         CONNECT,
-        "        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)\n",
+        "        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)\n",
     )
     assert connections_without_options("services/postgres.py", mutant) == [
         f"services/postgres.py:{line} in PostgresAssessmentRepository._connect"
