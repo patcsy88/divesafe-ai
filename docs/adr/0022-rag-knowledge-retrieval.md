@@ -1653,7 +1653,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   a new connection for each operation, so this stops the next request; ending its sessions only
   matters for statements already running), or stop the API. A revoked grant fails before the
   commit, with the true "nothing was recorded" 503, and `verify()` checks only for excess
-  privileges, so a restart during the freeze still starts. During a freeze some reads fail too:
+  privileges, so a restart during a freeze by revoked grants still starts (under `NOLOGIN`,
+  `verify()` cannot connect and the app refuses to start). During a freeze some reads fail too:
   a `GET` of a running or missing assessment runs `get_run`'s `_expire` UPDATE and gets the read
   503, and runs in progress can neither complete nor fail; they stay `RUNNING` until the freeze
   ends and cleanup marks them timed out.
@@ -1676,7 +1677,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `_fetch_run` backstop (503); a lost `client_encoding` makes psycopg raise
   `UnicodeEncodeError` on a write, which is not a `psycopg.Error`, so a logged 500, and on a
   read of a character the client encoding lacks the server raises SQLSTATE 22P05, a
-  `DataError`, which becomes the 422 "the content cannot be stored", even on a `GET`; a lost
+  `DataError`, which becomes the 422 "the content cannot be stored; nothing was recorded",
+  even on a `GET`, and the web app shows that detail as it stands on a read; a lost
   read-only default makes every write a 503 "nothing was recorded"; a lost isolation level
   brings back the snapshot problem in `admit` and the commit-time ambiguity described above.
   Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
@@ -1729,7 +1731,11 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `login.test.ts` and `status.test.ts` (every write path, mutation-checked).
   `tests/safety/test_web_nothing_recorded_texts.py` reads both files and fails if the web set
   differs from the API's 503 texts that say "nothing was recorded", so drift fails CI instead
-  of silently over-warning (mutation-checked on both sides).
+  of silently over-warning (mutation-checked on both sides). Known gap (review of a132265): the
+  scan reads only `app.py` and only a literal `status_code=503` keyword; a 503 raised in
+  another module, with a positional status or with `status.HTTP_503_SERVICE_UNAVAILABLE` would
+  be missed. That can only make the web app over-warn, never say "Nothing was recorded"
+  falsely.
   Retries stay safe but are not free. Decisions are write-once, so a retry is a replay or a
   409. If an admission committed and its reply was lost, no worker was started: the run stays
   `RUNNING` and holds a server and per-actor capacity slot until its lease expires (cleanup
