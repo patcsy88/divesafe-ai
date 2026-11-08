@@ -5,8 +5,10 @@ live in tests/integration/test_postgres_guard.py). Offline: psycopg.connect is r
 repository, and a source scan of src/ finds every other connection and requires a fixed `options`
 string outside a two-entry allow-list.
 
-Not seen by the scan (deliberate evasion, left to code review): `getattr`, `importlib`, low-level
-`psycopg.pq`, and anything outside src/ such as the `psql` calls in docker/ (owner role)."""
+Not seen by the scan (deliberate evasion, left to code review): `getattr`, `importlib`, `exec`,
+`globals()`, `setattr`, rebinding a name from another module (`postgres._OPTIONS = None`),
+`psycopg.pq`'s `connect_start` and connection generators, and anything outside src/ such as the
+`psql` calls in docker/ (owner role)."""
 
 from __future__ import annotations
 
@@ -88,6 +90,12 @@ NO_OPTIONS_ALLOWED = {
     ("services/postgres.py", "install_schema"),
     # The loader: a fixed `options` is ADR 0024 A3 work; its self-check refuses memberships.
     ("services/kb_common.py", "connect"),
+}
+# `super().connect()` (any class, any arguments) is allowed only here, by file and qualified name:
+# the loopback HTTP connections. Anywhere else it could reach a psycopg class as a base.
+SUPER_CONNECT_ALLOWED = {
+    ("models/loopback.py", "LoopbackConnection.connect"),
+    ("models/loopback.py", "LoopbackSecureConnection.connect"),
 }
 # The loader's connection (no `options`) may be used only by the loader's own commands.
 LOADER_CONNECT_USERS = {"services/kb_load.py", "services/kb_withdraw.py"}
@@ -255,9 +263,10 @@ def connections_without_options(relative: str, source: str) -> list[str]:
     `_is_fixed_string`) and is not allowed; any import that would let a connection escape the
     call shapes above; any connection function used other than by calling it; a connection
     class anywhere but an annotation or its own `.connect(...)` call; a `.connect` on any other
-    owner but `super()` (called) and the loader's `kb_common`; and any use of the loader's
-    connection outside the loader's commands. Any fixed text is accepted as `options`: the scan
-    stops settings injected from outside, while `_connect`'s own value is pinned above."""
+    owner but the loader's `kb_common` and a called `super()` in `SUPER_CONNECT_ALLOWED`; and
+    any use of the loader's connection outside the loader's commands. Any fixed text is
+    accepted as `options`: the scan stops settings injected from outside, while `_connect`'s
+    own value is pinned above."""
     found: list[str] = []
     tree = ast.parse(source)
     strings, scalars = _constants(tree)
@@ -314,7 +323,11 @@ def connections_without_options(relative: str, source: str) -> list[str]:
                 and child.attr == "connect"
                 and not _is_connection_call(ast.Call(func=child, args=[], keywords=[]))
                 and not _is_kb_common(child.value)
-                and not (_is_super_call(child.value) and id(child) in called)
+                and not (
+                    _is_super_call(child.value)
+                    and id(child) in called
+                    and (relative, scope) in SUPER_CONNECT_ALLOWED
+                )
             ):
                 found.append(f"{relative}:{child.lineno} calls connect on an unrecognised owner")
             if (
@@ -486,6 +499,14 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
             "def h(d):\n    return psycopg.connect(d, options=O)\n"
         ),
         "from divesafe.config import *\n",
+        (
+            "def h(conn, d):\n    class C(type(conn)):\n        @classmethod\n"
+            "        def mk(cls, d):\n            return super().connect(d)\n    return C.mk(d)\n"
+        ),
+        (
+            "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+            "    def connect(self):\n        super().connect()\n"
+        ),
     ],
     ids=[
         "bare-connect",
@@ -543,6 +564,8 @@ def test_the_scan_sees_exactly_one_connection_where_it_expects_one(
         "match-rest-rebinds",
         "type-parameter-rebinds",
         "star-import",
+        "super-connect-from-a-connection-subclass",
+        "super-connect-outside-the-allowed-methods",
     ],
 )
 def test_mutation_a_connection_without_options_is_found(source: str) -> None:
@@ -561,8 +584,8 @@ def test_mutation_a_connection_without_options_is_found(source: str) -> None:
         ),
         "import psycopg\ndef install_schema(d):\n    return psycopg.connect(d)\n",
         "from psycopg import sql\nimport psycopg\nx: psycopg.Connection[int]\n",
-        "import http.client\nclass C(http.client.HTTPConnection):\n    def connect(self):\n"
-        "        super().connect()\n",
+        "import http.client\nclass LoopbackConnection(http.client.HTTPConnection):\n"
+        "    def connect(self):\n        super().connect()\n",
         (
             "import psycopg\ndef h(c: psycopg.Connection[Any]) -> psycopg.AsyncConnection[Any]:\n"
             "    x: psycopg.Connection[Any] = c\n    return x\n"
@@ -582,19 +605,49 @@ def test_mutation_a_connection_without_options_is_found(source: str) -> None:
     ],
 )
 def test_the_scan_accepts_fixed_options_and_ordinary_code(source: str) -> None:
-    assert connections_without_options("services/postgres.py", source) == []
+    relative = "models/loopback.py" if "super().connect()" in source else "services/postgres.py"
+    assert connections_without_options(relative, source) == []
 
 
-def test_an_unloadable_timestamp_is_storage_unavailable_never_a_runtime_error() -> None:
-    """psycopg raises NotImplementedError (a RuntimeError, not a psycopg.Error) for a timestamp
-    in a non-ISO DateStyle, and PGDATESTYLE reaches the app over `options`. The app must see a
-    typed storage error with no driver text (a 503), never an error it may read as shutdown."""
+class _UnloadableRows:
+    def execute(self, *_: object) -> _UnloadableRows:
+        return self
+
+    def fetchone(self) -> None:
+        raise NotImplementedError(_DRIVER_TEXT)
+
+
+_DRIVER_TEXT = "can't parse timestamptz with DateStyle 'SQL, DMY': '07/11/2026'"
+
+
+def test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """psycopg raises NotImplementedError (not a psycopg.Error) when it cannot load the run's
+    timestamps, as under a non-ISO DateStyle that `options` cannot override. Loading a run row
+    must give the typed storage error (a 503) and one fixed log line, never the driver's text."""
     from divesafe.services import RepositoryUnavailableError
 
-    with pytest.raises(RepositoryUnavailableError) as raised, postgres._storage_errors():
-        raise NotImplementedError("can't parse timestamptz with DateStyle 'SQL, DMY': '07/11'")
+    repo = postgres.PostgresAssessmentRepository
+    with (
+        caplog.at_level("ERROR", logger=postgres.__name__),
+        pytest.raises(RepositoryUnavailableError) as raised,
+        postgres._storage_errors(),
+    ):
+        repo._fetch_run(_UnloadableRows(), "run-1")  # type: ignore[arg-type]
     assert str(raised.value) == "storage unavailable"
     assert raised.value.__cause__ is None and raised.value.__suppress_context__
+    [record] = caplog.records
+    assert record.getMessage() == "the driver could not load a stored run (check DateStyle)"
+    assert record.error_type == "NotImplementedError"  # type: ignore[attr-defined]
+    assert record.exc_info is None and _DRIVER_TEXT not in caplog.text
+
+
+def test_a_not_implemented_error_elsewhere_stays_an_unexpected_error() -> None:
+    """Only run-row loads are translated: any other NotImplementedError inside a storage call
+    is a bug and must reach the logged 500 handler, not hide behind "storage unavailable"."""
+    with pytest.raises(NotImplementedError), postgres._storage_errors():
+        raise NotImplementedError(_DRIVER_TEXT)
 
 
 def test_mutation_the_repository_connect_without_options_is_found() -> None:

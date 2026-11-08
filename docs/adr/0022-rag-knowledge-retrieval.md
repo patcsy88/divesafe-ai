@@ -1614,15 +1614,21 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   apply; `PGUSER` and `PGSERVICE` can choose the login role when the string omits one, which
   `verify()` then judges, but none can make `current_user` differ from the login role.
   `PGDATESTYLE` wins over a `-c DateStyle=` in `options` (probed live), so `options` cannot
-  pin it. A non-ISO DateStyle makes psycopg raise `NotImplementedError` (a `RuntimeError`, not a
-  `psycopg.Error`) on the first timestamp it loads. Assessments are stored and read as JSON
-  text and are unaffected; asynchronous run admission and run reads (`pending_runs`
-  timestamps) fail. `_storage_errors` turns it into `RepositoryUnavailableError` (a 503
-  "storage unavailable", no driver text), and `admit`'s INSERT is rolled back. Fails closed,
-  self-inflicted by the operator. Pinned offline (`test_an_unloadable_timestamp_is_storage_
-  unavailable_never_a_runtime_error`, mutation-checked by removing the branch) and live
-  (`test_a_non_iso_datestyle_from_the_environment_fails_admission_closed`, positive control;
-  mutation-checked).
+  pin it; a stored `ALTER ROLE ... SET DateStyle` or `ALTER DATABASE ... SET DateStyle` (any
+  role may store one for itself) gets through the same way. A non-ISO DateStyle makes psycopg
+  raise `NotImplementedError` (a `RuntimeError`, not a `psycopg.Error`) on the first timestamp
+  it loads. Assessments are stored and read as JSON text and are unaffected; asynchronous run
+  admission and run reads (`pending_runs` timestamps) fail. The repository catches it only
+  where it loads a run row (`_fetch_run`), logs one fixed line ("the driver could not load a
+  stored run (check DateStyle)", `error_type` only, no driver text) and raises
+  `RepositoryUnavailableError`; the client sees a 503 "storage is unavailable; nothing was
+  recorded", and `admit`'s INSERT is rolled back. A `NotImplementedError` anywhere else stays
+  an unexpected error (logged 500). Fails closed, self-inflicted by the operator. Pinned
+  offline (`test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text`,
+  `test_a_not_implemented_error_elsewhere_stays_an_unexpected_error`; mutation-checked by
+  removing the catch, moving it back into `_storage_errors` and logging the exception) and
+  live (`test_a_non_iso_datestyle_from_the_environment_fails_admission_closed`, positive
+  control; mutation-checked on 16 and 17).
   **Pinned in `tests/safety/test_app_connection_options.py`:**
   - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
   - `make_conninfo` replaces a string's `options`;
@@ -1641,13 +1647,19 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     connect`/`Connection`, `import psycopg as <other>`, any star import, any connection
     function used other than by calling it, a connection class anywhere but an annotation or
     its own `.connect(...)` call, a `.connect` on any other owner (`type(conn)`,
-    `conn.__class__`, a variable) except a called `super().connect()` and the loader's
-    `kb_common`, and any use of `kb_common.connect` outside `kb_load` and `kb_withdraw`
-    (aliased, dotted and relative imports of `kb_common` are refused). Bindings counted
-    include `match` captures and type parameters. Out of reach (left to code review):
-    `getattr`, `importlib`, `exec`, `globals()`, `setattr`, rebinding from another module
-    (`postgres._OPTIONS = None`), `psycopg.pq`, and the owner-role `psql` calls in
-    `docker/`.
+    `conn.__class__`, a variable, `psycopg.pq.PGconn`) except the loader's `kb_common` and a
+    called `super().connect()` in the two named `models/loopback.py` methods, and any use of
+    `kb_common.connect` outside `kb_load` and `kb_withdraw` (aliased, dotted and relative
+    imports of `kb_common` are refused). Bindings counted include `match` captures and type
+    parameters. The rules are deliberately broad: "a connection class" is any attribute named
+    `Connection`, `AsyncConnection` or `Crdb*`, from any module (`sqlite3.Connection` too);
+    "an annotation" is only a parameter, return or variable annotation, not `cast`,
+    `isinstance`, a type alias or a bound; and the `.connect` rule also refuses non-database
+    uses (`sock.connect`, `sqlite3.connect`). A false positive is resolved by a named
+    allow-list entry with its reason, never by loosening a rule. Out of reach (left to code
+    review): `getattr`, `importlib`, `exec`, `globals()`, `setattr`, rebinding from another
+    module (`postgres._OPTIONS = None`), `psycopg.pq`'s `connect_start` and connection
+    generators, and the owner-role `psql` calls in `docker/`.
 
   **Live:** `test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server`
   in `tests/integration/test_postgres_guard.py` (role granted, both places; a plain connection

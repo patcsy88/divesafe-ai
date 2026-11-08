@@ -138,6 +138,8 @@ def test_already_withdrawn_under_a_non_iso_datestyle_still_exits_16_with_the_tim
     capsys.readouterr()
     with monkeypatch.context() as m:
         m.setenv("PGDATESTYLE", "SQL, DMY")
+        with psycopg.connect(loader_dsn) as plain:
+            assert plain.execute("SHOW DateStyle").fetchone() == ("SQL, DMY",)
         outcome = _withdraw(loader_dsn, did)
     assert outcome == kb_withdraw.ALREADY_WITHDRAWN
     assert _recorded_lines(capsys.readouterr().out) == [f"recorded_at={first.isoformat()}"]

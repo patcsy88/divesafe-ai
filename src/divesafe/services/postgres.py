@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 from collections.abc import Iterator
@@ -65,6 +66,8 @@ CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
+
+logger = logging.getLogger(__name__)
 
 _RUNS_LOCK_KEY = 7_281_903_115
 _RUN_COLUMNS = (
@@ -354,10 +357,6 @@ def _storage_errors() -> Iterator[None]:
         raise RepositoryUnavailableError("storage unavailable") from None
     except ValidationError:
         raise RepositoryIntegrityError("a stored record failed validation") from None
-    except NotImplementedError:
-        # psycopg cannot load a timestamp in a non-ISO DateStyle (PGDATESTYLE reaches the app and
-        # `options` cannot override it). Typed, so it is never mistaken for a RuntimeError.
-        raise RepositoryUnavailableError("storage unavailable") from None
 
 
 # has_parameter_privilege() exists from PostgreSQL 15.
@@ -736,6 +735,22 @@ class PostgresAssessmentRepository:
         )
 
     @staticmethod
+    def _fetch_run(conn: psycopg.Connection[Any], run_id: str) -> tuple[Any, ...] | None:
+        """psycopg raises NotImplementedError (not a psycopg.Error) when it cannot load the run's
+        timestamps, as under a non-ISO DateStyle from PGDATESTYLE or a stored setting, which
+        `options` cannot override. Caught only here, so other bugs stay logged 500s."""
+        try:
+            return conn.execute(
+                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
+            ).fetchone()
+        except NotImplementedError:
+            logger.error(
+                "the driver could not load a stored run (check DateStyle)",
+                extra={"error_type": "NotImplementedError"},
+            )
+            raise RepositoryUnavailableError("storage unavailable") from None
+
+    @staticmethod
     def _expire(conn: psycopg.Connection[Any], run_id: str) -> None:
         conn.execute(
             "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
@@ -754,9 +769,7 @@ class PostgresAssessmentRepository:
             self._expire(conn, run.id)
             # The run is read before the record: a completion that commits between the two reads
             # is then seen by the second, so a finished id never starts a second run.
-            row = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
-            ).fetchone()
+            row = self._fetch_run(conn, run.id)
             if (
                 row is None
                 and conn.execute(
@@ -799,18 +812,14 @@ class PostgresAssessmentRepository:
                     lease,
                 ),
             )
-            stored = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
-            ).fetchone()
+            stored = self._fetch_run(conn, run.id)
             assert stored is not None
             return Admission(kind="started", run=self._run_from(stored), run_token=token)
 
     def get_run(self, run_id: str) -> PendingRun | None:
         with _storage_errors(), self._connect() as conn, conn.transaction():
             self._expire(conn, run_id)
-            row = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
-            ).fetchone()
+            row = self._fetch_run(conn, run_id)
             return None if row is None else self._run_from(row)
 
     def complete(self, record: AssessmentRecord, run_token: str) -> bool:
