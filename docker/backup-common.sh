@@ -2,8 +2,7 @@
 #
 # No script here uses the database superuser. Anything the owner or an archive put into the
 # database can run when a superuser reads it (a view over a function, an operator in `public`), so
-# every query and the dump run as divesafe_owner, which owns the four tables and is not a
-# superuser. They connect from inside the db container over TLS; the password is read there, so it
+# every query and the dump run as divesafe_owner, which owns the tables and is not a superuser. They connect from inside the db container over TLS; the password is read there, so it
 # is on no command line and in no file or variable of the host.
 # The first load of an archive happens in a throwaway container with no network and no secrets,
 # where the archive's code can only reach that container.
@@ -21,8 +20,9 @@ image=pgvector/pgvector:pg16
 
 # What a database must look like before its content is compared.
 guards_line='guards=assessments_append_only_guard,assessments_insert_guard,assessments_no_truncate_guard'
-tables_line='tables=assessments:r,pending_runs:r,run_failure_counts:r,schema_migrations:r'
-fact_keys='assessments dbsettings decided digest extensions failure_counts guard_defs guards hardening migrations objects pending_runs tables '
+kb_guards_line='kb_guards=kb_chunks_append_only_guard,kb_chunks_insert_guard,kb_chunks_no_truncate_guard,kb_documents_append_only_guard,kb_documents_insert_guard,kb_documents_no_truncate_guard,kb_status_events_append_only_guard,kb_status_events_insert_guard,kb_status_events_no_truncate_guard'
+tables_line='tables=assessments:r,kb_chunks:r,kb_documents:r,kb_status_events:r,pending_runs:r,run_failure_counts:r,schema_migrations:r'
+fact_keys='assessments dbsettings decided digest extensions failure_counts guard_defs guards hardening kb_chunks kb_digest kb_documents kb_guard_defs kb_guards kb_status_events migrations objects pending_runs tables '
 
 # The one running container of a compose service, found by label so that no compose settings are
 # needed. More or fewer than one is an error.
@@ -35,6 +35,19 @@ one_container() {
     return 1
   fi
   printf '%s' "$ids"
+}
+
+# no_loader <service>...: refuse while a container of a knowledge loader service exists in this
+# project, running or stopped (`compose run` containers carry the service label too). A load or a
+# withdrawal during a backup or a restore would leave the archive or the database half-way.
+no_loader() {
+  for service in "$@"; do
+    if docker ps -aq --filter "label=com.docker.compose.project=$project" \
+      --filter "label=com.docker.compose.service=$service" | grep -q .; then
+      echo "refusing: a '$service' container exists in project '$project'; let it finish, then remove it (docker ps -a)" >&2
+      return 1
+    fi
+  done
 }
 
 # Two running databases (an old stack beside a restored one, or the development stack) are how a
@@ -70,6 +83,9 @@ sha256_of() {
 # the `name` type can be chosen instead of a built-in one. Ordered by id with the C collation and
 # written with a fixed timestamp format, so neither locale nor DateStyle nor time zone can change
 # the digest. The guard functions and triggers are compared by definition, not only by name.
+# The knowledge digest covers every column of the three knowledge tables (the licensed text, its
+# hashes, the manifest hash and every status event with hash_checked), one JSON array per row so a
+# NULL or a separator inside a value cannot stand for another row.
 facts_sql() {
   cat <<'SQL'
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -95,9 +111,41 @@ SELECT 'guard_defs=' || COALESCE(md5(string_agg(d.def, E'\n' ORDER BY d.name COL
   UNION ALL
   SELECT t.tgname::text, pg_get_triggerdef(t.oid) FROM pg_trigger t
     WHERE t.tgrelid = 'public.assessments'::regclass AND NOT t.tgisinternal) d;
+SELECT 'kb_documents=' || count(*) FROM public.kb_documents;
+SELECT 'kb_chunks=' || count(*) FROM public.kb_chunks;
+SELECT 'kb_status_events=' || count(*) FROM public.kb_status_events;
+SELECT 'kb_digest=' || encode(sha256(convert_to(
+    'documents' || E'\n' || COALESCE((SELECT string_agg(json_build_array(d.document_id, d.version,
+        d.title, d.origin, d.author_role, d.approver_role, to_char(d.effective_date, 'YYYY-MM-DD'),
+        to_char(d.review_by_date, 'YYYY-MM-DD'), d.licence, d.licence_reference_present,
+        d.attribution, d.site_id, d.all_sites, d.display_permitted, d.supersedes,
+        d.manifest_sha256)::text, E'\n' ORDER BY d.document_id COLLATE "C", d.version)
+      FROM public.kb_documents d), '')
+    || E'\n' || 'chunks' || E'\n' || COALESCE((SELECT string_agg(json_build_array(c.document_id,
+        c.version, c.chunk, c.section, c.chunk_text, c.content_sha256)::text,
+        E'\n' ORDER BY c.document_id COLLATE "C", c.version, c.chunk)
+      FROM public.kb_chunks c), '')
+    || E'\n' || 'events' || E'\n' || COALESCE((SELECT string_agg(json_build_array(e.event_order,
+        e.document_id, e.version, e.status, e.hash_checked,
+        to_char(e.recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US'))::text,
+        E'\n' ORDER BY e.event_order)
+      FROM public.kb_status_events e), ''), 'UTF8')), 'hex');
+SELECT 'kb_guards=' || COALESCE(string_agg(tgname::text, ',' ORDER BY tgname::text COLLATE "C"), 'none')
+  FROM pg_trigger
+  WHERE tgrelid IN ('public.kb_documents'::regclass, 'public.kb_chunks'::regclass,
+    'public.kb_status_events'::regclass) AND NOT tgisinternal AND tgenabled = 'A';
+SELECT 'kb_guard_defs=' || COALESCE(md5(string_agg(d.def, E'\n' ORDER BY d.name COLLATE "C")), 'none') FROM (
+  SELECT p.proname::text AS name, pg_get_functiondef(p.oid) AS def FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname LIKE 'kb\_%'
+  UNION ALL
+  SELECT t.tgname::text, pg_get_triggerdef(t.oid) FROM pg_trigger t
+    WHERE t.tgrelid IN ('public.kb_documents'::regclass, 'public.kb_chunks'::regclass,
+      'public.kb_status_events'::regclass) AND NOT t.tgisinternal) d;
 SELECT 'tables=' || COALESCE(string_agg(relname::text || ':' || relkind::text, ',' ORDER BY relname::text COLLATE "C"), 'none')
   FROM pg_class WHERE relnamespace = 'public'::regnamespace
-  AND relname::text IN ('assessments', 'pending_runs', 'run_failure_counts', 'schema_migrations');
+  AND relname::text IN ('assessments', 'kb_chunks', 'kb_documents', 'kb_status_events',
+    'pending_runs', 'run_failure_counts', 'schema_migrations');
 SELECT 'extensions=' || COALESCE(string_agg(extname::text, ',' ORDER BY extname::text COLLATE "C"), 'none')
   FROM pg_extension;
 SELECT 'dbsettings=' || count(*) FROM pg_db_role_setting
@@ -148,23 +196,24 @@ printf "%s\n" "$FACTS_SQL" | psql -h /tmp -U scratch -d divesafe_verify -XAtq -v
 
 # The lines of the facts that must match exactly, in a fixed order.
 compared_facts() {
-  grep -E '^(assessments|dbsettings|decided|digest|extensions|failure_counts|guard_defs|guards|hardening|migrations|objects|pending_runs|tables)=' |
+  grep -E '^(assessments|dbsettings|decided|digest|extensions|failure_counts|guard_defs|guards|hardening|kb_chunks|kb_digest|kb_documents|kb_guard_defs|kb_guards|kb_status_events|migrations|objects|pending_runs|tables)=' |
     LC_ALL=C sort
 }
 
-# facts_complete <facts>: exactly the thirteen facts, each once. A query that failed the same way
+# facts_complete <facts>: exactly the nineteen facts, each once. A query that failed the same way
 # on both sides cannot pass as "equal".
 facts_complete() {
   keys="$(printf '%s\n' "$1" | cut -d= -f1 | tr '\n' ' ')"
   [ "$keys" = "$fact_keys" ]
 }
 
-# shape_ok <facts>: the three guard triggers, by name, all ENABLE ALWAYS; the four tables are ordinary
-# tables; no setting is stored for the database; and `hardening` is 0: no row-level-security policy,
+# shape_ok <facts>: the three guard triggers and the nine knowledge guard triggers, by name, all
+# ENABLE ALWAYS; the seven tables are ordinary tables; no setting is stored for the database; and `hardening` is 0: no row-level-security policy,
 # no default privilege, no stored role setting, no rule on a table in `public`, no schema other than
 # `public`, and the owner is not a superuser (each could change what a later session sees or may do).
 shape_ok() {
   printf '%s\n' "$1" | grep -qxF "$guards_line" &&
+    printf '%s\n' "$1" | grep -qxF "$kb_guards_line" &&
     printf '%s\n' "$1" | grep -qxF "$tables_line" &&
     printf '%s\n' "$1" | grep -qxF 'dbsettings=0' &&
     printf '%s\n' "$1" | grep -qxF 'hardening=0'
