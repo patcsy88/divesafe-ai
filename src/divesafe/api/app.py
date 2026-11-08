@@ -66,6 +66,7 @@ from divesafe.services import (
     InvalidSuccessorError,
     RecordNotFoundError,
     RepositoryIntegrityError,
+    RepositoryOutcomeUnknownError,
     RepositoryUnavailableError,
     UnstorableRecordError,
 )
@@ -83,6 +84,9 @@ logger = logging.getLogger(__name__)
 _NOT_UPDATABLE = "the assessment could not be updated; reload it"
 _WRITE_UNAVAILABLE = "storage is unavailable; nothing was recorded"
 _READ_UNAVAILABLE = "storage is unavailable; try again later"
+_OUTCOME_UNKNOWN = (
+    "storage is unavailable; the outcome is unknown: reload to check before trying again"
+)
 _NOT_ASSIGNED = (
     "nothing was recorded; this assessment is assigned to another decider and is still pending"
 )
@@ -211,9 +215,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
     @app.exception_handler(RepositoryUnavailableError)
     async def store_unavailable(request: Request, exc: RepositoryUnavailableError) -> JSONResponse:
         logger.error("storage unavailable", extra={"path": request.url.path})
+        if isinstance(exc, RepositoryOutcomeUnknownError):
+            # The commit failed: the server may have recorded the write before the reply was lost.
+            return JSONResponse({"detail": _OUTCOME_UNKNOWN}, status_code=503)
         if request.method in {"GET", "HEAD"}:
-            # A read changes nothing, so "nothing was recorded" would be untrue: a run may well
-            # still finish.
+            # A read records nothing the caller asked for, so "nothing was recorded" would mislead:
+            # a run may well still finish.
             return JSONResponse({"detail": _READ_UNAVAILABLE}, status_code=503)
         return JSONResponse({"detail": _WRITE_UNAVAILABLE}, status_code=503)
 

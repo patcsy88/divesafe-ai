@@ -45,6 +45,8 @@ class _SessionConnection:
 
     def commit(self) -> None:
         self.log.append("COMMIT")
+        if self.fail_on == "COMMIT":
+            raise psycopg.OperationalError("server closed the connection")
 
     def close(self) -> None:
         self.log.append("CLOSE")
@@ -104,21 +106,27 @@ def session_setup(module: Any, monkeypatch: pytest.MonkeyPatch, fail_on: str | N
     return [*conn.log, "RETURNED" if returned is conn else "OTHER"]
 
 
-def test_every_app_connection_sets_iso_datestyle_for_the_session_before_use(
+SESSION = [postgres._DATE_STYLE, postgres._CLIENT_ENCODING, "COMMIT"]
+
+
+def test_every_app_connection_sets_datestyle_and_encoding_for_the_session_before_use(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`options` cannot pin DateStyle (PGDATESTYLE wins over it, and a stored role or database
-    setting applies too), and psycopg cannot load a timestamp in any other style. A session SET
-    wins over both; it is committed so it outlives the caller's own transactions."""
+    """`options` cannot pin DateStyle or client_encoding (PGDATESTYLE and PGCLIENTENCODING win
+    over it, and a stored role or database setting applies too). psycopg cannot load a timestamp
+    in another DateStyle, nor encode every character in another encoding. A session SET wins over
+    both; it is committed so it outlives the caller's own transactions."""
     assert postgres._DATE_STYLE == "SET DateStyle = 'ISO, MDY'"
-    assert session_setup(postgres, monkeypatch) == [postgres._DATE_STYLE, "COMMIT", "RETURNED"]
+    assert postgres._CLIENT_ENCODING == "SET client_encoding = 'UTF8'"
+    assert session_setup(postgres, monkeypatch) == [*SESSION, "RETURNED"]
 
 
-def test_a_connection_whose_datestyle_cannot_be_set_is_closed_and_never_returned(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("step", range(len(SESSION)))
+def test_a_connection_whose_session_cannot_be_set_up_is_closed_and_never_returned(
+    monkeypatch: pytest.MonkeyPatch, step: int
 ) -> None:
-    log = session_setup(postgres, monkeypatch, fail_on=postgres._DATE_STYLE)
-    assert log == [postgres._DATE_STYLE, "CLOSE", "RAISED"]
+    log = session_setup(postgres, monkeypatch, fail_on=SESSION[step])
+    assert log == [*SESSION[: step + 1], "CLOSE", "RAISED"]
 
 
 @pytest.mark.parametrize(
@@ -132,15 +140,33 @@ def test_a_connection_whose_datestyle_cannot_be_set_is_closed_and_never_returned
             "_DATE_STYLE = \"SET LOCAL DateStyle = 'ISO, MDY'\"",
         ),
         ("            conn.close()\n            raise\n", "            raise\n"),
+        ("            conn.execute(_CLIENT_ENCODING)\n", ""),
+        (
+            "_CLIENT_ENCODING = \"SET client_encoding = 'UTF8'\"",
+            "_CLIENT_ENCODING = \"SET client_encoding = 'LATIN1'\"",
+        ),
+        (
+            "_CLIENT_ENCODING = \"SET client_encoding = 'UTF8'\"",
+            "_CLIENT_ENCODING = \"SET LOCAL client_encoding = 'UTF8'\"",
+        ),
     ],
-    ids=["no-set", "not-committed", "other-value", "set-local", "not-closed-on-failure"],
+    ids=[
+        "no-set",
+        "not-committed",
+        "other-value",
+        "set-local",
+        "not-closed-on-failure",
+        "no-encoding",
+        "other-encoding",
+        "encoding-set-local",
+    ],
 )
 def test_mutation_of_the_session_datestyle_is_caught(
     monkeypatch: pytest.MonkeyPatch, edit: tuple[str, str]
 ) -> None:
     mutant = mutated_module(postgres, edit)
     with monkeypatch.context() as m:
-        good = session_setup(mutant, m) == [postgres._DATE_STYLE, "COMMIT", "RETURNED"]
+        good = session_setup(mutant, m) == [*SESSION, "RETURNED"]
     with monkeypatch.context() as m:
         closed = session_setup(mutant, m, fail_on=postgres._DATE_STYLE) == [
             postgres._DATE_STYLE,
@@ -714,8 +740,16 @@ def test_each_allowed_super_connect_is_one_http_connection_method_with_one_bare_
         ["http.client.HTTPSConnection"],
     )
     assert not cls.keywords and not cls.decorator_list
+    # `http` must be the `import http.client` binding and nothing else in the module.
+    assert _bindings(tree).get("http") == 1
+    assert any(
+        isinstance(n, ast.Import)
+        and [(a.name, a.asname) for a in n.names] == [("http.client", None)]
+        for n in tree.body
+    )
     methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method_name]
     assert len(methods) == 1
+    assert not methods[0].decorator_list
     calls = [
         n
         for n in ast.walk(methods[0])

@@ -1610,8 +1610,9 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   takes it before `PGOPTIONS` (both probed live: a `work_mem` set in the string or in
   `PGOPTIONS` applied only when the code passed no `options`) and, per the libpq documentation
   (not probed), before a `service=` entry. So `-c role=...` put there never reaches the server.
-  Other libpq environment variables (`PGAPPNAME`, `PGTZ`, `PGDATESTYLE` and the like) still
-  apply; `PGUSER` and `PGSERVICE` can choose the login role when the string omits one, which
+  Other libpq environment variables (`PGAPPNAME`, `PGTZ`, `PGDATESTYLE`, `PGCLIENTENCODING`
+  and the like) still apply (`PGTZ` only changes the offset of correct timestamps); `PGUSER`
+  and `PGSERVICE` can choose the login role when the string omits one, which
   `verify()` then judges, but none can make `current_user` differ from the login role.
   `PGDATESTYLE` wins over a `-c DateStyle=` in `options` (probed live), so `options` cannot
   pin it; a stored `ALTER ROLE ... SET DateStyle` or `ALTER DATABASE ... SET DateStyle` (any
@@ -1625,7 +1626,20 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `PGDATESTYLE` and a stored `ALTER ROLE ... SET DateStyle`, positive control on a plain
   connection): runs are admitted and read back, on 16 and 17; removing the `SET` or making it
   `SET LOCAL` fails both cases. Offline: the exact statement, the commit and the close on
-  failure, each with a mutant.
+  failure (of the `SET` or of the commit), each with a mutant; dropping the commit is caught
+  offline only (the live test still sees ISO inside the open transaction).
+  `PGCLIENTENCODING` and a stored `client_encoding` get through the same way (probed live:
+  `LATIN1` from either reached the app; psycopg then raised `UnicodeEncodeError` on `’` or an
+  emoji, and `SQL_ASCII` returned text as bytes). `_connect` also sends
+  `SET client_encoding = 'UTF8'` in the same setup, before the commit (review of 3974b08).
+  Live (`test_a_non_utf8_client_encoding_from_outside_never_reaches_the_apps_sessions`, both
+  sources, positive control): a record with `’` and an emoji is stored and read back on 16 and
+  17; removing the `SET` or making it `SET LOCAL` fails both cases. Offline: the statement,
+  its order and three mutants.
+  Both are session settings, so a future transaction-mode pooler (PgBouncer and the like;
+  pooling is an open gap, see architecture.md) must keep session state or the settings must
+  move into each transaction; otherwise the `_fetch_run` backstop fires and requests fail
+  closed.
   Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
   `pending_runs` holds the timestamps): the repository catches `NotImplementedError` only
   where it loads a run row (`_fetch_run`), logs one fixed line ("the driver could not load a
@@ -1638,10 +1652,27 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `test_a_not_implemented_error_elsewhere_stays_an_unexpected_error`; mutation-checked by
   removing the catch, moving it back into `_storage_errors` and logging the exception).
   **Owner decision (2026-11-08): reads get their own 503 text.** A `GET` or `HEAD` that meets
-  unavailable storage returns "storage is unavailable; try again later" (a read changes
-  nothing, so "nothing was recorded" would be untrue); writes keep "storage is unavailable;
-  nothing was recorded" (`test_a_503_on_a_read_never_claims_that_nothing_was_recorded`, both
-  directions mutation-checked).
+  unavailable storage returns "storage is unavailable; try again later" (a read records
+  nothing the caller asked for, though `get_run` may mark an expired run failed, so "nothing
+  was recorded" would mislead); writes keep "storage is unavailable; nothing was recorded"
+  (`test_a_503_on_a_read_never_claims_that_nothing_was_recorded`, both directions
+  mutation-checked).
+  **Owner decision (2026-11-08): a failed commit is an unknown outcome** (review of 3974b08).
+  The server can commit and the reply be lost, so "nothing was recorded" could be untrue for a
+  decision, a reassignment, actual conditions, a create or an admission. Every write
+  (`create`, `replace`, `admit`, `complete`, `fail`, `cleanup`) runs in
+  `PostgresAssessmentRepository._transaction`, which commits explicitly and turns a
+  `psycopg.Error` from the commit into `RepositoryOutcomeUnknownError` (a subclass of
+  `RepositoryUnavailableError`, so the run runner and the decision race handle it as before);
+  any earlier failure closes the connection uncommitted and stays "nothing was recorded". The
+  API answers 503 "storage is unavailable; the outcome is unknown: reload to check before
+  trying again", and the web app shows that the outcome is unknown. Pinned by
+  `tests/safety/test_write_outcome_unknown.py` (the commit check, the close, every write
+  method, both API texts; mutation-checked), live by
+  `test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded`
+  (the decision is stored; fails on 16 and 17 if the commit error is re-raised as is) and in
+  `web/tests/forms.test.ts`. Retries stay safe: decisions are write-once and an admission with
+  the same key joins its run.
   **Pinned in `tests/safety/test_app_connection_options.py`:**
   - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
   - `make_conninfo` replaces a string's `options`;

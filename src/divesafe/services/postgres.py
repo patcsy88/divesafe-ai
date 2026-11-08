@@ -47,6 +47,7 @@ from divesafe.services.repository import (
     RecordExistsError,
     RecordNotFoundError,
     RepositoryIntegrityError,
+    RepositoryOutcomeUnknownError,
     RepositoryUnavailableError,
     UnstorableRecordError,
     check_successor,
@@ -66,9 +67,11 @@ CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
-# `options` cannot pin DateStyle (PGDATESTYLE wins over it, and a stored role or database
-# setting also applies); a session SET wins over both. psycopg cannot load a timestamp otherwise.
+# `options` cannot pin DateStyle or client_encoding (PGDATESTYLE and PGCLIENTENCODING win over
+# it, and a stored role or database setting also applies); a session SET wins over both. psycopg
+# cannot load a timestamp in another DateStyle, nor encode every character in another encoding.
 _DATE_STYLE = "SET DateStyle = 'ISO, MDY'"
+_CLIENT_ENCODING = "SET client_encoding = 'UTF8'"
 
 logger = logging.getLogger(__name__)
 
@@ -447,11 +450,27 @@ class PostgresAssessmentRepository:
         conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
         try:
             conn.execute(_DATE_STYLE)
+            conn.execute(_CLIENT_ENCODING)
             conn.commit()  # each caller then starts its own transaction, as before
         except BaseException:
             conn.close()
             raise
         return conn
+
+    @contextmanager
+    def _transaction(self) -> Iterator[psycopg.Connection[Any]]:
+        """One write transaction on a new connection. A failure while committing raises
+        RepositoryOutcomeUnknownError: the server may have committed before the reply was lost.
+        Any earlier failure closes the connection uncommitted, so nothing was recorded."""
+        conn = self._connect()
+        try:
+            yield conn
+            try:
+                conn.commit()
+            except psycopg.Error:
+                raise RepositoryOutcomeUnknownError("storage unavailable") from None
+        finally:
+            conn.close()
 
     def verify(self, *, least_privilege: bool, owner_not_superuser: bool = False) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
@@ -668,7 +687,7 @@ class PostgresAssessmentRepository:
         _storable(record.model_dump())
         with _storage_errors():
             try:
-                with self._connect() as conn:
+                with self._transaction() as conn:
                     conn.execute(
                         "INSERT INTO public.assessments (id, record) VALUES (%s, %s::jsonb)",
                         (record.id, record.model_dump_json()),
@@ -688,7 +707,7 @@ class PostgresAssessmentRepository:
         if expected.id != new.id:
             raise InvalidSuccessorError("id may not change")
         _storable(new.model_dump())
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             row = conn.execute(
                 "SELECT record::text FROM public.assessments WHERE id = %s FOR UPDATE",
                 (expected.id,),
@@ -774,7 +793,7 @@ class PostgresAssessmentRepository:
     ) -> Admission:
         _storable(run.plan.model_dump(mode="json"))
         token = secrets.token_urlsafe(32)
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
             self._expire(conn, run.id)
             # The run is read before the record: a completion that commits between the two reads
@@ -838,7 +857,7 @@ class PostgresAssessmentRepository:
         if record.human_decision is not None or record.actual_conditions is not None:
             raise InvalidSuccessorError("a new record cannot already carry a decision")
         _storable(record.model_dump())
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             row = conn.execute(
                 "SELECT token_hash FROM public.pending_runs WHERE id = %s AND state = 'RUNNING' "
                 "AND lease_expires_at > clock_timestamp() FOR UPDATE",
@@ -861,7 +880,7 @@ class PostgresAssessmentRepository:
             return True
 
     def fail(self, run_id: str, run_token: str, code: FailureCode) -> bool:
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             cursor = conn.execute(
                 "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
                 "failure_code = %s WHERE id = %s AND state = 'RUNNING' AND token_hash = %s",
@@ -872,7 +891,7 @@ class PostgresAssessmentRepository:
     def cleanup(self, *, retention: timedelta, batch: int) -> CleanupResult:
         """Mark expired running rows failed, then delete failed rows older than `retention` in a
         bounded batch, counting them by code first. Never touches `assessments`."""
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
             marked = conn.execute(
                 "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "

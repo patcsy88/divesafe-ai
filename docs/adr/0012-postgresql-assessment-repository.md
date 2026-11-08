@@ -25,7 +25,9 @@
   refuses to start.
 - **Connections.** Connect, statement and lock timeouts. Production refuses a DSN whose `sslmode`
   is not `require`, `verify-ca` or `verify-full`. Driver and validation errors become
-  `RepositoryUnavailableError` (HTTP 503, "nothing was recorded"), `RepositoryIntegrityError` or
+  `RepositoryUnavailableError` (HTTP 503; the text depends on the request and on whether the
+  commit itself failed, see ADR 0022 Known gaps, "`options`-borne settings"),
+  `RepositoryIntegrityError` or
   `UnstorableRecordError` (HTTP 422), raised `from None` so no DSN or record text reaches logs.
   `create` runs in a worker thread so a slow database cannot stall the event loop.
 - NUL characters are refused at the decision, actual-conditions and connector boundaries.

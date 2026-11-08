@@ -49,6 +49,11 @@ class RepositoryUnavailableError(Exception):
     """The store could not be reached or failed. Carries no connection details."""
 
 
+class RepositoryOutcomeUnknownError(RepositoryUnavailableError):
+    """The store failed while committing a write: the server may have committed it before the
+    connection was lost, so the caller cannot be told that nothing was recorded."""
+
+
 class RepositoryIntegrityError(Exception):
     """A stored record could not be read back as a valid record."""
 

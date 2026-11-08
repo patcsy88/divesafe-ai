@@ -52,6 +52,17 @@ test("an unknown outcome on a failed write is not reported as nothing recorded",
   assert.match(describeFailure(503, null, null), /Nothing was recorded/);
 });
 
+test("a 503 whose commit may have landed is never reported as nothing recorded", () => {
+  for (const detail of [
+    "storage is unavailable; the outcome is unknown: reload to check before trying again",
+    "the outcome is unknown; reload to see whether it was recorded",
+  ]) {
+    const text = describeFailure(503, detail, null);
+    assert.match(text, /outcome is unknown/, detail);
+    assert.ok(!/Nothing was recorded/i.test(text), detail);
+  }
+});
+
 test("a warning or knowledge item is never called measured", async () => {
   const { provenanceLabel, isLessSevere } = await import("../lib/present.ts");
   assert.equal(provenanceLabel("observation"), "measured");

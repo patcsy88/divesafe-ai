@@ -712,6 +712,67 @@ def test_a_non_iso_datestyle_from_outside_never_reaches_the_apps_sessions(
             owner.execute("ALTER ROLE divesafe_app_test RESET DateStyle")
 
 
+@pytest.mark.parametrize("source", ["environment", "stored-role-setting"])
+def test_a_non_utf8_client_encoding_from_outside_never_reaches_the_apps_sessions(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """PGCLIENTENCODING wins over `options`, and a stored ALTER ROLE ... SET client_encoding
+    applies too; under LATIN1 psycopg cannot encode a character such as a curly quote or an
+    emoji. `_connect` sets UTF8 for the session, so such a record is stored and read back.
+    Positive control: a plain connection does get LATIN1."""
+    assert DSN is not None
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    record = _record()
+    record = record.model_copy(update={"ruleset_version": "test \u2019 \U0001f41f"})
+    with monkeypatch.context() as m, psycopg.connect(DSN, autocommit=True) as owner:
+        if source == "environment":
+            m.setenv("PGCLIENTENCODING", "LATIN1")
+        else:
+            owner.execute("ALTER ROLE divesafe_app_test SET client_encoding = 'LATIN1'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute("SHOW client_encoding").fetchone() == ("LATIN1",)
+            with app._connect() as conn:
+                assert conn.execute("SHOW client_encoding").fetchone() == ("UTF8",)
+            app.create(record)
+            assert app.get(record.id) == record
+        finally:
+            owner.execute("ALTER ROLE divesafe_app_test RESET client_encoding")
+
+
+def test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server commits, then the reply is lost: the repository must not let anyone say that
+    nothing was recorded. Positive control: the decision really is stored."""
+    from divesafe.services import RepositoryOutcomeUnknownError
+
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    pending = _record()
+    app.create(pending)
+    connect = app._connect
+
+    def committed_then_lost() -> psycopg.Connection[object]:
+        conn = connect()
+        real = conn.commit
+
+        def commit() -> None:
+            real()
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+        conn.commit = commit  # type: ignore[method-assign]
+        return conn
+
+    monkeypatch.setattr(app, "_connect", committed_then_lost)
+    with pytest.raises(RepositoryOutcomeUnknownError):
+        app.replace(pending, _decided(pending))
+    monkeypatch.undo()
+    stored = app.get(pending.id)
+    assert stored is not None and stored.human_decision is not None
+
+
 def test_the_application_role_can_use_runs_but_cannot_touch_assessments_through_them(
     app_role_dsn: str,
 ) -> None:
