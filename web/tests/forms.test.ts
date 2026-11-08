@@ -56,10 +56,21 @@ test("a 503 says nothing was recorded only when the API itself says so", () => {
     "storage is unavailable; nothing was recorded",
     "the server is shutting down; nothing was recorded",
     "server configuration is unsafe; nothing was recorded",
+    "the evidence policy is not configured on this server; nothing was recorded",
   ]) {
     assert.match(describeFailure(503, detail, null), /Nothing was recorded/, detail);
   }
-  for (const detail of [null, "", "Service Unavailable", "<html>503</html>", [{ msg: "nothing was recorded" }]]) {
+  for (const detail of [
+    null,
+    "",
+    "Service Unavailable",
+    "<html>503</html>",
+    [{ msg: "nothing was recorded" }],
+    "nothing was recorded",
+    "upstream said: storage is unavailable; nothing was recorded",
+    "storage is unavailable; nothing was recorded unless the proxy retried",
+    "storage is unavailable; try again later",
+  ]) {
     const text = describeFailure(503, detail, null);
     assert.match(text, /outcome is unknown/, String(detail));
     assert.ok(!/Nothing was recorded/i.test(text), String(detail));

@@ -1637,8 +1637,18 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   17; removing the `SET` or making it `SET LOCAL` fails both cases. Offline: the statement,
   its order and three mutants.
   A stored `default_transaction_isolation` or `default_transaction_read_only` gets through the
-  same way (probed live: `serializable` and `on` reached the app). Serializable would turn a
-  certain refusal at commit into an unknown outcome; read-only would refuse every write.
+  same way (probed live: `serializable` and `on` reached the app). The stronger reason to pin
+  READ COMMITTED is that the writes rely on it: `admit` takes its advisory lock and then reads
+  the run, the record and the counts, each with a fresh snapshot. Under REPEATABLE READ or
+  SERIALIZABLE the snapshot is taken before the lock is granted, so those reads could miss
+  what the previous lock holder committed: the in-flight limits could be exceeded and a second
+  run started for an id that had just completed. `replace`'s `FOR UPDATE` would raise a
+  serialization error instead of `ConflictError`, and a certain refusal at commit would become
+  an unknown outcome. A read-only default would refuse every write.
+  `default_transaction_read_only` is a per-session default that any role may change, not an
+  access control, and the app now ignores a stored value. To freeze writes, revoke INSERT and
+  UPDATE from the app role, set it `NOLOGIN` and end its sessions, or stop the API; a revoked
+  grant fails before the commit, with the true "nothing was recorded" 503.
   `_connect` also sends `SET default_transaction_isolation = 'read committed'` and
   `SET default_transaction_read_only = off` (review of 740b091). Live
   (`test_a_stored_transaction_default_never_reaches_the_apps_sessions`, positive control on a
@@ -1647,12 +1657,17 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `SET client_encoding = 'UTF8'` converts nothing for a `SQL_ASCII` database (probed live:
   `server_encoding` stays `SQL_ASCII`), and another server encoding refuses or loses some
   characters, so `verify()` reports "the database encoding is not UTF8 (create it with UTF8)"
-  and the app refuses to start (`test_verify_refuses_a_database_whose_encoding_is_not_utf8`,
-  mutation-checked).
+  and the app refuses to start in every environment
+  (`test_verify_refuses_a_database_whose_encoding_is_not_utf8`, mutation-checked; offline only,
+  there is no live test on a non-UTF8 database). `db_init` still installs into such a database;
+  the app then refuses it.
   These are session settings, so a future transaction-mode pooler (PgBouncer and the like;
   pooling is an open gap, see architecture.md) must keep session state or the settings must
-  move into each transaction; otherwise the `_fetch_run` backstop fires and requests fail
-  closed.
+  move into each transaction. Otherwise each lost setting fails in its own way, all closed or
+  visible: a lost `DateStyle` fires the `_fetch_run` backstop (503); a lost `client_encoding`
+  makes psycopg raise `UnicodeEncodeError`, which is not a `psycopg.Error`, so a logged 500; a
+  lost read-only default makes every write a 503 "nothing was recorded"; a lost isolation level
+  brings back the snapshot problem in `admit` and the commit-time ambiguity described above.
   Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
   `pending_runs` holds the timestamps): the repository catches `NotImplementedError` only
   where it loads a run row (`_fetch_run`), logs one fixed line ("the driver could not load a
@@ -1690,15 +1705,24 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `_transaction` itself call `_connect()` directly (each pinned, with a mutant). The API logs
   a separate fixed line, "storage outcome unknown" (path only), so an operator can find writes
   that may have landed.
-  The web app reverses its default (review of 740b091): a 503 says "Nothing was recorded" only
-  when the API's detail says "nothing was recorded" (the write, shutdown and both
-  configuration 503s do) and not "outcome is unknown"; any other 503, including a proxy's own
-  page, shows the outcome as unknown (mutation-checked).
+  The web app reverses its default (review of 740b091): a 503 on a write says "Nothing was
+  recorded" only when the API's detail is exactly one of its four texts that say so (storage,
+  shutdown and the two configuration 503s; `NOTHING_RECORDED_503` in `web/lib/api.ts`); any
+  other 503, including a proxy's own page or a text that merely mentions the phrase, shows the
+  outcome as unknown. A 503 on any read (sign-in check, sites, evidence, an assessment) says it
+  could not be checked and to try again, since a read records nothing (review of 6b2aa6f;
+  `forms.test.ts`, `login.test.ts`, `status.test.ts`, mutation-checked). A new API text that
+  certainly recorded nothing must be added to that set, or the web app over-warns.
   Retries stay safe but are not free. Decisions are write-once, so a retry is a replay or a
   409. If an admission committed and its reply was lost, no worker was started: the run stays
   `RUNNING` and holds a server and per-actor capacity slot until its lease expires (cleanup
-  then marks it a timeout); a retry with the same key gets 409 "use a new Idempotency-Key",
-  and a request without a key leaves the client no id to reload. Both fail closed.
+  then marks it a timeout). A retry with the same key before the lease expires joins it (202)
+  and polls a run no worker owns: it shows as running, then as failed (timeout); a retry after
+  that gets 409 "use a new Idempotency-Key". A request without a key leaves the client no id to
+  reload. The shutdown branch has the same orphan: if `runner.start` refuses after `admit`
+  committed and the following `fail` meets unavailable storage before its commit, the client
+  reads "storage is unavailable; nothing was recorded" (true for the assessment, which never
+  exists) while the `RUNNING` row holds its slot until the lease expires. All fail closed.
   An early return that only read (an admission that joined or found its run completed,
   `complete` finding nothing to do, `fail` matching no row) still commits, since `_expire` may
   have written; if that commit fails the outcome is shown as unknown, and for `complete` the

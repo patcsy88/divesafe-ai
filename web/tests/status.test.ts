@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAssessment, getAssessment } from "../lib/api.ts";
+import { createAssessment, getAssessment, getEvidence, listSites } from "../lib/api.ts";
 import { classify, failureText } from "../lib/status.ts";
 
 const ID = "a".repeat(32);
@@ -153,6 +153,24 @@ test("a 503 on a read does not claim that nothing was recorded", async () => {
     () => getAssessment("k-12345678", ID),
     (error: Error) => /outcome is unknown/.test(error.message) && !/Nothing was recorded/i.test(error.message),
   );
+});
+
+test("a 503 on any read asks to try again, and a write keeps the API's own wording", async () => {
+  for (const read of [() => getEvidence("k-12345678", ID), () => listSites("k-12345678")]) {
+    for (const body of [{ detail: "storage is unavailable; nothing was recorded" }, { detail: "x" }, null]) {
+      reply(body, 503);
+      await assert.rejects(
+        read,
+        (error: Error) =>
+          /could not be checked right now/.test(error.message) &&
+          !/Nothing was recorded|whether it was recorded/i.test(error.message),
+      );
+    }
+  }
+  reply({ detail: "storage is unavailable; nothing was recorded" }, 503);
+  await assert.rejects(() => createAssessment("k-12345678", body), /Nothing was recorded/);
+  reply({ detail: "x" }, 503);
+  await assert.rejects(() => createAssessment("k-12345678", body), /outcome is unknown/);
 });
 
 test("a create takes only the id, from a run or from a replayed record", async () => {

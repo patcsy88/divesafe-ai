@@ -53,3 +53,15 @@ test("a rate-limit answer from the API is not shown as a wrong key", async () =>
   reply(429, { detail: "nothing was recorded; too many failed attempts; wait and try again" });
   await assert.rejects(() => checkKey("any-key-12345678"), (e: unknown) => (e as { status?: number }).status === 429);
 });
+
+test("a 503 at sign-in says neither that nothing was recorded nor that something may have been", async () => {
+  for (const body of [{ detail: "storage is unavailable; nothing was recorded" }, { detail: "x" }, null]) {
+    reply(503, body);
+    await assert.rejects(
+      () => checkKey("a-valid-key-123"),
+      (error: Error) =>
+        /could not be checked right now/.test(error.message) &&
+        !/Nothing was recorded|whether it was recorded/i.test(error.message),
+    );
+  }
+});

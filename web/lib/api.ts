@@ -15,6 +15,17 @@ export class ApiError extends Error {
 
 const ID = /^[0-9a-f]{32}$/;
 
+// The API's own 503 texts for a write that certainly recorded nothing (app.py). Any other 503,
+// including a proxy's page or a lost commit reply, may follow a write that landed.
+const NOTHING_RECORDED_503 = new Set([
+  "storage is unavailable; nothing was recorded",
+  "the server is shutting down; nothing was recorded",
+  "the evidence policy is not configured on this server; nothing was recorded",
+  "server configuration is unsafe; nothing was recorded",
+]);
+
+const READ_UNAVAILABLE = "The service is unavailable, so this could not be checked right now. Try again shortly.";
+
 export function describeFailure(status: number, detail: unknown, retryAfter: string | null): string {
   if (status === 401) return "The server did not accept this API key.";
   if (status === 403) {
@@ -40,13 +51,7 @@ export function describeFailure(status: number, detail: unknown, retryAfter: str
     return "The request was not accepted.";
   }
   if (status === 503) {
-    // Only the API's own text may say nothing was recorded; a proxy's 503 or a lost commit reply
-    // may follow a write that landed.
-    if (
-      typeof detail === "string" &&
-      !detail.includes("outcome is unknown") &&
-      detail.includes("nothing was recorded")
-    ) {
+    if (typeof detail === "string" && NOTHING_RECORDED_503.has(detail)) {
       return "The service is unavailable. Nothing was recorded.";
     }
     return "The service is unavailable and the outcome is unknown: check whether it was recorded before trying again.";
@@ -87,6 +92,11 @@ async function call(
   }
   if (!response.ok) {
     const detail = (body as { detail?: unknown } | null)?.detail;
+    // A read records nothing, so neither "nothing was recorded" nor "check whether it was
+    // recorded" fits it.
+    if (response.status === 503 && (init.method ?? "GET") === "GET") {
+      throw new ApiError(503, READ_UNAVAILABLE);
+    }
     throw new ApiError(
       response.status,
       describeFailure(response.status, detail, response.headers.get("retry-after")),
