@@ -33,6 +33,7 @@ random() { openssl rand -hex 24; }
 bootstrap_password="$(random)"
 owner_password="$(random)"
 app_password="$(random)"
+loader_password="$(random)"
 
 printf '%s' "$bootstrap_password" | write_new db_bootstrap_password || true
 
@@ -43,6 +44,13 @@ fi
 if printf '%s' "$app_password" | write_new db_app_password; then
   printf '%s' "postgresql://divesafe_app:${app_password}@db:5432/divesafe?sslmode=require&channel_binding=require" |
     write_new divesafe_database_url || true
+fi
+# The knowledge loader (ADR 0024 Amendment 1, A1). The role is created by
+# docker/db/20-create-loader-role.sql, which requires exactly these 48 hex characters with no
+# newline. connect_timeout=5 is the owner-approved ceiling the loader's settings accept.
+if printf '%s' "$loader_password" | write_new db_loader_password; then
+  printf '%s' "postgresql://divesafe_loader:${loader_password}@db:5432/divesafe?sslmode=require&channel_binding=require&connect_timeout=5" |
+    write_new divesafe_loader_database_url || true
 fi
 
 # An empty file means "not set" (the MET connector is then not used).

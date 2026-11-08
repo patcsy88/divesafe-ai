@@ -231,7 +231,7 @@ def test_the_secrets_script_never_prints_or_overwrites_a_secret() -> None:
     script = (COMPOSE.parent / "make-secrets.sh").read_text()
     assert '[ -e "$target" ]' in script
     assert "umask 077" in script
-    assert not re.search(r"echo[^\n]*(\$owner_password|\$app_password)", script)
+    assert not re.search(r"echo[^\n]*(\$owner_password|\$app_password|\$loader_password)", script)
     assert not re.search(r"\b(set -x|set -.*x)\b", script)
 
 
@@ -377,14 +377,36 @@ def test_the_database_command_turns_tls_on_and_loads_the_tls_only_rules(
     assert "./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro" in command
 
 
+_NETWORK_ROLES = {"divesafe_owner", "divesafe_app", "divesafe_loader"}
+
+
+def _hba_rules() -> list[list[str]]:
+    hba = (COMPOSE.parent / "db" / "pg_hba.conf").read_text()
+    return [line.split() for line in hba.splitlines() if line.strip() and line[0] != "#"]
+
+
+def test_the_database_rules_are_exactly_these_four_in_order() -> None:
+    """ADR 0024 A2: the local socket rule, then one TLS rule per network role. An added `local`
+    or `host` rule, a CIDR, `all`, `trust` or a rule for the bootstrap role fails here."""
+    assert _hba_rules() == [
+        ["local", "all", "all", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_owner", "samenet", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_app", "samenet", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_loader", "samenet", "scram-sha-256"],
+    ]
+
+
 def test_the_bootstrap_superuser_is_not_reachable_over_the_network() -> None:
     hba = (COMPOSE.parent / "db" / "pg_hba.conf").read_text()
     rules = [line.split() for line in hba.splitlines() if line.strip() and line[0] != "#"]
+    network_roles = set()
     for rule in rules:
         if rule[0] == "hostssl":
             assert rule[1] == "divesafe", rule
-            assert rule[2] in ("divesafe_owner", "divesafe_app"), rule
+            assert rule[2] in _NETWORK_ROLES, rule
             assert rule[3] == "samenet", rule
+            network_roles.add(rule[2])
+    assert network_roles == _NETWORK_ROLES, "exactly these roles, never a pattern"
     assert not any("bootstrap" in " ".join(r) for r in rules)
     assert not any(":" in field for rule in rules for field in rule[3:-1]), "no IPv6 ranges"
 
@@ -452,7 +474,7 @@ def test_the_secrets_script_prints_no_secret_by_any_command() -> None:
     file) or the assignment that creates it. Continuation lines are joined first."""
     script = (COMPOSE.parent / "make-secrets.sh").read_text().replace("|\n", "| ")
     for line in script.splitlines():
-        if re.search(r"\$\{?(bootstrap|owner|app)_password", line):
+        if re.search(r"\$\{?(bootstrap|owner|app|loader)_password", line):
             assert re.search(r"\|\s*write_new\b", line), line
 
 
@@ -555,3 +577,274 @@ def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
             build.append(line.strip())
         assert build == ["context: ..", "dockerfile: docker/Dockerfile"], name
         assert _value(block, "user") is None, name
+
+
+# --- the knowledge loader role script (ADR 0024 Amendment 1, A1) ---------------------------------
+
+LOADER_SCRIPT = COMPOSE.parent / "db" / "20-create-loader-role.sql"
+RUNBOOK = COMPOSE.parents[1] / "docs" / "knowledge-loader.md"
+_PASSWORD_FILE = "'/run/secrets/db_loader_password'"
+
+_LOADER_SCRIPT_LINES = [
+    "\\set VERBOSITY terse",
+    "\\set SHOW_CONTEXT never",
+    "SET log_statement = 'none';",
+    "SET log_min_duration_statement = -1;",
+    "SET log_min_error_statement = panic;",
+    "SET search_path = pg_catalog, pg_temp;",
+    "SELECT 'divesafe_loader' IN ('divesafe_bootstrap', 'divesafe_owner', 'divesafe_app')"
+    " AS loader_name_reserved \\gset",
+    "\\if :loader_name_reserved",
+    "\\warn 'refusing: the loader role name is reserved'",
+    "SELECT 'refusing: the loader role name is reserved'::integer;",
+    "\\endif",
+    "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'divesafe_loader')"
+    " AS loader_exists \\gset",
+    "\\if :loader_exists",
+    "SELECT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls"
+    " OR NOT r.rolcanlogin OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m"
+    " WHERE m.member = r.oid OR m.roleid = r.oid) OR EXISTS (SELECT 1 FROM"
+    " pg_catalog.pg_db_role_setting s WHERE s.setrole = r.oid)) AS loader_role_unsafe"
+    " FROM pg_catalog.pg_roles r WHERE r.rolname = 'divesafe_loader' \\gset",
+    "\\if :loader_role_unsafe",
+    "\\warn 'refusing: divesafe_loader exists with an attribute, a membership or a stored"
+    " setting; it is not repaired'",
+    "SELECT 'refusing: the existing loader role is not clean'::integer;",
+    "\\endif",
+    "\\else",
+    "SELECT pg_catalog.pg_read_file('/run/secrets/db_loader_password') ~ '^[0-9a-f]{48}$'"
+    " AS loader_password_ok \\gset",
+    "\\if :loader_password_ok",
+    "SELECT pg_catalog.format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    " NOREPLICATION NOBYPASSRLS PASSWORD %L', 'divesafe_loader',"
+    " pg_catalog.pg_read_file('/run/secrets/db_loader_password')) \\gexec",
+    "\\else",
+    "\\warn 'refusing: db_loader_password is not 48 lower-case hex characters with no newline'",
+    "SELECT 'refusing: the loader password file is not in the expected form'::integer;",
+    "\\endif",
+    "\\endif",
+    "GRANT CONNECT ON DATABASE divesafe TO divesafe_loader;",
+]
+
+
+def _loader_script_lines() -> list[str]:
+    """Split on newline only, refuse anything but printable ASCII, drop empty lines and whole-line
+    `--` comments. psql meta-commands are lines of their own."""
+    raw = LOADER_SCRIPT.read_bytes()
+    assert all(b == 10 or 32 <= b < 127 for b in raw), "only printable ASCII and newlines"
+    return [x for x in raw.decode("ascii").split("\n") if x and not x.startswith("--")]
+
+
+def test_the_loader_role_script_is_exactly_these_lines() -> None:
+    """Any change (a swapped password file, an extra statement, a dropped guard or check, a table
+    grant, another attribute) fails here and has to be read by both reviewers."""
+    assert _loader_script_lines() == _LOADER_SCRIPT_LINES
+
+
+def test_the_loader_password_is_read_by_the_server_and_never_printed() -> None:
+    """The password file is read only by the server, in exactly two places: a boolean check
+    (`\\gset`, never printed) and inside the one format(...) whose statement ends in `\\gexec`. A
+    bare `SELECT format(...)` would print it; a DO block or EXECUTE would put it in CONTEXT."""
+    lines = _loader_script_lines()
+    reads = [x for x in lines if "pg_read_file" in x]
+    assert len(reads) == 2, reads
+    check, create = reads
+    assert check.startswith("SELECT pg_catalog.pg_read_file(" + _PASSWORD_FILE + ") ~ ")
+    assert check.endswith(" AS loader_password_ok \\gset")
+    assert create.startswith("SELECT pg_catalog.format('CREATE ROLE %I ")
+    assert create.endswith(", pg_catalog.pg_read_file(" + _PASSWORD_FILE + ")) \\gexec")
+    assert all(x.count("pg_read_file") == 1 for x in reads)
+    assert [x for x in lines if "format(" in x] == [create]
+    assert [x for x in lines if x.endswith("\\gexec")] == [create]
+    joined = "\n".join(lines).upper()
+    assert not re.search(r"\bDO\b|\bEXECUTE\b|\$\$", joined)
+
+
+def test_the_loader_password_file_is_checked_without_trimming() -> None:
+    """A file written with `echo` ends in a newline and must be refused, not trimmed: a stored
+    newline would break SCRAM logins. The pattern is anchored at both ends."""
+    lines = _loader_script_lines()
+    check = next(x for x in lines if "pg_read_file" in x)
+    assert "~ '^[0-9a-f]{48}$' AS" in check
+    for line in (x for x in lines if "pg_read_file" in x):
+        for word in ("trim", "replace", "substr", "left(", "right(", "split_part", "E'", "chr("):
+            assert word not in line.lower(), (word, line)
+
+
+def test_the_loader_script_silences_echo_context_and_the_server_log_first() -> None:
+    lines = _loader_script_lines()
+    first_read = next(i for i, x in enumerate(lines) if "pg_read_file" in x)
+    for setting in (
+        "\\set VERBOSITY terse",
+        "\\set SHOW_CONTEXT never",
+        "SET log_statement = 'none';",
+        "SET log_min_duration_statement = -1;",
+        "SET log_min_error_statement = panic;",
+    ):
+        assert lines.index(setting) < first_read, setting
+    text = "\n".join(lines)
+    assert "ECHO" not in text and "\\echo" not in text and "\\qecho" not in text
+    assert "\\o" not in text and "\\copy" not in text and "\\!" not in text
+
+
+def test_the_loader_role_is_created_only_when_absent_and_never_repaired() -> None:
+    lines = _loader_script_lines()
+    creates = [i for i, x in enumerate(lines) if "CREATE ROLE" in x]
+    assert len(creates) == 1
+    guard = lines.index("\\if :loader_exists")
+    other = [i for i, x in enumerate(lines) if x == "\\else"]
+    assert other and guard < other[0] < creates[0], "CREATE ROLE only in the absent branch"
+    password_ok = lines.index("\\if :loader_password_ok")
+    assert other[0] < password_ok < creates[0]
+    text = "\n".join(lines)
+    assert "ALTER ROLE" not in text and "DROP" not in text and "REVOKE" not in text
+
+
+def test_an_existing_loader_role_with_any_extra_right_is_refused() -> None:
+    check = next(x for x in _loader_script_lines() if "AS loader_role_unsafe" in x)
+    for part in (
+        "r.rolsuper",
+        "r.rolcreatedb",
+        "r.rolcreaterole",
+        "r.rolreplication",
+        "r.rolbypassrls",
+        "NOT r.rolcanlogin",
+        "pg_catalog.pg_auth_members m WHERE m.member = r.oid OR m.roleid = r.oid",
+        "pg_catalog.pg_db_role_setting s WHERE s.setrole = r.oid",
+    ):
+        assert part in check, part
+    assert " AND " not in check, "every condition refuses on its own"
+
+
+def test_each_refusal_raises_an_error_inside_its_branch() -> None:
+    """`\\quit` exits zero, so a refusal must be a statement that fails under ON_ERROR_STOP."""
+    lines = _loader_script_lines()
+    for flag in (":loader_name_reserved", ":loader_role_unsafe"):
+        start = lines.index(f"\\if {flag}")
+        assert lines[start + 2].endswith("'::integer;"), flag
+        assert lines[start + 3] == "\\endif", flag
+    bad_file = lines.index("\\if :loader_password_ok") + 2
+    assert lines[bad_file] == "\\else" and lines[bad_file + 2].endswith("'::integer;")
+    assert "\\quit" not in "\n".join(lines) and "\\q" not in lines
+
+
+def test_the_loader_role_is_created_without_privileges_and_only_granted_connect() -> None:
+    lines = _loader_script_lines()
+    create = next(x for x in lines if "CREATE ROLE" in x)
+    assert "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L" in (
+        create
+    )
+    for word in ("SUPERUSER", "CREATEDB", "CREATEROLE", "REPLICATION", "BYPASSRLS"):
+        assert re.findall(rf"\b{word}\b", create) == [], word
+    assert "IN ROLE" not in create and "ADMIN" not in create and "INHERIT" not in create
+    assert [x for x in lines if "GRANT" in x.upper()] == [
+        "GRANT CONNECT ON DATABASE divesafe TO divesafe_loader;"
+    ]
+
+
+def test_the_loader_role_name_is_a_literal_reserved_names_are_refused_and_it_matches_hba() -> None:
+    lines = _loader_script_lines()
+    text = "\n".join(lines)
+    assert ":'" not in text and ':"' not in text and "\\getenv" not in text
+    assert "PASSWORD :" not in text
+    assert lines[6].startswith(
+        "SELECT 'divesafe_loader' IN ('divesafe_bootstrap', 'divesafe_owner', 'divesafe_app')"
+    )
+    names = set(re.findall(r"\bdivesafe_[a-z_]+\b", text)) - {
+        "divesafe_bootstrap",
+        "divesafe_owner",
+        "divesafe_app",
+    }
+    assert names == {"divesafe_loader"}
+    loader_rules = [r for r in _hba_rules() if r[0] == "hostssl" and "loader" in r[2]]
+    assert [r[2] for r in loader_rules] == ["divesafe_loader"]
+
+
+def test_the_loader_role_script_is_not_mounted_into_the_database_init_directory(
+    text: str,
+) -> None:
+    """The script runs by hand on an existing volume (stdin of `exec -T`), never at init."""
+    assert "20-create-loader-role" not in text
+
+
+def _runbook_role_command() -> str:
+    body = RUNBOOK.read_text()
+    blocks = re.findall(r"```sh\n(.*?)```", body, re.S)
+    found = [b for b in blocks if "20-create-loader-role.sql" in b]
+    assert len(found) == 1, "exactly one runbook block runs the role script"
+    return found[0]
+
+
+def test_the_runbook_runs_the_role_script_with_the_password_read_inside_the_container() -> None:
+    """ADR 0024 A1 (c): no `exec -e`, no psql echo option, no `$(cat` outside the single-quoted
+    wrapper, and `-u postgres`. The exact text is pinned."""
+    command = _runbook_role_command()
+    assert command == (
+        "docker compose -f docker/docker-compose.production.yml"
+        " --env-file docker/production.env \\\n"
+        "  exec -T -u postgres db sh -c "
+        '\'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \\\n'
+        "  exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \\\n"
+        "  < docker/db/20-create-loader-role.sql\n"
+    )
+    _assert_role_command_is_quiet(command)
+
+
+def _assert_role_command_is_quiet(command: str) -> None:
+    flat = command.replace("\\\n", " ")
+    assert "-u postgres" in flat and "exec -T" in flat
+    options = flat[flat.index(" exec ") : flat.index(" db sh -c ")]
+    assert options == " exec -T -u postgres", "no -e, --env or other option on exec"
+    inner = flat[flat.index("sh -c '") + len("sh -c '") :]
+    inner, _, outside = inner.partition("'")
+    assert "$(cat" not in flat.replace(inner, ""), "the password is read inside the wrapper only"
+    psql = inner[inner.index("psql") :]
+    assert not re.search(r"\s-[a-zA-Z]*[eab]\b|--echo|ECHO", psql), "psql must not echo"
+    assert "<" in outside
+
+
+def test_the_runbook_quiet_check_rejects_each_echo_or_leak() -> None:
+    good = _runbook_role_command()
+    _assert_role_command_is_quiet(good)
+    bad = {
+        "exec -e": good.replace("exec -T", "exec -T -e PGPASSWORD=x"),
+        "psql -e": good.replace("psql -X", "psql -e -X"),
+        "psql -b": good.replace("psql -X", "psql -b -X"),
+        "psql -a": good.replace("psql -X", "psql -a -X"),
+        "ECHO": good.replace("-v ON_ERROR_STOP=1", "-v ON_ERROR_STOP=1 -v ECHO=errors"),
+        "cat outside": good.replace("docker compose", 'PGPASSWORD="$(cat x)" docker compose'),
+        "no -u postgres": good.replace("-u postgres ", ""),
+    }
+    for label, command in bad.items():
+        with pytest.raises(AssertionError):
+            _assert_role_command_is_quiet(command)
+        assert label
+
+
+def test_the_runbook_fallback_insert_names_hash_checked() -> None:
+    """ADR 0024 A3: the owner `psql` fallback INSERT includes the NOT NULL column."""
+    body = RUNBOOK.read_text()
+    inserts = re.findall(r"INSERT INTO public\.kb_status_events \(([^)]*)\)", body)
+    assert inserts == ["document_id, version, status, hash_checked"]
+    assert "'WITHDRAWN', false)" in body
+
+
+def test_the_secrets_script_writes_the_loader_files_with_the_approved_connect_timeout() -> None:
+    script = (COMPOSE.parent / "make-secrets.sh").read_text()
+    assert 'loader_password="$(random)"' in script
+    assert re.search(r'printf .%s. "\$loader_password" \| write_new db_loader_password\b', script)
+    assert (
+        "postgresql://divesafe_loader:${loader_password}@db:5432/divesafe"
+        '?sslmode=require&channel_binding=require&connect_timeout=5" |\n'
+        "    write_new divesafe_loader_database_url || true"
+    ) in script
+
+
+def test_the_secrets_script_writes_files_only_through_write_new() -> None:
+    """A bare redirect would overwrite a secret, or leave it world-readable with no message."""
+    script = (COMPOSE.parent / "make-secrets.sh").read_text()
+    body = script[script.index("write_new() {") :]
+    function, _, rest = body.partition("\n}\n")
+    assert 'cat >"$target"' in function
+    assert not re.search(r">>?\s*\"?\$(dir|\{dir\})", rest), "only write_new writes a file"
+    assert not re.search(r"\btee\b", rest)
