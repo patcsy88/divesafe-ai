@@ -75,7 +75,7 @@ def everything(records: list[logging.LogRecord]) -> str:
     return " ".join(
         str(v)
         for r in records
-        for v in (r.getMessage(), *(v for k, v in r.__dict__.items() if k not in CLOCK))
+        for v in (r.getMessage(), *(field for k, field in r.__dict__.items() if k not in CLOCK))
     )
 
 
@@ -122,13 +122,17 @@ def test_the_log_scan_ignores_only_the_clock() -> None:
     record = logging.makeLogRecord({"msg": "plain", "created": 1762700031.5, "msecs": 501.5})
     record.relativeCreated = 31.5
     assert "1.5" not in everything([record])
-    for leak in (
-        logging.makeLogRecord({"msg": "value %s", "args": (1.5,)}),
-        logging.makeLogRecord({"msg": "plain", "summary": INPUT}),
-        logging.makeLogRecord({"msg": "plain", "exc_text": "validation error"}),
-    ):
-        text = everything([leak])
-        assert "1.5" in text or INPUT in text or "validation error" in text
+    # Each value reaches the scan only through its own field. `logger.error("plain", {"v": x})`
+    # stores the mapping as args, and "plain" % {...} is "plain", so it never shows in getMessage().
+    cases = (
+        ({"msg": "plain", "args": {"v": 1.5}}, "1.5"),
+        ({"msg": "plain", "summary": INPUT}, INPUT),
+        ({"msg": "plain", "exc_text": "validation error"}, "validation error"),
+    )
+    for fields, value in cases:
+        leak = logging.makeLogRecord(fields)
+        assert value not in leak.getMessage(), value
+        assert value in everything([leak]), value
 
 
 def test_of_raises_the_fixed_error_without_cause_or_context_and_logs_only_the_id() -> None:
