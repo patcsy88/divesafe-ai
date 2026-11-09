@@ -22,7 +22,7 @@ from divesafe.services import kb_withdraw
 
 pytestmark = pytest.mark.safety
 
-URL = "postgresql://loader:Zq9-never-echoed@db:5432/divesafe_test?sslmode=require"
+URL = "postgresql://loader:Zq9-never-echoed@db:5432/divesafe_test?sslmode=require&connect_timeout=5"
 BASE = {"DIVESAFE_ENVIRONMENT": "test", "DIVESAFE_LOADER_DATABASE_URL": URL}
 CAUGHT = (AssertionError, Exception, pytest.fail.Exception)
 

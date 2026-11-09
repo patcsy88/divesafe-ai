@@ -66,8 +66,9 @@ class LoaderSettings(BaseModel):
 
 def _check_uri_and_timeout(dsn: str) -> None:
     """ADR 0024 A1/A3: URI form only; no `%` in query keys (libpq decodes them, so an encoded
-    duplicate of connect_timeout could win); no repeated key; connect_timeout, if present, is a
-    positive integer without sign or leading zero and at most the ceiling."""
+    duplicate of connect_timeout could win); no repeated key; connect_timeout is REQUIRED (ADR 0024
+    A1: a missing one is refused, in every environment) and is a positive integer without sign or
+    leading zero and at most the ceiling."""
     refused = LoaderConfigError("the loader connection string is not valid")
     if not dsn.startswith(_URI_SCHEMES):
         raise refused
@@ -76,7 +77,7 @@ def _check_uri_and_timeout(dsn: str) -> None:
     except ValueError:
         raise refused from None
     if not query:
-        return
+        raise refused  # no connect_timeout
     seen: set[str] = set()
     for part in query.split("&"):
         key, _, value = part.partition("=")
@@ -87,6 +88,8 @@ def _check_uri_and_timeout(dsn: str) -> None:
             _TIMEOUT_VALUE.fullmatch(value) is None or int(value) > _CONNECT_TIMEOUT_CEILING
         ):
             raise refused
+    if "connect_timeout" not in seen:
+        raise refused
 
 
 def _query_keys(dsn: str) -> set[str]:

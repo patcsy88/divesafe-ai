@@ -44,4 +44,4 @@ divesafe-*.manifest
 .backup.lock
 
 # Knowledge corpus staging, if ever staged inside the repository (licensed text; ADR 0024 A3).
-/corpus/
+**/corpus

@@ -612,6 +612,7 @@ RUNBOOK = COMPOSE.parents[1] / "docs" / "knowledge-loader.md"
 _PASSWORD_FILE = "'/run/secrets/db_loader_password'"
 
 _LOADER_SCRIPT_LINES = [
+    "\\set ON_ERROR_STOP on",
     "\\set VERBOSITY terse",
     "\\set SHOW_CONTEXT never",
     "SET log_statement = 'none';",
@@ -745,6 +746,10 @@ def test_an_existing_loader_role_with_any_extra_right_is_refused() -> None:
 def test_each_refusal_raises_an_error_inside_its_branch() -> None:
     """`\\quit` exits zero, so a refusal must be a statement that fails under ON_ERROR_STOP."""
     lines = _loader_script_lines()
+    # The script stops on the first error by itself, before any statement, even without the
+    # runbook's `-v ON_ERROR_STOP=1` (which stays: two independent guards).
+    assert lines[0] == "\\set ON_ERROR_STOP on"
+    assert "ON_ERROR_STOP=1" in _runbook_role_command()
     for flag in (":loader_name_reserved", ":loader_role_unsafe"):
         start = lines.index(f"\\if {flag}")
         assert lines[start + 2].endswith("'::integer;"), flag
@@ -773,7 +778,7 @@ def test_the_loader_role_name_is_a_literal_reserved_names_are_refused_and_it_mat
     text = "\n".join(lines)
     assert ":'" not in text and ':"' not in text and "\\getenv" not in text
     assert "PASSWORD :" not in text
-    assert lines[6].startswith(
+    assert lines[7].startswith(
         "SELECT 'divesafe_loader' IN ('divesafe_bootstrap', 'divesafe_owner', 'divesafe_app')"
     )
     names = set(re.findall(r"\bdivesafe_[a-z_]+\b", text)) - {
@@ -1076,5 +1081,6 @@ def test_the_example_corpus_path_is_an_obvious_placeholder() -> None:
 def test_the_corpus_staging_location_is_ignored_by_git_and_the_build() -> None:
     """A5 item 19: `up -d --build` must never bake licensed text into the image."""
     root = COMPOSE.parents[1]
-    assert "corpus" in [x.strip() for x in (root / ".dockerignore").read_text().splitlines()]
-    assert "/corpus/" in [x.strip() for x in (root / ".gitignore").read_text().splitlines()]
+    # `**/corpus`: a directory named corpus at ANY depth (review nit 2026-11-09), not only the root.
+    assert "**/corpus" in [x.strip() for x in (root / ".dockerignore").read_text().splitlines()]
+    assert "**/corpus" in [x.strip() for x in (root / ".gitignore").read_text().splitlines()]

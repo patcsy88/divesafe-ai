@@ -290,6 +290,7 @@ case "$1" in
       case "$arg" in
         label=com.docker.compose.service=api) [ "${FAKE_API_UP:-0}" = 1 ] && echo apiid || true ;;
         label=com.docker.compose.service=kb_load)
+          [ "${FAKE_LOADER_PS_FAIL:-0}" = 1 ] && exit 1
           [ "${FAKE_LOADER:-}" = kb_load ] && echo kbid || true ;;
         label=com.docker.compose.service=kb_withdraw)
           [ "${FAKE_LOADER:-}" = kb_withdraw ] && echo kwid || true ;;
@@ -847,6 +848,7 @@ def test_backup_and_restore_refuse_while_a_loader_container_exists(h: Harness, l
     common = _code("backup-common.sh")
     body = common[common.index("no_loader()") : common.index("single_database()")]
     assert "docker ps -aq" in body and "com.docker.compose.service=$service" in body
+    assert "| grep -q ." not in body  # a pipe would hide the exit status of docker ps
     for name in ("backup.sh", "restore.sh"):
         code = _code(name)
         assert "no_loader kb_load kb_withdraw" in code, name
@@ -883,3 +885,19 @@ def test_the_restore_revokes_temp_and_says_what_comes_next(h: Harness) -> None:
     h.log.write_text("")
     bad = h.run("restore.sh", str(dump), FAKE_REVOKE_FAIL="1")
     assert bad.returncode != 0 and "Do not start the api" in bad.stderr
+
+
+def test_backup_and_restore_refuse_when_docker_cannot_list_the_loader_containers(
+    h: Harness,
+) -> None:
+    """Review nit (2026-11-09): a failing `docker ps -a` must refuse, never read as "no loader"."""
+    dump = _restore_inputs(h)
+    for name in list(h.out.iterdir()):
+        name.rename(h.tmp / name.name)
+    dump = h.tmp / dump.name
+    result = h.run("backup.sh", str(h.out), FAKE_LOADER_PS_FAIL="1")
+    assert result.returncode != 0 and "could not list 'kb_load' containers" in result.stderr
+    assert list(h.out.iterdir()) == [] and "exec pg_dump" not in h.calls()
+    result = h.run("restore.sh", str(dump), FAKE_LOADER_PS_FAIL="1")
+    assert result.returncode != 0 and "could not list 'kb_load' containers" in result.stderr
+    assert "pg_restore" not in h.calls()

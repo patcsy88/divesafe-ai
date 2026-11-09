@@ -42,8 +42,13 @@ one_container() {
 # withdrawal during a backup or a restore would leave the archive or the database half-way.
 no_loader() {
   for service in "$@"; do
-    if docker ps -aq --filter "label=com.docker.compose.project=$project" \
-      --filter "label=com.docker.compose.service=$service" | grep -q .; then
+    # A docker error must refuse: an empty answer from a failed `docker ps` is not "none".
+    if ! found="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+      --filter "label=com.docker.compose.service=$service")"; then
+      echo "refusing: could not list '$service' containers in project '$project' (docker ps -a failed)" >&2
+      return 1
+    fi
+    if [ -n "$found" ]; then
       echo "refusing: a '$service' container exists in project '$project'; let it finish, then remove it (docker ps -a)" >&2
       return 1
     fi

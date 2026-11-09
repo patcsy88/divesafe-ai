@@ -6,6 +6,7 @@
 -- psql variable or in an environment variable, and it is never selected: the generated statement
 -- is run with \gexec. Errors print no statement text and no context, and nothing is logged.
 -- The role name is a literal here and must equal the loader rule in pg_hba.conf.
+\set ON_ERROR_STOP on
 \set VERBOSITY terse
 \set SHOW_CONTEXT never
 SET log_statement = 'none';
