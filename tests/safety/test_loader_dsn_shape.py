@@ -58,11 +58,12 @@ REFUSED_TIMEOUT_URLS = [
     f"{BASE}?",
     f"{BASE}?connect_timeoutx=5",
     f"{BASE}?xconnect_timeout=5",
-    # A wrong scheme or the keyword form is refused even WITH a timeout, so the scheme check
-    # itself is needed (a string with no query is refused by the timeout rule as well).
+    # Refused ONLY by the scheme check: each has a valid `connect_timeout=5` query, so without
+    # that check all three would pass (checked by removing it, 2026-11-09). A string with no query
+    # is refused by the timeout rule as well.
     "mysql://loader:Zq9-never-echoed@db/divesafe?connect_timeout=5",
     "http://loader:Zq9-never-echoed@db/divesafe?connect_timeout=5",
-    "host=db?connect_timeout=5 user=loader password=Zq9-never-echoed",
+    "host=db user=loader password=Zq9-never-echoed?connect_timeout=5",  # keyword/value form
 ]
 
 
