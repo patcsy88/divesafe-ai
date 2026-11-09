@@ -67,6 +67,7 @@ def test_the_model_has_only_the_listed_fields() -> None:
         "environment",
         "loader_database_url",
         "corpus_target",
+        "dsn_from_secrets_dir",
     }
 
 

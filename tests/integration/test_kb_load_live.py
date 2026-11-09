@@ -845,8 +845,9 @@ def test_a_raw_writer_locking_documents_in_the_opposite_order_ends_in_a_fixed_re
 def test_production_refuses_load_and_approve_and_the_database_is_unchanged(
     scratch: Scratch, tmp_path: Path
 ) -> None:
-    """A DRAFT is loaded outside production first. In production both commands refuse with the
-    gate's fixed outcome, and every count and status event is as before. withdraw still works."""
+    """A DRAFT is loaded outside production first. In production, and with a string from the
+    secrets directory in `test`, both commands refuse with the gate's fixed outcome, and every
+    count and status event is as before. withdraw still works."""
     root, digest = _corpus(tmp_path)
     assert _go(_load_args(digest), scratch.loader_dsn, root).status == OK
     before = (scratch.counts(), scratch.events("site-guide"))
@@ -856,12 +857,20 @@ def test_production_refuses_load_and_approve_and_the_database_is_unchanged(
         loader_database_url=SecretStr(scratch.loader_dsn),
         corpus_target=other,
     )
-    for argv in (
-        _load_args(other_digest),
-        ["approve", "site-guide", "1", "--approved-manifest-sha256", digest],
-    ):
-        outcome = kb_load.run(kb_load.parse_arguments(argv), production)
-        assert outcome == kb_load.FAILED_GATES_OPEN, argv[0]
+    # The same string read from a secrets directory, with the environment claiming `test`.
+    from_secrets_dir = LoaderSettings(
+        environment="test",
+        loader_database_url=SecretStr(scratch.loader_dsn),
+        corpus_target=other,
+        dsn_from_secrets_dir=True,
+    )
+    for settings in (production, from_secrets_dir):
+        for argv in (
+            _load_args(other_digest),
+            ["approve", "site-guide", "1", "--approved-manifest-sha256", digest],
+        ):
+            outcome = kb_load.run(kb_load.parse_arguments(argv), settings)
+            assert outcome == kb_load.FAILED_GATES_OPEN, (settings.environment, argv[0])
     assert (scratch.counts(), scratch.events("site-guide")) == before
     withdrawn = kb_withdraw.run_withdraw(["site-guide", "1"], scratch.loader_dsn)
     assert withdrawn == kb_withdraw.OK

@@ -46,9 +46,12 @@ from divesafe.services.kb_manifest import LoadedCorpus
 FLAG_HASH = "--approved-manifest-sha256"
 FLAG_DEV = "--development-no-manifest-hash"
 
-# Owner decision (2026-11-09): in production, `load` and `approve` refuse until every gate in
-# ADR 0024 A6 ("First-production-load gates") is closed. Lifted ONLY by a reviewed change of this
-# literal, never by a setting, an environment variable or a file. `withdraw` is not affected.
+# Owner decisions (2026-11-09): `load` and `approve` refuse until every gate in ADR 0024 A6
+# ("First-production-load gates") is closed, in production AND whenever the connection string came
+# from DIVESAFE_SECRETS_DIR, whatever DIVESAFE_ENVIRONMENT says. The literal is the only switch
+# the code offers. This stops accidents and casual overrides (`-e DIVESAFE_ENVIRONMENT=...`), not
+# an operator with Docker access who replaces the entrypoint or the module, or hand-builds a
+# connection string outside the secrets directory (ADR 0024 A8). `withdraw` is not affected.
 PRODUCTION_LOAD_GATES_CLOSED = False
 
 
@@ -460,7 +463,7 @@ def _run_on(
 
 
 def run(request: Request, settings: LoaderSettings) -> Outcome:
-    if settings.production and not PRODUCTION_LOAD_GATES_CLOSED:
+    if (settings.production or settings.dsn_from_secrets_dir) and not PRODUCTION_LOAD_GATES_CLOSED:
         return FAILED_GATES_OPEN  # first: no corpus read, no connection, nothing written
     seconds = (
         kb_common.LOAD_DEADLINE_SECONDS

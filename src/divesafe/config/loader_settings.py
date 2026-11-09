@@ -52,6 +52,10 @@ class LoaderSettings(BaseModel):
     environment: Literal["development", "test", "production"]
     loader_database_url: SecretStr
     corpus_target: Path | None = None
+    # True when the connection string was read from DIVESAFE_SECRETS_DIR. Set only by
+    # load_loader_settings from where it found the string, never from an environment value.
+    # kb_load refuses `load` and `approve` while it is set (ADR 0024 A6); withdraw ignores it.
+    dsn_from_secrets_dir: bool = False
 
     @property
     def production(self) -> bool:
@@ -178,4 +182,5 @@ def load_loader_settings(environ: Mapping[str, str] | None = None) -> LoaderSett
         environment=name,
         loader_database_url=SecretStr(url),
         corpus_target=Path(target) if target else None,
+        dsn_from_secrets_dir=bool(location),
     )
