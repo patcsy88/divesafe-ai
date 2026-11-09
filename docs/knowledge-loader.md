@@ -15,7 +15,11 @@ says (so `-e DIVESAFE_ENVIRONMENT=development` on the compose loader does not li
 a determined operator with Docker access: one who replaces the entrypoint (`--entrypoint`), runs
 a changed copy of the module, or puts a hand-built loader string in `DIVESAFE_LOADER_DATABASE_URL`
 instead of the secrets directory can still write. Do none of these; the gap is recorded in ADR
-0024 A8. For the A7 hand run use the test-only seed in
+0024 A8. **Copying the loader string out of the secret** (for example into `-e
+DIVESAFE_LOADER_DATABASE_URL=...`) also exposes the loader password: it ends up in the process
+arguments (`ps`), the shell history and the container's configuration (`docker inspect`). If that
+ever happens, rotate the loader password (`ALTER ROLE divesafe_loader` as the superuser, then a
+new `db_loader_password` and loader string, section 2). For the A7 hand run use the test-only seed in
 [backup-and-restore.md](backup-and-restore.md) ("Knowledge rows for the A7 hand run"), never
 `kb_load`.
 

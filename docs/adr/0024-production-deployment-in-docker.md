@@ -20,8 +20,9 @@
   acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **A1 to A7
   are built** on branch `deploy-a1-a7` (2026-11-09, commits `a2c1e68`, `59381de`, `f4879a5`,
   `9f5b3ea`; see "Build state" at the end of A8). **Both reviewers reviewed `9f5b3ea` once** (no
-  blockers); the findings were fixed in the commits listed in "Build state", and those fixes are
-  **not yet reviewed**. Not run on the owner's host; the A7 hand run and the owner gates in A6
+  blockers); the findings were fixed in the commits listed in "Build state", and the final round
+  (`8eface8`..`99ace68`) was **reviewed by both reviewers on 2026-11-09, no blockers and no
+  should-fix**; its nits are fixed in the docs-only commit after it. Not run on the owner's host; the A7 hand run and the owner gates in A6
   remain. **In production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
@@ -1393,7 +1394,8 @@ condition; the mutation check is to break the compose file once and watch it fai
   secrets directory are unchanged. The only switch the code offers is a reviewed change of the
   module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in `src/divesafe/services/kb_load.py`,
   made after every gate in the list below is closed and reviewed by both reviewers.
-  **What it stops:** accidents and casual overrides (an environment value, a setting, a file).
+  **What it stops:** accidents and casual overrides (a single environment value, a setting, a
+  file).
   **What it does not stop:** a determined operator with Docker access (A8). Pinned by
   `tests/safety/test_kb_load_production_gate.py`: refusal before any read or connection, in
   production and with a secrets-directory string in development and test; through `_main` with
@@ -1791,13 +1793,17 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `DIVESAFE_ENVIRONMENT`, which the settings treat as development. Such a person can also write
     as the owner with `psql`, so the gate cannot be the control against them; review, the
     loader role's narrow rights and the database triggers are. The A7 hand run gets its rows from
-    a test-only seed (`docs/backup-and-restore.md`), not by any of these.
+    a test-only seed (`docs/backup-and-restore.md`), not by any of these. **Copying the loader
+    string out of the secret into `-e DIVESAFE_LOADER_DATABASE_URL=...` also exposes the loader
+    password** (process arguments and `ps`, shell history, `docker inspect`); if that ever
+    happens, the loader password must be rotated (`docs/knowledge-loader.md`).
   - **The loaders share the live image tag** (A5 pin 11: same `image` and `build` as `api`). A
     `build` or `--build` with the `knowledge` profile would replace the image the running API was
     started from; the compose header and the runbook say never to do that, and nothing
     mechanical stops it.
-- **Build state (2026-11-09, branch `deploy-a1-a7`, not pushed; `9f5b3ea` reviewed once, the
-  fixes after it not yet reviewed):**
+- **Build state (2026-11-09, branch `deploy-a1-a7`, not pushed; `9f5b3ea` reviewed once; the
+  final round `8eface8`..`99ace68` reviewed by both reviewers on 2026-11-09 with no blockers and
+  no should-fix; its nits are fixed in the docs-only commit after `99ace68`):**
   - A1 and A2 (`a2c1e68`): `docker/db/20-create-loader-role.sql` (`pg_read_file`, refusal by a
     failing cast after a `\warn`, `search_path = pg_catalog, pg_temp`), `make-secrets.sh` loader
     files (`connect_timeout=5`), the `pg_hba.conf` rule, `docs/knowledge-loader.md`. 35/35
@@ -1816,8 +1822,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     them, "`kb_guards` accepts a disabled trigger", first survived** and was caught only after a
     pin was added for it. The facts SQL ran on empty PG16 and PG17 test databases.
   - ADR text (`9f5b3ea`): this build state, verifications, Q10. **Reviewed once by both reviewers
-    (2026-11-09), no blockers**; the findings were fixed in the commits below, which are not yet
-    reviewed.
+    (2026-11-09), no blockers**; the findings were fixed in the commits below. **The final round
+    (`8eface8`..`99ace68`) was reviewed by both reviewers on 2026-11-09: no blockers, no
+    should-fix**; its nits (the A7 hand-run steps, the password exposure of a copied loader
+    string, wording) are fixed in the docs-only commit after `99ace68`.
   - **Production gate (`10f13cf`; owner decision 2026-11-09; A6):** `PRODUCTION_LOAD_GATES_CLOSED = False`
     in `kb_load.py`; `load` and `approve` exit 24 in production before any read, connection or
     write; `withdraw` unaffected. The two production hash-rule tests in `test_kb_load_flow.py` now
@@ -1837,7 +1845,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     (9/9 caught).
   - **A7 seed (`68f0537`):** `tests/hand_run/a7_seed_knowledge.sh` and `.sql` write synthetic
     knowledge rows as the owner into a `throwaway-*` compose project only, never through
-    `kb_load`; the SQL ran on PG16 and PG17 test databases; 8/8 mutations caught.
+    `kb_load`; the SQL ran on PG16 and PG17 test databases; 8/8 mutations caught. **In the
+    tree** (`tests/unit/test_a7_seed_script.py`): 3 on the script ("any project", "prod name
+    allowed", "count not checked"). **Run by hand only**: 2 on the script ("bad characters
+    allowed", "no ON_ERROR_STOP") and 3 on the SQL against PG16 ("not-empty check dropped",
+    "withdrawn missing", "label dropped"; the last first survived and the test was tightened).
   - **S1 (`9452eb3` and this ADR commit; risk-reviewer should-fix):** the first-run order is `up -d --wait db`, the role script,
     `up -d --wait api` (`docs/first-run-on-the-real-host.md`, "How to run it" above, the compose
     header); without the role script `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume.
@@ -1860,7 +1872,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 ## Not solved
 
 - **The knowledge loader (Amendment 1) is built; the build was reviewed once (`9f5b3ea`, no
-  blockers) and the fixes after it are not yet reviewed; it is not run on the owner's host**
+  blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
+  `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
   (A8 "Build state"); the A7 hand run is not done. Production `load` and `approve` refuse in code
   until the A6 gates are closed (also from the secrets directory in any environment; not a
   control against an operator with Docker access, A8). Both reviewers accepted its second,

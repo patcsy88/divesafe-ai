@@ -2,7 +2,10 @@
 read or write until the ADR 0024 A6 gates are closed, in production AND whenever the loader's
 connection string came from DIVESAFE_SECRETS_DIR, whatever DIVESAFE_ENVIRONMENT says
 (development, test, empty or unset). The only switch the code offers is the literal
-`PRODUCTION_LOAD_GATES_CLOSED`; no setting, environment value or file reaches the check.
+`PRODUCTION_LOAD_GATES_CLOSED`. The check reads only that literal, `settings.production` and
+`settings.dsn_from_secrets_dir`; a single environment value (DIVESAFE_ENVIRONMENT included) cannot
+lift it while the string comes from the secrets directory, but the environment does decide where
+the string comes from (see below).
 
 What this does NOT stop (ADR 0024 A8): an operator with Docker access who replaces the entrypoint,
 shadows the module, or hand-builds a connection string in the environment instead of the secrets

@@ -379,28 +379,113 @@ through the insert triggers, which still check and stamp every row. It never run
   (`tests/integration/test_a7_seed_knowledge.py`); another runs the script's refusals against a
   fake `docker` (`tests/unit/test_a7_seed_script.py`).
 
-Steps (on a developer machine, never on the owner's production host):
+Steps (on a developer machine with its own `docker/secrets` and `docker/production.env`, never on
+the owner's production host). Every compose command goes through `$C`, which names the throwaway
+project with `-p` and adds a test-only override that sets a **test image tag**; nothing here builds,
+tags or runs `divesafe-api:local`, and nothing touches a `divesafe-prod` project. Never add
+`--build` to a `$C` command. The work directory is outside the repository and is **never** the
+production backup directory. Run the blocks in one `bash` session (zsh does not split `$C` into
+words); `docker/production.env` needs `DIVESAFE_CORPUS_DIR` (an empty directory is enough).
 
 ```sh
-export DIVESAFE_COMPOSE_PROJECT=throwaway-a7
-C="docker compose -p $DIVESAFE_COMPOSE_PROJECT -f docker/docker-compose.production.yml --env-file docker/production.env"
-$C up -d --wait db          # a new volume: throwaway-a7_db-data
-# the role script (docs/knowledge-loader.md, section 2), with the container of this project
-$C up db-init
+# 0. A private work directory (mode 0700, outside the repository), a test image and its override.
+W="$(mktemp -d)"; mkdir -m 0700 "$W/backups"
+A7_IMAGE="divesafe-api:a7-test-$(date +%s)"
+docker build -f docker/Dockerfile -t "$A7_IMAGE" .
+cat >"$W/a7.override.yml" <<YML
+services:
+  db-init: { image: "$A7_IMAGE" }
+  api: { image: "$A7_IMAGE" }
+  kb_load: { image: "$A7_IMAGE" }
+  kb_withdraw: { image: "$A7_IMAGE" }
+YML
+use() {  # use <project>: sets the project for the scripts and for $C
+  export DIVESAFE_COMPOSE_PROJECT="$1"
+  C="docker compose -p $1 -f docker/docker-compose.production.yml -f $W/a7.override.yml --env-file docker/production.env"
+}
+role() {  # the role script (docs/knowledge-loader.md, section 2) in THIS project's db
+  $C exec -T -u postgres db sh -c 'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \
+    exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \
+    < docker/db/20-create-loader-role.sql
+}
+owner() {  # one read-only query as divesafe_owner in THIS project's db
+  $C exec -T db sh -c 'PGPASSWORD="$(cat /run/secrets/db_owner_password)" PGSSLMODE=require \
+    exec psql -X -At -v ON_ERROR_STOP=1 -h db -U divesafe_owner -d divesafe' <<SQL
+$1
+SQL
+}
+
+# 1. The source project.
+use throwaway-a7
+$C up -d --wait db            # new volume throwaway-a7_db-data
+role                          # exit 0
+$C up db-init                 # exits 0
 tests/hand_run/a7_seed_knowledge.sh
-docker/backup.sh            # then the restore order of A7 into a second throwaway project
+                              # exit 0; last line: seeded documents=3 chunks=4 events=6
+docker/backup.sh "$W/backups" # prints "backup written: ..." and "scratch restore equals the
+                              # live database: assessments=0 decided=0"; the manifest in
+                              # $W/backups holds all 19 facts, with kb_documents=3,
+                              # kb_chunks=4, kb_status_events=6
+
+# 2. Stop the source db: the scripts refuse while two compose `db` containers run
+#    (single_database).
+$C stop db
+
+# 3. Restore into a second throwaway project: db, role BEFORE restore, restore, db-init.
+use throwaway-a7-restore
+$C up -d --wait db
+role                          # the "used database" check must still see an empty database
+docker/restore.sh "$W"/backups/divesafe-*.dump
 ```
 
-The image used must be a test tag, never the live one (`divesafe-api:local`): set it with a
-test-only compose override file and remove the file afterwards. Afterwards remove both throwaway
-projects and their volumes (`$C down -v`, for each project name).
+Expected from `restore.sh`: "restored and matched the manifest: assessments=0 decided=0
+kb_documents=3 kb_status_events=6" (all 19 facts equal); **no** line "TEMP could not be revoked";
+then the report, whose knowledge part is exactly:
+
+```text
+knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); ...
+a7-approved 1 APPROVED aaaa...a (64 a)
+a7-draft 1 DRAFT cccc...c (64 c)
+approvals with hash_checked = false (the manifest hash was not compared):
+a7-withdrawn 1 <its recorded_at>
+```
+
+and finally "the grants are NOT yet applied. next, ...". Then:
+
+```sh
+owner "SELECT has_database_privilege('public', 'divesafe', 'TEMPORARY')"   # f (TEMP revoked)
+$C up db-init                                                             # exits 0
+owner "SELECT max(event_order) FROM public.kb_status_events"              # note it: M
+$C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its
+                                                                          # recorded_at, "withdrawn"
+owner "SELECT event_order, status FROM public.kb_status_events
+       WHERE document_id = 'a7-approved' ORDER BY event_order DESC LIMIT 1"
+                                                                          # WITHDRAWN, above M
+```
+
+A withdrawal whose `event_order` is not above `M`, or that fails on `UNIQUE(event_order)`, means
+the restored sequence was set back (ADR 0022 Known gaps): record it as a finding.
+
+Cleanup, always, whatever failed (the API is never started in either project):
+
+```sh
+use throwaway-a7-restore; $C --profile knowledge down -v
+use throwaway-a7;         $C --profile knowledge down -v
+rm -rf "$W"                   # the hand-run archives, manifests and the override file
+docker image rm "$A7_IMAGE"
+docker volume ls -q | grep throwaway-a7 || echo "no volumes left"
+```
+
+The archives hold only synthetic rows, but they are still archives: keep them in `$W` only, never
+in the production backup directory, and delete them with it.
 
 ## Not done
 
 - **The hand run of the knowledge changes (ADR 0024 A7) on a throwaway volume:** a backup and a
   restore of a database with knowledge rows, the role-before-restore order and the "used database"
-  check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker` cannot run SQL; the fact queries were run once against empty PostgreSQL
-  16 and 17 test databases. **Required before the first production load.**
+  check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker`
+  cannot run SQL; the fact queries were run once against empty PostgreSQL 16 and 17 test
+  databases. **Required before the first production load.**
 - The read-only post-restore check (documents, versions, manifest hashes and latest status) is
   the restore's closing report; there is no separate command to run it again later.
 
