@@ -67,7 +67,16 @@ the person who already operates the stack. The API may stay up. Two cautions:
   archive carries it.
 - Backup and restore **refuse while a `kb_load` or `kb_withdraw` container exists** in the project,
   running or stopped (found by its compose service label; `compose run` containers carry it). Run
-  the loader with `--rm`, or remove a leftover container (`docker ps -a`).
+  the loader with `--rm`, or remove a leftover container (`docker ps -a`). **If `docker ps -a`
+  itself fails, they refuse too** ("could not list ... containers"); an error is never read as "no
+  loader".
+- **That loader check is a point-in-time check, not the protection.** It looks once, before the
+  work starts; a loader started a moment later, under another compose project name or with plain
+  `docker run` is not seen. What actually protects the archive is the before/after facts check
+  below (a write in between makes it dump again) and the loader role itself, which can only
+  connect and add knowledge rows. **A scheduled backup needs an alert on failure**: a leftover
+  loader container makes every run refuse until someone removes it, and a silent refusal means
+  no backup.
 
 - The directory must be outside this repository, a real directory of yours with mode 0700 and no
   ACL entry (it is created with mode 0700 if missing). On a Mac, `ls -lde` must succeed and show no
@@ -121,10 +130,16 @@ the person who already operates the stack. The API may stay up. Two cautions:
 - The manifest also records the archive's SHA-256.
 
 **What the facts do not cover:** the content of `pending_runs`, the values of the failure
-counters, what other functions do, table grants, casts and operators, and whether the guard functions are
+counters, the position of the knowledge ordering sequence, what other functions do, table grants, casts and operators, and whether the guard functions are
 *correct* rather than unchanged (the owner owns them and could have replaced them before the
 backup; everything then agrees with the replacement). Only the names and the definitions' hash of
 the guard are checked.
+
+**The knowledge guard functions are different:** their bodies are **hash-pinned in the code** and
+checked at start-up, by `db-init` (`migrate()`) and by the API's `verify()`, against a pin per
+PostgreSQL major version (ADR 0022 condition 9). That pin, not the backup facts, is what refuses
+a replaced knowledge guard. The `kb_guard_defs` fact only shows that the archive and the database
+agree with each other.
 
 **The archive holds named human decisions and assessment content.** Treat it like the database:
 keep it off shared places, and encrypt it before it leaves the machine. Encryption, an off-machine
@@ -176,6 +191,13 @@ Then:
    docker/production.env up -d --wait db`. On an empty volume this creates the owner and app roles
    and an empty `divesafe` database. **Do not start `db-init` or the API yet**: if either creates
    the schema while the restore is checking, the load fails on the existing tables.
+   **This needs `DIVESAFE_CORPUS_DIR`** (every compose command on the production file does, even
+   for a service whose profile is off; ADR 0024 A3). If `docker/production.env` is lost or lacks
+   it, put the line back first, or give it on the command line for this one command
+   (`DIVESAFE_CORPUS_DIR=/an/absolute/dir/outside/the/repository docker compose ...`; a variable
+   in the shell wins over `--env-file`; an empty directory is enough, no loader runs here).
+   While compose cannot read the file, use plain `docker` for what you must do anyway: `docker
+   stop <name>` to stop a running API (`docker ps` shows the name).
 6. Create the loader role with the role script (`docs/knowledge-loader.md`), **before** the
    restore. A role and `GRANT CONNECT` do not count as objects in `public`, so the restore still
    sees an empty database (read from the script; part of the hand run, not yet done).
@@ -199,7 +221,8 @@ Then:
 **An archive from before the knowledge tables (`format=1`) is refused** with a message that says
 it is the old format. Restore it with the old scripts, run from a `git worktree` of the commit they
 come from (`restore.sh` sources `backup-common.sh` from its own directory), into a database without
-the knowledge tables, then run `db-init`: commit `433b569` for an archive from before migration 3,
+the knowledge tables, then **run the role script (step 6, from this checkout) before** `db-init`
+(today's `db-init` refuses with `LOADER_ROLE_MISSING` without the loader role), then run `db-init`: commit `433b569` for an archive from before migration 3,
 and for later ones commit `915285c` (the scripts are unchanged from `6840d2b` through `75cbd58` to
 `915285c`: `git diff` of the three scripts between them is empty, checked 2026-11-09).
 
@@ -236,7 +259,10 @@ remove it.
 The append-only guard is never switched off: the data is loaded first and the triggers are
 created after it, as part of a normal restore. **That also means a restore is the one way decided
 rows get into the database without the insert guard and without an authenticated actor.** The
-manifest check catches damage; it does not make an archive trustworthy.
+same holds for the knowledge tables: restored `kb_*` rows **skip the knowledge insert triggers**
+(the checks and stamps they make on a normal insert); damage to them is caught by the `kb_digest`
+fact, which covers every column of every row. The manifest check catches damage; it does not make
+an archive trustworthy.
 
 ## After a restore: reconcile before anyone acts on the data
 
