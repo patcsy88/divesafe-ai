@@ -66,8 +66,17 @@ def broken_of(record: AssessmentRecord) -> AssessmentRecord:
     return record.model_copy(update={"scenarios": (first, *record.scenarios[1:])})
 
 
+# The record's own clock fields: a timestamp such as 1762700031.5... would contain "1.5" by chance
+# and fail the scan about once in thirty runs. Every other field is still scanned.
+CLOCK = frozenset({"created", "msecs", "relativeCreated"})
+
+
 def everything(records: list[logging.LogRecord]) -> str:
-    return " ".join(str(v) for r in records for v in (r.getMessage(), *r.__dict__.values()))
+    return " ".join(
+        str(v)
+        for r in records
+        for v in (r.getMessage(), *(v for k, v in r.__dict__.items() if k not in CLOCK))
+    )
 
 
 def of_misses(mod: Any) -> list[str]:
@@ -106,6 +115,20 @@ def of_misses(mod: Any) -> list[str]:
         if leak in text:
             bad.append(f"the captured logs contain {leak!r}")
     return bad
+
+
+def test_the_log_scan_ignores_only_the_clock() -> None:
+    """The scan once failed at random when a timestamp contained "1.5" (review 2026-11-09)."""
+    record = logging.makeLogRecord({"msg": "plain", "created": 1762700031.5, "msecs": 501.5})
+    record.relativeCreated = 31.5
+    assert "1.5" not in everything([record])
+    for leak in (
+        logging.makeLogRecord({"msg": "value %s", "args": (1.5,)}),
+        logging.makeLogRecord({"msg": "plain", "summary": INPUT}),
+        logging.makeLogRecord({"msg": "plain", "exc_text": "validation error"}),
+    ):
+        text = everything([leak])
+        assert "1.5" in text or INPUT in text or "validation error" in text
 
 
 def test_of_raises_the_fixed_error_without_cause_or_context_and_logs_only_the_id() -> None:
