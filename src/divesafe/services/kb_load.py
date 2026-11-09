@@ -46,6 +46,11 @@ from divesafe.services.kb_manifest import LoadedCorpus
 FLAG_HASH = "--approved-manifest-sha256"
 FLAG_DEV = "--development-no-manifest-hash"
 
+# Owner decision (2026-11-09): in production, `load` and `approve` refuse until every gate in
+# ADR 0024 A6 ("First-production-load gates") is closed. Lifted ONLY by a reviewed change of this
+# literal, never by a setting, an environment variable or a file. `withdraw` is not affected.
+PRODUCTION_LOAD_GATES_CLOSED = False
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -77,6 +82,9 @@ FAILED_SELF_CHECK_INCOMPLETE = Outcome(20, "refused: self-check incomplete; noth
 FAILED_WRONG_STATUS = Outcome(21, "refused: version is not in DRAFT status; nothing written")
 FAILED_FILE_HASH = Outcome(22, "refused: a file hash does not match; nothing written")
 FAILED_CHUNK_HASH = Outcome(23, "refused: a chunk hash does not match; nothing written")
+FAILED_GATES_OPEN = Outcome(
+    24, "refused: production load gates (ADR 0024 A6) are not closed; nothing written"
+)
 OK_LOAD = Outcome(0, "loaded as DRAFT")
 OK_APPROVE = Outcome(0, "approved")
 
@@ -103,6 +111,7 @@ EXIT_TABLE: tuple[Outcome, ...] = (
     FAILED_WRONG_STATUS,
     FAILED_FILE_HASH,
     FAILED_CHUNK_HASH,
+    FAILED_GATES_OPEN,
     OK_LOAD,
     OK_APPROVE,
 )
@@ -451,6 +460,8 @@ def _run_on(
 
 
 def run(request: Request, settings: LoaderSettings) -> Outcome:
+    if settings.production and not PRODUCTION_LOAD_GATES_CLOSED:
+        return FAILED_GATES_OPEN  # first: no corpus read, no connection, nothing written
     seconds = (
         kb_common.LOAD_DEADLINE_SECONDS
         if request.command == "load"

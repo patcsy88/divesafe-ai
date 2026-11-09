@@ -2,7 +2,12 @@
 
 This is a procedure to run by hand. It loads, approves and withdraws site-knowledge documents
 (ADR 0022) on the production compose stack. **No production load may happen yet**: the gates in
-ADR 0024 A6 ("First-production-load gates") are still open. Knowledge is context only; it never
+ADR 0024 A6 ("First-production-load gates") are still open, and **the code enforces it**:
+in production, `kb_load load` and `kb_load approve` exit 24 ("refused: production load gates
+(ADR 0024 A6) are not closed; nothing written") before reading the corpus or connecting.
+`withdraw` is not affected. The refusal is lifted only by a reviewed code change
+(`PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py`), never by a setting, an
+environment variable or a file (owner decision, 2026-11-09). Knowledge is context only; it never
 supplies live conditions and never decides a dive. On this stack every knowledge item is withheld
 from the model (ADR 0022 decision 15).
 
@@ -13,8 +18,9 @@ C="docker compose -f docker/docker-compose.production.yml --env-file docker/prod
 ```
 
 Every compose command on the production file needs `DIVESAFE_CORPUS_DIR` in
-`docker/production.env`, even `up` and `down` (ADR 0024 A3). Set it to a directory **outside the
-repository**. The placeholder in the example file is refused by the loader (no manifest there).
+`docker/production.env`, even `up` and `down` (ADR 0024 A3). Set it to an **absolute path** of a
+directory **outside the repository** (a relative path is resolved against `docker/`, and a
+directory inside the repository would put licensed text where `git` and the build can see it). The placeholder in the example file is refused by the loader (no manifest there).
 
 ## 1. Upgrade order on a host that already has a volume (ADR 0024 A6)
 
@@ -54,7 +60,10 @@ printing it.
 
 ## 3. Load, approve, withdraw
 
-The loader services start only with the `knowledge` profile, never with `up`:
+The loader services start only with the `knowledge` profile, never with `up`. **Never add
+`--build` to these commands and never run `build` with the knowledge profile:** build the image
+only from the deploy commit, with `up -d --build` of the main stack. (Until the gates are closed,
+`load` and `approve` refuse in production with exit 24; see the top of this page.)
 
 ```sh
 $C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>

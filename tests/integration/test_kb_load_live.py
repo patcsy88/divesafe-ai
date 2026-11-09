@@ -836,3 +836,33 @@ def test_a_raw_writer_locking_documents_in_the_opposite_order_ends_in_a_fixed_re
     assert raw != [] and elapsed < 20
     assert outcome in (kb_load.FAILED_LOCK_BUSY, kb_load.FAILED_DEADLOCK), (outcome, raw)
     assert scratch.counts() == (0, 0, 0)
+
+
+# --- the production gate (owner decision 2026-11-09; ADR 0024 A6) ---------------------------------
+
+
+@pytest.mark.safety
+def test_production_refuses_load_and_approve_and_the_database_is_unchanged(
+    scratch: Scratch, tmp_path: Path
+) -> None:
+    """A DRAFT is loaded outside production first. In production both commands refuse with the
+    gate's fixed outcome, and every count and status event is as before. withdraw still works."""
+    root, digest = _corpus(tmp_path)
+    assert _go(_load_args(digest), scratch.loader_dsn, root).status == OK
+    before = (scratch.counts(), scratch.events("site-guide"))
+    other, other_digest = _corpus(tmp_path, [doc_spec("other-guide")])
+    production = LoaderSettings(
+        environment="production",
+        loader_database_url=SecretStr(scratch.loader_dsn),
+        corpus_target=other,
+    )
+    for argv in (
+        _load_args(other_digest),
+        ["approve", "site-guide", "1", "--approved-manifest-sha256", digest],
+    ):
+        outcome = kb_load.run(kb_load.parse_arguments(argv), production)
+        assert outcome == kb_load.FAILED_GATES_OPEN, argv[0]
+    assert (scratch.counts(), scratch.events("site-guide")) == before
+    withdrawn = kb_withdraw.run_withdraw(["site-guide", "1"], scratch.loader_dsn)
+    assert withdrawn == kb_withdraw.OK
+    assert [e[0] for e in scratch.events("site-guide")] == ["DRAFT", "WITHDRAWN"]
