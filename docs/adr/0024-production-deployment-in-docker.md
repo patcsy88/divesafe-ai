@@ -22,8 +22,10 @@
   `9f5b3ea`; see "Build state" at the end of A8). **Both reviewers reviewed `9f5b3ea` once** (no
   blockers); the findings were fixed in the commits listed in "Build state", and those fixes are
   **not yet reviewed**. Not run on the owner's host; the A7 hand run and the owner gates in A6
-  remain. **In production, `kb_load load` and `approve` refuse in code (exit 24) until the A6
-  gates are closed** (owner decision, 2026-11-09). Both reviewers accepted its second, third and fourth revisions as
+  remain. **In production, and whenever the loader string comes from the secrets directory,
+  `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
+  decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
+  access, A8). Both reviewers accepted its second, third and fourth revisions as
   recorded designs (no blockers; the fourth is committed as `c0457ef`), and the fifth (committed as
   `6545bd7`) likewise; the sixth revision (small, text only) has not been seen by either (see the
   notes at its start).
@@ -1376,21 +1378,34 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
-- **The gates are enforced in code (owner decision, 2026-11-09).** In production
-  (`DIVESAFE_ENVIRONMENT=production` in the loader's narrow settings), `kb_load load` and
+- **The gates are enforced in code (owner decisions, 2026-11-09).** `kb_load load` and
   `kb_load approve` return exit status 24, "refused: production load gates (ADR 0024 A6) are not
-  closed; nothing written", as the **first statement** of `kb_load.run`: before the Unicode check,
-  the corpus read and the connection. `withdraw` (and every read-only or verify command) is not
-  affected; development and test are unchanged. **It is lifted only by a reviewed code change**
-  of the module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in
-  `src/divesafe/services/kb_load.py`, made after every gate in the list below is closed and
-  reviewed by both reviewers; never by a setting, an environment variable or a file. Pinned by
-  `tests/safety/test_kb_load_production_gate.py` (refusal before any read or connection, through
-  `_main` with environment variables that try to lift it, an AST pin that the literal is assigned
-  once to `False` and read only by that check, that the loader settings have no gate field,
-  `withdraw` in production, development and test unchanged; mutations: 9 on the gate and 1 that
-  gates `withdraw`, all caught) and by a live test that the database is unchanged
-  (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`).
+  closed; nothing written", as the **first statement** of `kb_load.run` (before the Unicode check,
+  the corpus read and the connection) when **either** the loader's settings say production
+  (`DIVESAFE_ENVIRONMENT=production`) **or** the loader connection string was read from
+  `DIVESAFE_SECRETS_DIR`, whatever `DIVESAFE_ENVIRONMENT` says (development, test, empty or
+  unset). The second condition was added after both reviewers found that `run -e
+  DIVESAFE_ENVIRONMENT=development` (or `test`, or empty) lifted the first. How the string was
+  obtained is the field `LoaderSettings.dsn_from_secrets_dir`, set only by `load_loader_settings`
+  from where it found the string (default `False`), never from an environment value. `kb_load` has
+  no other commands; `withdraw` (`kb_withdraw`) is not affected and works from the secrets
+  directory in every environment. Development and test with `DIVESAFE_LOADER_DATABASE_URL` and no
+  secrets directory are unchanged. The only switch the code offers is a reviewed change of the
+  module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in `src/divesafe/services/kb_load.py`,
+  made after every gate in the list below is closed and reviewed by both reviewers.
+  **What it stops:** accidents and casual overrides (an environment value, a setting, a file).
+  **What it does not stop:** a determined operator with Docker access (A8). Pinned by
+  `tests/safety/test_kb_load_production_gate.py`: refusal before any read or connection, in
+  production and with a secrets-directory string in development and test; through `_main` with
+  the real settings for environment `production` (with variables that try to lift it) and for
+  `development`, `test`, empty and unset with a secrets directory; `withdraw` from a secrets
+  directory in every environment; development and test without a secrets directory unchanged,
+  also through `_main`; an AST pin that the literal is assigned once to `False` and read only by
+  that check, which reads only `settings.production` and `settings.dsn_from_secrets_dir`; an AST
+  pin that the field is passed once, as `bool(location)` with `location` read from
+  `DIVESAFE_SECRETS_DIR`. A live test checks the database is unchanged for both conditions
+  (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`). Mutations: see A8
+  "Build state".
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
   (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
   0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
@@ -1766,6 +1781,17 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     project name (`-p`), or with plain `docker run`, is invisible to it. The before/after facts
     check and the loader role's narrow rights are what protect the archive; `no_loader` is a
     point-in-time convenience check (`docs/backup-and-restore.md`).
+  - **The load gate does not stop a determined operator with Docker access** (owner decision,
+    2026-11-09; A6). It stops accidents and casual overrides only. Someone who can run `docker`
+    on the host can still load or approve in production by: replacing the entrypoint
+    (`--entrypoint`) or the command so that other code runs; shadowing or editing
+    `divesafe.services.kb_load` (a mounted or copied module, `PYTHONPATH`, a rebuilt image) so
+    the literal or the check changes; or putting a hand-built loader string in
+    `DIVESAFE_LOADER_DATABASE_URL` without `DIVESAFE_SECRETS_DIR` and a non-production
+    `DIVESAFE_ENVIRONMENT`, which the settings treat as development. Such a person can also write
+    as the owner with `psql`, so the gate cannot be the control against them; review, the
+    loader role's narrow rights and the database triggers are. The A7 hand run gets its rows from
+    a test-only seed (`docs/backup-and-restore.md`), not by any of these.
   - **The loaders share the live image tag** (A5 pin 11: same `image` and `build` as `api`). A
     `build` or `--build` with the `knowledge` profile would replace the image the running API was
     started from; the compose header and the runbook say never to do that, and nothing
@@ -1797,6 +1823,21 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     write; `withdraw` unaffected. The two production hash-rule tests in `test_kb_load_flow.py` now
     set the literal to `True` for their own run, so they keep testing the hash rules that apply
     once the gate is lifted.
+  - **Harder gate (`8eface8`; owner decision 2026-11-09, round 3):** `load` and `approve` also
+    refuse when the loader string came from the secrets directory, in any environment
+    (`LoaderSettings.dsn_from_secrets_dir`); the docs now say what the gate does not stop (A8).
+    **Mutants of the round-2 gate (9 + 1):** in round 2, five were in the tree as tests ("gate
+    open", "check removed", "environment ignored", "load only", "approve only") and five were run
+    by hand only ("also outside production", "from an environment variable", "after the
+    connection", "message changed", "withdraw gated"). Since `8eface8` all ten are in the tree,
+    adapted to the new check, plus the round-3 ones: the secrets-directory condition dropped,
+    keyed on the environment again (three forms), the field never set, set from the environment
+    name or from an environment value, an extra condition in the check, the literal reassigned in
+    a function, and `withdraw` gated. The round-3 list was also run by hand on the real sources
+    (9/9 caught).
+  - **A7 seed (`68f0537`):** `tests/hand_run/a7_seed_knowledge.sh` and `.sql` write synthetic
+    knowledge rows as the owner into a `throwaway-*` compose project only, never through
+    `kb_load`; the SQL ran on PG16 and PG17 test databases; 8/8 mutations caught.
   - **S1 (`9452eb3` and this ADR commit; risk-reviewer should-fix):** the first-run order is `up -d --wait db`, the role script,
     `up -d --wait api` (`docs/first-run-on-the-real-host.md`, "How to run it" above, the compose
     header); without the role script `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume.
@@ -1821,7 +1862,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The knowledge loader (Amendment 1) is built; the build was reviewed once (`9f5b3ea`, no
   blockers) and the fixes after it are not yet reviewed; it is not run on the owner's host**
   (A8 "Build state"); the A7 hand run is not done. Production `load` and `approve` refuse in code
-  until the A6 gates are closed. Both reviewers accepted its second,
+  until the A6 gates are closed (also from the secrets directory in any environment; not a
+  control against an operator with Docker access, A8). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.

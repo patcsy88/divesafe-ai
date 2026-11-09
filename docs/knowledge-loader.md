@@ -2,14 +2,25 @@
 
 This is a procedure to run by hand. It loads, approves and withdraws site-knowledge documents
 (ADR 0022) on the production compose stack. **No production load may happen yet**: the gates in
-ADR 0024 A6 ("First-production-load gates") are still open, and **the code enforces it**:
-in production, `kb_load load` and `kb_load approve` exit 24 ("refused: production load gates
-(ADR 0024 A6) are not closed; nothing written") before reading the corpus or connecting.
-`withdraw` is not affected. The refusal is lifted only by a reviewed code change
-(`PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py`), never by a setting, an
-environment variable or a file (owner decision, 2026-11-09). Knowledge is context only; it never
-supplies live conditions and never decides a dive. On this stack every knowledge item is withheld
-from the model (ADR 0022 decision 15).
+ADR 0024 A6 ("First-production-load gates") are still open, and the code refuses it:
+`kb_load load` and `kb_load approve` exit 24 ("refused: production load gates (ADR 0024 A6) are
+not closed; nothing written") before reading the corpus or connecting, **in production and
+whenever the loader string was read from the secrets directory**, whatever `DIVESAFE_ENVIRONMENT`
+says (so `-e DIVESAFE_ENVIRONMENT=development` on the compose loader does not lift it).
+`withdraw` is not affected. The only switch the code offers is a reviewed change of
+`PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py` (owner decisions,
+2026-11-09).
+
+**What the refusal is and is not.** It stops accidents and casual overrides. It does **not** stop
+a determined operator with Docker access: one who replaces the entrypoint (`--entrypoint`), runs
+a changed copy of the module, or puts a hand-built loader string in `DIVESAFE_LOADER_DATABASE_URL`
+instead of the secrets directory can still write. Do none of these; the gap is recorded in ADR
+0024 A8. For the A7 hand run use the test-only seed in
+[backup-and-restore.md](backup-and-restore.md) ("Knowledge rows for the A7 hand run"), never
+`kb_load`.
+
+Knowledge is context only; it never supplies live conditions and never decides a dive. On this
+stack every knowledge item is withheld from the model (ADR 0022 decision 15).
 
 Run everything from the repository root. `C` below is short for the compose prefix:
 
@@ -56,14 +67,23 @@ the role keeps the old password (run `ALTER ROLE` as the superuser yourself). Do
 If `divesafe_loader_database_url` is missing but `db_loader_password` exists, `make-secrets.sh`
 will not write it. If the role does not exist yet, remove both loader files and run
 `make-secrets.sh` again. Otherwise write the string by hand from the password file, without
-printing it.
+printing it, in exactly the form `make-secrets.sh` writes (one line, no trailing newline):
+
+```text
+postgresql://divesafe_loader:<password>@db:5432/divesafe?sslmode=require&channel_binding=require&connect_timeout=5
+```
+
+`<password>` is the 48 hex characters of `docker/secrets/db_loader_password`. The loader refuses
+a string without `connect_timeout` or with a value above 5, and in production one whose `sslmode`
+is not `require`, `verify-ca` or `verify-full` (it does not check `channel_binding`; keep it as
+written).
 
 ## 3. Load, approve, withdraw
 
 The loader services start only with the `knowledge` profile, never with `up`. **Never add
 `--build` to these commands and never run `build` with the knowledge profile:** build the image
 only from the deploy commit, with `up -d --build` of the main stack. (Until the gates are closed,
-`load` and `approve` refuse in production with exit 24; see the top of this page.)
+`load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
 
 ```sh
 $C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
