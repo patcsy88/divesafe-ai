@@ -356,11 +356,50 @@ A `pg_dump` archive is restorable by a newer server (documented behaviour, not r
 the last point above. Run the restore on a copy first, and keep the old volume until you have
 compared.
 
+## Knowledge rows for the A7 hand run
+
+The A7 hand run (ADR 0024 A7) needs a database with knowledge rows, but `kb_load load` and
+`approve` refuse on the production stack until the A6 gates are closed (exit 24, also with
+`DIVESAFE_ENVIRONMENT` changed, because the loader string comes from the secrets directory). **Do
+not lift that refusal for the hand run** (no `--entrypoint`, no edited module, no hand-made loader
+string). Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
+through the insert triggers, which still check and stamp every row. It never runs `kb_load`.
+
+- `tests/hand_run/a7_seed_knowledge.sh` runs `tests/hand_run/a7_seed_knowledge.sql` with `psql`
+  in the `db` container of the project named by `DIVESAFE_COMPOSE_PROJECT`. It refuses (exit 2,
+  before any `docker exec`) unless the name is `throwaway-<lower-case letters, digits, ->` and does
+  not contain `divesafe-prod`, and unless exactly one running `db` container has that project's
+  label. The SQL refuses a database that already holds any knowledge row.
+- It writes three documents, each version 1, all marked SYNTHETIC: `a7-approved` (DRAFT, APPROVED
+  with `hash_checked = true`), `a7-withdrawn` (DRAFT, APPROVED with `hash_checked = false`,
+  WITHDRAWN) and `a7-draft` (DRAFT). Four chunks. These cover the restore report's not-WITHDRAWN
+  list and its `hash_checked = false` list.
+- `tests/` is not in the image (`.dockerignore`), so the seed is run from the repository on the
+  host. A test runs the SQL against PostgreSQL 16 and 17 test databases
+  (`tests/integration/test_a7_seed_knowledge.py`); another runs the script's refusals against a
+  fake `docker` (`tests/unit/test_a7_seed_script.py`).
+
+Steps (on a developer machine, never on the owner's production host):
+
+```sh
+export DIVESAFE_COMPOSE_PROJECT=throwaway-a7
+C="docker compose -p $DIVESAFE_COMPOSE_PROJECT -f docker/docker-compose.production.yml --env-file docker/production.env"
+$C up -d --wait db          # a new volume: throwaway-a7_db-data
+# the role script (docs/knowledge-loader.md, section 2), with the container of this project
+$C up db-init
+tests/hand_run/a7_seed_knowledge.sh
+docker/backup.sh            # then the restore order of A7 into a second throwaway project
+```
+
+The image used must be a test tag, never the live one (`divesafe-api:local`): set it with a
+test-only compose override file and remove the file afterwards. Afterwards remove both throwaway
+projects and their volumes (`$C down -v`, for each project name).
+
 ## Not done
 
 - **The hand run of the knowledge changes (ADR 0024 A7) on a throwaway volume:** a backup and a
   restore of a database with knowledge rows, the role-before-restore order and the "used database"
-  check. The fake `docker` cannot run SQL; the fact queries were run once against empty PostgreSQL
+  check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker` cannot run SQL; the fact queries were run once against empty PostgreSQL
   16 and 17 test databases. **Required before the first production load.**
 - The read-only post-restore check (documents, versions, manifest hashes and latest status) is
   the restore's closing report; there is no separate command to run it again later.
