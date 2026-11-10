@@ -12,9 +12,12 @@ import asyncio
 from collections.abc import Sequence
 
 from divesafe.agents.prompts import (
+    NOT_RETRIEVED,
+    KnowledgeContext,
     agent_view,
     build_user_message,
     evidence_payload,
+    knowledge_note,
     missing_note,
     tide_note,
     warning_note,
@@ -47,6 +50,7 @@ async def _one(
     findings: Sequence[Finding],
     rule_results: Sequence[RuleResult],
     missing: Sequence[str],
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> Scenario:
     task = f"scenario:{kind.value}"
     message = build_user_message(
@@ -58,6 +62,7 @@ async def _one(
             + missing_note(missing)
             + tide_note(evidence)
             + warning_note(evidence)
+            + knowledge_note(evidence, knowledge)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],
@@ -97,9 +102,10 @@ async def evaluate_scenarios(
     findings: Sequence[Finding],
     rule_results: Sequence[RuleResult],
     missing: Sequence[str] = (),
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> tuple[tuple[Scenario, ...], tuple[str, ...]]:
     scenarios, issues, _ = await evaluate_scenarios_with_outcomes(
-        provider, plan, evidence, findings, rule_results, missing
+        provider, plan, evidence, findings, rule_results, missing, knowledge
     )
     return scenarios, issues
 
@@ -111,6 +117,7 @@ async def evaluate_scenarios_with_outcomes(
     findings: Sequence[Finding],
     rule_results: Sequence[RuleResult],
     missing: Sequence[str] = (),
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> tuple[tuple[Scenario, ...], tuple[str, ...], tuple[tuple[ScenarioKind, str], ...]]:
     """`evaluate_scenarios` plus one fixed label per kind ("ok", "failed", "skipped") so the
     stage trace never has to read the issue strings. Same calls, same issues."""
@@ -122,7 +129,10 @@ async def evaluate_scenarios_with_outcomes(
         return (), (issue,), tuple((k, "skipped") for k in KINDS)
 
     results = await asyncio.gather(
-        *(_one(provider, k, plan, evidence, findings, rule_results, missing) for k in KINDS),
+        *(
+            _one(provider, k, plan, evidence, findings, rule_results, missing, knowledge)
+            for k in KINDS
+        ),
         return_exceptions=True,
     )
     scenarios: list[Scenario] = []

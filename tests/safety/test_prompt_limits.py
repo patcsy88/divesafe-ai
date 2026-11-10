@@ -86,7 +86,7 @@ def test_the_prompt_forbids_hazards_no_input_mentions_but_keeps_the_gap_remedy()
     assert "does not cover a hazard" in TEXT[TEXT.index("8. Keep") :]
 
 
-PINNED = ("2026-10-30.1", "fdee19b62324addce3bbea2a541c8b9645a58df10e2124d742fb44681242770c")
+PINNED = ("2026-11-10.1", "89cbf2d4c45ac7c34d5a126bd038b011f0e3cefb12003a87421f61e5b572f57e")
 
 
 def test_the_prompt_text_is_pinned_to_its_version() -> None:
@@ -94,9 +94,29 @@ def test_the_prompt_text_is_pinned_to_its_version() -> None:
     instruction text itself is not pinned (a known gap, ADR 0007)."""
     import hashlib
 
-    from divesafe.agents.prompts import PROMPT_VERSION, TIDE_NOTE, WARNING_NOTE
+    from divesafe.agents.prompts import (
+        ABSENCE_LINE,
+        KNOWLEDGE_NOTE,
+        PROMPT_VERSION,
+        TIDE_NOTE,
+        WARNING_NOTE,
+        WITHHELD_FINDING_SUFFIX,
+        WITHHELD_FINDING_SUMMARY,
+        WITHHELD_KNOWLEDGE_NOTE,
+    )
 
-    pinned_text = "\x00".join((SYSTEM_PROMPT, TIDE_NOTE, WARNING_NOTE))
+    pinned_text = "\x00".join(
+        (
+            SYSTEM_PROMPT,
+            TIDE_NOTE,
+            WARNING_NOTE,
+            KNOWLEDGE_NOTE,
+            WITHHELD_KNOWLEDGE_NOTE,
+            ABSENCE_LINE,
+            WITHHELD_FINDING_SUMMARY,
+            WITHHELD_FINDING_SUFFIX,
+        )
+    )
     digest = hashlib.sha256(pinned_text.encode()).hexdigest()
     assert (PROMPT_VERSION, digest) == PINNED, (
         "the system prompt or a trusted note changed: bump PROMPT_VERSION and update PINNED"

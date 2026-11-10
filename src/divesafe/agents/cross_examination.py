@@ -23,9 +23,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from divesafe.agents.prompts import (
+    NOT_RETRIEVED,
+    KnowledgeContext,
     agent_view,
     build_user_message,
     evidence_payload,
+    knowledge_note,
     warning_note,
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
@@ -95,6 +98,7 @@ async def cross_examine_one(
     plan: DivePlan,
     evidence: Sequence[EvidenceItem],
     findings: Sequence[Finding],
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> Finding:
     """One second-round call. Raises `AgentError` (with a fixed kind) on any refusal."""
     own_items = relevant_evidence(spec, evidence)
@@ -118,6 +122,7 @@ async def cross_examine_one(
             "the evidence. You cannot change your own earlier finding. Do not recommend GO, "
             "CAUTION or NO-GO. Cite only evidence ids in ALLOWED_EVIDENCE_IDS."
             + warning_note(evidence)
+            + knowledge_note(evidence, knowledge)
         ),
         plan=plan,
         allowed_ids=sorted(allowed),
@@ -156,6 +161,7 @@ async def run_cross_examination(
     evidence: Sequence[EvidenceItem],
     findings: Sequence[Finding],
     timeout: float,
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> tuple[tuple[Finding, ...], tuple[CrossOutcome, ...], tuple[str, ...]]:
     """Run the second round for every specialist, in parallel. Each call is bounded by its own
     call timeout inside `call_structured`, so a slow call times out alone (`timed_out`) and the
@@ -165,7 +171,10 @@ async def run_cross_examination(
     del timeout  # the stage deadline bounds the round; kept in the signature for the caller
     results: list[object] = list(
         await asyncio.gather(
-            *(cross_examine_one(provider, spec, plan, evidence, findings) for spec in SPECIALISTS),
+            *(
+                cross_examine_one(provider, spec, plan, evidence, findings, knowledge)
+                for spec in SPECIALISTS
+            ),
             return_exceptions=True,
         )
     )

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from divesafe.agents.cross_examination import CrossOutcome, run_cross_examination
-from divesafe.agents.prompts import PROMPT_VERSION
+from divesafe.agents.prompts import NOT_RETRIEVED, PROMPT_VERSION, KnowledgeContext
 from divesafe.agents.risk_agent import propose
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, stage_timeout
 from divesafe.agents.signal_screen import SCREEN_TOKEN
@@ -101,9 +101,10 @@ async def _run_specialists(
     issues: list[str],
     findings: list[Finding],
     tasks: list[TaskOutcome],
+    knowledge: KnowledgeContext,
 ) -> None:
     outcomes = await asyncio.gather(
-        *(run_specialist(provider, spec, plan, evidence) for spec in SPECIALISTS),
+        *(run_specialist(provider, spec, plan, evidence, knowledge) for spec in SPECIALISTS),
         return_exceptions=True,
     )
     for spec, outcome in zip(SPECIALISTS, outcomes, strict=True):
@@ -138,12 +139,13 @@ async def _stage(
     cross_out: list[Finding] | None = None,
     cross_outcomes: list[CrossOutcome] | None = None,
     cross_timeout: float = 0.0,
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> tuple[Recommendation | None, tuple[str, ...], str]:
     if not with_specialists:
         issues.append(f"{ABLATION_ISSUE_PREFIX}specialists")
         tasks.extend(TaskOutcome(spec.name, "skipped") for spec in SPECIALISTS)
     else:
-        await _run_specialists(provider, plan, evidence, issues, findings, tasks)
+        await _run_specialists(provider, plan, evidence, issues, findings, tasks, knowledge)
 
     have = {f.agent for f in findings}
     missing = [spec.name for spec in SPECIALISTS if spec.name not in have]
@@ -153,7 +155,7 @@ async def _stage(
     proposal_findings: list[Finding] = list(findings)
     if cross_examination and with_specialists and findings and cross_out is not None:
         added, outcomes, cross_issues = await run_cross_examination(
-            provider, plan, evidence, findings, cross_timeout
+            provider, plan, evidence, findings, cross_timeout, knowledge
         )
         cross_out.extend(added)
         if cross_outcomes is not None:
@@ -167,7 +169,7 @@ async def _stage(
         tasks.extend(TaskOutcome(kind.value, "skipped") for kind in ScenarioKind)
     else:
         scenarios, scenario_issues, scenario_labels = await evaluate_scenarios_with_outcomes(
-            provider, plan, evidence, findings, rule_results, missing
+            provider, plan, evidence, findings, rule_results, missing, knowledge
         )
         scenarios_out.extend(scenarios)
         issues.extend(scenario_issues)
@@ -191,6 +193,7 @@ async def _stage(
             rule_results,
             deterministic,
             missing,
+            knowledge,
         )
     except AgentError as exc:
         issues.append(str(exc))
