@@ -189,15 +189,24 @@ class EvidencePolicy:
 
 
 def _covers_window(items: Sequence[EvidenceItem], start: datetime, end: datetime) -> bool:
-    """Exempt items need no cover; everything else must cover [start, end] together."""
-    spans = [e for e in items if not _exempt(e, start, end)]
+    """Exempt items need no cover; everything else must cover [start, end] together.
+
+    Knowledge is exempt or nothing (ADR 0022 decisions 3 and 5, AGENTS section 8): a knowledge
+    item that fails `_exempt` is never coverage, so it is left out as if absent."""
+    counted = [e for e in items if e.data_kind is not DataKind.KNOWLEDGE or _exempt(e, start, end)]
+    if items and not counted:
+        return False
+    spans = [e for e in counted if not _exempt(e, start, end)]
     return not spans or _covers(spans, start, end)
 
 
 def _relevant_to_window(item: EvidenceItem, start: datetime, end: datetime) -> bool:
-    """Does the item say anything about the window (overlap), or is it exempt?"""
+    """Does the item say anything about the window (overlap), or is it exempt? A knowledge item
+    is relevant only when exempt (ADR 0022 decision 5): it never counts by overlap."""
     if _exempt(item, start, end):
         return True
+    if item.data_kind is DataKind.KNOWLEDGE:
+        return False
     return item.valid_at <= end and (item.valid_until or item.valid_at) >= start
 
 
@@ -484,8 +493,13 @@ class RiskRulesEngine:
             # A dive between two samples is exposed to both, so the nearest instant on each side
             # (per category) is legitimate evidence, exactly as DefinitionRule uses it.
             for category in {e.category for e in usable_items}:
+                # Never knowledge: it is relevant only when exempt (ADR 0022 decision 5).
                 instants = [
-                    e for e in usable_items if e.category == category and e.valid_until is None
+                    e
+                    for e in usable_items
+                    if e.category == category
+                    and e.valid_until is None
+                    and e.data_kind is not DataKind.KNOWLEDGE
                 ]
                 before = [e for e in instants if e.valid_at < start]
                 after = [e for e in instants if e.valid_at > end]

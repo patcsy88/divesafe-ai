@@ -15,7 +15,7 @@ from typing import Literal
 
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
-from divesafe.domain import DataCategory, DataKind, EvidenceItem, is_knowledge_id
+from divesafe.domain import DataCategory, DataKind, EvidenceItem, is_knowledge_id, knowledge_ref
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,16 @@ def _is_knowledge_item(item: EvidenceItem) -> bool:
     return item.data_kind is DataKind.KNOWLEDGE or is_knowledge_id(item.id)
 
 
+def _well_formed_knowledge(item: EvidenceItem) -> bool:
+    """A KNOWLEDGE item whose id follows the decision 6 `kb:` grammar (security N3)."""
+    if item.data_kind is not DataKind.KNOWLEDGE or not is_knowledge_id(item.id):
+        return False
+    try:
+        return knowledge_ref(item.id) is not None
+    except ValueError:
+        return False
+
+
 def screen_knowledge(
     connector: Connector, knowledge_connector: Connector | None, result: FetchResult
 ) -> FetchResult:
@@ -46,9 +56,7 @@ def screen_knowledge(
     items or `kb:` ids, and it may emit nothing else. Anything else is dropped before it reaches
     a rule or a prompt and reported as an evidence issue with a fixed text."""
     if connector is knowledge_connector:
-        kept = tuple(
-            i for i in result.items if i.data_kind is DataKind.KNOWLEDGE and is_knowledge_id(i.id)
-        )
+        kept = tuple(i for i in result.items if _well_formed_knowledge(i))
         issue = NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE
     else:
         kept = tuple(i for i in result.items if not _is_knowledge_item(i))

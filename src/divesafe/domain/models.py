@@ -767,7 +767,18 @@ class AssessmentRecord(_Frozen):
     def _check_egress(self) -> None:
         """ADR 0022 decision 15, checkable from the record alone: knowledge in a prompt implies
         `declared_local`. Knowledge here means evidence with a `kb:` id (owner decision
-        2026-11-06); a KNOWLEDGE item without one is not covered (ADR 0022 Known gaps)."""
+        2026-11-06). Since the owner decision of 2026-11-10 (reversing condition 7) the record
+        refuses a KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind, in both
+        directions as `services.evidence.screen_knowledge` does, so the two meanings coincide.
+        Fixed messages: no id or content."""
+        # Withheld items too: they are shown to the human and read by the variant search.
+        # The messages for `evidence` are unchanged; withheld ones name the field (no id).
+        for items, where in ((self.evidence, "evidence"), (self.withheld_evidence, "withheld")):
+            for e in items:
+                if e.data_kind is DataKind.KNOWLEDGE and not is_knowledge_id(e.id):
+                    raise ValueError(f"a knowledge {where} item must have a kb: id")
+                if e.data_kind is not DataKind.KNOWLEDGE and is_knowledge_id(e.id):
+                    raise ValueError(f"a kb: id is reserved for knowledge {where} items")
         basis, host = self.egress_basis, self.model_host
         if basis is None or basis in _NO_HOST_BASES:
             if host is not None:
