@@ -87,6 +87,8 @@ def _item(i: str, cat: DataCategory, kind: DataKind, forecast: bool, now: dateti
         source="synthetic",
         retrieved_at=now,
         valid_at=now,
+        # ADR 0022 decision 5: knowledge needs a review-by date. Other kinds keep an open window.
+        valid_until=now + timedelta(days=365) if kind is DataKind.KNOWLEDGE else None,
         is_forecast=forecast,
         data_kind=kind,
         value={"note": "synthetic"},
@@ -105,7 +107,11 @@ def five_category_evidence() -> list[EvidenceItem]:
 
 
 class _SiteFacts:
-    """SYNTHETIC connector for the site-level categories no real connector produces."""
+    """SYNTHETIC connector for the site-level category no real connector produces.
+
+    It emits no KNOWLEDGE: only the knowledge connector may (ADR 0022 decision 5) and the pipeline
+    wires none yet, so knowledge from here would be dropped with an issue. `syn-history` still
+    gives the site specialist evidence, so every specialist makes its call."""
 
     name = "synthetic-site-facts"
 
@@ -114,8 +120,6 @@ class _SiteFacts:
     ) -> FetchResult:
         return FetchResult(
             items=(
-                _item("syn-site", C.SITE_INFORMATION, DataKind.KNOWLEDGE, False, now),
-                _item("syn-guide", C.LOCAL_GUIDANCE, DataKind.KNOWLEDGE, False, now),
                 _item("syn-history", C.HISTORICAL_OBSERVATIONS, DataKind.OBSERVATION, False, now),
             )
         )
@@ -246,6 +250,8 @@ def test_pipeline_off_nine_calls_no_token_no_trace_code() -> None:
     provider = FakeProvider(scripted())
     record = _assess(provider)
     assert len(provider.requests) == OFF_CALLS
+    # The fixture is clean: no connector item was refused (ADR 0022 decision 5 filter).
+    assert record.evidence_issues == ()
     assert "cross_examination" not in record.model_version
     assert record.cross_examination_findings == ()
     codes = [c for s in record.stages for c in s.issues]

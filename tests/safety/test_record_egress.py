@@ -60,6 +60,8 @@ def _knowledge(evidence_id: str = KB_ID) -> EvidenceItem:
         source="kb:site-guide",
         retrieved_at=NOW,
         valid_at=NOW,
+        # Review-by date (ADR 0022 decision 5: knowledge requires `valid_until`).
+        valid_until=NOW + timedelta(days=365),
         is_forecast=False,
         data_kind=DataKind.KNOWLEDGE,
         value={},
@@ -196,6 +198,16 @@ def _citing(channel: str) -> dict[str, Any]:
             "proposed_recommendation": "NO-GO",
             "final_recommendation": "NO-GO",
         }
+    # ADR 0022 A1: a record with `kb:` evidence and a trace needs a Retrieve entry listing it,
+    # so the Reason trace (the channel under test) follows one.
+    retrieve = StageTrace(
+        name=StageName.RETRIEVE,
+        outcome=StageOutcome.COMPLETED,
+        next_stage=StageName.REASON,
+        started_at=NOW,
+        finished_at=NOW,
+        evidence_ids=(KB_ID,),
+    )
     reason = StageTrace(
         name=StageName.REASON,
         outcome=StageOutcome.COMPLETED,
@@ -204,7 +216,7 @@ def _citing(channel: str) -> dict[str, Any]:
         finished_at=NOW,
         evidence_ids=(KB_ID,),
     )
-    return {"stages": [reason.model_dump(mode="json")]}
+    return {"stages": [retrieve.model_dump(mode="json"), reason.model_dump(mode="json")]}
 
 
 @pytest.mark.parametrize(

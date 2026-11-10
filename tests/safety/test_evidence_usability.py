@@ -227,14 +227,13 @@ def test_a_notice_that_ended_before_the_dive_does_not_count() -> None:
     assert engine.assess(PLAN, [expired], NOW).recommendation == R.INSUFFICIENT_EVIDENCE
 
 
-@pytest.mark.parametrize("kind", [NOTICE, KNOWLEDGE])
 @pytest.mark.parametrize("category", [C.WAVES_SWELL, C.CURRENTS, C.WIND, C.TIDES, C.WEATHER])
 def test_live_condition_data_cannot_dodge_coverage_by_being_labelled_a_notice(
-    kind: DataKind, category: DataCategory
+    category: DataCategory,
 ) -> None:
     mislabelled = _item(
         category=category,
-        kind=kind,
+        kind=NOTICE,
         quality=DataQuality.DEGRADED,
         valid_at=START - 3 * H,
         valid_until=None,
@@ -243,16 +242,78 @@ def test_live_condition_data_cannot_dodge_coverage_by_being_labelled_a_notice(
     assert engine.assess(PLAN, [mislabelled], NOW).recommendation == R.INSUFFICIENT_EVIDENCE
 
 
+def _constructed(item: EvidenceItem, **changes: object) -> EvidenceItem:
+    """A copy that skips every validator, as stored or hostile input could (`model_construct`)."""
+    return EvidenceItem.model_construct(**{**dict(item), **changes})
+
+
+def _guidance(valid_until: datetime | None = NOW + 365 * 24 * H, **kw: object) -> EvidenceItem:
+    """SYNTHETIC local guidance with a review-by date well after the dive."""
+    item = _item(
+        category=C.LOCAL_GUIDANCE,
+        kind=KNOWLEDGE,
+        quality=DataQuality.DEGRADED,
+        valid_at=NOW - 10 * H,
+        valid_until=NOW + 365 * 24 * H,
+    )
+    return _constructed(item, valid_until=valid_until, **kw)
+
+
+@pytest.mark.parametrize(
+    ("valid_at", "valid_until"),
+    [(START - 3 * H, None), (START - H, END + H)],  # stale instant; one covering the window
+    ids=["instant", "covering"],
+)
+@pytest.mark.parametrize("category", [C.WAVES_SWELL, C.CURRENTS, C.WIND, C.TIDES, C.WEATHER])
+def test_live_condition_data_labelled_knowledge_is_refused_and_ignored(
+    category: DataCategory, valid_at: datetime, valid_until: datetime | None
+) -> None:
+    """ADR 0022 decision 5: the validator refuses KNOWLEDGE outside the knowledge categories, and
+    a copy that skipped it (`model_construct`) is ignored by `_usable`, never counted, even
+    when it covers the window."""
+    with pytest.raises(ValidationError, match="knowledge is valid only as"):
+        _item(
+            category=category,
+            kind=KNOWLEDGE,
+            valid_at=valid_at,
+            valid_until=valid_until or END + H,
+        )
+    mislabelled = _constructed(
+        _item(category=category, kind=MODEL, quality=DataQuality.DEGRADED),
+        data_kind=KNOWLEDGE,
+        is_forecast=False,
+        valid_at=valid_at,
+        valid_until=valid_until,
+    )
+    engine = _engine({category}, degraded_may_support_go=True)
+    result = engine.assess(PLAN, [mislabelled], NOW)
+    assert result.recommendation == R.INSUFFICIENT_EVIDENCE
+    assert f"No '{category.value}' evidence is available." in " | ".join(
+        r.rationale for r in result.rule_results
+    )
+
+
 def test_knowledge_satisfies_only_the_knowledge_categories() -> None:
     guidance = _item(
         category=C.LOCAL_GUIDANCE,
         kind=KNOWLEDGE,
         quality=DataQuality.DEGRADED,
         valid_at=NOW - 10 * H,
-        valid_until=None,
+        valid_until=NOW + 365 * 24 * H,  # review-by date (ADR 0022 decision 5)
     )
     engine = _engine({C.LOCAL_GUIDANCE}, degraded_may_support_go=True)
     assert engine.assess(PLAN, [guidance], NOW).recommendation == R.GO
+
+
+def test_knowledge_without_a_review_by_date_is_refused_and_not_exempt() -> None:
+    """ADR 0022 decision 5: `valid_until=None` is refused; a copy that skipped the validator is
+    not window-exempt, so it cannot satisfy the category."""
+    with pytest.raises(ValidationError, match="knowledge requires valid_until"):
+        _item(category=C.LOCAL_GUIDANCE, kind=KNOWLEDGE, valid_at=NOW - 10 * H, valid_until=None)
+    engine = _engine({C.LOCAL_GUIDANCE}, degraded_may_support_go=True)
+    assert engine.assess(PLAN, [_guidance()], NOW).recommendation == R.GO
+    result = engine.assess(PLAN, [_guidance(valid_until=None)], NOW)
+    assert result.recommendation == R.INSUFFICIENT_EVIDENCE
 
 
 # --- effective quality ----------------------------------------------------------------------
@@ -266,7 +327,9 @@ def test_a_measured_observation_with_both_checks_earns_validated() -> None:
     "kind", [DataKind.MODEL, DataKind.FORECAST, DataKind.PREDICTION, NOTICE, KNOWLEDGE]
 )
 def test_only_a_measurement_can_be_validated_whatever_the_connector_claims(kind: DataKind) -> None:
-    claimed = _item(kind=kind, quality=DataQuality.VALIDATED)
+    # Knowledge exists only in its own categories, with a review-by date (ADR 0022 decision 5).
+    knowledge = {"category": C.LOCAL_GUIDANCE, "valid_until": NOW + H} if kind is KNOWLEDGE else {}
+    claimed = _item(kind=kind, quality=DataQuality.VALIDATED, **knowledge)  # type: ignore[arg-type]
     assert effective_quality(claimed) == DataQuality.DEGRADED
 
 
