@@ -1609,6 +1609,32 @@ def test_a_stored_row_whose_withheld_id_is_also_an_evidence_id_fails_validation(
         repo.get("r1")
 
 
+@pytest.mark.parametrize(
+    "where", ["evidence-no-kb", "evidence-kb-live", "withheld-no-kb", "withheld-kb-live"]
+)
+def test_a_stored_row_breaking_the_knowledge_id_rule_fails_validation(where: str) -> None:
+    """Owner decision 2026-11-10: a stored record carrying KNOWLEDGE without a `kb:` id, or a
+    `kb:` id on another kind, in either evidence field, is refused on load with the fixed error.
+    SYNTHETIC rows."""
+    from tests.safety.test_record_egress import _knowledge
+    from tests.safety.test_record_knowledge_identity import _live, _with_evidence, _with_withheld
+
+    from divesafe.services import RepositoryIntegrityError
+
+    item = _knowledge("syn-site") if where.endswith("no-kb") else _live("kb:site-guide:2:8")
+    forged = (_with_evidence if where.startswith("evidence") else _with_withheld)(item)
+    forged = {**forged, "id": "r1"}
+    repo = _postgres()
+    repo.create(_record())
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(forged)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(RepositoryIntegrityError) as caught:
+        repo.get("r1")
+    assert str(caught.value) == "a stored record failed validation"
+    assert "syn-site" not in _printed(caught.value)
+
+
 def _has_withheld_key() -> str:
     return _sql_value(
         "SELECT (record ? 'withheld_evidence')::text FROM assessments WHERE id = 'r1'"

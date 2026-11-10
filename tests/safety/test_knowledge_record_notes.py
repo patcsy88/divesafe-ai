@@ -93,8 +93,9 @@ def test_a_no_knowledge_note_contradicts_kb_evidence(code: K) -> None:
     message = "a note saying no knowledge was returned contradicts kb: evidence"
     assert _refused(_doc(_knowledge(), notes=[_note(code)], **LOCAL), message)
     AssessmentRecord.model_validate(_doc(_knowledge(), **LOCAL))
-    # Knowledge without a kb: id is not knowledge for this check (the owner's rule, 2026-11-06).
-    AssessmentRecord.model_validate(_doc(_knowledge("syn-site"), notes=[_note(code)]))
+    # The note itself is fine on a record without kb: evidence (knowledge without a kb: id is
+    # refused outright since the owner decision of 2026-11-10).
+    AssessmentRecord.model_validate(_doc(notes=[_note(code)]))
 
 
 @pytest.mark.parametrize("code", [K.NOT_CONFIGURED, K.NONE_RETURNED])

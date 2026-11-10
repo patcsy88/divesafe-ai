@@ -21,6 +21,7 @@ from tests.safety.test_evidence_usability import (
     START,
     H,
     _engine,
+    _Go,
     _item,
 )
 
@@ -39,7 +40,7 @@ from divesafe.domain import (
     Recommendation,
     severity,
 )
-from divesafe.risk.engine import WINDOW_EXEMPT, _exempt
+from divesafe.risk.engine import CITES_UNUSABLE_PREFIX, WINDOW_EXEMPT, _exempt
 from divesafe.services import (
     KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE,
     NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE,
@@ -173,6 +174,22 @@ def test_the_knowledge_connector_may_emit_only_knowledge_with_a_kb_id() -> None:
     assert result.issues == (f"syn-kb: {NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE}",)
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    ["kb:Bad", "KB:site-guide:2:7", "kb:site-guide:2", "kb:site-guide:x:7", "kb:site-guide:2:7:1"],
+    ids=["no-parts", "upper-prefix", "short", "non-numeric", "extra-part"],
+)
+def test_the_knowledge_connector_may_not_emit_a_malformed_kb_id(bad_id: str) -> None:
+    """Security N3: the knowledge connector's `kb:` ids must follow the decision 6 grammar
+    (`knowledge_ref`). A malformed one is dropped with the fixed issue and a well-formed one is
+    kept. `EvidenceItem` accepts these ids, so the screen is the stage that must refuse them."""
+    kb = _Source("syn-kb", [_knowledge(), _knowledge(bad_id)])
+    result = _gather([kb], kb)
+    assert [e.id for e in result.items] == [KB_ID]
+    assert result.issues == (f"syn-kb: {NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE}",)
+    assert all(bad_id not in i for i in result.issues)
+
+
 def test_a_clean_result_adds_no_issue_in_either_direction() -> None:
     other = _Source("syn-live", [_live()])
     kb = _Source("syn-kb", [_knowledge()])
@@ -280,14 +297,79 @@ def _verdict(item: EvidenceItem) -> Recommendation:
         (START + 60 * S, END + S, R.GO),
         (END + S, FAR, R.INSUFFICIENT_EVIDENCE),
         (START + 60 * S, None, R.INSUFFICIENT_EVIDENCE),
+        # Risk M1: in force before the dive, so the item brackets the window as an ordinary
+        # interval would. Not exempt, so it must not count as coverage either.
+        (START - H, END, R.INSUFFICIENT_EVIDENCE),
+        (START - H, END - S, R.INSUFFICIENT_EVIDENCE),
+        # Positive control: the same item reviewed one second after the window is usable.
+        (START - H, END + S, R.GO),
     ],
-    ids=["until-eq-end", "until-after-end", "at-after-end", "none"],
+    ids=[
+        "until-eq-end",
+        "until-after-end",
+        "at-after-end",
+        "none",
+        "bracketing-until-eq-end",
+        "bracketing-until-in",
+        "bracketing-until-after-end",
+    ],
 )
 def test_a_stored_knowledge_item_reassessed_by_the_engine_honours_the_strict_window(
     valid_at: datetime, valid_until: datetime | None, expected: Recommendation
 ) -> None:
     """Record-form items re-assessed without the connector's filter (decision 5)."""
     assert _verdict(_knowledge(valid_at=valid_at, valid_until=valid_until)) == expected
+
+
+@pytest.mark.parametrize(
+    "valid_until", [END, END - S, START + S], ids=["until-eq-end", "until-in", "until-at-start"]
+)
+def test_a_rule_citing_non_exempt_knowledge_is_flagged_as_citing_unusable_evidence(
+    valid_until: datetime,
+) -> None:
+    """Risk M1: a non-exempt knowledge item is never relevant evidence, even when it brackets or
+    overlaps the window. The category is satisfied by another, exempt, item so only the citation
+    guard can stop the GO. A window start passed instead of the end at the `_relevant_to_window`
+    call (risk m1) makes these items exempt and fails here."""
+    good = _knowledge(KB_ID, valid_at=START - H, valid_until=FAR)
+    bad = _knowledge("kb:site-guide:2:8", valid_at=START - H, valid_until=valid_until)
+    engine = _engine({C.LOCAL_GUIDANCE}, rules=[_Go(cites=(bad.id,))], degraded_may_support_go=True)
+    result = engine.assess(PLAN, [good, bad], NOW)
+    assert result.recommendation == R.INSUFFICIENT_EVIDENCE
+    assert f"{CITES_UNUSABLE_PREFIX}{_Go.rule_id}" in {r.rule_id for r in result.rule_results}
+    # Positive control: citing the exempt item gives GO with no guard result.
+    engine = _engine(
+        {C.LOCAL_GUIDANCE}, rules=[_Go(cites=(good.id,))], degraded_may_support_go=True
+    )
+    control = engine.assess(PLAN, [good, bad], NOW)
+    assert control.recommendation == R.GO
+    assert not any(r.rule_id.startswith(CITES_UNUSABLE_PREFIX) for r in control.rule_results)
+
+
+@pytest.mark.parametrize("valid_at", [START - H, END + H], ids=["instant-before", "instant-after"])
+def test_a_knowledge_instant_is_never_the_nearest_sample_to_the_window(valid_at: datetime) -> None:
+    """The citation guard admits the nearest instant on each side of the window per category.
+    Knowledge never takes that path: a `model_construct` knowledge item with no review-by date,
+    before or after the window, cited by a GO rule, is flagged. Another, exempt, item satisfies
+    the category so only the guard decides."""
+    good = _knowledge(KB_ID, valid_at=START - H, valid_until=FAR)
+    instant = _knowledge("kb:site-guide:2:8", valid_at=valid_at, valid_until=None)
+    engine = _engine(
+        {C.LOCAL_GUIDANCE}, rules=[_Go(cites=(instant.id,))], degraded_may_support_go=True
+    )
+    result = engine.assess(PLAN, [good, instant], NOW)
+    assert result.recommendation == R.INSUFFICIENT_EVIDENCE
+    assert f"{CITES_UNUSABLE_PREFIX}{_Go.rule_id}" in {r.rule_id for r in result.rule_results}
+    # Positive control: the same instant as a live sample is the nearest sample and may be cited.
+    live = _live("syn-wave-instant", valid_at=valid_at, valid_until=None)
+    other = _live(
+        "syn-wave-other", valid_at=END + H if valid_at < START else START - H, valid_until=None
+    )
+    wave_engine = _engine(
+        {C.WAVES_SWELL}, rules=[_Go(cites=(live.id,))], degraded_may_support_go=True
+    )
+    control = wave_engine.assess(PLAN, [live, other], NOW)
+    assert not any(r.rule_id.startswith(CITES_UNUSABLE_PREFIX) for r in control.rule_results)
 
 
 def test_knowledge_needs_a_review_by_date_and_its_own_categories() -> None:

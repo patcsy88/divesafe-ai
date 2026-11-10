@@ -145,7 +145,8 @@ def test_knowledge_evidence_needs_a_basis_even_when_withheld() -> None:
     """ADR 0022 condition 7: absent is valid only for records with no knowledge evidence."""
     assert _refused(_doc(_knowledge()), "needs an egress basis")
     assert _refused(_doc(_knowledge(), withheld_knowledge=_held(REF)), "needs an egress basis")
-    AssessmentRecord.model_validate(_doc(_knowledge("syn-site")))  # not a kb: id
+    # A record with no knowledge evidence needs no basis (the live item alone).
+    AssessmentRecord.model_validate(_doc())
 
 
 def test_declared_local_may_send_knowledge_or_withhold_it() -> None:
@@ -236,12 +237,16 @@ def test_withheld_knowledge_cannot_be_cited_by_model_output(channel: str) -> Non
     AssessmentRecord.model_validate(sent)
 
 
-def test_items_without_a_kb_id_are_not_judged() -> None:
-    """The owner's rule (2026-11-06): a KNOWLEDGE item with no `kb:` id is not covered (ADR 0022
-    "Not solved"). Invert this test when decision 5's connector-stage KNOWLEDGE filter lands."""
-    item = _knowledge("syn-site")
-    record = AssessmentRecord.model_validate(_doc(item, egress_basis="none"))
-    assert record.withheld_knowledge == ()
+def test_knowledge_without_a_kb_id_is_refused_by_the_record() -> None:
+    """Owner decision 2026-11-10 (reversing condition 7 of 2026-11-06): a KNOWLEDGE item without
+    a `kb:` id is refused, whatever the basis, so the egress check cannot be dodged by the id.
+    Both directions and both fields: `tests/safety/test_record_knowledge_identity.py`."""
+    message = "a knowledge evidence item must have a kb: id"
+    for basis in B:
+        assert _refused(
+            _doc(_knowledge("syn-site"), egress_basis=basis, model_host=HOST[basis]), message
+        )
+    assert _refused(_doc(_knowledge("syn-site")), message)
 
 
 @pytest.mark.parametrize(
