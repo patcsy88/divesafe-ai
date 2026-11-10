@@ -107,6 +107,22 @@ stage yet, so no run produces knowledge evidence today.
   and `withheld_evidence`, with fixed messages (`domain/models.py`, `_check_egress`;
   `tests/safety/test_record_knowledge_identity.py`). See decision 15 and condition 7.
 - **Conditions for the Retrieve wiring** are listed in a new section before "Options not taken".
+- **Prompt path, egress filter and Retrieve wiring (branch `rag-connector`, 2026-11-10; reviewed
+  by `risk-reviewer` and `security-reviewer`, no blockers, no should-fix):** `7c2b07b` the prompt
+  path (decision 6 envelope allow-list, decision 9 trusted wording, the absence line, the
+  withheld-aware `site_intelligence` finding); `ddcfccf` the egress filter (decision 15:
+  `build_provider` returns `(provider, basis)`, knowledge is sent only under exactly
+  `declared_local`, the record's `sent_evidence_ids`, Supervise checks the ids actually sent,
+  `withheld()` hides `model_host` from create-only keys with `model_host_withheld: true`);
+  `92ad3d1` the Retrieve wiring (see "Conditions for the Retrieve wiring", Status). Builder
+  choices accepted by the reviewers: a host-needing basis without a host records `none` and
+  withholds everything, with a fixed `egress.host_missing` (or `egress.basis_unrecognised`)
+  first in `agent_issues`, not counted as a failed call; the host is hidden by a private flag
+  and a wrap serializer; retrieval starts as a background task during Observe under the
+  connector timeout; the knowledge connector is refused if it is also an Observe connector;
+  the connector's `NO_DOCUMENTS` folds into `NONE_RETURNED` with count 0. The new Known gaps are
+  items 11-25 of the 2026-11-10 list. **The feature is built end to end; shipping still waits on
+  the ADR 0024 amendment and the operations check of wiring condition 10.**
 
 **Required follow-up outside this ADR (not written here; the feature does not ship without it):**
 amendments to ADR 0024 (decision 11, "Required ADR 0024 amendment") and to ADR 0023's text (done
@@ -381,7 +397,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      `location`, `quality_notes`, `retrieved_at` and `is_forecast`. (Today `_payload_item` sends
      `source`, `upstream`, `upstream_known`, `quality_notes`, `retrieved_at` and `is_forecast`
      for every item; the knowledge branch must send exactly the fields listed as sent above and
-     none of these.) A test asserts this. The record form holds the label `kb:<document_id>` as
+     none of these.) A test asserts this. **Built (`7c2b07b`, 2026-11-10;
+     `tests/agent/test_knowledge_prompts.py`).** The record form holds the label `kb:<document_id>` as
      `source` and the version as `source_version` (decision 16), so the provenance of AGENTS
      section 10 still holds in the record; only the scoped lookup shows title, attribution and
      licence, from the store.
@@ -1082,8 +1099,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       domain-record changes (decision 14), so `risk-reviewer` and `security-reviewer` are needed.
       The basis does not go into `model_version` (ADR 0023's text now says so): the typed fields
       are required here; **the fields and the validator are built (2026-11-06, condition 7;
-      widened 2026-11-10); the filter, the `(provider, basis)` pair and the wiring through
-      `assess_dive` are not**, so no run sets them yet and every new record still has them absent. **Safety invariant, checkable from
+      widened 2026-11-10), and so are the filter, the `(provider, basis)` pair and the wiring
+      through `assess_dive` (`ddcfccf`, `92ad3d1`, 2026-11-10)**, so every new record writes
+      them (older records keep them absent). **Safety invariant, checkable from
       the record alone:** any record whose prompt held knowledge items has `egress_basis` equal to
       `declared_local`; a record with knowledge evidence and `egress_basis` of `no_agent_stage`
       (or any other value) holds only withheld items.
@@ -1618,12 +1636,14 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   layer is transport protection only** (a model may still read the escaped form); the real
   mitigation is the citation check. **`reconcile` only tightens covers the recommendation, not the
   explanation text a human reads, which a spoofed citation could steer.** Two partial mitigations
-  exist elsewhere, **none on the knowledge path yet (not built)**: `prompts.neutralize`, and
+  exist elsewhere: `prompts.neutralize`, and
   `runner.py` exact-match rejection of top-level `evidence_ids` not in `allowed_ids` (nested
-  `evidence_ids` and a spoof of a REAL id in the same run are unchecked; the knowledge connector
-  and prompt path are not built). Impact limit: `reconcile` only tightens the recommendation and
-  rules never read LLM values. **Must be revisited when the knowledge connector and citation guard
-  are built.** (b) the newline-inside-`kb:` gap is closed
+  `evidence_ids` and a spoof of a REAL id in the same run are unchecked). **Update 2026-11-10:
+  the knowledge connector, the prompt path and the Retrieve wiring are now built (see the status
+  block); both mitigations apply to knowledge text as to any other evidence, and Supervise checks
+  citations against the ids actually sent. The knowledge half of the citation guard (decision 8)
+  is still not built**, so this item must be revisited when it lands. Impact limit: `reconcile`
+  only tightens the recommendation and rules never read LLM values. (b) the newline-inside-`kb:` gap is closed
   in code (not yet re-reviewed); (c) **stays OPEN**: the "and similar" word-list tail and
   separators, namely hyphens dropped or replaced in connector prefixes (`openmeteomarine:x`),
   percent-encoding (`kb%3Aabc`, since `%` is allowed), and allowed ASCII punctuation separators
@@ -1658,7 +1678,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
   a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
 
-### Known gaps (recorded 2026-11-10, after the domain and connector stages)
+### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring)
 
 1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
    `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
@@ -1682,12 +1702,60 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
    `local_guidance` as "this site's local rules".
 8. **No client-side bound on a stalled socket read in the connector** (`tcp_user_timeout` is
    Linux-only; the statement and lock timeouts are server-side). Listed beside "Connector HTTP
-   limits" in `docs/architecture.md`.
+   limits" in `docs/architecture.md`. **Now on the live path (wiring, N2):** `retrieve` runs on
+   asyncio's default thread pool, shared with Assess, so a database network stall could hold a
+   worker thread and starve Assess until the run's deadline (runs then fail closed; not
+   attacker-triggered). Remedy: a small bounded executor for the store.
 9. **The malformed-id connector tests depend on the chunk text passing the screen**; they should
    use fixed text so a screen change cannot mask the case under test.
 10. **The static check's allowed places (decision 8)** now include `_usable`, `_covers_window`,
     `_relevant_to_window` and `_citation_guard`; the earlier mutation references by line number
     are replaced by function names in the tests list.
+11. **Prompt cap.** 20 chunks of entirely non-ASCII text exceed `MAX_PROMPT_CHARS` (200,000)
+    after escaping; the risk agent and each ToT scenario then refuse and send nothing (fail
+    closed, recorded as an agent issue). A corpus heavy in non-English text would silently lose
+    the risk agent and ToT; `site_intelligence` and cross-examination read the same categories
+    and are not tested against the cap. The only sign today is the agent issue. (Decision 12
+    asked for this test; the 20-chunk bound does not fit the cap for such text.)
+12. **A missing host on a real provider records `egress_basis: none`**, which understates that
+    live evidence went to a model server (the ADR reserves `none` for the fake provider). Not
+    reachable today, since the only adapter requires `llm_base_url`; it becomes reachable with a
+    hosted adapter that has no base URL. Remedy: refuse at start-up in `build_default_state` and
+    keep the run-time fallback. Now partly visible through `egress.host_missing`.
+13. **Hiding `model_host` relies on FastAPI not re-validating the returned view**
+    (`revalidate_instances='never'`). The HTTP-level test in `tests/agent/test_knowledge_egress.py`
+    guards it and must stay at the HTTP layer.
+14. **Unusual hosts** (a trailing dot, `localhost.`; an IPv6 zone id, `%`) make every run fail at
+    `_gate`: visible, nothing stored, no leak. Consider refusing them at start-up.
+15. **Supplied agent output with no provider citing a `kb:` item** (tests and evaluation only):
+    `sent_ids` is `None`, so Supervise uses all ids; the record validator then refuses and the
+    run is lost.
+16. `tests/agent/test_knowledge_prompts.py` (about line 387) should assert
+    `match="prompt too large"`.
+17. **K4: `_retrieve` catches only `TimeoutError` and `ConnectorError`.** A bug-class exception
+    ends the run as `FailureCode.INTERNAL` with no record: the same contract as Observe and ADR
+    0025's accepted crash rule; fail-closed, availability not safety. A deterministic bug in the
+    knowledge path would lose every assessment for the affected sites. Later option: a broad
+    catch into a fixed `retrieve.knowledge_failed` issue that logs the exception type only.
+18. **K5: an exception between Observe and Retrieve orphans the retrieval task.** If `next_stage`
+    or `_record_trace` raise there, the task is neither cancelled nor awaited: the store call runs
+    to the statement timeout, and asyncio may log "Task exception was never retrieved" (fixed
+    text, no driver text). Remedy: a `try/finally` in `assess_dive` that cancels and drains it.
+19. **K6: `build_knowledge_connector` relies on `build_repository` having run
+    `verify(least_privilege=True)` first.** A future caller (a CLI, the evaluation harness) would
+    skip the privilege check. The read-only session limits the damage.
+20. **`domain/models.py` `agent_issues` description is now wrong** ("LLM agent calls that failed
+    or were rejected"): the fixed egress codes live there too. A doc nit for a later code change.
+21. **`tests/evaluation/harness.py` `schema_failure_rate`** (about line 200) would count the
+    egress codes as schema failures once the harness runs with a hosted basis.
+22. **The absence line is also sent when items are present with a note or issue.** Its wording
+    ("no site documents were available, or retrieving them failed") is cautious but imprecise.
+23. **`KnowledgeConnector.fetch` still exists**; only `gather_evidence` calls it, the pipeline
+    never does (it calls `retrieve`). Dead on the live path.
+24. **Wiring condition 10 remains open (operations):** check stored records for now-refused forms
+    before deploy (also gap 5).
+25. **The knowledge half of the citation guard (decision 8) is still not built**; a GO or CAUTION
+    citing a knowledge item is not yet flagged (unreachable today: no signed limits).
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
@@ -1723,7 +1791,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   this ADR (2026-10-20/21, not re-accepted). The build reviews are in the conversation record and the
   commit messages, not in a history section. Recording the basis and host as typed
   record fields (`egress_basis`, `model_host`) and using the basis in the filter belong to this
-  feature and are not done. **ADR 0024 must be amended** (decision 11, "Required ADR 0024
+  feature and are done (2026-11-10). **ADR 0024 must be amended** (decision 11, "Required ADR 0024
   amendment") before the feature ships; that is not written here.
 - A name can fit the document id grammar; only the attestation screens for names (decision 6).
 - The two 12-month limits (decisions 3 and 7) are owner policy limits; the other numeric bounds are

@@ -130,9 +130,13 @@ names and a recommendation only, no dedicated view yet), the per-stage trace (`s
 item 3: one `StageTrace` per executed stage in graph order with outcome, `next_stage`, timing,
 the evidence ids the stage used and fixed issue codes such as `observe.connector_failed:<name>`;
 empty on older records; never prompts, model text or provider error text), the egress fields
-(ADR 0022 decision 15: `egress_basis`, one of five fixed values; `model_host`, a host name only;
-`withheld_knowledge`, the `kb:` items not sent to a model, by document id, version and chunk; all
-absent on older records; the record refuses
+(ADR 0022 decision 15, written on every new record since the Retrieve wiring of 2026-11-10:
+`egress_basis`, one of five fixed values; `model_host`, a host name only, hidden from create-only
+keys in the API view with `model_host_withheld: true`; `withheld_knowledge`, the `kb:` items not
+sent to a model, by document id, version and chunk; `sent_evidence_ids`, the ids a prompt
+actually held; all absent on older records; a host-needing basis without a host is recorded as
+`none` with everything withheld and a fixed `egress.host_missing` or `egress.basis_unrecognised`
+first in `agent_issues`, which therefore holds more than failed agent calls; the record refuses
 `kb:` evidence that is not withheld unless the basis is `declared_local`, and, since 2026-11-10, a
 KNOWLEDGE item without a `kb:` id or a `kb:` id on any other kind), the knowledge notes (ADR 0022
 decision 14: `notes`, typed codes and counts, and `superseded_knowledge`, versions by id; empty on
@@ -200,10 +204,14 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Knowledge connector socket limits** (2026-11-10): the knowledge store uses connect, statement
   and lock timeouts, but there is no client-side bound on a stalled socket read
   (`tcp_user_timeout` is Linux-only). See ADR 0022 Known gaps.
-- **RAG stages (ADR 0022, 2026-11-10):** the domain, connector and Retrieve wiring stages are
-  built. Open: older stored records must be checked for now-refused forms before deploy (wiring
+- **RAG stages (ADR 0022, 2026-11-10):** the domain, connector, prompt path, egress filter and
+  Retrieve wiring stages are built and reviewed (`rag` is wired: Retrieve calls the one knowledge
+  connector once per run, and writes `retrieve.knowledge_not_configured` when none is built).
+  Open: older stored records must be checked for now-refused forms before deploy (wiring
   condition 10), the identity filter trusts validated items, `EvidencePolicy` does not refuse a
-  required knowledge category, the 20-item cut, `local_guidance` meaning scope; see ADR 0022.
+  required knowledge category, the knowledge half of the citation guard, the 20-item cut,
+  `local_guidance` meaning scope, the prompt cap for non-ASCII corpora, the shared thread pool
+  for `retrieve`, and the `_retrieve` crash contract; see ADR 0022 Known gaps 1-25.
 - **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
   interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
   see [risk-model.md](risk-model.md) Known gaps.

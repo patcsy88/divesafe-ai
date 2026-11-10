@@ -28,7 +28,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 | `domain` | Frozen Pydantic types: plan, site, conditions, evidence + provenance, risk results, record, human decision. |
 | `risk` | Deterministic rules engine, placeholder rules, `reconcile`. |
 | `data` | Environmental connectors returning validated `EvidenceItem`s. |
-| `rag` | Contextual knowledge retrieval (pgvector). Not built yet. |
+| `rag` | Contextual knowledge retrieval (pgvector): store, selection and connector; Retrieve calls it once per run (ADR 0022). |
 | `agents` | Specialists, bounded Tree-of-Thought, risk proposal, prompt layer. |
 | `orchestration` | Pipeline and the human gate. |
 | `models` | `LLMProvider` abstraction; adapters register here. |
