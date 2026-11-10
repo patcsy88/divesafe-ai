@@ -71,6 +71,43 @@ Decision 13's claim that `kb_load` refuses a manifest root inside the repository
 because the check cannot work inside the container, and condition 1 gains the explicit development
 flag form. The status above is otherwise unchanged.
 
+**Update (2026-11-10, build record and owner decisions; text amendment, the decisions above are
+not re-accepted).** Two code stages are built and reviewed by `risk-reviewer` and
+`security-reviewer` with no open blockers or should-fix items; neither is wired into the Retrieve
+stage yet, so no run produces knowledge evidence today.
+- **Domain stage (branch `rag-domain`, commits `0d80cfa`, `db32359`, `92f7645`, `3b6d3d0`):** the
+  stage trace split (Observe lists live ids, Retrieve lists the `kb:` ids; A1); the Retrieve trace
+  codes (`not_configured` kept for older records, plus `knowledge_not_configured`,
+  `knowledge_failed`, `knowledge_timed_out`, `knowledge_issue`; A2); the KNOWLEDGE validator on
+  `EvidenceItem` (two categories, `valid_until` required; A10); in `risk/engine.py`
+  `WINDOW_EXEMPT[KNOWLEDGE]` drops `historical_observations`, `_exempt` is strict for knowledge
+  (`valid_until > window_end`, `valid_at <= window_end`, `None` not exempt), non-exempt knowledge is
+  never coverage (`_covers_window`), never relevant (`_relevant_to_window`) and never a
+  nearest-instant sample (`_citation_guard`), and `_usable` ignores KNOWLEDGE outside its two
+  categories; `services.evidence.screen_knowledge` applies the identity filter both ways with the
+  fixed issue `evidence.knowledge_refused` and drops malformed `kb:` ids; and the notes channel of
+  decision 14 (`KnowledgeNoteCode`, `KnowledgeNote`, `KnowledgeVersionRef`, record `notes` and
+  `superseded_knowledge`, the view's `knowledge_note`; owner decision A4, 2026-11-09: ships now).
+  Tests: `tests/safety/test_knowledge_identity_exempt.py`, `test_knowledge_record_notes.py`,
+  `test_record_knowledge_identity.py`.
+- **Connector stage (branch `rag-connector`, commits `c24e680`, `6037517`):**
+  `src/divesafe/rag/{store,selection,items,connector}.py`: SQL selection checked again in code,
+  the bounds, the items and the notes. Builder choices, reviewed: a site document maps to
+  `site_information` and an all-sites document to `local_guidance` (the category records scope,
+  not content; see Known gaps); the live test is `integration` only; safety-marked connector tests
+  live in `tests/agent/`. The read-time screen reuses `services.kb_screen`, so `rag -> services` is
+  a new sibling import (no cycle; recorded in `docs/architecture.md`).
+- **Owner decisions, 2026-11-09:** (B1) the per-run bound issue is raised at **20 or more** chunks
+  (decision 12); (B2) where the decision 3 table and its prose disagreed, **the prose wins** (walk
+  down from the governing version; the table is amended, see decision 3); (A4) the notes channel
+  ships now; (A1-A3, A10) domain changes land first, then the Retrieve wiring, with **no
+  feature-flagged half state**.
+- **Owner decision, 2026-11-10, reversing the 2026-11-06 narrowing of condition 7:** the record
+  refuses a KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind, in both `evidence`
+  and `withheld_evidence`, with fixed messages (`domain/models.py`, `_check_egress`;
+  `tests/safety/test_record_knowledge_identity.py`). See decision 15 and condition 7.
+- **Conditions for the Retrieve wiring** are listed in a new section before "Options not taken".
+
 **Required follow-up outside this ADR (not written here; the feature does not ship without it):**
 amendments to ADR 0024 (decision 11, "Required ADR 0024 amendment") and to ADR 0023's text (done
 in this change: it now says the typed record fields are required by this ADR and not built).
@@ -216,21 +253,31 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
 
    | Situation | Returned | Classification |
    | --- | --- | --- |
-   | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
-   | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
+   | **Any version between the governing (highest approved) version and the first clean one, inclusive,** whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
+   | **Any version between the governing version and the first clean one, inclusive,** whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
    | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end before 00:00 local on the day after review-by | its chunks | none |
    | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
-   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now`, **in date or expired** | nothing from the family | withdrawn (note) |
-   | Higher version approved or withdrawn, effective after window end | the lower governing version, classified by rows 1-5 | as for that version |
+   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now`, **in date or expired**, and no lower approved version below it is unchecked or dated after `now` | nothing from the family | withdrawn (note) |
+   | Governing version withdrawn, **above a lower approved version that is unchecked or dated after `now`** | nothing from the family | **evidence issue** (the matching issue row), not a note |
+   | Higher version approved or withdrawn, effective after window end | the lower governing version, classified by rows 1-6 | as for that version |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
    | Draft or never-approved version | ignored; does not hide a lower version | none |
-   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, classified by rows 1-5 | as for that version |
+   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, classified by rows 1-6 | as for that version |
    | Only future-effective, only draft or only never-approved-and-withdrawn versions | nothing | not in force (note) |
 
    **Precedence.** The table is read top to bottom. **The two issue rows come before every other
    row**: the clock-disagreement row first, then the unchecked-approval row, then the in-date,
    expired and withdrawn rows (so an unchecked approval is an issue even when withdrawn or expired,
-   and an unchecked in-date version never matches the "its chunks" row). **Decision 3 defines
+   and an unchecked in-date version never matches the "its chunks" row). **Walk down from the
+   governing version (owner decision B2, 2026-11-09: the prose wins over the earlier table, which
+   is amended above).** Selection starts at the governing version and walks down the family's
+   approved versions until the first **clean** one: a checked version, dated on or before `now`,
+   whose current status is APPROVED. The two issue rows apply to **every** version between the
+   governing one and that first clean one, inclusive, not only to the governing version: a
+   withdrawn version sitting over an unchecked one (or over one dated after `now`) is the
+   **issue**, not the withdrawn note, because the withdrawn version hides the lower one and the
+   lower one's defect would otherwise go unreported. The connector (`rag/selection.py`,
+   `rag-connector` branch) is built this way. **Decision 3 defines
    "approved" as having an APPROVED event whether or not it was later withdrawn, so rows 3 and 4
    also require the current status to be APPROVED (no WITHDRAWN event)**: a withdrawn, checked
    governing version, in date or expired, never matches them and is classified by the withdrawn row
@@ -271,12 +318,24 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       becomes the strict `valid_until > window_end`, because re-assessing stored record-form evidence
       skips the connector's filter. The NOTICE branch is unchanged; the tests are in "Identity and
       exemption". The engine does not rely on the connector having removed an expired document.
+      **Built (2026-11-10, `rag-domain`):** all of the above, and (review fix, `92f7645`) a
+      knowledge item that is not exempt is **never coverage** (`_covers_window` leaves it out as if
+      absent), **never relevant** to the window (`_relevant_to_window`: knowledge counts only when
+      exempt, never by overlap) and **never a nearest-instant sample** in `_citation_guard`.
+      `tests/safety/test_knowledge_identity_exempt.py`.
    - `kb_load` refuses any `variables`, `ranges` or `units` key in a knowledge `value`.
    - Only the knowledge connector may emit KNOWLEDGE items or `kb:` ids. `gather_evidence` passes
      the connector object itself, and the check is identity (`is`) with the single instance built
      at start-up, not the self-declared name and not `isinstance`. Items from any other connector
      that carry KNOWLEDGE or a `kb:` id are **dropped** before they reach a rule or a prompt and
-     reported as an evidence issue. The `kb:` prefix is reserved in both directions.
+     reported as an evidence issue. The `kb:` prefix is reserved in both directions. **Built
+     (2026-11-10, `services.evidence.screen_knowledge`):** the filter runs both ways (another
+     connector emitting KNOWLEDGE or `kb:`; the knowledge connector emitting anything else), with
+     the fixed issue `evidence.knowledge_refused` and no id, title or content in the text, and it
+     drops a malformed `kb:` id from the knowledge connector. `gather_evidence` takes the connector
+     instance (`knowledge_connector=`); the wiring must pass the same instance it registers
+     ("Conditions for the Retrieve wiring"). Known gap: the filter trusts validated items (it tests
+     `data_kind is DataKind.KNOWLEDGE`), see Known gaps.
    - The KNOWLEDGE validator does not require `text`, so the record form (decision 16) validates.
 6. **Item fields.**
    - `id`: `kb:<document_id>:<version>:<chunk>`. **Document id grammar:** lowercase letters and
@@ -443,8 +502,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    - A future `site_constraint` rule never reads knowledge text. Two checks: a static check that
      `risk/` never reads a knowledge item's `text` **and never refers to the KNOWLEDGE kind or the
      two knowledge categories outside the allowed places**, which are exactly these, as the files
-     exist today: (1) `risk/engine.py`: `WINDOW_EXEMPT`, `_exempt`, `EvidencePolicy` (the refusal
-     of a knowledge category as required) and the new citation guard; (2) `risk/placeholders.py`:
+     exist today (2026-11-10): (1) `risk/engine.py`: `WINDOW_EXEMPT`, `_exempt`, `_usable`,
+     `_covers_window`, `_relevant_to_window`, `_citation_guard`, and `EvidencePolicy` (the refusal
+     of a knowledge category as required, not built) and the knowledge half of the citation guard
+     (not built); (2) `risk/placeholders.py`:
      the `site_constraint` placeholder's category set (`K.SITE_CONSTRAINT`). No other file in
      `risk/` (`rules.py`, `definition_rules.py`, `interfaces.py`, `__init__.py`) may mention them.
      The check catches only the obvious forms and is a screen. It needs a **positive control**: a
@@ -767,7 +828,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     meaning of approved: an APPROVED event counts whether or not `hash_checked` is true), so reaching the bound in operation
     always means a mistake that fails closed. Reaching the per-run bound is an **evidence issue**
     (owner answer; it forces INSUFFICIENT EVIDENCE) with the count returned and the count
-    available (after the decision 3 filters). Exceeding the agent stage's existing
+    available (after the decision 3 filters). **Owner decision B1 (2026-11-09): the issue is
+    raised at 20 or more chunks** (`total >= MAX_KNOWLEDGE_ITEMS`), so exactly 20 is an issue too
+    (the loader's per-site check means 20 in operation is already a mistake). The connector cuts
+    the result at 20 items; the cut can split the last family mid-document (owner's choice; see
+    Known gaps: it does not follow the connector's own whole-family-or-nothing rule for a dropped
+    chunk). Exceeding the agent stage's existing
     `MAX_EVIDENCE_ITEMS` cap skips the agent stage, as today. Prompt escaping expands non-ASCII
     text, so the 20-chunk bound must be tested against `MAX_PROMPT_CHARS` for the risk agent and
     ToT; a prompt over the cap fails the agent stage closed.
@@ -895,6 +961,17 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       validate, none enters a prompt, and each is shown to the human in fixed wording, with a test
       that it reaches the user. Notes never force an outcome. This changes the shape of the domain
       record: it needs **`risk-reviewer` and `security-reviewer`**, and ADR 0015's rules apply.
+      **Built (2026-11-10, owner decision A4, 2026-11-09: the notes channel ships now, ahead of
+      the wiring):** `KnowledgeNoteCode` (`knowledge_not_configured`, `knowledge_withdrawn`,
+      `knowledge_not_in_force`, `knowledge_expired`, `knowledge_none_returned`), `KnowledgeNote`
+      (code plus a family count, 0 for codes that count none), `KnowledgeVersionRef`, the record
+      fields `notes` and `superseded_knowledge` (one note per code; "not configured" stands alone;
+      a "no knowledge" note contradicts `kb:` evidence; a superseded version cannot be in the
+      evidence), and the API view's `knowledge_note` in fixed wording, reviewed by both reviewers
+      (`tests/safety/test_knowledge_record_notes.py`). The connector's "no documents" case maps to
+      `NONE_RETURNED` with count 0; the wiring uses this one enum, not a second one ("Conditions
+      for the Retrieve wiring"). The view shows no knowledge sentence when knowledge failed only
+      as an issue with no note (Known gaps; to revisit at wiring).
 15. **Egress: corpus text reaches a model only under `declared_local`.** A loopback address proves
     nothing about where a model server sends data: the local proxy used in the 2026-10-17 run was
     counted as local before ADR 0023 yet forwards off the machine. ADR 0023 (ACCEPTED 2026-10-20)
@@ -957,9 +1034,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       **validator on `AssessmentRecord`**, not only by a test: a record whose `egress_basis` is
       anything but `declared_local` (including absent) is invalid if any knowledge evidence item in
       it is missing from `withheld_knowledge`. Older records have no knowledge items, so they still
-      validate. **As built (condition 7, owner decision 2026-11-06), "knowledge item" here means an
-      evidence item with a `kb:` id only**; a KNOWLEDGE-kind item without one is not judged (see
-      "Not solved"). The validator also refuses (review fixes, 2026-11-06): a `model_host` that
+      validate. **As built, "knowledge item" here means an evidence item with a `kb:` id; since the
+      owner decision of 2026-11-10 (reversing the 2026-11-06 narrowing of condition 7) the two
+      meanings coincide:** the record refuses a KNOWLEDGE-kind item without a `kb:` id and a `kb:`
+      id on any other kind, in both `evidence` and `withheld_evidence`, with fixed messages that
+      carry no id (`domain/models.py`, `_check_egress`;
+      `tests/safety/test_record_knowledge_identity.py`, including an item built with
+      `model_construct`). The validator also refuses (review fixes, 2026-11-06): a `model_host` that
       does not match the basis (`declared_local` and `loopback_external_opt_in` need `localhost`
       or a loopback IP, IPv4-mapped included; `remote_external_opt_in` needs a non-loopback host);
       a host with a zone id (`%`), a `0x` label or a label over 63 characters; more than 20 `kb:`
@@ -975,7 +1056,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
         record.
       - The filter decides "knowledge" with `domain.knowledge_ref`, the validator's definition.
       - The knowledge connector drops malformed `kb:` ids and items past `MAX_KNOWLEDGE_ITEMS`,
-        each with a fixed issue.
+        each with a fixed issue. **Built** in the connector (`rag-connector`) and, as a second
+        line, in `screen_knowledge` (`rag-domain`); the connector tests for a malformed id depend
+        on the chunk text passing the screen (Known gaps).
       - The wiring takes `model_host` from `urllib.parse.urlsplit(...).hostname` (no `[::1]`
         brackets), with a test for `http://[::1]:8000`.
       - The human view shows withheld knowledge in fixed wording (decision 14), with a test.
@@ -986,7 +1069,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
         separate flag (e.g. `model_host_withheld: true`, like ADR 0019's `decision_withheld`),
         never with null, because null means "no model server". Viewer, decider, overrider and
         admin keys see it. Tests: a create-only key never receives the host, on creation, polling
-        and later reads; the other roles do.
+        and later reads; the other roles do. **Not built (2026-11-10):** `withheld()` does not hide
+        `model_host` yet; it must land in the same commit as the egress wiring (a condition on that
+        commit, "Conditions for the Retrieve wiring").
     - **The live evaluation path applies the same basis filter**, as `tide_check_allowed` does for
       tides (ADR 0023 decision 7): it must not put corpus text in a prompt unless its basis is
       `declared_local`.
@@ -996,9 +1081,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       same stage as the filter, never later, so the rule can be checked afterwards. Both are
       domain-record changes (decision 14), so `risk-reviewer` and `security-reviewer` are needed.
       The basis does not go into `model_version` (ADR 0023's text now says so): the typed fields
-      are required here; **the fields and the validator are built (2026-11-06, condition 7); the
-      filter, the `(provider, basis)` pair and the wiring through `assess_dive` are not**, so no
-      run sets them yet and every new record still has them absent. **Safety invariant, checkable from
+      are required here; **the fields and the validator are built (2026-11-06, condition 7;
+      widened 2026-11-10); the filter, the `(provider, basis)` pair and the wiring through
+      `assess_dive` are not**, so no run sets them yet and every new record still has them absent. **Safety invariant, checkable from
       the record alone:** any record whose prompt held knowledge items has `egress_basis` equal to
       `declared_local`; a record with knowledge evidence and `egress_basis` of `no_agent_stage`
       (or any other value) holds only withheld items.
@@ -1051,7 +1136,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   collision or all-expired site becomes an evidence issue; an approved family dated after the
   run's `now` becomes an evidence issue with the fixed "store/run clock disagreement" wording; the
   bound becomes an issue; any other
-  connector emitting KNOWLEDGE or `kb:` is an issue.
+  connector emitting KNOWLEDGE or `kb:` is an issue (**done 2026-11-10**, both directions and the
+  malformed id: `tests/safety/test_knowledge_identity_exempt.py`).
 - Loader failure tests: a review-by 12 months and one day after the effective date is refused, and
   12 months exactly is accepted; an effective date of 29 February resolves to the last day of
   February in a non-leap target year (a review-by one day later is refused); a missing
@@ -1093,7 +1179,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   approver, author, role label, attribution or licence reaches a prompt; an item from any other
   connector carrying KNOWLEDGE or `kb:` is dropped; the absence line is sent when zero items were
   returned; the app role cannot write, delete, truncate or hold column privileges; the
-  status-events triggers hold; the notes channel reaches the user; the record form carries a hash,
+  status-events triggers hold; the notes channel reaches the user (**done 2026-11-10**:
+  `test_knowledge_record_notes.py`, over HTTP, every code with fixed wording and the absence line,
+  no code or wording in any prompt or in the prompt layer's source); the record form carries a hash,
   the lookup is scoped to the record and refuses a mismatch; the 20-chunk bound fits
   `MAX_PROMPT_CHARS`.
 - **Egress safety tests (one per property, each mutation-checked):**
@@ -1257,7 +1345,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `licence_requires_personal_name` is refused (not only `true`); the licence text is covered by
   the no-name attestation test (a manifest without the attestation is refused); no licence or
   display evidence reference is stored in any column (inspect the table).
-- **Identity and exemption (decision 5).** A connector with the same name as the knowledge
+- **Identity and exemption (decision 5). Done 2026-11-10 (`tests/safety/test_knowledge_identity_exempt.py`,
+  mutation-checked; plus `_usable` ignoring KNOWLEDGE outside its categories, knowledge no longer
+  satisfying `historical_observations`, a rule citing non-exempt knowledge flagged as citing
+  unusable evidence, and a knowledge instant never the nearest sample).** A connector with the same name as the knowledge
   connector but not the same object is dropped; a subclass of the knowledge connector is dropped
   (identity `is`, not name, not `isinstance`; mutation: compare by name or `isinstance`; each
   must fail). `_exempt` returns false for a knowledge item with `valid_at` after the window end
@@ -1266,7 +1357,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   a stored record-form item re-assessed without the connector's filter (mutation: `>=`); the NOTICE exemption is unchanged and has its own case. A KNOWLEDGE item with `valid_until` `None`
   is refused by the validator and, built with `model_construct`, is not exempt (mutation: treat
   `None` as exempt). `_exempt` takes the window end (mutation: pass the window start at either call
-  site, about `engine.py` lines 168 and 174).
+  site, `_covers_window` and `_relevant_to_window` in `engine.py`).
 - **No request field reaches SQL (decision 2):** a query-capture test passes hostile values in
   every request field and asserts that the only SQL parameters are `site_id`, the run clock and
   the window. **Order (decision 4):** the result is ordered by document id, version, chunk number
@@ -1346,10 +1437,21 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   refused; log capture shows no chunk text, title or path from `kb_load`, the connector or the
   lookup.
 - **Failure and notes (decisions 9, 14).** No driver text in an issue and no title in an issue
-  text; notes never appear in a prompt; **not configured** records the `knowledge_not_configured`
-  note code **and** the absence line is sent; the absence line is also sent for a note, an issue
-  and zero items; older stored records (without the new fields) still validate (ADR 0015); a
+  text; notes never appear in a prompt (**done**); **not configured** records the `knowledge_not_configured`
+  note code **and** the absence line is sent (**done** for the placeholder stage:
+  `test_the_pipeline_records_not_configured_and_the_view_says_so_with_the_absence_line`); the absence line is also sent for a note, an issue
+  and zero items; older stored records (without the new fields) still validate (ADR 0015;
+  **done**, including the older `not_configured` Retrieve code); a
   database error is wrapped in a fixed-string `ConnectorError` (assert the exact string).
+- **Stage trace split (A1, A2; done 2026-11-10, `test_knowledge_record_notes.py`):** Observe lists
+  the live ids and may not list a `kb:` id; Retrieve lists exactly the `kb:` ids; `kb:` evidence
+  with a trace but no Retrieve entry is refused; Observe's cut at the bound counts live ids only;
+  the Retrieve codes are fixed.
+- **Record identity (owner decision 2026-11-10; done, `test_record_knowledge_identity.py`):** a
+  KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind are refused in `evidence` and
+  in `withheld_evidence`; the messages carry no id; an item that skipped its own validation
+  (`model_construct`) is still refused by the record; a stored record breaking the rule raises the
+  fixed integrity error on load.
 - **`site_intelligence` (decision 15):** a finding with all items withheld and one with part
   withheld; each has the withheld wording, not "no evidence is available for this domain".
 - **Records and display (decisions 6, 15, 16).** No title appears anywhere in a stored record,
@@ -1372,6 +1474,34 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   fail (so a check that matches nothing is detected).
 - Mutation checks on each new safety rule. Documents used in tests are SYNTHETIC and labelled; no
   real corpus is committed.
+
+## Conditions for the Retrieve wiring (recorded 2026-11-10)
+
+The domain stage and the connector stage are built; the Retrieve wiring that joins them is the
+next stage and lands as one change, with **no feature-flagged half state** (owner decision,
+2026-11-09). It must meet all of these; each needs a failure test:
+
+1. **One note enum, the domain's** (`KnowledgeNoteCode`). The connector's "no documents" result
+   maps to `NONE_RETURNED` with count 0; no second enum or free text.
+2. **`record_form` before any item reaches the record** (decision 16): the pipeline stores
+   record-form items only; no chunk text is ever in a record.
+3. **The store uses the app role**, never the loader or owner DSN (decision 10: app role SELECT
+   only; the application already refuses the loader's and owner's strings in production).
+4. **The same connector instance** registered at start-up is the one passed to `gather_evidence`
+   as `knowledge_connector` (decision 5 identity filter).
+5. **Items and notes come from one `retrieve` call**: a second call could see a different store
+   state and let items and notes disagree.
+6. **New records write `retrieve.knowledge_not_configured`** when no connector is configured (the
+   older `not_configured` code stays valid for older records only).
+7. **A pipeline-level test with real `kb:` items** through `assess_dive`, not only unit tests of
+   the connector and the record.
+8. **Zero `kb:` items with no issue always carries a note** (decision 14's catch-all), including
+   the not-configured case.
+9. **`withheld()` hides `model_host` from create-only keys** in the same commit as the egress
+   wiring (decision 15; owner decision 2026-11-06).
+10. **Older stored records are checked before deploy** for now-refused forms (a KNOWLEDGE item
+    without a `kb:` id, or a `kb:` id on another kind); believed to be zero rows since no knowledge
+    connector was ever wired (Known gaps).
 
 ## Options not taken
 
@@ -1494,11 +1624,6 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 
 ## Not solved
 
-- **A KNOWLEDGE item without a `kb:` id is not judged by the record validator** (owner decision
-  2026-11-06, condition 7). It can reach a prompt under any basis and need not be listed in
-  `withheld_knowledge`. Decision 5's connector-stage filter (drop KNOWLEDGE items from every
-  connector but the knowledge connector) is what closes this; until it lands, only `kb:` ids are
-  covered.
 - **The record validator checks the record, not the prompt.** It cannot see whether a withheld
   item was actually left out of a prompt; that is the filter's job and its tests (decision 15).
   It does refuse a record in which model output (findings, scenarios, proposal, Reason trace)
@@ -1507,11 +1632,44 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   `model_host` under `declared_local` still rests on the operator's declaration (ADR 0023); the
   record cannot show where the server forwards a prompt.
 - **`kb:` ids in `withheld_evidence` (ADR 0008) are not grammar-checked** (security review,
-  2026-11-06, note 8). Those items never reach a prompt, so the risk is low.
+  2026-11-06, note 8). Those items never reach a prompt, so the risk is low. Since 2026-11-10 the
+  kind/id pairing is checked there too, but not the grammar.
 - **Until the wiring stage, the API record view shows `model_host` to every key that can read the
   record, including create-only keys** (security review note 7). Nothing sets the field yet, so no
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
-  a condition on the wiring stage (decision 15).
+  a condition on the wiring stage (decision 15). **`withheld()` does not hide it yet (2026-11-10).**
+
+### Known gaps (recorded 2026-11-10, after the domain and connector stages)
+
+1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
+   `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
+   plain string could pass it. The record validator catches the kind/id mismatch afterwards
+   (`_check_egress`), so such an item fails the run rather than the prompt filter.
+2. **`withheld()` does not hide `model_host` from create-only keys yet**; must land with the
+   egress wiring (a condition on that commit).
+3. **`EvidencePolicy` does not refuse a required knowledge category** (decision 8, not built).
+   Until then an engine-level policy could require knowledge; `INTERIM_REQUIRED_CATEGORIES` does
+   not, and the safety test for "no knowledge category is required" covers the shipped policy
+   only.
+4. **The view shows no knowledge sentence when knowledge failed only as an issue with no note.**
+   The issue is still shown as an evidence issue; to revisit at wiring.
+5. **Older stored records holding now-refused forms** (a KNOWLEDGE item without a `kb:` id, or a
+   `kb:` id on another kind) would fail to load with the fixed integrity error. Believed to be zero
+   rows, since no knowledge connector was ever wired; check before deploy (wiring condition 10).
+6. **The 20-item cut can split the last family mid-document** (owner's choice, decision 12, B1).
+   It raises the bound issue, which forces INSUFFICIENT EVIDENCE, but does not follow the
+   connector's whole-family-or-nothing rule for a dropped chunk.
+7. **`local_guidance` records scope, not content.** The connector maps an all-sites document to
+   `local_guidance` and a site document to `site_information`. No future rule may read
+   `local_guidance` as "this site's local rules".
+8. **No client-side bound on a stalled socket read in the connector** (`tcp_user_timeout` is
+   Linux-only; the statement and lock timeouts are server-side). Listed beside "Connector HTTP
+   limits" in `docs/architecture.md`.
+9. **The malformed-id connector tests depend on the chunk text passing the screen**; they should
+   use fixed text so a screen change cannot mask the case under test.
+10. **The static check's allowed places (decision 8)** now include `_usable`, `_covers_window`,
+    `_relevant_to_window` and `_citation_guard`; the earlier mutation references by line number
+    are replaced by function names in the tests list.
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
@@ -1950,8 +2108,13 @@ citation guard are later stages.
    **Built 2026-11-06, narrowed by the owner (2026-11-06, "kb: ids only"):** a knowledge item is an
    evidence item whose id has the reserved `kb:` prefix (compared case-insensitively); such an id
    must follow the decision 6 grammar or the record is invalid. A KNOWLEDGE-kind item without a
-   `kb:` id is **not** judged (see "Not solved"); the reason is that synthetic KNOWLEDGE items
-   (`tests/safety/test_cross_examination.py`) reach prompts today with no basis. Built in
+   `kb:` id was **not** judged; the reason was that synthetic KNOWLEDGE items
+   (`tests/safety/test_cross_examination.py`) reached prompts with no basis.
+   **Reversed by the owner, 2026-11-10:** the record now refuses a KNOWLEDGE item without a `kb:`
+   id and a `kb:` id on any other kind, in both `evidence` and `withheld_evidence`, with fixed
+   messages (`_check_egress`; `tests/safety/test_record_knowledge_identity.py`; the synthetic
+   connector in `test_cross_examination.py` no longer emits KNOWLEDGE, since the identity filter
+   would drop it). The kind and the id now name the same set. Built in
    `AssessmentRecord._check_egress` (`RecordEgressBasis`, `KnowledgeRef`, `knowledge_ref` in
    `domain/models.py`), tested with mutations in `tests/safety/test_record_egress.py`. Review
    fixes (2026-11-06): basis/host cross-check, zone-id / `0x` / long-label hosts refused, a 20-item
