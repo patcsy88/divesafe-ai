@@ -4,9 +4,11 @@ the database clock) decides, the zone is the named one, and the full connector a
 Needs DIVESAFE_TEST_DATABASE_URL (a database named *_test); skipped without it.
 
 Lives in tests/agent because tests/integration was not writable for this builder (builder
-choice, ADR 0022). No database or role is created or dropped. Rows can never be deleted, so each
-run uses fresh document ids under a fresh site id and NO all-sites rows (they would apply to
-every site forever); the all-sites path is covered offline in test_knowledge_connector.py."""
+choice, ADR 0022). No database or role is created or dropped; the schema is installed (owner
+only, idempotent) so the module does not depend on another having run first. Rows can never be
+deleted, so each run uses fresh document ids under a fresh site id and NO all-sites rows (they
+would apply to every site forever); the all-sites path is covered offline in
+test_knowledge_connector.py."""
 
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import uuid
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+import psycopg.conninfo
 import pytest
 from tests.integration.test_knowledge_store import (
     _add_doc,
@@ -31,6 +34,7 @@ from divesafe.rag import store as store_module
 from divesafe.rag.connector import KnowledgeConnector
 from divesafe.rag.selection import CLOCK_ISSUE, KL, UNCHECKED_ISSUE
 from divesafe.rag.store import PostgresKnowledgeStore
+from divesafe.services.postgres import install_schema
 
 # `integration` only, like the other live tests: `-m safety` must never skip, and this needs a DSN.
 pytestmark = [
@@ -51,6 +55,13 @@ RETURNED = ("good", "draftw-above", "future-above")
 @pytest.fixture(scope="module")
 def db() -> dict[str, Any]:
     assert DSN is not None
+    name = str(psycopg.conninfo.conninfo_to_dict(DSN).get("dbname", ""))
+    if not name.endswith("_test"):
+        raise RuntimeError("DIVESAFE_TEST_DATABASE_URL must point at a database named *_test")
+    # The knowledge tables, as `tests/integration/test_knowledge_store.py`'s `roles` installs them
+    # (a fresh CI database has none). Owner only: this module reads and writes as the owner, and
+    # grants no role, so no teardown is needed and other modules see the schema they install.
+    install_schema(DSN)
     tag = uuid.uuid4().hex[:8]
     site = DiveSite(
         id=f"t-site-{tag}", name="Synthetic", latitude=0, longitude=0, coordinate_source="test"
