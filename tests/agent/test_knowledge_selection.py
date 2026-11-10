@@ -137,6 +137,8 @@ CASES: dict[str, tuple[list[VersionRow], FamilyClass, int | None]] = {
     "future-effective-only": ([v(1, eff=TODAY + 5 * DAY)], F.NOT_IN_FORCE, None),
     "approved-but-latest-draft": ([v(1, latest="DRAFT")], F.INCONSISTENT_ISSUE, None),
     "review-by-today": ([v(1, rev=TODAY, eff=TODAY - 30 * DAY)], F.RETURNED, 1),
+    # Risk review n2: a future-dated version BELOW a clean governing one is not judged.
+    "clock-below-clean": ([v(1), v(2, approved_on=TOMORROW), v(3)], F.RETURNED, 3),
 }
 
 
@@ -293,6 +295,11 @@ MUTATIONS = [
         id="unchecked-withdrawn-read-as-never-approved",
     ),
     pytest.param((WALK, ""), "clock-withdrawn", id="clock-row-dropped"),
+    pytest.param(
+        (WALK, WALK.replace("for r in above", "for r in candidates")),
+        "clock-below-clean",
+        id="clock-judged-over-all-candidates",
+    ),
     pytest.param(
         (UNCHECKED, UNCHECKED.replace("in above", "in above[:1]")),
         "withdrawn-over-unchecked",

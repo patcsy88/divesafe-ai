@@ -18,12 +18,13 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import groupby
 
 from pydantic import ValidationError
 
 from divesafe.data import FetchResult
 from divesafe.domain import MAX_KNOWLEDGE_ITEMS, DiveSite, EvidenceItem
-from divesafe.rag.items import run_item
+from divesafe.rag.items import run_item, screened
 from divesafe.rag.selection import (
     FamilyClass,
     Note,
@@ -34,7 +35,14 @@ from divesafe.rag.selection import (
     family_notes,
     usable_for,
 )
-from divesafe.rag.store import MAX_CHUNK_CHARACTERS, ChunkRow, KnowledgeStore
+from divesafe.rag.store import (
+    MAX_CHUNK_CHARACTERS,
+    STORE_MALFORMED,
+    ChunkRow,
+    KnowledgeStore,
+    KnowledgeStoreError,
+    require_aware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +56,7 @@ DISAGREEMENT_ISSUE = (
 MALFORMED_ID_ISSUE = "knowledge store: a chunk with a malformed id was dropped"
 TOO_LONG_ISSUE = "knowledge store: a chunk over the length bound was dropped"
 SCHEMA_ISSUE = "knowledge store: a chunk that failed the evidence schema was dropped"
+SCREEN_ISSUE = "knowledge store: a chunk that failed the character screen was dropped"
 
 
 def bound_issue(returned: int, available: int) -> str:
@@ -89,6 +98,9 @@ def check(
     returned = {
         (r.document_id, r.version): r.chunks for r in results if r.kind is FamilyClass.RETURNED
     }
+    # The schema refuses an approval of a version with no chunks; a returned one is malformed.
+    if any(n == 0 for n in returned.values()):
+        raise KnowledgeStoreError(STORE_MALFORMED)
     expected = sum(returned.values())
     agreed: list[ChunkRow] = []
     disagree = expected != available
@@ -110,18 +122,30 @@ def check(
         issues.append(DISAGREEMENT_ISSUE)
         agreed = []
 
+    # A family is used whole or not at all (AGENTS.md section 10: never partial data as
+    # complete): one dropped chunk drops every chunk of its family, with the fixed issue.
     items: list[EvidenceItem] = []
     dropped: list[str] = []
-    for row in agreed:
-        if len(row.text) > MAX_CHUNK_CHARACTERS:
-            dropped.append(TOO_LONG_ISSUE)
-            continue
-        try:
-            items.append(run_item(row, site, now))
-        except ValidationError:
-            dropped.append(SCHEMA_ISSUE)
-        except ValueError:
-            dropped.append(MALFORMED_ID_ISSUE)
+    for _, family in groupby(agreed, key=lambda r: r.document_id):
+        built: list[EvidenceItem] = []
+        failed: list[str] = []
+        for row in family:
+            if len(row.text) > MAX_CHUNK_CHARACTERS:
+                failed.append(TOO_LONG_ISSUE)
+                continue
+            if not screened(row):
+                failed.append(SCREEN_ISSUE)
+                continue
+            try:
+                built.append(run_item(row, site, now))
+            except ValidationError:
+                failed.append(SCHEMA_ISSUE)
+            except ValueError:
+                failed.append(MALFORMED_ID_ISSUE)
+        if failed:
+            dropped.extend(failed)
+        else:
+            items.extend(built)
     issues.extend(dict.fromkeys(dropped))
 
     total = max(expected, available, len(chunks))
@@ -148,6 +172,7 @@ class KnowledgeConnector:
     ) -> KnowledgeResult:
         """Raises `ConnectorError` (fixed text) when the store cannot answer. Selection reads
         only the window END (decision 3: in force by it, usable to it)."""
+        require_aware(now, window_end)
         selection = await asyncio.to_thread(self._store.select, site.id, now, window_end)
         result = check(
             site, selection.versions, selection.chunks, selection.available, now, window_end

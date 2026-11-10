@@ -41,6 +41,7 @@ from divesafe.rag.connector import (
 )
 from divesafe.rag.items import ALL_SITES_NOTE, record_form, run_item
 from divesafe.rag.selection import (
+    ALL_EXPIRED_ISSUE,
     CLOCK_ISSUE,
     UNCHECKED_ISSUE,
     Note,
@@ -359,15 +360,16 @@ def test_a_store_returning_past_the_bound_is_cut_in_code() -> None:
 
 
 def test_an_over_long_chunk_is_dropped_with_a_fixed_issue() -> None:
+    # Risk review S1: the whole family goes, never the rest of it as if complete.
     result = run([ver("x", chunks=2)], [chunk("x", n=1, text="a" * 1501), chunk("x", n=2)])
-    assert ids(result) == ["kb:x:1:2"]
+    assert ids(result) == []
     assert result.fetch.issues == (TOO_LONG_ISSUE,)
     ok = run([ver("x")], [chunk("x", text="a" * 1500)])
     assert len(ok.fetch.items) == 1 and ok.fetch.issues == ()
 
 
 def test_a_malformed_id_is_dropped_with_a_fixed_issue() -> None:
-    result = run([ver("Bad_Id", chunks=1)], [chunk("Bad_Id")])
+    result = run([ver("Bad-Id", chunks=1)], [chunk("Bad-Id")])
     assert result.fetch.items == ()
     assert result.fetch.issues == (MALFORMED_ID_ISSUE,)
 
@@ -465,9 +467,10 @@ def test_the_connection_has_options_timeouts_and_a_read_only_session(
         "connect_timeout": store_module.CONNECT_TIMEOUT_SECONDS,
         "options": "-c statement_timeout=5000 -c lock_timeout=3000",
     }
-    assert conn.log[:3] == [
+    assert conn.log[:4] == [
         ("SET DateStyle = 'ISO, MDY'", None),
         ("SET client_encoding = 'UTF8'", None),
+        ("SET search_path = pg_catalog, pg_temp", None),
         "COMMIT",
     ]
     assert conn.read_only is True
@@ -732,3 +735,113 @@ def test_mutation_hash_check_removed_is_caught() -> None:
     with pytest.raises(KnowledgeStoreError):
         chunk_row(_chunk_tuple(sha="0" * 64))
     mutant.chunk_row(_chunk_tuple(sha="0" * 64))
+
+
+# --- a family is used whole or not at all (risk review S1) --------------------------------
+
+
+def _bad_schema(row: ChunkRow) -> ChunkRow:
+    return replace(row, effective_date=TODAY + 400 * DAY)  # valid_until before valid_at
+
+
+def test_a_dropped_chunk_drops_its_whole_family_and_only_that_family() -> None:
+    versions = [ver("a-doc", chunks=2), ver("x", chunks=2)]
+    rows = [chunk("a-doc", n=1), chunk("a-doc", n=2)]
+    for bad, issue in (
+        (replace(chunk("x", n=1), text="a" * 1501, content_sha256="0" * 64), TOO_LONG_ISSUE),
+        (_bad_schema(chunk("x", n=1)), SCHEMA_ISSUE),
+    ):
+        result = check(SITE, versions, [*rows, bad, chunk("x", n=2)], 4, NOW, END)
+        assert ids(result) == ["kb:a-doc:1:1", "kb:a-doc:1:2"]
+        assert result.fetch.issues == (issue,)
+
+
+def test_a_malformed_id_drops_its_whole_family() -> None:
+    result = check(SITE, [ver("Bad-Id", chunks=2)], [chunk("Bad-Id", n=1), chunk("Bad-Id", n=2)],
+                   2, NOW, END)  # fmt: skip
+    assert result.fetch.items == ()
+    assert result.fetch.issues == (MALFORMED_ID_ISSUE,)
+
+
+def test_mutation_per_chunk_drop_is_caught() -> None:
+    mutant = mutated_module(
+        connector_module, ("        if failed:\n            dropped.extend(failed)\n        else:\n"
+                           "            items.extend(built)\n",
+                           "        dropped.extend(failed)\n        items.extend(built)\n"),
+    )  # fmt: skip
+    rows = [chunk("x", n=1, text="a" * 1501), chunk("x", n=2)]
+    assert _mut_run(connector_module, [ver("x", chunks=2)], rows, 2).fetch.items == ()
+    assert len(_mut_run(mutant, [ver("x", chunks=2)], rows, 2).fetch.items) == 1
+
+
+# --- retrieve reads the window END (risk review S2) ---------------------------------------
+
+
+def _retrieve(module: Any, selection: Selection, start: datetime, end: datetime) -> Any:
+    store = FakeStore(selection)
+    result = asyncio.run(module.KnowledgeConnector(store).retrieve(SITE, start, end, NOW))
+    return store, result
+
+
+def test_retrieve_passes_the_window_end_to_the_store() -> None:
+    store, _ = _retrieve(connector_module, Selection((), (), 0), START, END)
+    assert store.calls == [(SITE.id, NOW, END)]
+
+
+# Review-by today: usable until 00:00 local tomorrow. The window starts before it, ends after.
+EXPIRY = datetime(2026, 6, 15, 23, 0, tzinfo=KL), datetime(2026, 6, 16, 0, 30, tzinfo=KL)
+
+
+def test_a_window_ending_past_review_by_is_the_all_expired_issue() -> None:
+    sel = Selection((ver("x", rev=TODAY),), (), 0)
+    _, result = _retrieve(connector_module, sel, *EXPIRY)
+    assert result.fetch.items == ()
+    assert result.fetch.issues == (ALL_EXPIRED_ISSUE,)
+
+
+def test_mutation_window_start_at_the_store_call_is_caught() -> None:
+    mutant = mutated_module(
+        connector_module,
+        ("self._store.select, site.id, now, window_end)", "self._store.select, site.id, now, "
+         "window_start)"),
+    )  # fmt: skip
+    store, _ = _retrieve(mutant, Selection((), (), 0), START, END)
+    assert store.calls == [(SITE.id, NOW, START)]
+
+
+def test_mutation_window_start_at_check_is_caught() -> None:
+    mutant = mutated_module(
+        connector_module,
+        ("selection.available, now, window_end", "selection.available, now, window_start"),
+    )
+    sel = Selection((ver("x", rev=TODAY),), (), 0)
+    _, result = _retrieve(mutant, sel, *EXPIRY)
+    assert result.fetch.issues != (ALL_EXPIRED_ISSUE,)
+
+
+# --- risk review n1: the chunk row's own review-by is re-checked --------------------------
+
+
+def test_a_chunk_row_whose_review_by_disagrees_with_the_summary_is_a_disagreement() -> None:
+    result = check(SITE, [ver("x")], [chunk("x", rev=TODAY - DAY)], 1, NOW, END)
+    assert result.fetch.items == ()
+    assert result.fetch.issues == (DISAGREEMENT_ISSUE,)
+    mutant = mutated_module(
+        connector_module, ("            or not usable_for(row.review_by_date, window_end)\n", "")
+    )
+    assert len(_mut_run(mutant, [ver("x")], [chunk("x", rev=TODAY - DAY)], 1).fetch.items) == 1
+
+
+# --- risk review n3: a returned version with no chunks is malformed -----------------------
+
+
+def test_a_returned_version_with_no_chunks_is_a_malformed_store() -> None:
+    with pytest.raises(KnowledgeStoreError) as raised:
+        check(SITE, [ver("x", chunks=0)], [], 0, NOW, END)
+    assert str(raised.value) == STORE_MALFORMED
+    mutant = mutated_module(
+        connector_module,
+        ("    if any(n == 0 for n in returned.values()):\n", "    if False:\n"),
+    )
+    result = _mut_run(mutant, [ver("x", chunks=0)], [], 0)
+    assert result.fetch.items == () and result.fetch.issues == ()

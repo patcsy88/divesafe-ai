@@ -37,7 +37,10 @@ _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_T
 # over it); a session SET wins over both, as in `services.postgres`.
 _DATE_STYLE = "SET DateStyle = 'ISO, MDY'"
 _CLIENT_ENCODING = "SET client_encoding = 'UTF8'"
-_SESSION_SETUP = (_DATE_STYLE, _CLIENT_ENCODING)
+# A role or database search_path must not let an object in another schema shadow a built-in
+# function or operator the queries use (the tables are schema-qualified already).
+_SEARCH_PATH = "SET search_path = pg_catalog, pg_temp"
+_SESSION_SETUP = (_DATE_STYLE, _CLIENT_ENCODING, _SEARCH_PATH)
 
 # A chunk is at most this many characters (decision 12; the load refuses longer ones).
 MAX_CHUNK_CHARACTERS = 1500
@@ -46,6 +49,7 @@ MAX_CHUNK_CHARACTERS = 1500
 STORE_UNAVAILABLE = "knowledge store unavailable"
 STORE_TIMED_OUT = "knowledge store did not answer in time"
 STORE_MALFORMED = "knowledge store returned a malformed row"
+STORE_NAIVE_CLOCK = "knowledge store: the run clock or the window has no time zone"
 
 # The per-version facts selection needs. Never a title. `hash_checked` is true only when every
 # APPROVED event is checked; `approved_on` is the latest APPROVED event's local date.
@@ -233,8 +237,15 @@ def chunk_row(row: tuple[Any, ...]) -> tuple[ChunkRow, int]:
     return chunk, _int(row[15])
 
 
+def require_aware(*instants: datetime) -> None:
+    """A naive instant has no local date; refused with a fixed text, never a `ValueError`."""
+    if any(i.tzinfo is None or i.utcoffset() is None for i in instants):
+        raise KnowledgeStoreError(STORE_NAIVE_CLOCK)
+
+
 def parameters(site_id: str, now: datetime, window_end: datetime) -> dict[str, Any]:
     """The only values that reach SQL (decision 2)."""
+    require_aware(now, window_end)
     return {"site_id": site_id, "now": now, "window_end": window_end}
 
 

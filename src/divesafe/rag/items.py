@@ -16,6 +16,7 @@ from divesafe.domain import (
 )
 from divesafe.rag.selection import valid_from, valid_until
 from divesafe.rag.store import ChunkRow
+from divesafe.services import kb_screen
 
 SITE_SCOPE = "site"
 ALL_SITES_SCOPE = "all_sites"
@@ -45,6 +46,19 @@ def source_label(document_id: str) -> str:
 def scope(item: EvidenceItem) -> str:
     """The scope marker of a knowledge item: an all-sites document has no location."""
     return ALL_SITES_SCOPE if item.location is None else SITE_SCOPE
+
+
+def screened(row: ChunkRow) -> bool:
+    """The load-time character screen again at read time (decision 13): NFC, no carriage
+    return, every character on the allow-list; newlines only in the text. Never repairs. On
+    Unicode data other than the reviewed version the allow-list is not trusted: refused."""
+    try:
+        kb_screen.require_reviewed_unicode()
+    except kb_screen.UnicodeNotReviewed:
+        return False
+    return kb_screen.allowed_text(row.text, newlines=True) and kb_screen.allowed_text(
+        row.section, newlines=False
+    )
 
 
 def run_item(row: ChunkRow, site: DiveSite, now: datetime) -> EvidenceItem:
