@@ -73,7 +73,16 @@ TRACE_ISSUE_KINDS: Final[Mapping[StageName, Mapping[str, str | None]]] = {
         "evidence_conflict": None,
         "no_evidence": None,
     },
-    StageName.RETRIEVE: {"not_configured": None},
+    StageName.RETRIEVE: {
+        # The placeholder stage (no knowledge connector): what every run writes today.
+        "not_configured": None,
+        # ADR 0022 decisions 9 and 14, for the wired stage: not configured (mirrors the record
+        # note of the same name), and the knowledge connector's failure, timeout and issue.
+        "knowledge_not_configured": None,
+        "knowledge_failed": None,
+        "knowledge_timed_out": None,
+        "knowledge_issue": None,
+    },
     StageName.ASSESS: {
         "connector_issues_rule": None,
         "unevaluated_factors": None,

@@ -24,7 +24,7 @@ Evidence value validation, contradiction detection and ToT guardrails are planne
 | | DETERMINISTIC | PROBABILISTIC / AI | HUMAN |
 | --- | --- | --- | --- |
 | **What** | Validation, rules, hard constraints, calculations | Interpretation, prediction, scenario reasoning, explanation | The final decision |
-| **Code** | `domain` (validators), `data` (connectors), `risk` (engine, `reconcile`), `services` | `agents` (specialists, bounded ToT, risk proposal), `rag` (not built) | `orchestration.human_gate`, `api` decision endpoints |
+| **Code** | `domain` (validators), `data` (connectors), `risk` (engine, `reconcile`), `services` | `agents` (specialists, bounded ToT, risk proposal), `rag` (connector built, not wired; ADR 0022) | `orchestration.human_gate`, `api` decision endpoints |
 | **Authority** | Authoritative; the only source of `final_recommendation` | Advisory; a proposal that can only tighten, never relax | Accepts or overrides with rationale (ADR 0004) |
 | **Reproducible** | Yes, same input gives same output | No; stored with model and prompt versions | n/a; recorded with identity and time |
 | **Failure** | Fails closed to `INSUFFICIENT EVIDENCE` | Dropped and reported; deterministic result stands | n/a |
@@ -63,7 +63,7 @@ tests assert its properties without running it. Stage names as stored on the rec
 | Stage | What happens | Primary components |
 | --- | --- | --- |
 | Observe | Receive the dive plan; fetch live conditions as structured evidence. Failed sources become issues, never an abort. | Connectors, Provenance |
-| Retrieve | Fetch site knowledge, guidance, history. Placeholder (`not_configured`) until RAG stage 1 (ADR 0022). | RAG, Historical data |
+| Retrieve | Fetch curated site knowledge and guidance as KNOWLEDGE evidence (`site_information`, `local_guidance` only; knowledge never carries `historical_observations`, ADR 0022 decision 5). Placeholder (`not_configured`) until the Retrieve wiring lands (ADR 0022: the domain and connector stages are built, the wiring is not). | RAG |
 | Assess | Rules engine (authoritative) scores the plan; connector issues become a rule result. Must complete or the run fails. | Risk Rules Engine |
 | Reason | Specialist agents interpret evidence; bounded ToT compares scenarios; the risk agent proposes with evidence IDs. A failed or rejected task, or a deadline, degrades to "no proposal"; an unexpected crash stops the run (fails closed). | Agents |
 | Rejudge | Rules engine again at the later clock, keeping every earlier result; a started window or expired rule can only add problems. Must complete. | Risk Rules Engine |
@@ -133,7 +133,10 @@ empty on older records; never prompts, model text or provider error text), the e
 (ADR 0022 decision 15: `egress_basis`, one of five fixed values; `model_host`, a host name only;
 `withheld_knowledge`, the `kb:` items not sent to a model, by document id, version and chunk; all
 absent on older records and, until the knowledge filter is wired, on new ones; the record refuses
-`kb:` evidence that is not withheld unless the basis is `declared_local`), human
+`kb:` evidence that is not withheld unless the basis is `declared_local`, and, since 2026-11-10, a
+KNOWLEDGE item without a `kb:` id or a `kb:` id on any other kind), the knowledge notes (ADR 0022
+decision 14: `notes`, typed codes and counts, and `superseded_knowledge`, versions by id; empty on
+older records; shown in fixed wording, never prompted), human
 decision, override rationale, and later actual conditions. `deterministic_recommendation` is
 the most severe of every rule result, including any `supervisor.<check>` result.
 
@@ -148,6 +151,9 @@ stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 `api -> orchestration -> agents / rag / data / risk / services -> domain`
 
 `domain` and `risk` are pure (no I/O, no LLM, no imports from agents, rag, models, api).
+One sibling import is recorded (2026-11-10): `rag -> services` (`rag.items` reuses the read-time
+character screen `services.kb_screen`; `services` does not import `rag`, so there is no cycle).
+Alternative, not chosen yet: move the pure screen functions to a neutral module.
 
 ## Decisions
 
@@ -191,6 +197,15 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   gaps (connect/DNS/TLS/header stalls, private socket access, no per-host thread limit, unbounded
   queue, shared module-level pool); see
   [data-sources.md](data-sources.md).
+- **Knowledge connector socket limits** (2026-11-10): the knowledge store uses connect, statement
+  and lock timeouts, but there is no client-side bound on a stalled socket read
+  (`tcp_user_timeout` is Linux-only). See ADR 0022 Known gaps.
+- **RAG stages (ADR 0022, 2026-11-10):** the domain stage (`rag-domain`) and the connector stage
+  (`rag-connector`) are built and reviewed; the Retrieve wiring is not, so no run yet produces
+  knowledge evidence and every new record still writes the placeholder `not_configured`. The
+  wiring's conditions and the open gaps (identity filter trusts validated items, `model_host` not
+  hidden from create-only keys, `EvidencePolicy` not refusing a required knowledge category, the
+  20-item cut, `local_guidance` meaning scope) are listed in ADR 0022.
 - **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
   interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
   see [risk-model.md](risk-model.md) Known gaps.

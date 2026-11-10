@@ -35,6 +35,8 @@ from divesafe.domain import (
     AssessmentRecord,
     DivePlan,
     Finding,
+    KnowledgeNote,
+    KnowledgeNoteCode,
     Recommendation,
     RecordEgressBasis,
     RiskFactorKind,
@@ -46,6 +48,7 @@ from divesafe.domain import (
     StageTrace,
     SupervisorVerdict,
     bound_issues,
+    is_knowledge_id,
     issue_code,
     most_severe,
     unnamed_qualifier,
@@ -130,6 +133,8 @@ class _Run:
     completed: datetime | None = None
     reconciled: Reconciliation | None = None
     verdict: SupervisorVerdict | None = None
+    # Knowledge notes for the record and the human only; never passed to an agent or a prompt.
+    notes: tuple[KnowledgeNote, ...] = ()
     record: AssessmentRecord | None = None
     # Structured facts for the stage trace (ADR 0025 item 3); never read from issue strings.
     task_outcomes: tuple[TaskOutcome, ...] = ()
@@ -168,12 +173,17 @@ async def _observe(run: _Run) -> StageOutcome:
         window_end,
         run.now,
         timeout_seconds=run.connector_timeout_seconds,
+        # No knowledge connector is wired yet (ADR 0022): every KNOWLEDGE item and `kb:` id from
+        # an Observe connector is dropped and reported.
+        knowledge_connector=None,
     )
     return StageOutcome.COMPLETED
 
 
 async def _retrieve(run: _Run) -> StageOutcome:
-    # Placeholder until RAG stage 1 (ADR 0022). Context only; never live conditions.
+    # Placeholder until RAG stage 1 (ADR 0022). Context only; never live conditions. With no
+    # knowledge connector the record carries the `knowledge_not_configured` note (decision 9).
+    run.notes = (KnowledgeNote(code=KnowledgeNoteCode.NOT_CONFIGURED),)
     return StageOutcome.NOT_CONFIGURED
 
 
@@ -395,6 +405,7 @@ async def _gate(run: _Run) -> StageOutcome:
         created_by=run.created_by,
         assigned_decider=run.assigned_decider,
         supervisor_verdict=run.verdict,
+        notes=run.notes,
         stages=tuple(run.traces),
         egress_basis=run.egress_basis,
         model_host=run.model_host,
@@ -428,7 +439,9 @@ def _trace_evidence_ids(run: _Run, name: StageName) -> tuple[tuple[str, ...], bo
     if run.evidence is None:
         return (), False
     if name is StageName.OBSERVE:
-        return _present_ids(run, [item.id for item in run.evidence.items])
+        return _present_ids(run, [i.id for i in run.evidence.items if not is_knowledge_id(i.id)])
+    if name is StageName.RETRIEVE:
+        return _present_ids(run, [i.id for i in run.evidence.items if is_knowledge_id(i.id)])
     if name in (StageName.ASSESS, StageName.REJUDGE):
         return _present_ids(run, [i for r in run.rule_results for i in r.evidence_ids])
     if name is StageName.REASON:
