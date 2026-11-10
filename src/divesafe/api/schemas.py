@@ -17,6 +17,7 @@ from divesafe.domain import (
     DataQuality,
     DiveSite,
     EvidenceItem,
+    KnowledgeNoteCode,
     Recommendation,
     ScenarioKind,
     effective_quality,
@@ -107,6 +108,48 @@ def _agent_note(record: AssessmentRecord) -> str:
         if any(i.startswith("agent stage: timed out") for i in record.agent_issues):
             note += " The agent stage timed out: scenarios and the proposal may be missing."
     return note
+
+
+# ADR 0022 decision 14: fixed wording per note code. A note's only variable part is its count.
+# Nothing here is connector text, a title or a document id from a note.
+_KNOWLEDGE_NOTE_WORDING: dict[KnowledgeNoteCode, str] = {
+    KnowledgeNoteCode.NOT_CONFIGURED: (
+        "No curated site knowledge source is configured, so no site documents were consulted."
+    ),
+    KnowledgeNoteCode.WITHDRAWN: "{count} site document(s) were withdrawn and not used.",
+    KnowledgeNoteCode.NOT_IN_FORCE: (
+        "{count} site document(s) were not yet in force for this dive and not used."
+    ),
+    KnowledgeNoteCode.EXPIRED: (
+        "{count} site document(s) were past their review date for this dive and not used."
+    ),
+    KnowledgeNoteCode.NONE_RETURNED: "No site documents were found for this dive.",
+}
+_KNOWLEDGE_ABSENCE = (
+    " Absence of site documents is not evidence that the site has no hazards. Site knowledge "
+    "is context only and never live conditions."
+)
+
+
+def knowledge_note(record: AssessmentRecord) -> str:
+    """The knowledge notes, superseded and withheld documents in fixed wording (ADR 0022
+    decisions 14 and 15). Empty when the record says nothing about knowledge (older records)."""
+    parts = [
+        _KNOWLEDGE_NOTE_WORDING[n.code].format(count=n.count)
+        for n in sorted(record.notes, key=lambda n: list(KnowledgeNoteCode).index(n.code))
+    ]
+    if record.superseded_knowledge:
+        # Ids follow the strict document grammar (lowercase letters, digits and hyphens).
+        names = ", ".join(f"{r.document_id} v{r.version}" for r in record.superseded_knowledge)
+        parts.append(f"Superseded by a newer version and not used: {names}.")
+    if record.withheld_knowledge:
+        parts.append(
+            f"{len(record.withheld_knowledge)} site document extract(s) were not sent to the "
+            "language model because the model server is not declared local."
+        )
+    if not parts:
+        return ""
+    return " ".join(parts) + (_KNOWLEDGE_ABSENCE if record.notes else "")
 
 
 class _Request(BaseModel):
@@ -256,6 +299,8 @@ class AssessmentView(BaseModel):
     outcome_note: str
     status_note: str
     agent_note: str
+    # Fixed wording for the record's knowledge notes, superseded and withheld documents.
+    knowledge_note: str = ""
     attributions: tuple[str, ...]
     decision_withheld: bool = False
     notice: str = DISCLAIMER
@@ -354,6 +399,7 @@ class AssessmentView(BaseModel):
             record=AssessmentRecordView.of(record),
             outcome_note=outcome_note,
             agent_note=_agent_note(record),
+            knowledge_note=knowledge_note(record),
             status_note=(
                 "Awaiting a human decision. Do not act on this result yet."
                 if record.status == "PENDING_HUMAN"

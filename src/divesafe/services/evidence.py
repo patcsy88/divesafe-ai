@@ -15,12 +15,48 @@ from typing import Literal
 
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
-from divesafe.domain import DataCategory, EvidenceItem
+from divesafe.domain import DataCategory, DataKind, EvidenceItem, is_knowledge_id
 
 logger = logging.getLogger(__name__)
 
 # The fixed prefix `gather_evidence` gives a timed-out connector's error (a class name).
 _TIMEOUT_CLASS = "TimeoutError:"
+
+# ADR 0022 decision 5: fixed issue texts (no id, title or content) for items dropped because the
+# connector may not emit them. `build_evidence_set` prefixes the connector's registered name.
+KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE = (
+    "evidence.knowledge_refused: knowledge items or reserved kb: ids from a connector that is "
+    "not the knowledge connector were dropped"
+)
+NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE = (
+    "evidence.knowledge_refused: items from the knowledge connector that are not knowledge "
+    "items with a kb: id were dropped"
+)
+
+
+def _is_knowledge_item(item: EvidenceItem) -> bool:
+    return item.data_kind is DataKind.KNOWLEDGE or is_knowledge_id(item.id)
+
+
+def screen_knowledge(
+    connector: Connector, knowledge_connector: Connector | None, result: FetchResult
+) -> FetchResult:
+    """ADR 0022 decision 5, both directions of the reserved `kb:` prefix. Only the knowledge
+    connector (by identity: `is`, never its name and never `isinstance`) may emit KNOWLEDGE
+    items or `kb:` ids, and it may emit nothing else. Anything else is dropped before it reaches
+    a rule or a prompt and reported as an evidence issue with a fixed text."""
+    if connector is knowledge_connector:
+        kept = tuple(
+            i for i in result.items if i.data_kind is DataKind.KNOWLEDGE and is_knowledge_id(i.id)
+        )
+        issue = NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE
+    else:
+        kept = tuple(i for i in result.items if not _is_knowledge_item(i))
+        issue = KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE
+    if len(kept) == len(result.items):
+        return result
+    logger.warning("knowledge items refused", extra={"connector": connector.name})
+    return FetchResult(items=kept, issues=(*result.issues, issue))
 
 
 class DuplicateEvidenceError(ValueError):
@@ -142,9 +178,14 @@ async def gather_evidence(
     now: datetime,
     *,
     timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
+    knowledge_connector: Connector | None = None,
 ) -> EvidenceSet:
     """Fetch from every connector at once. A connector that has not answered within the overall
-    timeout becomes an issue, like any other failure, so one stuck source cannot hold a run."""
+    timeout becomes an issue, like any other failure, so one stuck source cannot hold a run.
+
+    `knowledge_connector` is the single knowledge connector instance built at start-up, or None
+    (none configured: every KNOWLEDGE item and `kb:` id is then refused). See
+    `screen_knowledge`."""
     if not (0 < timeout_seconds <= CONNECTOR_BUDGET_SECONDS):  # also false for NaN
         raise ValueError("timeout_seconds must be positive and within the connector budget")
 
@@ -153,7 +194,7 @@ async def gather_evidence(
             result = await asyncio.wait_for(
                 connector.fetch(site, window_start, window_end, now), timeout_seconds
             )
-            return connector.name, result, None
+            return connector.name, screen_knowledge(connector, knowledge_connector, result), None
         except TimeoutError:
             logger.warning("connector timed out", extra={"connector": connector.name})
             return connector.name, None, f"{_TIMEOUT_CLASS} no answer within the time allowed"

@@ -1,11 +1,14 @@
 """Platform services: evidence/provenance, historical data, feedback/learning, persistence."""
 
 from divesafe.services.evidence import (
+    KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE,
+    NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE,
     ConnectorOutcome,
     DuplicateEvidenceError,
     EvidenceSet,
     build_evidence_set,
     gather_evidence,
+    screen_knowledge,
 )
 from divesafe.services.postgres import PostgresAssessmentRepository
 from divesafe.services.repository import (
@@ -35,6 +38,9 @@ from divesafe.services.runs import (
 )
 
 __all__ = [
+    "KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE",
+    "NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE",
+    "screen_knowledge",
     "Admission",
     "CapacityError",
     "CleanupResult",

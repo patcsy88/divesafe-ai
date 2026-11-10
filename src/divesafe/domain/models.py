@@ -29,7 +29,12 @@ from divesafe.domain.provenance import (
     TransformationStep,
 )
 from divesafe.domain.risk_types import THRESHOLD_FACTORS, RiskFactorKind, ThresholdStatus
-from divesafe.domain.stages import MAX_EVIDENCE_ITEMS, STAGE_ORDER, StageName, StageTrace
+from divesafe.domain.stages import (
+    MAX_EVIDENCE_ITEMS,
+    STAGE_ORDER,
+    StageName,
+    StageTrace,
+)
 
 
 class Recommendation(StrEnum):
@@ -128,7 +133,20 @@ class EvidenceItem(_Frozen):
             raise ValueError("upstream_known requires at least one named upstream product")
         if self.upstream and len(set(self.upstream)) != len(self.upstream):
             raise ValueError("upstream products must be unique")
+        if self.data_kind == DataKind.KNOWLEDGE:
+            # ADR 0022 decision 5. `text` is not required, so the record form validates.
+            if self.category not in KNOWLEDGE_CATEGORIES:
+                raise ValueError("knowledge is valid only as site_information or local_guidance")
+            if self.valid_until is None:
+                raise ValueError("knowledge requires valid_until (its review-by date)")
         return self
+
+
+# ADR 0022 decision 5: the only categories a KNOWLEDGE item may have. `historical_observations`
+# is reserved for a future typed history service with its own ADR.
+KNOWLEDGE_CATEGORIES: frozenset[DataCategory] = frozenset(
+    {DataCategory.SITE_INFORMATION, DataCategory.LOCAL_GUIDANCE}
+)
 
 
 class DivePlan(_Frozen):
@@ -369,11 +387,69 @@ class KnowledgeRef(_Frozen):
     chunk: StrictInt = Field(ge=1, le=999999)
 
 
+class KnowledgeVersionRef(_Frozen):
+    """One document version by id only (document, version), never by title."""
+
+    document_id: str = Field(max_length=40, pattern=KB_DOCUMENT_ID_PATTERN)
+    version: StrictInt = Field(ge=1, le=999999)
+
+
+class KnowledgeNoteCode(StrEnum):
+    """Why knowledge is absent or partial without being an evidence issue (ADR 0022 decisions 3,
+    9 and 14). RECORD AND HUMAN VIEW ONLY: a note code never enters a prompt. The model gets only
+    the prompt layer's fixed absence line, never these codes or their wording. Notes never force
+    an outcome; anything that should is an evidence issue instead."""
+
+    # No knowledge connector at all (a documented gap: a note, not an issue).
+    NOT_CONFIGURED = "knowledge_not_configured"
+    # Families whose governing version is withdrawn (decision 3 table, withdrawn row).
+    WITHDRAWN = "knowledge_withdrawn"
+    # Families with only future-effective, draft or never-approved versions.
+    NOT_IN_FORCE = "knowledge_not_in_force"
+    # Families past review-by beside live ones (all expired is an evidence issue instead).
+    EXPIRED = "knowledge_expired"
+    # The catch-all: zero items returned and no issue.
+    NONE_RETURNED = "knowledge_none_returned"
+
+
+# Codes that count document families, and those that carry no count (always 0).
+FAMILY_NOTE_CODES: frozenset[KnowledgeNoteCode] = frozenset(
+    {KnowledgeNoteCode.WITHDRAWN, KnowledgeNoteCode.NOT_IN_FORCE, KnowledgeNoteCode.EXPIRED}
+)
+# A capacity bound on a count, not a safety threshold (the version range of decision 6).
+MAX_NOTE_COUNT = 999999
+
+
+class KnowledgeNote(_Frozen):
+    """One typed note: a fixed code and a count, never connector text. For the record and the
+    human view only; never placed in a prompt (see `KnowledgeNoteCode`)."""
+
+    code: KnowledgeNoteCode
+    count: StrictInt = Field(
+        default=0,
+        ge=0,
+        le=MAX_NOTE_COUNT,
+        description="Document families concerned; 0 for codes that do not count families.",
+    )
+
+    @model_validator(mode="after")
+    def _count_matches_code(self) -> KnowledgeNote:
+        if (self.code in FAMILY_NOTE_CODES) != (self.count > 0):
+            raise ValueError("a family note needs a positive count; other notes carry none")
+        return self
+
+
+def is_knowledge_id(evidence_id: str) -> bool:
+    """Does the id use the reserved `kb:` prefix (compared case-insensitively)? Says nothing
+    about whether it follows the grammar; `knowledge_ref` checks that."""
+    return evidence_id[: len(KNOWLEDGE_ID_PREFIX)].casefold() == KNOWLEDGE_ID_PREFIX
+
+
 def knowledge_ref(evidence_id: str) -> KnowledgeRef | None:
     """The chunk a `kb:<document_id>:<version>:<chunk>` evidence id names, or None for an id
     outside the reserved `kb:` prefix (compared case-insensitively). Raises `ValueError` for a
     reserved id that does not follow the decision 6 grammar."""
-    if evidence_id[: len(KNOWLEDGE_ID_PREFIX)].casefold() != KNOWLEDGE_ID_PREFIX:
+    if not is_knowledge_id(evidence_id):
         return None
     parts = evidence_id.split(":")
     if (
@@ -553,6 +629,23 @@ class AssessmentRecord(_Frozen):
             "basis, by id only (ADR 0022 decision 15). Not `withheld_evidence` (ADR 0008)."
         ),
     )
+    notes: tuple[KnowledgeNote, ...] = Field(
+        default=(),
+        max_length=len(KnowledgeNoteCode),
+        description=(
+            "Knowledge notes (ADR 0022 decision 14): typed codes and counts, never connector "
+            "text. Shown to the human in fixed wording; never sent to a model; never force an "
+            "outcome. Empty on records made before they existed."
+        ),
+    )
+    superseded_knowledge: tuple[KnowledgeVersionRef, ...] = Field(
+        default=(),
+        max_length=MAX_KNOWLEDGE_ITEMS,
+        description=(
+            "Document versions replaced by a newer one in force, by id only (ADR 0022 decisions "
+            "10 and 14). Shown to the human; never sent to a model."
+        ),
+    )
 
     stages: tuple[StageTrace, ...] = Field(
         default=(),
@@ -642,6 +735,7 @@ class AssessmentRecord(_Frozen):
         self._check_supervisor()
         self._check_stages()
         self._check_egress()
+        self._check_notes()
 
         self._check_reassignments()
         if self.human_decision is not None:
@@ -707,6 +801,29 @@ class AssessmentRecord(_Frozen):
         if held_ids & model_cited:
             raise ValueError("withheld knowledge cannot be cited by model output")
 
+    def _check_notes(self) -> None:
+        """ADR 0022 decision 14: one note per code; "not configured" and "none returned" mean no
+        knowledge in the record; "not configured" stands alone; a superseded version is not one
+        whose chunks were used."""
+        codes = [n.code for n in self.notes]
+        if len(codes) != len(set(codes)):
+            raise ValueError("each knowledge note code appears at most once")
+        if len(self.superseded_knowledge) != len(set(self.superseded_knowledge)):
+            raise ValueError("each superseded knowledge version appears at most once")
+        used = {
+            KnowledgeVersionRef(document_id=ref.document_id, version=ref.version)
+            for e in self.evidence
+            if (ref := knowledge_ref(e.id)) is not None
+        }
+        held = any(is_knowledge_id(e.id) for e in self.withheld_evidence)
+        not_configured = KnowledgeNoteCode.NOT_CONFIGURED in codes
+        if not_configured and (len(codes) > 1 or self.superseded_knowledge):
+            raise ValueError("knowledge_not_configured cannot appear with other knowledge notes")
+        if (not_configured or KnowledgeNoteCode.NONE_RETURNED in codes) and (used or held):
+            raise ValueError("a note saying no knowledge was returned contradicts kb: evidence")
+        if used & set(self.superseded_knowledge):
+            raise ValueError("a superseded knowledge version cannot be in the evidence")
+
     @property
     def original_decider(self) -> str | None:
         """Who the assessment was assigned to when it was created."""
@@ -743,11 +860,23 @@ class AssessmentRecord(_Frozen):
         if [t.next_stage for t in self.stages] != expected[: len(self.stages)]:
             raise ValueError("each stage trace must name the following entry as next_stage")
         by_name = {t.name: t for t in self.stages}
+        # ADR 0022: Observe lists the kept non-knowledge ids (cut at the bound, as the pipeline
+        # cuts them); Retrieve lists exactly the kept `kb:` ids. A record with `kb:` evidence and
+        # a trace must have a Retrieve entry, so no knowledge id goes unlisted.
+        kept_ids = [e.id for e in self.evidence]
+        knowledge = tuple(i for i in kept_ids if is_knowledge_id(i))
         observe = by_name.get(StageName.OBSERVE)
         if observe is not None:
-            kept = tuple(e.id for e in self.evidence)[:MAX_EVIDENCE_ITEMS]
-            if observe.evidence_ids != kept:
+            live = tuple(i for i in kept_ids if not is_knowledge_id(i))[:MAX_EVIDENCE_ITEMS]
+            if observe.evidence_ids != live:
+                # The message is unchanged since ADR 0025; tests match on it.
                 raise ValueError("the observe trace must list the record's kept evidence ids")
+        retrieve = by_name.get(StageName.RETRIEVE)
+        if retrieve is not None:
+            if retrieve.evidence_ids != knowledge:
+                raise ValueError("the retrieve trace must list exactly the record's kb: ids")
+        elif knowledge and self.stages:
+            raise ValueError("kb: evidence needs a retrieve trace that lists it")
         supervise = by_name.get(StageName.SUPERVISE)
         if supervise is not None:
             tightened = {

@@ -13,7 +13,9 @@ from divesafe.domain.conditions import (
 )
 from divesafe.domain.lineage import are_independent, can_corroborate
 from divesafe.domain.models import (
+    FAMILY_NOTE_CODES,
     INVARIANT_CHECKS,
+    KNOWLEDGE_CATEGORIES,
     KNOWLEDGE_ID_PREFIX,
     MAX_KNOWLEDGE_ITEMS,
     MAX_REASSIGNMENTS,
@@ -25,7 +27,10 @@ from divesafe.domain.models import (
     EvidenceItem,
     Finding,
     HumanDecision,
+    KnowledgeNote,
+    KnowledgeNoteCode,
     KnowledgeRef,
+    KnowledgeVersionRef,
     Reassignment,
     Recommendation,
     RecordEgressBasis,
@@ -34,6 +39,7 @@ from divesafe.domain.models import (
     ScenarioKind,
     SupervisorCheck,
     SupervisorVerdict,
+    is_knowledge_id,
     knowledge_ref,
     most_severe,
     severity,
@@ -91,9 +97,15 @@ RiskFactor = RuleResult
 PostDiveObservation = ActualConditions
 
 __all__ = [
+    "FAMILY_NOTE_CODES",
+    "KNOWLEDGE_CATEGORIES",
     "KNOWLEDGE_ID_PREFIX",
     "MAX_KNOWLEDGE_ITEMS",
+    "KnowledgeNote",
+    "KnowledgeNoteCode",
     "KnowledgeRef",
+    "KnowledgeVersionRef",
+    "is_knowledge_id",
     "RecordEgressBasis",
     "knowledge_ref",
     "FACTOR_METRICS",
