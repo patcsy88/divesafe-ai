@@ -66,8 +66,17 @@ def broken_of(record: AssessmentRecord) -> AssessmentRecord:
     return record.model_copy(update={"scenarios": (first, *record.scenarios[1:])})
 
 
+# The record's own clock fields: a timestamp such as 1762700031.5... would contain "1.5" by chance
+# and fail the scan about once in thirty runs. Every other field is still scanned.
+CLOCK = frozenset({"created", "msecs", "relativeCreated"})
+
+
 def everything(records: list[logging.LogRecord]) -> str:
-    return " ".join(str(v) for r in records for v in (r.getMessage(), *r.__dict__.values()))
+    return " ".join(
+        str(v)
+        for r in records
+        for v in (r.getMessage(), *(field for k, field in r.__dict__.items() if k not in CLOCK))
+    )
 
 
 def of_misses(mod: Any) -> list[str]:
@@ -106,6 +115,24 @@ def of_misses(mod: Any) -> list[str]:
         if leak in text:
             bad.append(f"the captured logs contain {leak!r}")
     return bad
+
+
+def test_the_log_scan_ignores_only_the_clock() -> None:
+    """The scan once failed at random when a timestamp contained "1.5" (review 2026-11-09)."""
+    record = logging.makeLogRecord({"msg": "plain", "created": 1762700031.5, "msecs": 501.5})
+    record.relativeCreated = 31.5
+    assert "1.5" not in everything([record])
+    # Each value reaches the scan only through its own field. `logger.error("plain", {"v": x})`
+    # stores the mapping as args, and "plain" % {...} is "plain", so it never shows in getMessage().
+    cases = (
+        ({"msg": "plain", "args": {"v": 1.5}}, "1.5"),
+        ({"msg": "plain", "summary": INPUT}, INPUT),
+        ({"msg": "plain", "exc_text": "validation error"}, "validation error"),
+    )
+    for fields, value in cases:
+        leak = logging.makeLogRecord(fields)
+        assert value not in leak.getMessage(), value
+        assert value in everything([leak]), value
 
 
 def test_of_raises_the_fixed_error_without_cause_or_context_and_logs_only_the_id() -> None:
