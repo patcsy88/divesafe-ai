@@ -970,8 +970,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       evidence), and the API view's `knowledge_note` in fixed wording, reviewed by both reviewers
       (`tests/safety/test_knowledge_record_notes.py`). The connector's "no documents" case maps to
       `NONE_RETURNED` with count 0; the wiring uses this one enum, not a second one ("Conditions
-      for the Retrieve wiring"). The view shows no knowledge sentence when knowledge failed only
-      as an issue with no note (Known gaps; to revisit at wiring).
+      for the Retrieve wiring"). When knowledge failed only as an issue (no note), the view adds a
+      fixed sentence from the Retrieve trace code (Known gap 4, closed at wiring).
 15. **Egress: corpus text reaches a model only under `declared_local`.** A loopback address proves
     nothing about where a model server sends data: the local proxy used in the 2026-10-17 run was
     counted as local before ADR 0023 yet forwards off the machine. ADR 0023 (ACCEPTED 2026-10-20)
@@ -1503,6 +1503,25 @@ next stage and lands as one change, with **no feature-flagged half state** (owne
     without a `kb:` id, or a `kb:` id on another kind); believed to be zero rows since no knowledge
     connector was ever wired (Known gaps).
 
+**Status (2026-11-10): wired** in `orchestration.pipeline`; conditions 1-9 are met and tested in
+`tests/agent/test_retrieve_wiring.py` (safety marker, each with a mutation check); condition 10
+is an operations check before deploy. How it is built:
+
+- The connector is built whenever `DIVESAFE_DATABASE_URL` is set (`api.state.build_knowledge_connector`,
+  owner decision 2026-11-10; no new flag). The in-memory repository gives `knowledge_not_configured`.
+- Observe starts the one `retrieve` call as a task, bounded by the connector timeout, alongside
+  the live connectors; Retrieve awaits it. A `ConnectorError` is `retrieve.knowledge_failed`, a
+  timeout `retrieve.knowledge_timed_out`, a connector issue `retrieve.knowledge_issue`; each is
+  an evidence issue (`knowledge: ...`), so never GO. `assess_dive` refuses the knowledge connector
+  in its Observe list (that would be a second call).
+- The prompts' absence line follows the Retrieve result (zero items, a note or an issue), not
+  the evidence alone (risk-reviewer, 2026-11-10).
+- A basis forced to `none` (missing or unrecognised basis, or no model host) puts a fixed code
+  first in `agent_issues` (`egress.basis_unrecognised`, `egress.host_missing`), shown in fixed
+  wording on the view and not counted as a failed agent call (risk-reviewer, 2026-11-10).
+- Replay fixtures recorded before the wiring keep `retrieve.not_configured`; the evaluation tests
+  map it to the new code in test code.
+
 ## Options not taken
 
 - **pgvector or full-text search from the start.** Silent misses, an English vocabulary against
@@ -1637,7 +1656,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **Until the wiring stage, the API record view shows `model_host` to every key that can read the
   record, including create-only keys** (security review note 7). Nothing sets the field yet, so no
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
-  a condition on the wiring stage (decision 15). **`withheld()` does not hide it yet (2026-11-10).**
+  a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
 
 ### Known gaps (recorded 2026-11-10, after the domain and connector stages)
 
@@ -1645,14 +1664,13 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
    `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
    plain string could pass it. The record validator catches the kind/id mismatch afterwards
    (`_check_egress`), so such an item fails the run rather than the prompt filter.
-2. **`withheld()` does not hide `model_host` from create-only keys yet**; must land with the
-   egress wiring (a condition on that commit).
+2. **Closed:** `withheld()` hides `model_host` from create-only keys (wiring condition 9).
 3. **`EvidencePolicy` does not refuse a required knowledge category** (decision 8, not built).
    Until then an engine-level policy could require knowledge; `INTERIM_REQUIRED_CATEGORIES` does
    not, and the safety test for "no knowledge category is required" covers the shipped policy
    only.
-4. **The view shows no knowledge sentence when knowledge failed only as an issue with no note.**
-   The issue is still shown as an evidence issue; to revisit at wiring.
+4. **Closed at wiring (2026-11-10):** knowledge that failed only as an issue with no note gets a
+   fixed view sentence, chosen from the Retrieve trace codes (never issue text).
 5. **Older stored records holding now-refused forms** (a KNOWLEDGE item without a `kb:` id, or a
    `kb:` id on another kind) would fail to load with the fixed integrity error. Believed to be zero
    rows, since no knowledge connector was ever wired; check before deploy (wiring condition 10).

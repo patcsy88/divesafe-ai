@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from tests.safety.kb_fakes import mutated_module
 
+from divesafe.domain import KnowledgeNote, KnowledgeNoteCode
 from divesafe.rag import selection
 from divesafe.rag.selection import (
     ALL_EXPIRED_ISSUE,
@@ -18,8 +19,6 @@ from divesafe.rag.selection import (
     UNCHECKED_ISSUE,
     FamilyClass,
     FamilyResult,
-    Note,
-    NoteCode,
     VersionRow,
 )
 
@@ -207,12 +206,17 @@ def test_issues_per_family() -> None:
 
 
 def test_notes_per_family() -> None:
-    assert selection.family_notes([_r(F.EXPIRED), _r(F.RETURNED)]) == (Note(NoteCode.EXPIRED, 1),)
+    assert selection.family_notes([_r(F.EXPIRED), _r(F.RETURNED)]) == (
+        KnowledgeNote(code=KnowledgeNoteCode.EXPIRED, count=1),
+    )
     assert selection.family_notes([_r(F.EXPIRED)]) == ()
-    assert selection.family_notes([]) == (Note(NoteCode.NO_DOCUMENTS, 1),)
+    assert selection.family_notes([]) == (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
     assert selection.family_notes(
         [_r(F.WITHDRAWN, "a"), _r(F.WITHDRAWN, "b"), _r(F.NOT_IN_FORCE, "c")]
-    ) == (Note(NoteCode.NOT_IN_FORCE, 1), Note(NoteCode.WITHDRAWN, 2))
+    ) == (
+        KnowledgeNote(code=KnowledgeNoteCode.NOT_IN_FORCE, count=1),
+        KnowledgeNote(code=KnowledgeNoteCode.WITHDRAWN, count=2),
+    )
 
 
 def test_issue_wording_carries_no_title_and_no_id() -> None:

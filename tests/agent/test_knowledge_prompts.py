@@ -32,7 +32,7 @@ from divesafe.agents.prompts import (
     WITHHELD_KNOWLEDGE_NOTE,
     KnowledgeContext,
     evidence_payload,
-    knowledge_note,
+    knowledge_wording,
 )
 from divesafe.agents.runner import MAX_PROMPT_CHARS, AgentError
 from divesafe.agents.specialists import NO_EVIDENCE_SUMMARY, SITE_INTELLIGENCE, SPECIALISTS
@@ -233,7 +233,7 @@ def test_the_absence_line_is_sent_with_no_knowledge_item_at_all() -> None:
     message = _trusted(_message(provider))
     assert ABSENCE_LINE.strip() in message
     assert KNOWLEDGE_NOTE.strip() not in message
-    assert knowledge_note([item], PRESENT) == ""
+    assert knowledge_wording([item], PRESENT) == ""
 
 
 def test_the_wording_holds_the_decision_9_points() -> None:
@@ -260,10 +260,14 @@ def test_the_prediction_focus_refuses_trends_from_documents() -> None:
 @pytest.mark.parametrize(
     ("caller", "module", "target"),
     [
-        ("specialist", specialists_module, " + knowledge_note(items, knowledge)"),
-        ("scenario:marginal", tot_module, "            + knowledge_note(evidence, knowledge)\n"),
-        ("risk", risk_module, "            + knowledge_note(evidence, knowledge)\n"),
-        ("cross_examination", cross_module, "            + knowledge_note(evidence, knowledge)\n"),
+        ("specialist", specialists_module, " + knowledge_wording(items, knowledge)"),
+        ("scenario:marginal", tot_module, "            + knowledge_wording(evidence, knowledge)\n"),
+        ("risk", risk_module, "            + knowledge_wording(evidence, knowledge)\n"),
+        (
+            "cross_examination",
+            cross_module,
+            "            + knowledge_wording(evidence, knowledge)\n",
+        ),
     ],
 )
 def test_mutation_wording_dropped_from_a_caller_is_caught(
@@ -288,7 +292,7 @@ def test_mutation_wording_dropped_from_a_caller_is_caught(
         ),
     ],
 )
-def test_mutation_knowledge_note_is_caught(
+def test_mutation_knowledge_wording_is_caught(
     edit: tuple[str, str], ctx: KnowledgeContext | None
 ) -> None:
     mutant = mutated_module(prompts_module, edit)
@@ -299,7 +303,7 @@ def test_mutation_knowledge_note_is_caught(
     )
     real = KnowledgeContext() if ctx is None else ctx
     items = [] if edit[0].startswith("KNOWLEDGE_NOTE") else [_site_item()]
-    assert mutant.knowledge_note(items, context) != knowledge_note(items, real)
+    assert mutant.knowledge_wording(items, context) != knowledge_wording(items, real)
 
 
 # --- decision 15: site_intelligence when knowledge was withheld --------------------------------

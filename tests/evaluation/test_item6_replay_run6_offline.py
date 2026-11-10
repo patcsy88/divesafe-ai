@@ -149,7 +149,10 @@ def test_the_replay_gives_the_recorded_trace_codes_and_stages() -> None:
     fixture = _fixture()
     record = run_replay()
     assert [s.name.value for s in record.stages] == fixture["result"]["stages"]
-    assert _codes(record) == sorted(fixture["result"]["stage_issues"])
+    # Recorded before ADR 0022 wiring condition 6 renamed the not-configured Retrieve code.
+    renamed = {"retrieve.not_configured": "retrieve.knowledge_not_configured"}
+    recorded = [renamed.get(c, c) for c in fixture["result"]["stage_issues"]]
+    assert _codes(record) == sorted(recorded)
     for code in _codes(record):
         assert CODE_PATTERN.fullmatch(code), f"not a fixed code: {code!r}"
 

@@ -43,6 +43,8 @@ from divesafe.orchestration import (
     load_ruleset_bytes,
     read_ruleset_file,
 )
+from divesafe.rag.connector import KnowledgeConnector
+from divesafe.rag.store import PostgresKnowledgeStore
 from divesafe.risk import (
     EvidencePolicy,
     FactorScopeRule,
@@ -113,6 +115,8 @@ class AppState:
     # ADR 0022 decision 15: from `build_provider`'s pair and `model_host`, set together.
     egress_basis: ProviderBasis = "no_agent_stage"
     model_host: str | None = None
+    # ADR 0022 wiring condition 4: the one knowledge connector, passed to every run.
+    knowledge_connector: KnowledgeConnector | None = None
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(default_limits()))
     trusted_proxies: frozenset[str] = frozenset()
     runs: RunLimits = field(default_factory=RunLimits)
@@ -231,6 +235,16 @@ def build_repository(settings: Settings) -> RunAwareRepository:
     return repository
 
 
+def build_knowledge_connector(settings: Settings) -> KnowledgeConnector | None:
+    """ADR 0022 wiring condition 3: the store reads with the application's own connection string
+    (`DIVESAFE_DATABASE_URL`, the app role: SELECT only), never the loader's or the owner's; the
+    caller has already refused those in production. No database: not configured (owner decision
+    2026-11-10)."""
+    if settings.database_url is None:
+        return None
+    return KnowledgeConnector(PostgresKnowledgeStore(settings.database_url.get_secret_value()))
+
+
 def refuse_loader_credentials(environ: Mapping[str, str]) -> None:
     """ADR 0024 A4: the API never holds the knowledge loader's connection string. `Settings` has
     no field for it (extra="ignore" would drop it silently), so look for it by name, in the
@@ -333,6 +347,7 @@ def build_default_state(settings: Settings) -> AppState:
         provider=provider,
         egress_basis=basis,
         model_host=None if provider is None else model_host(settings),
+        knowledge_connector=build_knowledge_connector(settings),
         limiter=RateLimiter(
             default_limits(
                 settings.rate_limit_create_per_minute,

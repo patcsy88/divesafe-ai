@@ -219,8 +219,9 @@ def test_the_trace_codes_match_the_recorded_stage_codes_as_they_now_are() -> Non
     assert [s.name.value for s in record.stages] == fixture["result"]["stages"]
     # Observe: every connector answered, so no failure code is expected (the recorded run had none).
     assert _codes_of(record, "observe") == []
-    # Retrieve: placeholder, as recorded.
-    assert _codes_of(record, "retrieve") == ["retrieve.not_configured"]
+    # Retrieve: recorded as the placeholder `not_configured`; new records write the wired stage's
+    # `knowledge_not_configured` for the same case (ADR 0022 wiring condition 6).
+    assert _codes_of(record, "retrieve") == ["retrieve.knowledge_not_configured"]
     # Assess: the factors without a validated limit are reported as not evaluated, as recorded.
     assert _codes_of(record, "assess") == ["assess.unevaluated_factors"]
     # Reason. The fixture was recorded with the schema short-text limit at 300. Its two rejected

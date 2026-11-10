@@ -26,6 +26,8 @@ from divesafe.domain import (
     DataKind,
     DataQuality,
     EvidenceItem,
+    KnowledgeNote,
+    KnowledgeNoteCode,
 )
 from divesafe.rag import connector as connector_module
 from divesafe.rag import items as items_module
@@ -44,8 +46,6 @@ from divesafe.rag.selection import (
     ALL_EXPIRED_ISSUE,
     CLOCK_ISSUE,
     UNCHECKED_ISSUE,
-    Note,
-    NoteCode,
     VersionRow,
 )
 from divesafe.rag.store import (
@@ -294,21 +294,25 @@ def test_the_result_is_ordered_by_document_version_chunk() -> None:
 def test_another_sites_versions_are_ignored_in_code() -> None:
     result = run([ver("x", site="other-site", checked=False)], [])
     assert result.fetch.issues == ()
-    assert result.notes == (Note(NoteCode.NO_DOCUMENTS, 1),)
+    assert result.notes == (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
 
 
 # --- notes --------------------------------------------------------------------------------
 
 
 def test_notes() -> None:
-    assert run([], []).notes == (Note(NoteCode.NO_DOCUMENTS, 1),)
-    assert run([ver("x", withdrawn=True)], []).notes == (Note(NoteCode.WITHDRAWN, 1),)
-    assert run([ver("x", approved_on=None)], []).notes == (Note(NoteCode.NOT_IN_FORCE, 1),)
+    assert run([], []).notes == (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
+    assert run([ver("x", withdrawn=True)], []).notes == (
+        KnowledgeNote(code=KnowledgeNoteCode.WITHDRAWN, count=1),
+    )
+    assert run([ver("x", approved_on=None)], []).notes == (
+        KnowledgeNote(code=KnowledgeNoteCode.NOT_IN_FORCE, count=1),
+    )
     live = run(
         [ver("a"), ver("b", rev=TODAY - DAY, eff=TODAY - 30 * DAY)],
         [chunk("a")],
     )
-    assert live.notes == (Note(NoteCode.EXPIRED, 1),)
+    assert live.notes == (KnowledgeNote(code=KnowledgeNoteCode.EXPIRED, count=1),)
     assert ids(live) == ["kb:a:1:1"]
     assert live.fetch.issues == ()
 

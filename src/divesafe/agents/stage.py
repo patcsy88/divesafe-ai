@@ -271,6 +271,7 @@ async def run_agent_stage(
     proposal: bool = True,
     cross_examination: bool = False,
     cross_examination_timeout: float | None = None,
+    knowledge_incomplete: bool | None = None,
 ) -> AgentStageResult:
     """Run the agent stage. The keyword-only switches are private ablation hooks for the
     evaluation harness only; production callers never pass them. `cross_examination` turns on the
@@ -278,11 +279,18 @@ async def run_agent_stage(
     round never runs longer than the stage deadline.
 
     `egress_basis` has no default (ADR 0022 decision 15): the filter is applied here, once, so
-    every specialist, scenario, cross-examination call and the proposal see the same set."""
+    every specialist, scenario, cross-examination call and the proposal see the same set.
+
+    `knowledge_incomplete` is the Retrieve stage's result (zero items, a note or an issue): it
+    sends the absence line (decision 9). The pipeline always passes it; None (a direct caller
+    with no Retrieve) falls back to "no knowledge item in the evidence"."""
     split = split_for_egress(evidence, egress_basis)
-    knowledge = KnowledgeContext(
-        withheld=split.any_withheld, absent=not any(is_knowledge(e) for e in evidence)
+    absent = (
+        not any(is_knowledge(e) for e in evidence)
+        if knowledge_incomplete is None
+        else knowledge_incomplete
     )
+    knowledge = KnowledgeContext(withheld=split.any_withheld, absent=absent)
     evidence = split.sent
     issues: list[str] = []
     findings: list[Finding] = []

@@ -30,8 +30,10 @@ from divesafe.domain import (
     KnowledgeNoteCode,
     Recommendation,
     ScenarioKind,
+    StageName,
     effective_quality,
 )
+from divesafe.orchestration.pipeline import EGRESS_BASIS_UNRECOGNISED, EGRESS_HOST_MISSING
 from divesafe.risk import NOT_EVALUATED_MARKER
 from divesafe.risk.engine import (
     ENGINE_RULE_PREFIXES,
@@ -91,6 +93,19 @@ def _shown_rule_id(name: str) -> str:
     return name if RULE_ID_PATTERN.fullmatch(name) else "(unnamed)"
 
 
+# Fixed wording for the egress codes `record_egress` stores (never the submitted value).
+_EGRESS_WORDING: dict[str, str] = {
+    EGRESS_BASIS_UNRECOGNISED: (
+        " The model server's egress basis was missing or not recognised, so it was recorded as "
+        "none and site documents were withheld from the model."
+    ),
+    EGRESS_HOST_MISSING: (
+        " The model server's host was not known, so the egress basis was recorded as none and "
+        "site documents were withheld from the model."
+    ),
+}
+
+
 def _agent_note(record: AssessmentRecord) -> str:
     if record.model_version is None:
         if record.explanation or record.scenarios or record.proposed_recommendation is not None:
@@ -100,8 +115,9 @@ def _agent_note(record: AssessmentRecord) -> str:
         "Findings, scenarios and the explanation are LLM-generated summaries of the evidence. "
         "They can add caution but never relax a rule result, and they may be wrong."
     )
-    if record.agent_issues:
-        note += f" {len(record.agent_issues)} agent call(s) failed or were rejected."
+    calls = [i for i in record.agent_issues if i not in _EGRESS_WORDING]
+    if calls:
+        note += f" {len(calls)} agent call(s) failed or were rejected."
         known = {spec.name for spec in SPECIALISTS}
         names = sorted(
             {
@@ -117,6 +133,7 @@ def _agent_note(record: AssessmentRecord) -> str:
             note += " The LLM risk proposal is missing."
         if any(i.startswith("agent stage: timed out") for i in record.agent_issues):
             note += " The agent stage timed out: scenarios and the proposal may be missing."
+    note += "".join(w for code, w in _EGRESS_WORDING.items() if code in record.agent_issues)
     return note
 
 
@@ -141,6 +158,24 @@ _KNOWLEDGE_ABSENCE = (
 )
 
 
+_KNOWLEDGE_FAILED = (
+    "Site documents could not be fully retrieved for this dive; see the evidence issues."
+)
+_KNOWLEDGE_FAILURE_CODES = frozenset(
+    {"retrieve.knowledge_failed", "retrieve.knowledge_timed_out", "retrieve.knowledge_issue"}
+)
+
+
+def _knowledge_failed(record: AssessmentRecord) -> bool:
+    """From the Retrieve trace's fixed codes only, never from issue text."""
+    return any(
+        code in _KNOWLEDGE_FAILURE_CODES
+        for t in record.stages
+        if t.name is StageName.RETRIEVE
+        for code in t.issues
+    )
+
+
 def knowledge_note(record: AssessmentRecord) -> str:
     """The knowledge notes, superseded and withheld documents in fixed wording (ADR 0022
     decisions 14 and 15). Empty when the record says nothing about knowledge (older records)."""
@@ -157,9 +192,13 @@ def knowledge_note(record: AssessmentRecord) -> str:
             f"{len(record.withheld_knowledge)} site document extract(s) were not sent to the "
             "language model because the model server is not declared local."
         )
+    failed = _knowledge_failed(record)
+    if failed:
+        # Known gap 4: knowledge that failed only as an issue (no note) still gets a sentence.
+        parts.append(_KNOWLEDGE_FAILED)
     if not parts:
         return ""
-    return " ".join(parts) + (_KNOWLEDGE_ABSENCE if record.notes else "")
+    return " ".join(parts) + (_KNOWLEDGE_ABSENCE if record.notes or failed else "")
 
 
 class _Request(BaseModel):

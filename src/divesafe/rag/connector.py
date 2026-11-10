@@ -23,12 +23,16 @@ from itertools import groupby
 from pydantic import ValidationError
 
 from divesafe.data import FetchResult
-from divesafe.domain import MAX_KNOWLEDGE_ITEMS, DiveSite, EvidenceItem
+from divesafe.domain import (
+    MAX_KNOWLEDGE_ITEMS,
+    DiveSite,
+    EvidenceItem,
+    KnowledgeNote,
+    KnowledgeNoteCode,
+)
 from divesafe.rag.items import run_item, screened
 from divesafe.rag.selection import (
     FamilyClass,
-    Note,
-    NoteCode,
     VersionRow,
     classify,
     family_issues,
@@ -73,7 +77,7 @@ class KnowledgeResult:
     """The connector's evidence and issues (as a `FetchResult`) plus the typed notes."""
 
     fetch: FetchResult
-    notes: tuple[Note, ...]
+    notes: tuple[KnowledgeNote, ...]
 
 
 def _order(row: ChunkRow) -> tuple[str, int, int]:
@@ -154,7 +158,7 @@ def check(
         issues.append(bound_issue(len(items), total))
 
     if not items and not issues and not notes:
-        notes.append(Note(NoteCode.NONE_RETURNED, 1))
+        notes.append(KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED))
     return KnowledgeResult(FetchResult(tuple(items), tuple(issues)), tuple(notes))
 
 

@@ -28,7 +28,7 @@ from divesafe.agents.prompts import (
     agent_view,
     build_user_message,
     evidence_payload,
-    knowledge_note,
+    knowledge_wording,
     warning_note,
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
@@ -122,7 +122,7 @@ async def cross_examine_one(
             "the evidence. You cannot change your own earlier finding. Do not recommend GO, "
             "CAUTION or NO-GO. Cite only evidence ids in ALLOWED_EVIDENCE_IDS."
             + warning_note(evidence)
-            + knowledge_note(evidence, knowledge)
+            + knowledge_wording(evidence, knowledge)
         ),
         plan=plan,
         allowed_ids=sorted(allowed),

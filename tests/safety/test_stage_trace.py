@@ -592,7 +592,7 @@ def test_connector_and_provider_text_never_reaches_the_trace() -> None:
         "reason.scenario_failed:marginal",
         "reason.proposal_failed",
     )
-    assert codes_of(record)[N.RETRIEVE] == ("retrieve.not_configured",)
+    assert codes_of(record)[N.RETRIEVE] == ("retrieve.knowledge_not_configured",)
     assert codes_of(record)[N.REJUDGE] == ()
     assert codes_of(record)[N.PROPOSE] == ()
     assert codes_of(record)[N.SUPERVISE] == ()
@@ -620,7 +620,7 @@ def test_an_all_completed_run_has_eight_traces_in_order_with_the_right_chain() -
         **dict.fromkeys(STAGE_ORDER, O.COMPLETED),
         N.RETRIEVE: O.NOT_CONFIGURED,
     }
-    assert codes_of(record)[N.RETRIEVE] == ("retrieve.not_configured",)
+    assert codes_of(record)[N.RETRIEVE] == ("retrieve.knowledge_not_configured",)
     assert codes_of(record)[N.OBSERVE] == ()
     assert codes_of(record)[N.REASON] == ()
 

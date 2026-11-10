@@ -56,11 +56,12 @@ STAGES: Final[tuple[Stage, ...]] = (
         produces=("evidence",),
         route=_always(StageName.RETRIEVE),
     ),
-    # Placeholder until RAG stage 1 (ADR 0022): ends `not_configured` and still proceeds.
+    # Curated site knowledge (ADR 0022), merged into the evidence. `not_configured` with no
+    # knowledge connector; a failure or timeout is an evidence issue. Every outcome proceeds.
     Stage(
         name=StageName.RETRIEVE,
-        requires=("plan", "site"),
-        produces=(),
+        requires=("plan", "site", "evidence"),
+        produces=("evidence", "notes"),
         route=_always(StageName.ASSESS),
     ),
     # The deterministic engine, plus the connector-issue rule result.

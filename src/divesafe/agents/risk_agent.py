@@ -12,7 +12,7 @@ from divesafe.agents.prompts import (
     agent_view,
     build_user_message,
     evidence_payload,
-    knowledge_note,
+    knowledge_wording,
     missing_note,
     tide_note,
     warning_note,
@@ -53,7 +53,7 @@ async def propose(
             + missing_note(missing)
             + tide_note(evidence)
             + warning_note(evidence)
-            + knowledge_note(evidence, knowledge)
+            + knowledge_wording(evidence, knowledge)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

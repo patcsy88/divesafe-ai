@@ -17,7 +17,7 @@ from divesafe.agents.prompts import (
     KnowledgeContext,
     build_user_message,
     evidence_payload,
-    knowledge_note,
+    knowledge_wording,
     tide_note,
 )
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
@@ -104,7 +104,7 @@ async def run_specialist(
         instructions=(
             f"You are the {spec.name} specialist. Interpret {spec.focus} Report risk factors and "
             "conflicting signals, and cite the evidence ids behind each claim. Do not recommend "
-            "GO, CAUTION or NO-GO." + tide_note(items) + knowledge_note(items, knowledge)
+            "GO, CAUTION or NO-GO." + tide_note(items) + knowledge_wording(items, knowledge)
         ),
         plan=plan,
         allowed_ids=[e.id for e in items],

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import StrEnum
 
+from divesafe.domain import KnowledgeNote, KnowledgeNoteCode
+
 KL = timezone(timedelta(hours=8))
 
 APPROVED = "APPROVED"
@@ -196,23 +198,6 @@ def classify(
     return tuple(classify_family(families[name], now, window_end) for name in sorted(families))
 
 
-class NoteCode(StrEnum):
-    """Typed note codes (decision 14). Internal: never a prompt, never free text."""
-
-    NO_DOCUMENTS = "knowledge_no_documents"
-    NOT_IN_FORCE = "knowledge_not_in_force"
-    WITHDRAWN = "knowledge_withdrawn"
-    EXPIRED = "knowledge_expired"
-    NONE_RETURNED = "knowledge_none_returned"
-    NOT_CONFIGURED = "knowledge_not_configured"
-
-
-@dataclass(frozen=True)
-class Note:
-    code: NoteCode
-    count: int
-
-
 def family_issues(results: Sequence[FamilyResult]) -> tuple[str, ...]:
     """One issue per issue family, in family order, then the all-expired issue: every family
     that would otherwise be returned (its governing version clean, withdrawn excluded) is past
@@ -224,17 +209,22 @@ def family_issues(results: Sequence[FamilyResult]) -> tuple[str, ...]:
     return tuple(issues)
 
 
-def family_notes(results: Sequence[FamilyResult]) -> tuple[Note, ...]:
-    """Notes for the families that are not issues. Expired is a note only beside a returned
-    family (otherwise it is the all-expired issue)."""
+def family_notes(results: Sequence[FamilyResult]) -> tuple[KnowledgeNote, ...]:
+    """Notes for the families that are not issues, in the domain's one note enum (wiring
+    condition 1). No family at all is "none returned" with count 0. Expired is a note only beside
+    a returned family (otherwise it is the all-expired issue)."""
     if not results:
-        return (Note(NoteCode.NO_DOCUMENTS, 1),)
+        return (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
     counts = {kind: sum(1 for r in results if r.kind is kind) for kind in FamilyClass}
-    notes: list[Note] = []
-    if counts[FamilyClass.NOT_IN_FORCE]:
-        notes.append(Note(NoteCode.NOT_IN_FORCE, counts[FamilyClass.NOT_IN_FORCE]))
-    if counts[FamilyClass.WITHDRAWN]:
-        notes.append(Note(NoteCode.WITHDRAWN, counts[FamilyClass.WITHDRAWN]))
+    notes: list[KnowledgeNote] = []
+    for kind, code in (
+        (FamilyClass.NOT_IN_FORCE, KnowledgeNoteCode.NOT_IN_FORCE),
+        (FamilyClass.WITHDRAWN, KnowledgeNoteCode.WITHDRAWN),
+    ):
+        if counts[kind]:
+            notes.append(KnowledgeNote(code=code, count=counts[kind]))
     if counts[FamilyClass.EXPIRED] and counts[FamilyClass.RETURNED]:
-        notes.append(Note(NoteCode.EXPIRED, counts[FamilyClass.EXPIRED]))
+        notes.append(
+            KnowledgeNote(code=KnowledgeNoteCode.EXPIRED, count=counts[FamilyClass.EXPIRED])
+        )
     return tuple(notes)

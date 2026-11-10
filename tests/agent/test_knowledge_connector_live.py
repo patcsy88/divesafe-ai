@@ -26,10 +26,10 @@ from tests.integration.test_knowledge_store import (
 )
 from tests.unit.test_repository_contract import TEST_DSN as DSN
 
-from divesafe.domain import DiveSite
+from divesafe.domain import DiveSite, KnowledgeNote, KnowledgeNoteCode
 from divesafe.rag import store as store_module
 from divesafe.rag.connector import KnowledgeConnector
-from divesafe.rag.selection import CLOCK_ISSUE, KL, UNCHECKED_ISSUE, Note, NoteCode
+from divesafe.rag.selection import CLOCK_ISSUE, KL, UNCHECKED_ISSUE
 from divesafe.rag.store import PostgresKnowledgeStore
 
 # `integration` only, like the other live tests: `-m safety` must never skip, and this needs a DSN.
@@ -151,9 +151,9 @@ def test_the_connector_agrees_with_sql(db: dict[str, Any]) -> None:
     assert [i.id for i in result.fetch.items] == sorted(f"kb:{d}:{v}:1" for d, v in _expected(db))
     assert result.fetch.issues == (UNCHECKED_ISSUE,)
     assert set(result.notes) == {
-        Note(NoteCode.NOT_IN_FORCE, 2),
-        Note(NoteCode.WITHDRAWN, 2),
-        Note(NoteCode.EXPIRED, 1),
+        KnowledgeNote(code=KnowledgeNoteCode.NOT_IN_FORCE, count=2),
+        KnowledgeNote(code=KnowledgeNoteCode.WITHDRAWN, count=2),
+        KnowledgeNote(code=KnowledgeNoteCode.EXPIRED, count=1),
     }
     for item in result.fetch.items:
         assert "Synthetic test document" not in item.model_dump_json()

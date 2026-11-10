@@ -175,7 +175,8 @@ def test_older_records_without_the_new_fields_still_validate() -> None:
 def test_an_older_record_with_the_placeholder_retrieve_code_still_validates() -> None:
     doc = sl.run_pipeline(sl.fake()).model_dump(mode="json")
     retrieve = next(t for t in doc["stages"] if t["name"] == "retrieve")
-    assert retrieve["issues"] == ["retrieve.not_configured"]
+    assert retrieve["issues"] == ["retrieve.knowledge_not_configured"]
+    retrieve["issues"] = ["retrieve.not_configured"]  # an older record's placeholder code
     doc.pop("notes")
     AssessmentRecord.model_validate(doc)
 

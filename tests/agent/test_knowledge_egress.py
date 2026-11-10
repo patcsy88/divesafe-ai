@@ -9,12 +9,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import replace
+from datetime import date
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 from tests.agent import scripted_llm as sl
-from tests.agent.test_knowledge_connector import NOW, SITE, chunk
+from tests.agent.test_knowledge_connector import NOW, SITE, FakeStore, chunk, ver
 from tests.api_polling import create_and_poll
 from tests.safety.kb_fakes import mutated_module
 from tests.safety.test_api_human_gate import AUTH_A, PLAN, _build, _hash
@@ -28,19 +29,22 @@ from divesafe.api import state as state_module
 from divesafe.api.auth import ApiKeyAuthenticator, KeyEntry, Role
 from divesafe.api.schemas import AssessmentView
 from divesafe.config import Settings
-from divesafe.data import DataGovMyWarningConnector, FetchResult, OpenMeteoMarineConnector
+from divesafe.data import DataGovMyWarningConnector, OpenMeteoMarineConnector
 from divesafe.domain import (
     AssessmentRecord,
     EvidenceItem,
     KnowledgeRef,
     Recommendation,
     RecordEgressBasis,
+    StageName,
     SupervisorCheck,
 )
 from divesafe.models import FakeProvider
 from divesafe.models.egress import EgressBasis, check_egress
 from divesafe.orchestration import pipeline as pipeline_module
+from divesafe.rag.connector import KnowledgeConnector
 from divesafe.rag.items import run_item
+from divesafe.rag.store import Selection
 
 pytestmark = pytest.mark.safety
 
@@ -51,7 +55,7 @@ REFS = (
     KnowledgeRef(document_id="guide", version=1, chunk=1),
     KnowledgeRef(document_id="site-doc", version=1, chunk=1),
 )
-UNLISTED = "manual:1"  # KNOWLEDGE kind without a `kb:` id: withheld, not in withheld_knowledge
+UNLISTED = "manual:1"  # KNOWLEDGE kind without a `kb:` id: never reaches a record (screened out)
 WITHHOLDING: list[Any] = [
     "loopback_external_opt_in",
     "remote_external_opt_in",
@@ -78,45 +82,52 @@ def _unlisted() -> EvidenceItem:
     return _kb_items()[0].model_copy(update={"id": UNLISTED})
 
 
-class _Knowledge:
-    """Stand-in for Retrieve (not wired yet): a connector that returns knowledge items."""
-
-    name = "kb-stub"
-
-    def __init__(self, unlisted: bool) -> None:
-        self.unlisted = unlisted
-
-    async def fetch(self, *_args: object) -> FetchResult:
-        return FetchResult(items=(*_kb_items(), *((_unlisted(),) if self.unlisted else ())))
+# Review-by after the scripted run's window (the connector helpers default to a June clock).
+REVIEW_BY = date(2027, 1, 1)
 
 
-def _connectors(unlisted: bool = False) -> list[Any]:
+def knowledge(*, extra_version: Any = None) -> KnowledgeConnector:
+    """The real connector over a fake store holding `site-doc` (this site) and `guide` (all
+    sites): the pipeline's knowledge goes through Retrieve, never through Observe."""
+    rows = [
+        chunk("site-doc", site=SITE.id, rev=REVIEW_BY),
+        chunk("guide", rev=REVIEW_BY),
+    ]
+    versions = [ver("site-doc", site=SITE.id, rev=REVIEW_BY), ver("guide", rev=REVIEW_BY)]
+    if extra_version is not None:
+        versions.append(extra_version)
+    return KnowledgeConnector(FakeStore(Selection(tuple(versions), tuple(rows), len(rows))))
+
+
+def _connectors() -> list[Any]:
     return [
         OpenMeteoMarineConnector(sl._Getter(sl.MARINE)),
         DataGovMyWarningConnector(sl._Getter(sl.WARNINGS)),
-        _Knowledge(unlisted),
     ]
 
 
-def _run(
-    provider: Any, basis: Any, host: str | None, module: Any = None, unlisted: bool = False
-) -> AssessmentRecord:
+def _run(provider: Any, basis: Any, host: str | None, module: Any = None) -> AssessmentRecord:
     if module is None:
         return sl.run_pipeline(
-            provider, connectors=_connectors(unlisted), egress_basis=basis, model_host=host
+            provider,
+            connectors=_connectors(),
+            egress_basis=basis,
+            model_host=host,
+            knowledge_connector=knowledge(),
         )
     record: AssessmentRecord = asyncio.run(
         module.assess_dive(
             assessment_id="agent-1",
             plan=sl.PLAN,
             site=SITE,
-            connectors=_connectors(unlisted),
+            connectors=_connectors(),
             engine=sl.engine(with_warning_rule=True),
             now=sl.NOW,
             provider=provider,
             clock=lambda: sl.NOW,
             egress_basis=basis,
             model_host=host,
+            knowledge_connector=knowledge(),
         )
     )
     return record
@@ -325,12 +336,42 @@ def test_no_provider_records_no_agent_stage_whatever_the_basis_says() -> None:
     assert set(record.withheld_knowledge) == set(REFS)
 
 
+def test_a_knowledge_kind_without_a_kb_id_never_reaches_the_record() -> None:
+    """rag-domain: the record refuses a KNOWLEDGE item without a `kb:` id, and the identity screen
+    drops one from any connector first, with its fixed issue; neither is loosened here."""
+    record = _run(sl.fake(), "none", None)
+    doc = record.model_dump(mode="json")
+    (kb_item,) = [e for e in doc["evidence"] if e["id"] == SITE_DOC]
+    doc["evidence"] = [*doc["evidence"], {**kb_item, "id": UNLISTED}]
+    doc["stages"] = []  # older-record shape: the trace checks do not run first
+    with pytest.raises(ValidationError, match="must have a kb: id"):
+        AssessmentRecord.model_validate(doc)
+
+    class Planted:
+        name = "planted"
+
+        async def fetch(self, *_a: object) -> Any:
+            from divesafe.data import FetchResult
+
+            return FetchResult(items=(_unlisted(),))
+
+    planted = sl.run_pipeline(
+        sl.fake(),
+        connectors=[*_connectors(), Planted()],
+        egress_basis="none",
+        model_host=None,
+        knowledge_connector=knowledge(),
+    )
+    assert UNLISTED not in {e.id for e in planted.evidence}
+    assert any("evidence.knowledge_refused" in i for i in planted.evidence_issues)
+
+
 def test_supervise_checks_citations_against_the_ids_actually_sent() -> None:
-    """The runner refuses an unknown id first, and the record refuses a cited `kb:` item it lists
-    as withheld; Supervise is the line for a withheld KNOWLEDGE-kind item with no `kb:` id. A
-    proposal citing it fails `citations_valid`; checking against all evidence would pass it."""
-    record = _run(sl.fake(), "none", None, unlisted=True)
-    assert UNLISTED in {e.id for e in record.evidence}
+    """A proposal citing a withheld `kb:` item fails `citations_valid` at Supervise; checking
+    against all evidence would pass it. (The record then refuses the citation as well; Supervise
+    is checked here before the record is built.)"""
+    record = _run(sl.fake(), "none", None)
+    assert {SITE_DOC, GUIDE} <= {e.id for e in record.evidence}
     assert record.supervisor_verdict is not None
     assert SupervisorCheck.CITATIONS_VALID in record.supervisor_verdict.passed
     edit = (
@@ -343,29 +384,44 @@ def test_supervise_checks_citations_against_the_ids_actually_sent() -> None:
     assert SupervisorCheck.CITATIONS_VALID not in broken
 
 
+class _Stop(Exception):
+    pass
+
+
 def _supervised_with_a_withheld_citation(module: Any) -> tuple[SupervisorCheck, ...]:
-    """The module's pipeline with a stage whose proposal also cites the withheld `manual:1`;
-    returns Supervise's failed checks."""
-    original = module.run_agent_stage
+    """The module's pipeline with a stage whose proposal also cites the withheld `kb:guide`;
+    returns Supervise's failed checks, read at the gate before the record is built."""
+    original, gate = module.run_agent_stage, module.STAGE_WORK[StageName.GATE]
+    seen: list[tuple[SupervisorCheck, ...]] = []
 
     async def citing(*args: Any, **kwargs: Any) -> Any:
         result = await original(*args, **kwargs)
-        assert UNLISTED not in result.sent_evidence_ids
-        return replace(result, proposal_evidence_ids=(*result.proposal_evidence_ids, UNLISTED))
+        assert GUIDE not in result.sent_evidence_ids
+        return replace(result, proposal_evidence_ids=(*result.proposal_evidence_ids, GUIDE))
+
+    async def stop(run: Any) -> Any:
+        seen.append(run.verdict.failed)
+        raise _Stop
 
     module.run_agent_stage = citing
+    module.STAGE_WORK[StageName.GATE] = stop
     try:
-        record = _run(sl.fake(), "none", None, module=module, unlisted=True)
+        with pytest.raises(_Stop):
+            _run(sl.fake(), "none", None, module=module)
     finally:
         module.run_agent_stage = original
-    assert record.supervisor_verdict is not None
-    failed: tuple[SupervisorCheck, ...] = record.supervisor_verdict.failed
-    return failed
+        module.STAGE_WORK[StageName.GATE] = gate
+    return seen[0]
 
 
 PIPELINE_MUTATIONS = [
     pytest.param(
-        ("deterministic, egress_basis=basis\n", "deterministic, egress_basis='declared_local'\n"),
+        (
+            "                egress_basis=basis,\n"
+            "                knowledge_incomplete=incomplete,\n",
+            "                egress_basis='declared_local',\n"
+            "                knowledge_incomplete=incomplete,\n",
+        ),
         id="basis-not-passed",
     ),
     pytest.param(

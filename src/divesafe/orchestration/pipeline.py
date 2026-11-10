@@ -1,6 +1,6 @@
 """Assessment pipeline: the stage graph in `graph.py`, walked in order, stopping at the gate.
 
-Observe (connectors) -> Retrieve (placeholder) -> Assess (engine) -> Reason (agents) -> Rejudge
+Observe (connectors) -> Retrieve (site knowledge) -> Assess (engine) -> Reason (agents) -> Rejudge
 (engine again at the later clock) -> Propose (`reconcile`) -> Supervise (code-only checks) ->
 Gate (a `PENDING_HUMAN` record). Failed or missing sources never abort the assessment: they
 become recorded issues and force at least INSUFFICIENT EVIDENCE, so the user sees why instead of
@@ -14,7 +14,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from divesafe.agents import (
@@ -28,12 +28,13 @@ from divesafe.agents import (
 )
 from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, agent_stage_budget
-from divesafe.data import Connector, DiveSite
+from divesafe.data import Connector, ConnectorError, DiveSite
 from divesafe.domain import (
     MAX_EVIDENCE_ITEMS,
     OVERFLOW,
     AssessmentRecord,
     DivePlan,
+    EvidenceItem,
     Finding,
     KnowledgeNote,
     KnowledgeNoteCode,
@@ -61,9 +62,11 @@ from divesafe.orchestration.conflict_variants import (
 )
 from divesafe.orchestration.graph import STAGES, next_stage
 from divesafe.orchestration.supervisor import check_invariants, supervise
+from divesafe.rag.connector import KnowledgeConnector, KnowledgeResult
+from divesafe.rag.items import record_form
 from divesafe.risk import Reconciliation, RiskRulesEngine, reconcile
 from divesafe.risk.engine import WINDOW_STARTED_RULE
-from divesafe.services import EvidenceSet, gather_evidence
+from divesafe.services import EvidenceSet, gather_evidence, screen_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ _SUPERVISOR_NOTICE = (
     "earlier result"
 )
 _CONNECTOR_ISSUES_RULE = "evidence.connector_issues"
+# The same fixed text `gather_evidence` gives a timed-out connector.
+_KNOWLEDGE_TIMEOUT_ISSUE = "TimeoutError: no answer within the time allowed"
 
 
 class InvalidPlanError(ValueError):
@@ -114,6 +119,8 @@ class _Run:
     provider: LLMProvider | None
     clock: Callable[[], datetime] | None
     connector_timeout_seconds: float
+    # ADR 0022: the one knowledge connector built at start-up, or None (not configured).
+    knowledge_connector: KnowledgeConnector | None
     created_by: str | None
     assigned_decider: str | None
     # Agent output, either given by the caller or produced by the Reason stage.
@@ -135,6 +142,13 @@ class _Run:
     verdict: SupervisorVerdict | None = None
     # Knowledge notes for the record and the human only; never passed to an agent or a prompt.
     notes: tuple[KnowledgeNote, ...] = ()
+    # ADR 0022 wiring condition 5: the one `retrieve` call, started in Observe beside the
+    # connectors (so both share the connector budget) and read in Retrieve.
+    retrieval: asyncio.Task[KnowledgeResult] | None = None
+    # Structured Retrieve facts: an issue from the knowledge connector, and whether the prompts
+    # get the absence line (zero items, a note or an issue; decision 9).
+    knowledge_issue: bool = False
+    knowledge_incomplete: bool = True
     record: AssessmentRecord | None = None
     # Structured facts for the stage trace (ADR 0025 item 3); never read from issue strings.
     task_outcomes: tuple[TaskOutcome, ...] = ()
@@ -152,6 +166,7 @@ class _Run:
     egress_basis: RecordEgressBasis = RecordEgressBasis.NO_AGENT_STAGE
     model_host: str | None = None
     sent_ids: tuple[str, ...] | None = None
+    egress_code: str | None = None
 
     @property
     def evidence_set(self) -> EvidenceSet:
@@ -164,27 +179,84 @@ class _Run:
         return self.reconciled
 
 
+def _window_end(plan: DivePlan) -> datetime:
+    return plan.planned_start + timedelta(minutes=plan.planned_duration_minutes)
+
+
 async def _observe(run: _Run) -> StageOutcome:
-    window_end = run.plan.planned_start + timedelta(minutes=run.plan.planned_duration_minutes)
-    run.evidence = await gather_evidence(
-        run.connectors,
-        run.site,
-        run.plan.planned_start,
-        window_end,
-        run.now,
-        timeout_seconds=run.connector_timeout_seconds,
-        # No knowledge connector is wired yet (ADR 0022): every KNOWLEDGE item and `kb:` id from
-        # an Observe connector is dropped and reported.
-        knowledge_connector=None,
-    )
+    knowledge = run.knowledge_connector
+    if knowledge is not None:
+        run.retrieval = asyncio.create_task(
+            asyncio.wait_for(
+                knowledge.retrieve(
+                    run.site, run.plan.planned_start, _window_end(run.plan), run.now
+                ),
+                run.connector_timeout_seconds,
+            )
+        )
+    try:
+        run.evidence = await gather_evidence(
+            run.connectors,
+            run.site,
+            run.plan.planned_start,
+            _window_end(run.plan),
+            run.now,
+            timeout_seconds=run.connector_timeout_seconds,
+            # ADR 0022 decision 5 and wiring condition 4: the same instance Retrieve calls, so
+            # KNOWLEDGE items and `kb:` ids from any Observe connector are dropped and reported.
+            knowledge_connector=knowledge,
+        )
+    except BaseException:
+        if run.retrieval is not None:
+            run.retrieval.cancel()
+        raise
     return StageOutcome.COMPLETED
 
 
+def _add_knowledge(run: _Run, items: Sequence[EvidenceItem], issues: Sequence[str]) -> None:
+    """Merge Retrieve's items and issues into the evidence set, in `build_evidence_set`'s order
+    and with its `<connector>: <issue>` form. Live items never carry a `kb:` id (screened in
+    Observe), so no id is shared."""
+    evidence = run.evidence_set
+    merged = sorted((*evidence.items, *items), key=lambda i: (i.category.value, i.valid_at, i.id))
+    versions = {i.source: i.source_version or "unversioned" for i in items}
+    run.evidence = replace(
+        evidence,
+        items=tuple(merged),
+        issues=(*evidence.issues, *issues),
+        data_versions={**evidence.data_versions, **versions},
+    )
+
+
 async def _retrieve(run: _Run) -> StageOutcome:
-    # Placeholder until RAG stage 1 (ADR 0022). Context only; never live conditions. With no
-    # knowledge connector the record carries the `knowledge_not_configured` note (decision 9).
-    run.notes = (KnowledgeNote(code=KnowledgeNoteCode.NOT_CONFIGURED),)
-    return StageOutcome.NOT_CONFIGURED
+    """Curated site knowledge, context only (ADR 0022). Items, notes and issues all come from the
+    one `retrieve` call Observe started (wiring condition 5); the items pass the identity screen
+    with the same instance; a failure or timeout is an evidence issue, never an abort. Notes use
+    the domain's enum only (condition 1); zero items with no issue always carries one (condition
+    8), `knowledge_not_configured` when there is no connector (condition 6)."""
+    connector, retrieval = run.knowledge_connector, run.retrieval
+    if connector is None or retrieval is None:
+        run.notes = (KnowledgeNote(code=KnowledgeNoteCode.NOT_CONFIGURED),)
+        return StageOutcome.NOT_CONFIGURED
+    try:
+        result = await retrieval
+    except TimeoutError:
+        logger.warning("connector timed out", extra={"connector": connector.name})
+        _add_knowledge(run, (), (f"{connector.name}: {_KNOWLEDGE_TIMEOUT_ISSUE}",))
+        return StageOutcome.TIMED_OUT
+    except ConnectorError as exc:
+        logger.warning("connector failed", extra={"connector": connector.name})
+        _add_knowledge(run, (), (f"{connector.name}: {type(exc).__name__}: {exc}",))
+        return StageOutcome.FAILED
+    fetch = screen_knowledge(connector, connector, result.fetch)
+    _add_knowledge(run, fetch.items, tuple(f"{connector.name}: {i}" for i in fetch.issues))
+    notes = result.notes
+    if not fetch.items and not fetch.issues and not notes:
+        notes = (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
+    run.notes = notes
+    run.knowledge_issue = bool(fetch.issues)
+    run.knowledge_incomplete = not fetch.items or bool(notes) or bool(fetch.issues)
+    return StageOutcome.COMPLETED
 
 
 async def _assess(run: _Run) -> StageOutcome:
@@ -223,6 +295,10 @@ async def _reason(run: _Run) -> StageOutcome:
         run.rule_results,
         run.deterministic,
     )
+    # The Retrieve result sets the absence line (decision 9). With no knowledge connector every
+    # knowledge item was screened out, so the stage's own fallback gives the same answer and the
+    # call is unchanged.
+    incomplete = run.knowledge_incomplete
     if run.cross_examination:
         budget_timeout = agent_stage_budget(
             stage_timeout(provider), call_timeout(provider), cross_examination=True
@@ -235,13 +311,25 @@ async def _reason(run: _Run) -> StageOutcome:
             deterministic,
             egress_basis=run.egress_basis.value,
             cross_examination=True,
+            knowledge_incomplete=incomplete,
             cross_examination_timeout=budget_timeout,
         )
     else:
         basis = run.egress_basis.value
-        stage = await run_agent_stage(
-            provider, plan, evidence.items, rule_results, deterministic, egress_basis=basis
-        )
+        if run.knowledge_connector is None:
+            stage = await run_agent_stage(
+                provider, plan, evidence.items, rule_results, deterministic, egress_basis=basis
+            )
+        else:
+            stage = await run_agent_stage(
+                provider,
+                plan,
+                evidence.items,
+                rule_results,
+                deterministic,
+                egress_basis=basis,
+                knowledge_incomplete=incomplete,
+            )
     run.proposed, run.scenarios = stage.proposed, stage.scenarios
     run.explanation, run.model_version = stage.explanation, stage.model_version
     if run.cross_examination:
@@ -372,8 +460,18 @@ async def _supervise(run: _Run) -> StageOutcome:
     return StageOutcome.COMPLETED
 
 
+def _for_record(evidence: EvidenceSet) -> EvidenceSet:
+    """ADR 0022 decision 16 and wiring condition 2: knowledge items in record form only (ids and
+    the text hash, never chunk text). Other items are unchanged."""
+    return replace(
+        evidence,
+        items=tuple(record_form(i) for i in evidence.items),
+        withheld=tuple(record_form(i) for i in evidence.withheld),
+    )
+
+
 async def _gate(run: _Run) -> StageOutcome:
-    evidence = run.evidence_set
+    evidence = _for_record(run.evidence_set)
     reconciled = run.reconciliation
     assert run.completed is not None  # set by Rejudge, required by the graph
     # The gate's own trace is taken here, before the record exists, so the record holds every
@@ -399,7 +497,7 @@ async def _gate(run: _Run) -> StageOutcome:
         scenarios=run.scenarios,
         explanation=run.explanation,
         model_version=run.model_version,
-        agent_issues=run.agent_issues,
+        agent_issues=(*((run.egress_code,) if run.egress_code else ()), *run.agent_issues),
         ruleset_version=run.ruleset_version,
         data_versions=evidence.data_versions,
         created_by=run.created_by,
@@ -468,8 +566,16 @@ def _trace_codes(run: _Run, name: StageName, outcome: StageOutcome) -> list[str]
             codes.append(issue_code(name, "evidence_conflict"))
         if not run.evidence.items:
             codes.append(issue_code(name, "no_evidence"))
-    elif name is StageName.RETRIEVE and outcome is StageOutcome.NOT_CONFIGURED:
-        codes.append(issue_code(name, "not_configured"))
+    elif name is StageName.RETRIEVE:
+        # New records write `knowledge_not_configured`; `not_configured` is for older ones only.
+        if outcome is StageOutcome.NOT_CONFIGURED:
+            codes.append(issue_code(name, "knowledge_not_configured"))
+        elif outcome is StageOutcome.FAILED:
+            codes.append(issue_code(name, "knowledge_failed"))
+        elif outcome is StageOutcome.TIMED_OUT:
+            codes.append(issue_code(name, "knowledge_timed_out"))
+        elif run.knowledge_issue:
+            codes.append(issue_code(name, "knowledge_issue"))
     elif name is StageName.ASSESS:
         if any(r.rule_id == _CONNECTOR_ISSUES_RULE for r in run.rule_results):
             codes.append(issue_code(name, "connector_issues_rule"))
@@ -575,28 +681,34 @@ if set(STAGE_WORK) != {stage.name for stage in STAGES}:
 
 
 _NO_HOST = frozenset({RecordEgressBasis.NONE, RecordEgressBasis.NO_AGENT_STAGE})
+# Fixed codes stored in `agent_issues` when the basis is forced to `none`, so a human can tell it
+# from a real `none` (risk-reviewer, 2026-11-10). Never the submitted value.
+EGRESS_BASIS_UNRECOGNISED = "egress.basis_unrecognised"
+EGRESS_HOST_MISSING = "egress.host_missing"
+EGRESS_CODES = (EGRESS_BASIS_UNRECOGNISED, EGRESS_HOST_MISSING)
 
 
 def record_egress(
     provider: LLMProvider | None, egress_basis: object, model_host: str | None
-) -> tuple[RecordEgressBasis, str | None]:
-    """The record's basis and host (ADR 0022 decision 15). With no provider no agent stage
-    exists: `no_agent_stage`. A missing, unrecognised or non-string basis is recorded as `none`
-    with a warning (builder choice A6), so knowledge is withheld; never guessed upward."""
+) -> tuple[RecordEgressBasis, str | None, str | None]:
+    """The record's basis and host (ADR 0022 decision 15), and the fixed code when the basis was
+    forced to `none`. With no provider no agent stage exists: `no_agent_stage`. A missing,
+    unrecognised or non-string basis is recorded as `none` (builder choice A6), so knowledge is
+    withheld; never guessed upward."""
     if provider is None:
-        return RecordEgressBasis.NO_AGENT_STAGE, None
+        return RecordEgressBasis.NO_AGENT_STAGE, None, None
     known = {b.value for b in RecordEgressBasis} - {RecordEgressBasis.NO_AGENT_STAGE.value}
     if not isinstance(egress_basis, str) or egress_basis not in known:
         logger.warning("egress basis missing or not recognised; knowledge is withheld")
-        return RecordEgressBasis.NONE, None
+        return RecordEgressBasis.NONE, None, EGRESS_BASIS_UNRECOGNISED
     basis = RecordEgressBasis(egress_basis)
     if basis in _NO_HOST:
-        return basis, None
+        return basis, None, None
     if model_host is None:
         # A basis that names a model server needs its host; without one, withhold (builder choice).
         logger.warning("egress basis has no model host; knowledge is withheld")
-        return RecordEgressBasis.NONE, None
-    return basis, model_host
+        return RecordEgressBasis.NONE, None, EGRESS_HOST_MISSING
+    return basis, model_host, None
 
 
 async def assess_dive(
@@ -619,6 +731,7 @@ async def assess_dive(
     options: RunOptions | None = None,
     egress_basis: str | None,
     model_host: str | None,
+    knowledge_connector: KnowledgeConnector | None = None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
@@ -632,6 +745,9 @@ async def assess_dive(
         )
     if plan.planned_start < now:
         raise StartPassedError("planned_start is in the past; assess a future dive window")
+    if knowledge_connector is not None and any(c is knowledge_connector for c in connectors):
+        # Retrieve makes the one `retrieve` call; as an Observe connector it would be a second.
+        raise ValueError("the knowledge connector runs in Retrieve, never as an Observe connector")
 
     run = _Run(
         assessment_id=assessment_id,
@@ -643,6 +759,7 @@ async def assess_dive(
         provider=provider,
         clock=clock,
         connector_timeout_seconds=connector_timeout_seconds,
+        knowledge_connector=knowledge_connector,
         created_by=created_by,
         assigned_decider=assigned_decider,
         proposed=proposed,
@@ -651,7 +768,9 @@ async def assess_dive(
         model_version=model_version,
         cross_examination=options is not None and options.cross_examination,
     )
-    run.egress_basis, run.model_host = record_egress(provider, egress_basis, model_host)
+    run.egress_basis, run.model_host, run.egress_code = record_egress(
+        provider, egress_basis, model_host
+    )
     current: StageName | None = STAGES[0].name
     visited: list[StageName] = []
     while current is not None:

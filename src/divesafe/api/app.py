@@ -477,6 +477,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
                     provider=app_state.provider,
                     egress_basis=app_state.egress_basis,
                     model_host=app_state.model_host,
+                    knowledge_connector=app_state.knowledge_connector,
                     clock=clock,
                     options=RunOptions(cross_examination=settings.agent_cross_examination),
                 )

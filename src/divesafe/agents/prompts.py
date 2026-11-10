@@ -234,12 +234,12 @@ class KnowledgeContext:
     absent: bool = True
 
 
-# Until Retrieve is wired, no knowledge connector runs: zero items, so the absence line is sent
-# (decision 9: "not configured" also sends it).
+# The default for a direct caller with no Retrieve result: zero items, so the absence line is
+# sent (decision 9). The pipeline passes the Retrieve result through `run_agent_stage`.
 NOT_RETRIEVED = KnowledgeContext()
 
 
-def knowledge_note(items: Sequence[EvidenceItem], context: KnowledgeContext) -> str:
+def knowledge_wording(items: Sequence[EvidenceItem], context: KnowledgeContext) -> str:
     """Trusted wording for one call: the knowledge note when a knowledge item is in this call or
     one was withheld, the withheld note, and the absence line. Fixed text only."""
     note = KNOWLEDGE_NOTE if context.withheld or any(is_knowledge(e) for e in items) else ""
