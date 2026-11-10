@@ -447,6 +447,8 @@ def test_the_pipeline_passes_its_connector_budget_on_to_the_gather() -> None:
         connectors=[_Stuck()],
         engine=client.app.state.divesafe.engine,
         now=now,
+        egress_basis=None,
+        model_host=None,
         connector_timeout_seconds=0.05,
     )
     # The ceiling is below the 30 s default, so a budget that is not passed on fails here.
@@ -570,6 +572,8 @@ def test_a_connector_budget_that_is_not_positive_finite_and_within_the_ceiling_i
                 connectors=[],
                 engine=client.app.state.divesafe.engine,
                 now=now,
+                egress_basis=None,
+                model_host=None,
                 connector_timeout_seconds=bad,
             )
         )

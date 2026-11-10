@@ -111,6 +111,8 @@ def _run(marine: Any = MARINE, warnings: Any = WARNINGS, **kwargs: Any) -> Asses
         "connectors": connectors,
         "engine": _engine(with_warning_rule=False),
         "now": NOW,
+        "egress_basis": None,
+        "model_host": None,
     }
     options.update(kwargs)
     return asyncio.run(assess_dive(**options))

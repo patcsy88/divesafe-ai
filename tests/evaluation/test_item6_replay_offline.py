@@ -168,6 +168,8 @@ def run_replay(
             engine=engine,
             now=REPLAY_NOW,
             provider=FakeProvider(replay_reply(reply_source, requested)),
+            egress_basis="declared_local",
+            model_host="localhost",
             clock=lambda: clock_now,
             options=RunOptions(cross_examination=False),
         )

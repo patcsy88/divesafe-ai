@@ -9,6 +9,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
 from divesafe.api.auth import Authenticator, build_authenticator
 from divesafe.api.ratelimit import Limit, RateLimiter
@@ -35,7 +37,7 @@ from divesafe.data import (
 from divesafe.data.http import HTTP_POOL_CEILING, configure_http_pool, http_pool_size
 from divesafe.domain import DataCategory, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
-from divesafe.models.egress import check_egress
+from divesafe.models.egress import EgressBasis, check_egress
 from divesafe.orchestration import (
     RulesetError,
     load_ruleset_bytes,
@@ -108,6 +110,9 @@ class AppState:
     sites: Mapping[str, DiveSite]
     decision_max_age: timedelta | None
     provider: LLMProvider | None = None
+    # ADR 0022 decision 15: from `build_provider`'s pair and `model_host`, set together.
+    egress_basis: ProviderBasis = "no_agent_stage"
+    model_host: str | None = None
     limiter: RateLimiter = field(default_factory=lambda: RateLimiter(default_limits()))
     trusted_proxies: frozenset[str] = frozenset()
     runs: RunLimits = field(default_factory=RunLimits)
@@ -175,12 +180,25 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
     return RiskRulesEngine(rules, policy, version)
 
 
-def build_provider(settings: Settings) -> LLMProvider | None:
-    """None disables the agent stage (the default `fake` setting). A real provider that has no
-    adapter fails loudly at startup instead of silently producing assessments without agents."""
+ProviderBasis = EgressBasis | Literal["no_agent_stage"]
+
+
+def model_host(settings: Settings) -> str | None:
+    """The model server's host name only (ADR 0022 decision 15): `urlsplit(...).hostname`, so
+    no scheme, port, userinfo or IPv6 brackets, lowercased."""
+    if settings.llm_base_url is None:
+        return None
+    return urlsplit(str(settings.llm_base_url)).hostname
+
+
+def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasis]:
+    """The provider and its egress basis as one pair, so they cannot be separated (ADR 0022
+    decision 15). `(None, "no_agent_stage")` disables the agent stage (the default `fake`
+    setting) and never calls `check_egress`. A real provider that has no adapter fails loudly at
+    startup instead of silently producing assessments without agents."""
     if settings.llm_provider == "fake":
         logger.warning("agent stage is OFF (DIVESAFE_LLM_PROVIDER=fake)")
-        return None
+        return None, "no_agent_stage"
     provider = create_provider(settings)
     basis = check_egress(provider, settings)
     logger.warning(
@@ -188,7 +206,7 @@ def build_provider(settings: Settings) -> LLMProvider | None:
         extra={
             "provider": provider.name,
             "model": provider.model,
-            "model_host": settings.llm_base_url.host if settings.llm_base_url else None,
+            "model_host": model_host(settings),
             "address_is_remote": provider.external,
             "egress_basis": basis,
         },
@@ -199,7 +217,7 @@ def build_provider(settings: Settings) -> LLMProvider | None:
             "is sent to it with every assessment, and PHN's terms are not on file (ADR 0021)",
             extra={"egress_basis": basis},
         )
-    return provider
+    return provider, basis
 
 
 def build_repository(settings: Settings) -> RunAwareRepository:
@@ -299,6 +317,7 @@ def build_default_state(settings: Settings) -> AppState:
             "DIVESAFE_TRUSTED_PROXIES is empty: failed-authentication limits count the TCP peer. "
             "Behind a proxy or the web server, every person shares one bucket until it is set"
         )
+    provider, basis = build_provider(settings)
     return AppState(
         repository=build_repository(settings),
         connectors=connectors,
@@ -311,7 +330,9 @@ def build_default_state(settings: Settings) -> AppState:
             if settings.decision_max_age_minutes is not None
             else None
         ),
-        provider=build_provider(settings),
+        provider=provider,
+        egress_basis=basis,
+        model_host=None if provider is None else model_host(settings),
         limiter=RateLimiter(
             default_limits(
                 settings.rate_limit_create_per_minute,

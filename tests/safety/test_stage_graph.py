@@ -230,6 +230,8 @@ def test_an_engine_stage_that_does_not_complete_yields_no_record(
                 connectors=[],
                 engine=sl.engine(with_warning_rule=False),
                 now=sl.NOW,
+                egress_basis=None,
+                model_host=None,
             )
         )
 

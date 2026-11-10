@@ -431,7 +431,7 @@ def test_hosted_providers_need_an_explicit_opt_in(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setitem(llm_module._REGISTRY, "openai", lambda s: _Hosted())
     with pytest.raises(RuntimeError, match="off-machine"):
         build_provider(Settings(llm_provider="openai"))
-    allowed = build_provider(Settings(llm_provider="openai", allow_external_llm=True))
+    allowed, _ = build_provider(Settings(llm_provider="openai", allow_external_llm=True))
     assert allowed is not None and allowed.external is True
 
 

@@ -253,9 +253,11 @@ def reaches_nowhere(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         recorder = _Recorder()
         stage_ids: list[str] = []
 
-        async def recording(prov: Any, plan: Any, evidence: Any, rules: Any, det: Any) -> Any:
+        async def recording(
+            prov: Any, plan: Any, evidence: Any, rules: Any, det: Any, *, egress_basis: Any
+        ) -> Any:
             stage_ids.extend(i.id for i in evidence)
-            return await original(prov, plan, evidence, rules, det)
+            return await original(prov, plan, evidence, rules, det, egress_basis=egress_basis)
 
         monkeypatch.setattr(module, "run_agent_stage", recording)
         engine = RiskRulesEngine(
@@ -279,6 +281,8 @@ def reaches_nowhere(module: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
                 now=sl.NOW,
                 provider=provider,
                 clock=lambda: sl.NOW,
+                egress_basis=None if provider is None else "declared_local",
+                model_host=None if provider is None else "localhost",
             )
         )
         return record, recorder, stage_ids
@@ -374,6 +378,8 @@ def assess_with(connectors: Sequence[Any]) -> AssessmentRecord:
             connectors=connectors,
             engine=no_go_engine(),
             now=NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
 
@@ -727,9 +733,9 @@ PIPELINE_MUTATIONS = [
     ),
     pytest.param(
         (
-            "run_agent_stage(provider, plan, evidence.items, rule_results, deterministic)",
-            "run_agent_stage(provider, plan, (*evidence.items, *evidence.withheld), "
-            "rule_results, deterministic)",
+            "evidence.items, rule_results, deterministic, egress_basis=basis",
+            "(*evidence.items, *evidence.withheld), rule_results, deterministic, "
+            "egress_basis=basis",
         ),
         id="withheld-included-in-the-prompt-evidence",
     ),

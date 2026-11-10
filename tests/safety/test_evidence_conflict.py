@@ -366,6 +366,8 @@ def _assess(connectors: Sequence[Any]) -> Any:
             connectors=connectors,
             engine=_engine(),
             now=NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
 
@@ -398,6 +400,8 @@ def test_a_conflict_with_a_proposal_of_go_still_cannot_give_go() -> None:
             connectors=[_Source("a", waves(1), wind(1)), _Source("b", wind(2))],
             engine=_engine(),
             now=NOW,
+            egress_basis=None,
+            model_host=None,
             proposed=R.GO,
         )
     )
@@ -420,6 +424,8 @@ def test_a_conflict_on_a_required_category_is_insufficient_evidence() -> None:
             connectors=[_Source("a", waves(1)), _Source("b", waves(2))],
             engine=engine,
             now=NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
     assert record.final_recommendation == R.INSUFFICIENT_EVIDENCE

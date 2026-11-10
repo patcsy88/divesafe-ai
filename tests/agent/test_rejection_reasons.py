@@ -92,7 +92,12 @@ def _stage_outcomes(provider: FakeProvider | _Raw) -> dict[str, TaskOutcome]:
     record = sl.run_pipeline(sl.fake())  # evidence and rule results from a clean run
     stage = asyncio.run(
         run_agent_stage(
-            provider, sl.PLAN, record.evidence, record.rule_results, R.INSUFFICIENT_EVIDENCE
+            provider,
+            sl.PLAN,
+            record.evidence,
+            record.rule_results,
+            R.INSUFFICIENT_EVIDENCE,
+            egress_basis="declared_local",
         )
     )
     return {t.task: t for t in stage.task_outcomes}
@@ -130,6 +135,7 @@ def test_a_timed_out_specialist_records_no_reason(monkeypatch: pytest.MonkeyPatc
             record.evidence,
             record.rule_results,
             R.INSUFFICIENT_EVIDENCE,
+            egress_basis="declared_local",
         )
     )
     weather = next(t for t in stage.task_outcomes if t.task == "weather")

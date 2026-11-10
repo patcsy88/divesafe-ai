@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from divesafe.agents.cross_examination import CrossOutcome, run_cross_examination
-from divesafe.agents.prompts import NOT_RETRIEVED, PROMPT_VERSION, KnowledgeContext
+from divesafe.agents.prompts import NOT_RETRIEVED, PROMPT_VERSION, KnowledgeContext, is_knowledge
 from divesafe.agents.risk_agent import propose
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, stage_timeout
 from divesafe.agents.signal_screen import SCREEN_TOKEN
@@ -29,10 +29,13 @@ from divesafe.domain import (
     DivePlan,
     EvidenceItem,
     Finding,
+    KnowledgeRef,
     Recommendation,
+    RecordEgressBasis,
     RuleResult,
     Scenario,
     ScenarioKind,
+    knowledge_ref,
 )
 from divesafe.models import LLMProvider
 
@@ -77,6 +80,51 @@ class AgentStageResult:
     # proposal only; they are never passed to the scenarios.
     cross_examination_findings: tuple[Finding, ...] = ()
     cross_examination_outcomes: tuple[CrossOutcome, ...] = ()
+    # ADR 0022 decision 15: the ids of the evidence actually offered to a model (the only ids it
+    # may cite), and the knowledge kept out by the egress basis.
+    sent_evidence_ids: tuple[str, ...] = ()
+    withheld_knowledge: tuple[KnowledgeRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class EgressSplit:
+    """The evidence a model may be sent under one egress basis (ADR 0022 decision 15)."""
+
+    sent: tuple[EvidenceItem, ...]
+    # Knowledge kept out of every prompt, by id only, for the record's `withheld_knowledge`.
+    withheld: tuple[KnowledgeRef, ...]
+    # True when any knowledge item was kept out, listed or not (a malformed `kb:` id or a
+    # KNOWLEDGE item without a `kb:` id is kept out but has no reference to list).
+    any_withheld: bool
+
+
+def _declared_local(basis: object) -> bool:
+    """Only the exact string `declared_local` allows knowledge out; `None`, any other value and
+    any non-string withhold it."""
+    return isinstance(basis, str) and basis == RecordEgressBasis.DECLARED_LOCAL.value
+
+
+def split_for_egress(evidence: Sequence[EvidenceItem], egress_basis: object) -> EgressSplit:
+    """Decide what reaches a prompt. Knowledge is a `kb:` id by `domain.knowledge_ref` (the
+    record validator's definition); a KNOWLEDGE item without one, and a malformed `kb:` id, are
+    also never sent unless the basis is `declared_local` (a malformed `kb:` id never is)."""
+    local = _declared_local(egress_basis)
+    sent: list[EvidenceItem] = []
+    withheld: list[KnowledgeRef] = []
+    any_withheld = False
+    for item in evidence:
+        try:
+            ref = knowledge_ref(item.id)
+        except ValueError:
+            any_withheld = True
+            continue
+        if local or (ref is None and not is_knowledge(item)):
+            sent.append(item)
+            continue
+        any_withheld = True
+        if ref is not None and ref not in withheld:
+            withheld.append(ref)
+    return EgressSplit(tuple(sent), tuple(withheld), any_withheld)
 
 
 def _rejection_reason(error: AgentError) -> str:
@@ -217,6 +265,7 @@ async def run_agent_stage(
     rule_results: Sequence[RuleResult],
     deterministic: Recommendation,
     *,
+    egress_basis: str | None,
     specialists: bool = True,
     scenarios: bool = True,
     proposal: bool = True,
@@ -226,7 +275,15 @@ async def run_agent_stage(
     """Run the agent stage. The keyword-only switches are private ablation hooks for the
     evaluation harness only; production callers never pass them. `cross_examination` turns on the
     second round (ADR 0025 item 5); the caller supplies its timeout from the stage budget, and the
-    round never runs longer than the stage deadline."""
+    round never runs longer than the stage deadline.
+
+    `egress_basis` has no default (ADR 0022 decision 15): the filter is applied here, once, so
+    every specialist, scenario, cross-examination call and the proposal see the same set."""
+    split = split_for_egress(evidence, egress_basis)
+    knowledge = KnowledgeContext(
+        withheld=split.any_withheld, absent=not any(is_knowledge(e) for e in evidence)
+    )
+    evidence = split.sent
     issues: list[str] = []
     findings: list[Finding] = []
     scenarios_out: list[Scenario] = []
@@ -266,6 +323,7 @@ async def run_agent_stage(
                 cross_out=cross_out,
                 cross_outcomes=cross_outcomes,
                 cross_timeout=round_two,
+                knowledge=knowledge,
             )
     except TimeoutError:
         issues.append(STAGE_TIMED_OUT_ISSUE)
@@ -284,4 +342,6 @@ async def run_agent_stage(
         task_outcomes=tuple(tasks),
         cross_examination_findings=tuple(cross_out),
         cross_examination_outcomes=tuple(cross_outcomes),
+        sent_evidence_ids=tuple(e.id for e in evidence),
+        withheld_knowledge=split.withheld,
     )

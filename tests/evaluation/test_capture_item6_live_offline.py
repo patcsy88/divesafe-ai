@@ -819,7 +819,7 @@ def test_connectors_run_lists_every_built_connector_and_omits_a_missing_met(
     from divesafe.api import state as api_state
 
     monkeypatch.delenv("DIVESAFE_MET_API_TOKEN", raising=False)
-    monkeypatch.setattr(api_state, "build_provider", lambda _settings: None)
+    monkeypatch.setattr(api_state, "build_provider", lambda _s: (None, "no_agent_stage"))
     monkeypatch.setattr(api_state, "build_engine", lambda _settings: None)
     parts = cap.build_live_state(Settings(_env_file=None))
     names = sorted(c.name for c in parts.connectors)
@@ -838,7 +838,7 @@ def test_connectors_run_lists_met_when_its_token_is_set(monkeypatch: pytest.Monk
     from divesafe.api import state as api_state
 
     monkeypatch.setenv("DIVESAFE_MET_API_TOKEN", "synthetic-token-not-real")
-    monkeypatch.setattr(api_state, "build_provider", lambda _settings: None)
+    monkeypatch.setattr(api_state, "build_provider", lambda _s: (None, "no_agent_stage"))
     monkeypatch.setattr(api_state, "build_engine", lambda _settings: None)
     parts = cap.build_live_state(Settings(_env_file=None))
     assert MET_SOURCE in [c.name for c in parts.connectors]

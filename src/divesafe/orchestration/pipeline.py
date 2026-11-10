@@ -24,6 +24,7 @@ from divesafe.agents import (
     TaskOutcome,
     cross_examination_token,
     run_agent_stage,
+    split_for_egress,
 )
 from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS, agent_stage_budget
@@ -35,6 +36,7 @@ from divesafe.domain import (
     DivePlan,
     Finding,
     Recommendation,
+    RecordEgressBasis,
     RiskFactorKind,
     RuleResult,
     Scenario,
@@ -140,6 +142,11 @@ class _Run:
     cross_examination: bool = False
     cross_findings: tuple[Finding, ...] = ()
     cross_ran: bool = False
+    # ADR 0022 decision 15: the basis and host for the record, and the evidence ids actually
+    # offered to a model (None until Reason ran with a provider).
+    egress_basis: RecordEgressBasis = RecordEgressBasis.NO_AGENT_STAGE
+    model_host: str | None = None
+    sent_ids: tuple[str, ...] | None = None
 
     @property
     def evidence_set(self) -> EvidenceSet:
@@ -216,11 +223,15 @@ async def _reason(run: _Run) -> StageOutcome:
             evidence.items,
             rule_results,
             deterministic,
+            egress_basis=run.egress_basis.value,
             cross_examination=True,
             cross_examination_timeout=budget_timeout,
         )
     else:
-        stage = await run_agent_stage(provider, plan, evidence.items, rule_results, deterministic)
+        basis = run.egress_basis.value
+        stage = await run_agent_stage(
+            provider, plan, evidence.items, rule_results, deterministic, egress_basis=basis
+        )
     run.proposed, run.scenarios = stage.proposed, stage.scenarios
     run.explanation, run.model_version = stage.explanation, stage.model_version
     if run.cross_examination:
@@ -231,6 +242,7 @@ async def _reason(run: _Run) -> StageOutcome:
     run.findings, run.agent_issues = stage.findings, stage.issues
     run.proposal_ids = stage.proposal_evidence_ids
     run.task_outcomes = stage.task_outcomes
+    run.sent_ids = stage.sent_evidence_ids
     if STAGE_TIMED_OUT_ISSUE in stage.issues:
         return StageOutcome.TIMED_OUT
     return StageOutcome.COMPLETED
@@ -325,7 +337,10 @@ async def _supervise(run: _Run) -> StageOutcome:
             i for f in (*run.findings, *run.cross_findings) for i in f.evidence_ids
         ),
         scenario_evidence_ids=(i for s in run.scenarios for i in s.evidence_ids),
-        evidence_ids=(item.id for item in evidence.items),
+        # ADR 0022 decision 15: only the ids a model was offered count as valid citations.
+        evidence_ids=(
+            run.sent_ids if run.sent_ids is not None else (item.id for item in evidence.items)
+        ),
         model_version=run.model_version,
         provider_ran=run.provider is not None,
         missing_required_categories=run.engine.policy.required_categories - present,
@@ -381,6 +396,10 @@ async def _gate(run: _Run) -> StageOutcome:
         assigned_decider=run.assigned_decider,
         supervisor_verdict=run.verdict,
         stages=tuple(run.traces),
+        egress_basis=run.egress_basis,
+        model_host=run.model_host,
+        # The same filter `run_agent_stage` applies, over the same evidence and basis.
+        withheld_knowledge=split_for_egress(evidence.items, run.egress_basis.value).withheld,
     )
     return StageOutcome.COMPLETED
 
@@ -542,6 +561,31 @@ if set(STAGE_WORK) != {stage.name for stage in STAGES}:
     raise RuntimeError("every stage in the graph needs exactly one unit of work")
 
 
+_NO_HOST = frozenset({RecordEgressBasis.NONE, RecordEgressBasis.NO_AGENT_STAGE})
+
+
+def record_egress(
+    provider: LLMProvider | None, egress_basis: object, model_host: str | None
+) -> tuple[RecordEgressBasis, str | None]:
+    """The record's basis and host (ADR 0022 decision 15). With no provider no agent stage
+    exists: `no_agent_stage`. A missing, unrecognised or non-string basis is recorded as `none`
+    with a warning (builder choice A6), so knowledge is withheld; never guessed upward."""
+    if provider is None:
+        return RecordEgressBasis.NO_AGENT_STAGE, None
+    known = {b.value for b in RecordEgressBasis} - {RecordEgressBasis.NO_AGENT_STAGE.value}
+    if not isinstance(egress_basis, str) or egress_basis not in known:
+        logger.warning("egress basis missing or not recognised; knowledge is withheld")
+        return RecordEgressBasis.NONE, None
+    basis = RecordEgressBasis(egress_basis)
+    if basis in _NO_HOST:
+        return basis, None
+    if model_host is None:
+        # A basis that names a model server needs its host; without one, withhold (builder choice).
+        logger.warning("egress basis has no model host; knowledge is withheld")
+        return RecordEgressBasis.NONE, None
+    return basis, model_host
+
+
 async def assess_dive(
     *,
     assessment_id: str,
@@ -560,6 +604,8 @@ async def assess_dive(
     clock: Callable[[], datetime] | None = None,
     connector_timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
     options: RunOptions | None = None,
+    egress_basis: str | None,
+    model_host: str | None,
 ) -> AssessmentRecord:
     if not engine.policy.required_categories:
         raise UnsafeConfigurationError("the evidence policy must require at least one category")
@@ -592,6 +638,7 @@ async def assess_dive(
         model_version=model_version,
         cross_examination=options is not None and options.cross_examination,
     )
+    run.egress_basis, run.model_host = record_egress(provider, egress_basis, model_host)
     current: StageName | None = STAGES[0].name
     visited: list[StageName] = []
     while current is not None:

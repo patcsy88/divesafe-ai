@@ -171,9 +171,17 @@ def run_pipeline(
             now=NOW,
             provider=provider,
             clock=lambda: NOW,
-            **extra,
+            **{**_egress(provider), **extra},
         )
     )
+
+
+def _egress(provider: object) -> dict[str, Any]:
+    """Today's behaviour for tests where knowledge is not the subject: a declared local server
+    with a provider, `no_agent_stage` without one. A test may pass its own values."""
+    if provider is None:
+        return {"egress_basis": None, "model_host": None}
+    return {"egress_basis": "declared_local", "model_host": "localhost"}
 
 
 def fake(**kwargs: Any) -> FakeProvider:

@@ -213,6 +213,8 @@ def test_variants_are_checked_again_at_the_later_clock() -> None:
             connectors=sources({0: [SAFE, DANGER], 1: [SAFE]}),
             engine=no_go_engine(),
             now=NOW,
+            egress_basis=None,
+            model_host=None,
             clock=lambda: next(clock_values),
         )
     )
@@ -338,6 +340,8 @@ def wiring_misses(pipeline: Any) -> list[str]:
             connectors=sources({0: [SAFE, DANGER], 1: [SAFE]}),
             engine=no_go_engine(),
             now=NOW,
+            egress_basis=None,
+            model_host=None,
             clock=lambda: next(clock_values),
         )
     )
@@ -514,6 +518,8 @@ def _threads_used(pipeline: Any) -> tuple[int, set[int]]:
             connectors=sources({0: [SAFE, SAFE + 0.1], 1: [SAFE]}),
             engine=engine,
             now=NOW,
+            egress_basis=None,
+            model_host=None,
         )
         return threading.get_ident()
 

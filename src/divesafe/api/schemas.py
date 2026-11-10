@@ -8,7 +8,17 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import (
@@ -221,6 +231,19 @@ class AssessmentRecordView(AssessmentRecord):
     scenarios: tuple[ScenarioView, ...] = ()  # type: ignore[assignment]
     findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
     cross_examination_findings: tuple[FindingView, ...] = ()  # type: ignore[assignment]
+    # ADR 0022 decision 15: a create-only key is not shown the model server's host. The key is
+    # left out of the output, never set to null, so null keeps meaning "no model server".
+    _hide_model_host: bool = PrivateAttr(default=False)
+
+    @model_serializer(mode="wrap")
+    # No return annotation on purpose: pydantic then keeps the record's own serialisation schema
+    # in the OpenAPI document instead of an untyped object.
+    def _without_hidden(self, handler: SerializerFunctionWrapHandler):  # type: ignore[no-untyped-def]
+        data: dict[str, Any] = handler(self)
+        # getattr: a plain `AssessmentRecord` placed here is serialised as-is, not crashed on.
+        if getattr(self, "_hide_model_host", False):
+            data.pop("model_host", None)
+        return data
 
     @classmethod
     def of(cls, record: AssessmentRecord) -> AssessmentRecordView:
@@ -258,6 +281,8 @@ class AssessmentView(BaseModel):
     agent_note: str
     attributions: tuple[str, ...]
     decision_withheld: bool = False
+    # True when `record.model_host` is left out for this key (ADR 0022 decision 15).
+    model_host_withheld: bool = False
     notice: str = DISCLAIMER
 
     @classmethod
@@ -273,11 +298,14 @@ class AssessmentView(BaseModel):
             }
         )
         view = cls.of(stripped)
+        # `of` built a new record view for this response only, so the flag is not shared.
+        view.record._hide_model_host = True
         return view.model_copy(
             update={
                 "status": "DECISION_WITHHELD",
                 "overrides_to_less_severe": None,
                 "decision_withheld": True,
+                "model_host_withheld": True,
                 "status_note": _WITHHELD_NOTE,
             }
         )

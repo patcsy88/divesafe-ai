@@ -538,6 +538,8 @@ def _assess(
             engine=engine or _engine(),
             now=NOW,
             provider=provider,
+            egress_basis=None if provider is None else "declared_local",
+            model_host=None if provider is None else "localhost",
             clock=clock,
             **extra,
         )
@@ -852,7 +854,14 @@ def test_task_outcomes_list_every_task_with_the_right_label_on_a_mixed_run() -> 
     record = sl.run_pipeline(provider)
     evidence = record.evidence
     stage = asyncio.run(
-        run_agent_stage(provider, sl.PLAN, evidence, record.rule_results, R.INSUFFICIENT_EVIDENCE)
+        run_agent_stage(
+            provider,
+            sl.PLAN,
+            evidence,
+            record.rule_results,
+            R.INSUFFICIENT_EVIDENCE,
+            egress_basis="declared_local",
+        )
     )
     outcomes = {t.task: t.outcome for t in stage.task_outcomes}
     assert set(outcomes) == {s.name for s in SPECIALISTS} | {k.value for k in ScenarioKind} | {
@@ -869,7 +878,11 @@ def test_task_outcomes_list_every_task_with_the_right_label_on_a_mixed_run() -> 
 
 def test_task_outcomes_mark_the_proposal_skipped_with_no_evidence() -> None:
     provider = sl.fake()
-    stage = asyncio.run(run_agent_stage(provider, sl.PLAN, (), (), R.INSUFFICIENT_EVIDENCE))
+    stage = asyncio.run(
+        run_agent_stage(
+            provider, sl.PLAN, (), (), R.INSUFFICIENT_EVIDENCE, egress_basis="declared_local"
+        )
+    )
     outcomes = {t.task: t.outcome for t in stage.task_outcomes}
     assert outcomes[RISK_TASK] == "skipped"
     assert all(outcomes[k.value] == "skipped" for k in ScenarioKind)

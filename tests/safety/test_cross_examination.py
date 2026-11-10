@@ -140,6 +140,8 @@ def _assess(provider: Any, options: RunOptions | None = None) -> AssessmentRecor
             engine=engine(with_warning_rule=True),
             now=NOW,
             provider=provider,
+            egress_basis=None if provider is None else "declared_local",
+            model_host=None if provider is None else "localhost",
             clock=lambda: NOW,
             **extra,
         )
@@ -164,6 +166,7 @@ def _stage(
             items,
             rules,
             R.INSUFFICIENT_EVIDENCE,
+            egress_basis="declared_local",
             cross_examination=on,
             cross_examination_timeout=round_two_timeout if on else None,
         )
@@ -356,6 +359,7 @@ def test_a_slow_round_two_keeps_round_one_and_the_proposal() -> None:
             five_category_evidence(),
             [],
             R.INSUFFICIENT_EVIDENCE,
+            egress_basis="declared_local",
             cross_examination=True,
             cross_examination_timeout=60.0,
         )
@@ -792,6 +796,8 @@ def test_round_two_cannot_lower_final_below_deterministic(rule: Any, determinist
             engine=_floor_engine(rule),
             now=NOW,
             provider=FakeProvider(_go_proposal_with_hostile_peers()),
+            egress_basis="declared_local",
+            model_host="localhost",
             clock=lambda: NOW,
             options=RunOptions(cross_examination=True),
         )

@@ -13,8 +13,10 @@ from divesafe.agents.stage import (
     RISK_TASK,
     STAGE_TIMED_OUT_ISSUE,
     AgentStageResult,
+    EgressSplit,
     TaskOutcome,
     run_agent_stage,
+    split_for_egress,
 )
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "RISK_TASK",
     "TaskOutcome",
     "run_agent_stage",
+    "EgressSplit",
+    "split_for_egress",
 ]

@@ -456,6 +456,8 @@ def test_a_run_without_a_provider_passes_all_five_checks() -> None:
             connectors=[],
             engine=sl.engine(with_warning_rule=False),
             now=sl.NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
     assert record.model_version is None
@@ -599,6 +601,8 @@ def test_a_missing_required_category_the_engine_let_through_is_caught_by_supervi
             connectors=[],
             engine=sl.engine(with_warning_rule=False),
             now=sl.NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
     verdict = record.supervisor_verdict
@@ -800,6 +804,8 @@ def _run_with_a_later_clock(provider: Any) -> AssessmentRecord:
             now=sl.NOW,
             provider=provider,
             clock=lambda: sl.NOW + timedelta(minutes=1),
+            egress_basis=None if provider is None else "declared_local",
+            model_host=None if provider is None else "localhost",
         )
     )
 

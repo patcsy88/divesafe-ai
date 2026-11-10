@@ -553,6 +553,8 @@ async def run_live_assessment(
         engine=state.engine,
         now=now,
         provider=RecordingProvider(state.provider, recorder),
+        egress_basis=state.egress_basis,
+        model_host=getattr(state, "model_host", None),
         clock=clock,
         options=RunOptions(cross_examination=False),
     )
@@ -634,13 +636,14 @@ class _LiveParts:
     engine: Any
     provider: Any
     egress_basis: str = "unknown"
+    model_host: str | None = None
 
 
 def build_live_state(settings: Settings) -> Any:
     """Connectors, engine and provider only: the same getters and engine construction as
     `api.state.build_default_state`, without its repository, authenticator or pool settings, so no
     database is ever constructed (F2). Mirrors state.py's connector list; PHN is never built."""
-    from divesafe.api.state import build_engine, build_provider
+    from divesafe.api.state import build_engine, build_provider, model_host
     from divesafe.data import (
         MET_API_HOSTS,
         MET_API_QUOTA,
@@ -673,13 +676,14 @@ def build_live_state(settings: Settings) -> Any:
             quotas=(MET_API_QUOTA,),
         )
         connectors.append(MetApiMarineConnector(met_getter))
-    provider = build_provider(settings)
+    provider, _ = build_provider(settings)
     basis = egress_basis_label(provider, settings) if provider is not None else "none"
     return _LiveParts(
         connectors=connectors,
         engine=build_engine(settings),
         provider=provider,
         egress_basis=basis,
+        model_host=None if provider is None else model_host(settings),
     )
 
 

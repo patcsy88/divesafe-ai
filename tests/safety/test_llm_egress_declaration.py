@@ -47,8 +47,10 @@ def test_the_declaration_or_the_external_opt_in_lets_a_loopback_server_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _with_stub(monkeypatch, external=False)
-    assert build_provider(_settings(llm_provider="openai", llm_server_is_local=True)) is not None
-    assert build_provider(_settings(llm_provider="openai", allow_external_llm=True)) is not None
+    provider, basis = build_provider(_settings(llm_provider="openai", llm_server_is_local=True))
+    assert provider is not None and basis == "declared_local"
+    provider, basis = build_provider(_settings(llm_provider="openai", allow_external_llm=True))
+    assert provider is not None and basis == "loopback_external_opt_in"
 
 
 def test_the_declaration_cannot_cover_a_server_that_is_not_on_this_machine(
@@ -59,7 +61,8 @@ def test_the_declaration_cannot_cover_a_server_that_is_not_on_this_machine(
         build_provider(_settings(llm_provider="openai", llm_server_is_local=True))
     with pytest.raises(RuntimeError, match="off-machine"):
         build_provider(_settings(llm_provider="openai"))
-    assert build_provider(_settings(llm_provider="openai", allow_external_llm=True)) is not None
+    provider, basis = build_provider(_settings(llm_provider="openai", allow_external_llm=True))
+    assert provider is not None and basis == "remote_external_opt_in"
 
 
 def test_the_declaration_and_the_external_opt_in_contradict_each_other() -> None:
@@ -429,7 +432,7 @@ def test_the_fake_provider_still_turns_the_agent_stage_off_outside_production() 
     that is the only way the stage is off. If this stopped being true the production refusal
     above would no longer be the whole story."""
     for environment in ("development", "test"):
-        assert build_provider(Settings(environment=environment)) is None  # type: ignore[arg-type]
+        assert build_provider(Settings(environment=environment)) == (None, "no_agent_stage")  # type: ignore[arg-type]
 
 
 def test_check_egress_refuses_both_flags_even_when_settings_validation_was_skipped() -> None:
@@ -466,7 +469,7 @@ def test_a_remote_host_must_be_listed_even_with_the_external_opt_in() -> None:
         OpenAICompatibleProvider(
             "m", "http://llm.example.org/v1", allowed_hosts=frozenset({"llm.example.org"})
         )
-    built = build_provider(
+    built, basis = build_provider(
         _settings(
             llm_provider="openai_compatible",
             llm_model="m",
@@ -475,6 +478,6 @@ def test_a_remote_host_must_be_listed_even_with_the_external_opt_in() -> None:
             allow_external_llm=True,
         )
     )
-    assert built is not None
+    assert built is not None and basis == "remote_external_opt_in"
     listed = OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"llm.example.org"}))
     check_egress(listed, _settings(allow_external_llm=True))
