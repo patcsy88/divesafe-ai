@@ -56,7 +56,10 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Every safety rule needs a test of the **failure** condition, not just the happy path. Prove a
   new safety test has teeth by breaking the code once and watching it fail.
 - **NEVER** weaken, skip or delete a safety test to make a change pass. Strengthening is welcome.
-- `pytest -m safety` MUST always pass.
+- `pytest -m safety` MUST always pass and never skip. Two documented exceptions (owner,
+  2026-11-12): a safety test that needs a test database skips without `DIVESAFE_TEST_DATABASE_URL`,
+  and the case-only path check skips on a case-sensitive volume. CI runs the safety suite with a
+  database and fails on any other skip.
 
 ## 5. Safety principles
 
@@ -171,7 +174,7 @@ the prompt layer MUST be reviewed by `security-reviewer`. Reviewers never edit.
 ```bash
 pip install -e ".[dev]"
 pytest                    # everything (offline)
-pytest -m safety          # must always pass; never skip
+pytest -m safety          # must always pass; never skip (exceptions: section 4)
 ruff check . && ruff format --check .
 mypy
 ```

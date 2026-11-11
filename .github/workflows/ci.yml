@@ -45,7 +45,11 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
-      - run: pytest -m safety
+      - name: Safety suite (must pass; nothing in it may skip here)
+        shell: bash # explicit bash enables pipefail, so a failing pytest is not hidden by tee
+        run: pytest -m safety -rs | tee safety.log
+      - name: Fail if a safety test was skipped (only the case-sensitive-volume check may skip on Linux)
+        run: "! (grep -E '^SKIPPED' safety.log | grep -qv 'this volume is case-sensitive')"
       - name: Full suite (the PostgreSQL tests must run, not skip)
         shell: bash # explicit bash enables pipefail, so a failing pytest is not hidden by tee
         run: pytest -rs | tee pytest.log
