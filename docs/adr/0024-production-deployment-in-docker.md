@@ -28,9 +28,9 @@
   the owner's production Mac with production stopped (owner decision; A7 "Hand run 1"), and
   FAILED** at `db-init` after the restore: `pg_restore --no-acl` had dropped the `REVOKE EXECUTE`
   on the five knowledge guard functions. Fixed and reviewed (`83efde5`, `a7bab38`, `f3a103d`; no
-  blockers, no should-fix after two rounds). **A7 is not passed; a re-run is needed** (another
-  production stop, on the owner's go-ahead). The owner gates in A6 remain, and the production
-  load gate (exit 24) still stands. **In production, and whenever the loader string comes from the secrets directory,
+  blockers, no should-fix after two rounds). **Hand run 2 (2026-11-12) PASSED** on a test image
+  built from `3bb2811`, with production stopped for 32 seconds (A7 "Hand run 2"); **A7 is done.**
+  The owner gates in A6 remain, and the production load gate (exit 24) still stands. **In production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
   access, A8). Both reviewers accepted its second, third and fourth revisions as
@@ -1421,7 +1421,8 @@ condition; the mutation check is to break the compose file once and watch it fai
   "Build state".
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
   (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
-  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
+  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume (**done, run 2 passed
+  2026-11-12**); (4) **ADR 0022 condition 10**
   (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
   remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
   each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
@@ -1591,8 +1592,18 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   including the closing report's SQL and re-applying every logged withdrawal (`kb_withdraw` is
   idempotent: `KB001` becomes exit 16); a live dump/restore integration test exists and CI fails
   if it skips; `db-init` stays report-only.
-  **A7 is not yet passed; a re-run is needed**, which is another production stop and needs the
-  owner's go-ahead. Gaps from the fix reviews are in A8.
+  Gaps from the fix reviews are in A8.
+- **Hand run 2 (2026-11-12): PASSED.** Same setup and safeguards as run 1, on the owner's
+  production Mac; the test image was built from `3bb2811` before stopping, and a script restarted
+  production on any exit. Production stopped 16:17:00 UTC, restarted 16:17:32 UTC (32 seconds),
+  healthy on the same image (`sha256:c97d9d35fe49`); everything throwaway was removed. Every
+  result matched the docs: seed `documents=3 chunks=4 events=6`; backup and scratch restore
+  equal; manifest 23 lines with kb 3/4/6; the restore matched the manifest and the report's
+  knowledge lines were exactly as expected; TEMP `f`; guard ACL read-back `5 5`;
+  `restore.sh --check` matches; `db-init` after the restore "schema is up to date"; `M=6`,
+  `kb_withdraw a7-approved 1` gave "withdrawn" and the latest event is `7|WITHDRAWN`, above `M`.
+  CI on `3bb2811` is green; the restore round-trip test ran there and its skip guard did not
+  fire. **A7 is done**; gate (3) of the first-production-load list is closed.
 - **Golden-copy and script-review round.** `tests/safety/golden_backup/backup-common.sh.txt` and
   `restore.sh.txt` (and `backup.sh.txt` if it changes) are line-by-line change detectors, so these
   edits fail `test_backup_scripts.py` until someone reads the diff and updates the copies. That is
@@ -1619,8 +1630,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   text scan only, as for the existing facts.
 - **Documented gaps.** (1) The fake `docker` cannot run SQL, so the content of the new facts, the
   role-before-restore order and the "used database" check are covered by scans and by a hand run on
-  a throwaway volume, **made once on 2026-11-11 and FAILED at `db-init` (above); a re-run is
-  required before the first production load**.
+  a throwaway volume (run 1, 2026-11-11, FAILED at `db-init`; **run 2, 2026-11-12, PASSED**;
+  above).
   (2) The digest detects damage, not tampering, as today (the manifest sits next to its archive).
   (3) The withdrawal log has no defined home, so R1 depends on the operator keeping it, and
   **nothing technically stops the API starting before the re-apply** (operator discipline). (4) The
@@ -1915,9 +1926,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     string without `connect_timeout` is now refused in every environment**, as A1 always said (the
     code accepted it before); `docs/knowledge-loader.md` and `docs/backup-and-restore.md`
     corrections.
-  - **Still needed before production use** (updated 2026-11-11): ~~review of every change~~
-    (done); **the A7 hand run re-run** (run 1 on 2026-11-11 failed at `db-init` after the restore;
-    fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; see A7 "Hand run 1"); the owner gates
+  - **Still needed before production use** (updated 2026-11-12): ~~review of every change~~
+    (done); ~~the A7 hand run~~ (run 1 on 2026-11-11 failed at `db-init` after the restore;
+    fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; **run 2 on 2026-11-12 passed**, see
+    A7 "Hand run 2"); the owner gates
     (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable code point
     table, per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
     owner's `docker/production.env`~~ (done 2026-11-11). The A6 branch rule is lifted (owner
@@ -1937,8 +1949,12 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`) skips in an
       offline `pytest -m safety` run** because it needs a database; it runs in CI. That conflicts
       with AGENTS.md section 4 ("`pytest -m safety` MUST always pass", with tests offline).
-      **Needs an owner decision:** move it out of the safety marker (keeping the offline pins in
-      `tests/safety/test_kb_load_production_gate.py`), or accept a safety test that skips offline.
+      **Resolved by owner decision 2026-11-12 (`73afc1c`, AGENTS.md section 4):** `pytest -m
+      safety` never skips, with two documented exceptions off CI, this test without
+      `DIVESAFE_TEST_DATABASE_URL` and the case-only path check in
+      `tests/evaluation/test_capture_item6_offline.py` on a case-sensitive volume; CI runs the
+      safety suite with a database and fails on any other skip. The offline pins stay in
+      `tests/safety/test_kb_load_production_gate.py`.
     - `docs/backup-and-restore.md` step 9 and the recovery paragraph now say what exits 10 and 12
       of `kb_withdraw` mean when re-applying every logged withdrawal (done in this change).
 
@@ -1947,8 +1963,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The knowledge loader (Amendment 1) is built; the build was reviewed once (`9f5b3ea`, no
   blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
   `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
-  (A8 "Build state"); the A7 hand run was made once on 2026-11-11 and failed (A7 "Hand run 1";
-  fixed, reviewed, re-run needed). Production `load` and `approve` refuse in code
+  (A8 "Build state"); the A7 hand run failed on 2026-11-11 (fixed and reviewed) and **passed on
+  2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refuse in code
   until the A6 gates are closed (also from the secrets directory in any environment; not a
   control against an operator with Docker access, A8). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are

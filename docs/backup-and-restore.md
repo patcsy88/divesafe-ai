@@ -572,10 +572,12 @@ in the production backup directory, and delete them with it.
   check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker`
   cannot run SQL; the fact queries were run once against empty PostgreSQL 16 and 17 test
   databases. **Run 1 (2026-11-11) failed** at `db-init` after the restore (the lost function
-  revoke, fixed above; everything before the restore matched this document). **A re-run is
-  required before the first production load.** The live restore test restores as `postgres`,
-  not `divesafe_owner`, so the re-run is the end-to-end check; the backup manifest has no fact
-  for function ACLs, so only the restore's read-back detects a lost revoke.
+  revoke, fixed above; everything before the restore matched this document). **Run 2
+  (2026-11-12) passed:** every result matched this document, production was stopped for 32
+  seconds, and the throwaway projects, image and archives were removed (ADR 0024 A7). What
+  remains: the live restore test restores as `postgres`, not `divesafe_owner`, so run 2 is the
+  only end-to-end check; the backup manifest has no fact for function ACLs, so only the
+  restore's read-back detects a lost revoke.
 - The read-only post-restore check (documents, versions, manifest hashes and latest status) is
   the restore's closing report; there is no separate command to run it again later (its SQL is
   given under the recovery above, to run by hand).
