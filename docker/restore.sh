@@ -12,8 +12,9 @@
 #   docker compose ... up -d --wait api
 #
 #   docker/restore.sh --check /path/to/divesafe-<time>.dump   # compare the database with the
-#       manifest. Writes nothing. While the api runs it only matches until the next write: it is
-#       a check of a restored database, not a health check.
+#       manifest and check EXECUTE on the knowledge guard functions. Writes nothing. While the
+#       api runs it only matches until the next write: it is a check of a restored database, not a
+#       health check.
 #
 # It refuses an archive in the old format 1 (made before the knowledge tables; restore it with the
 # old scripts, docs/backup-and-restore.md). It refuses to run if the API is up, if a loader
@@ -73,6 +74,19 @@ if ! shape_ok "$want"; then
   exit 1
 fi
 
+# guard_acl_ok: read-only. True only if each of the five knowledge guard functions exists once in
+# public and only its owner may EXECUTE it (a NULL proacl means PUBLIC may). The backup facts hash
+# the function definitions, which do not include the ACL, so the manifest cannot show this.
+guard_acl_ok() {
+  guard_acl="$(printf '%s\n' \
+    "BEGIN TRANSACTION READ ONLY;" \
+    "SET LOCAL search_path = pg_catalog, pg_temp;" \
+    "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');" \
+    "COMMIT;" |
+    in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1)" || return 1
+  [ "$guard_acl" = "5 5" ]
+}
+
 db="$(one_container db)"
 single_database
 no_loader kb_load kb_withdraw
@@ -82,6 +96,10 @@ if [ "$check_only" -eq 1 ]; then
   got="$(read_live)" || got=""
   if [ "$want" != "$got" ]; then
     echo "the database does NOT match the manifest (or its facts could not be read)" >&2
+    exit 1
+  fi
+  if ! guard_acl_ok; then
+    echo "the database does NOT pass: a knowledge guard function may be executed by a role other than its owner (or its ACL could not be read). Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
     exit 1
   fi
   echo "the database matches the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided)=' | tr '\n' ' ')" >&2
@@ -117,27 +135,23 @@ in_db_owner pg_restore -h db -U divesafe_owner -d divesafe --no-password --no-ow
   --single-transaction --exit-on-error <"$work/archive.dump"
 
 # --no-acl also drops migration 4's REVOKE EXECUTE ... FROM PUBLIC on the five SECURITY DEFINER
-# knowledge guard functions, and a function with no ACL may be executed by PUBLIC. Put it back,
-# then read it back: each of the five must exist once and only its owner may EXECUTE it. db-init
-# only checks this (it stops on it); it does not repair it.
+# knowledge guard functions, and a function with no ACL may be executed by PUBLIC. db-init cannot
+# repair that: its grants (_kb_grants) would revoke it, but migrate() checks the knowledge guard
+# first and refuses, so they never run. Put it back in one transaction, then read it back.
 printf '%s\n' \
+  "BEGIN;" \
   "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete() FROM PUBLIC;" \
   "REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM PUBLIC;" \
   "REVOKE EXECUTE ON FUNCTION public.kb_documents_insert() FROM PUBLIC;" \
   "REVOKE EXECUTE ON FUNCTION public.kb_chunks_insert() FROM PUBLIC;" \
-  "REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;" |
+  "REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;" \
+  "COMMIT;" |
   in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1 >/dev/null || {
-  echo "restored, but EXECUTE on the knowledge guard functions could not be revoked from PUBLIC. Do not start the api (docs/backup-and-restore.md)." >&2
+  echo "restored, but EXECUTE on the knowledge guard functions could not be revoked from PUBLIC. Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
   exit 1
 }
-guard_acl="$(printf '%s\n' \
-  "BEGIN TRANSACTION READ ONLY;" \
-  "SET LOCAL search_path = pg_catalog, pg_temp;" \
-  "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');" \
-  "COMMIT;" |
-  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1)" || guard_acl=""
-if [ "$guard_acl" != "5 5" ]; then
-  echo "restored, but a knowledge guard function may be executed by a role other than its owner (or its ACL could not be read). Do not start the api (docs/backup-and-restore.md)." >&2
+if ! guard_acl_ok; then
+  echo "restored, but a knowledge guard function may be executed by a role other than its owner (or its ACL could not be read). Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
   exit 1
 fi
 

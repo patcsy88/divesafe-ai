@@ -923,25 +923,42 @@ KB_GUARD_FUNCTIONS = (
 
 def test_the_restore_takes_execute_on_every_knowledge_guard_function_back_from_public() -> None:
     """A7 hand run (2026-11-11): `pg_restore --no-acl` drops migration 4's REVOKE EXECUTE ... FROM
-    PUBLIC, a NULL proacl lets PUBLIC execute the SECURITY DEFINER guards, and db-init (which only
-    checks) then stops. Each of the five must be revoked after the load and before the comparison
-    and the report, and the read-back must name all five and accept only "5 5"."""
+    PUBLIC, and a NULL proacl lets PUBLIC execute the SECURITY DEFINER guards. db-init cannot repair
+    it (migrate() refuses before _kb_grants runs). Each of the five must be revoked after the load,
+    in one transaction that stops on the first error, then read back before the comparison and the
+    report; the read-back must name all five and accept only "5 5"."""
     from divesafe.services.migrations import KNOWLEDGE_FUNCTIONS
 
     assert set(KB_GUARD_FUNCTIONS) == set(KNOWLEDGE_FUNCTIONS.values())
     code = _code("restore.sh")
     load = code.index("in_db_owner pg_restore")
+    begin = code.index('  "BEGIN;" \\\n  "REVOKE EXECUTE', load)
+    commit = code.index('  "COMMIT;" |\n', begin)
+    psql = code[commit:].splitlines()[1]
+    assert psql.startswith("  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq ")
+    assert "-v ON_ERROR_STOP=1 >/dev/null || {" in psql
+    check_call = code.index("if ! guard_acl_ok; then", load)
     for fn in KB_GUARD_FUNCTIONS:
         line = f'  "REVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;"'
         assert code.count(line) == 1, fn
-        assert load < code.index(line) < code.index('guard_acl="$(') < code.index('report="$('), fn
-    check = code[code.index('guard_acl="$(') : code.index('got="$(read_live)"', load)]
-    assert "READ ONLY" in check and "p.proacl IS NOT NULL" in check
-    assert "aclexplode(p.proacl) x WHERE x.grantee <> p.proowner" in check
-    names = check[check.index("p.proname IN (") : check.index(");", check.index("p.proname IN ("))]
+        assert begin < code.index(line) < commit < check_call < code.index('report="$('), fn
+    assert check_call < code.index('got="$(read_live)"', load)
+    fn_body = code[
+        code.index("guard_acl_ok() {") : code.index("\n}\n", code.index("guard_acl_ok() {"))
+    ]
+    assert code.index("guard_acl_ok() {") < code.index('if [ "$check_only" -eq 1 ]; then')
+    assert "BEGIN TRANSACTION READ ONLY;" in fn_body and "p.proacl IS NOT NULL" in fn_body
+    assert "aclexplode(p.proacl) x WHERE x.grantee <> p.proowner" in fn_body
+    assert '-v ON_ERROR_STOP=1)" || return 1' in fn_body
+    assert fn_body.rstrip().endswith('[ "$guard_acl" = "5 5" ]')
+    names = fn_body[
+        fn_body.index("p.proname IN (") : fn_body.index(");", fn_body.index("p.proname IN ("))
+    ]
     assert sorted(re.findall(r"'([a-z_]+)'", names)) == sorted(KB_GUARD_FUNCTIONS)
-    assert "nspname = 'public'" in check
-    assert '[ "$guard_acl" != "5 5" ]' in check and "Do not start the api" in check
+    assert "nspname = 'public'" in fn_body
+    assert "REVOKE" not in fn_body and "GRANT" not in fn_body
+    after = code[check_call : code.index("fi\n", check_call)]
+    assert "Do not start the api" in after and "exit 1" in after
 
 
 @pytest.mark.parametrize(
@@ -975,3 +992,45 @@ def test_the_restore_runs_the_function_revoke_and_its_check_on_the_happy_path(h:
     assert calls.count("fn-revoke") == 1 and calls.count("fn-acl") == 1
     load = next(i for i, x in enumerate(calls) if x.startswith("exec pg_restore"))
     assert load < calls.index("fn-revoke") < calls.index("fn-acl")
+
+
+def test_check_also_requires_the_guard_functions_to_be_closed_to_others(h: Harness) -> None:
+    """Review S1 (2026-11-11): a restore stopped after the load but before the function revoke left
+    a database that `--check` called matching (the facts do not cover ACLs). `--check` must also run
+    the read-only read-back and accept only "5 5", and still write nothing."""
+    dump = _restore_inputs(h)
+    ok = h.run("restore.sh", "--check", str(dump))
+    assert ok.returncode == 0 and "matches the manifest" in ok.stderr, ok.stderr
+    assert "fn-acl" in h.calls().splitlines()
+    for env in (
+        {"FAKE_FN_ACL": "0 5"},
+        {"FAKE_FN_ACL": "4 5"},
+        {"FAKE_FN_ACL": "5 4"},
+        {"FAKE_FN_ACL": ""},
+        {"FAKE_FN_ACL_FAIL": "1"},
+    ):
+        h.log.write_text("")
+        bad = h.run("restore.sh", "--check", str(dump), **env)
+        assert bad.returncode != 0, env
+        assert "does NOT pass" in bad.stderr and "Do not start the api" in bad.stderr, env
+        assert "matches the manifest" not in bad.stderr, env
+        calls = h.calls().splitlines()
+        assert "fn-acl" in calls, env
+        assert "fn-revoke" not in calls and "run" not in calls, env
+        assert not any(x.startswith("exec pg_restore") for x in calls), env
+    check = _code("restore.sh")
+    branch = check[check.index('if [ "$check_only" -eq 1 ]; then') : check.index("exit 0\nfi")]
+    assert "guard_acl_ok" in branch and "REVOKE" not in branch
+
+
+def test_the_documented_recovery_uses_the_scripts_own_revokes_and_read_back() -> None:
+    """Review S1 (b): the manual recovery in docs/backup-and-restore.md runs exactly the five
+    revokes and the read-back query of restore.sh, and the A7 hand run checks with that query."""
+    code = _code("restore.sh")
+    query = re.search(r'"(SELECT count\(\*\) FILTER .*?;)"', code)
+    assert query is not None
+    doc = (ROOT / "docs" / "backup-and-restore.md").read_text()
+    assert doc.count(query.group(1)) == 2
+    for fn in KB_GUARD_FUNCTIONS:
+        assert f"\nREVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;\n" in doc, fn
+    assert "proacl IS NULL" not in doc

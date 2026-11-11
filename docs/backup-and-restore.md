@@ -204,8 +204,9 @@ Then:
 7. `docker/restore.sh /path/to/divesafe-<time>.dump`. Its closing report lists every knowledge
    version that is **not WITHDRAWN** (with its latest status and manifest hash) and every approval
    with `hash_checked = false`, and says the grants are not yet applied.
-8. `... up db-init` (the grants and revokes, including `EXECUTE` on the knowledge functions, which
-   `PUBLIC` holds until then). The API must stay stopped.
+8. `... up db-init` (the table, sequence and role grants and revokes; `EXECUTE` on the knowledge
+   functions was already taken back from `PUBLIC` by `restore.sh`, and `db-init` stops if it was
+   not). The API must stay stopped.
 9. **Re-apply withdrawals by state, not by time:** every version in the withdrawal log that the
    report shows as not WITHDRAWN, with `kb_withdraw` (`docs/knowledge-loader.md`). A version that
    is already WITHDRAWN gets its own message and nothing is written, so this can be repeated. The
@@ -246,28 +247,59 @@ and sequence grants come only from `db-init`. `--no-acl` also drops every functi
 function with no ACL gets PostgreSQL's default: everyone may `EXECUTE` it. For the five
 `SECURITY DEFINER` knowledge guard functions (`kb_no_update_delete`, `kb_no_truncate`,
 `kb_documents_insert`, `kb_chunks_insert`, `kb_status_events_insert`), migration 4 revokes that
-default. `db-init` only **checks** it and stops with "the knowledge guard is not intact after
-migrating: a role other than the owner may EXECUTE ..." (found by the A7 hand run, 2026-11-11). So
-right after the load `restore.sh` runs `REVOKE EXECUTE ... FROM PUBLIC` on each of the five, then
-reads them back read-only: each must exist once, with an ACL whose only grantee is its owner. If
-the revoke or the read-back fails, it stops and says not to start the API. (The three
+default. `db-init` cannot put it back: its grants (`_kb_grants`) would revoke it, but `migrate()`
+checks the knowledge guard first and stops with "the knowledge guard is not intact after
+migrating: a role other than the owner may EXECUTE ...", so the grants never run (found by the A7
+hand run, 2026-11-11). So right after the load `restore.sh` runs `REVOKE EXECUTE ... FROM PUBLIC`
+on each of the five, in one transaction, then reads them back read-only: each must exist once,
+with an ACL whose only grantee is its owner (the read-back prints `5 5`). If the revoke or the
+read-back fails, it stops and says not to start the API; recover by hand (below). (The three
 `assessments_*` guard functions are not `SECURITY DEFINER`, keep the default ACL in the source
 database too, and are not affected.) **The backup facts do not cover function ACLs:**
 `guard_defs` and `kb_guard_defs` hash `pg_get_functiondef`, which does not include the ACL, and the
 scratch server also loads with `--no-acl`. So the trial load and both manifest comparisons match
 whatever the ACLs are; this read-back is the check. Afterwards it reads the restored database and
-compares it with the manifest again, then revokes `TEMPORARY` on the database from `PUBLIC` (extra protection only:
+compares it with the manifest again, then revokes `TEMPORARY` on the database from `PUBLIC` (extra
+protection only:
 `10-create-app-role.sh` already revoked everything from `PUBLIC`, `db-init` does again, and the
 loader refuses while `PUBLIC` holds TEMP). On a mismatch the data stays committed: it tells you not to start the API, and in that case you
 remove **the restored** volume only (it names it) and start again.
 
 If the script is interrupted after the load has committed, the final comparison did not run. A
 re-run will say the database is not empty. Run `docker/restore.sh --check <dump>` and start the
-API only after it says the database matches. If `--check` says it does NOT match on a database
+API only after it says the database matches. `--check` compares the manifest's facts **and** runs
+the same read-only read-back of `EXECUTE` on the five knowledge guard functions; it says "does NOT
+pass" unless that reads `5 5`. If `--check` says it does NOT match on a database
 that is empty, nothing committed (the load rolled back); run the restore again. `--check` writes nothing; while the API runs it
 matches only until the next write, so it is a check of a restored database, not a health check.
 A hard kill (`kill -9`) leaves a private copy of the archive in the system temporary directory;
 remove it.
+
+**Recovery when the function revoke or its read-back stopped the restore** (or `--check` says
+"does NOT pass" about a knowledge guard function, for example after an interruption between the
+load and the revoke). The data is loaded and a re-run is refused because `public` is not empty;
+`db-init` refuses too, for the reason above. With the API stopped, as `divesafe_owner` (the
+`in_db_owner` connection the scripts use, or the `owner` helper of the A7 hand run below), run:
+
+```sql
+BEGIN;
+REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_documents_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_chunks_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;
+COMMIT;
+```
+
+then the read-back, which must return `5 5` (anything else: stop, and look at the five functions'
+owner and `proacl`; a missing function or another grantee is not something this fixes):
+
+```sql
+SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');
+```
+
+Then `docker/restore.sh --check <dump>` must say the database matches, and only then continue with
+`db-init` (step 8).
 
 The append-only guard is never switched off: the data is loaded first and the triggers are
 created after it, as part of a normal restore. **That also means a restore is the one way decided
@@ -468,7 +500,8 @@ and finally "the grants are NOT yet applied. next, ...". Then:
 
 ```sh
 owner "SELECT has_database_privilege('public', 'divesafe', 'TEMPORARY')"   # f (TEMP revoked)
-owner "SELECT count(*) FROM pg_proc WHERE proname LIKE 'kb\\_%' AND proacl IS NULL"  # 0
+owner "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');"
+                                                                          # 5 5
 $C up db-init                                                             # exits 0
 owner "SELECT max(event_order) FROM public.kb_status_events"              # note it: M
 $C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its

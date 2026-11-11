@@ -6,12 +6,15 @@ database, the check fails; the statements restore.sh runs (read from the script 
 the script's own read-back accepts only then. It also compares what PUBLIC may do on every object
 in `public` before and after, which is the survey behind the fix.
 
-pg_dump and pg_restore are run with `docker exec` inside the container that publishes the port of
-DIVESAFE_TEST_DATABASE_URL (they are not on the host). Both scratch databases are named *_test and
-force-dropped; the shared database is never dropped."""
+pg_dump and pg_restore are run with `docker exec` inside the one container whose host port binding
+is the port of DIVESAFE_TEST_DATABASE_URL (they are not on the host); a `divesafe-prod` container is
+never chosen, and anything but exactly one candidate skips. It restores as the test server's
+superuser, not divesafe_owner: the ACL loss under test does not depend on the restoring role.
+Both scratch databases are named *_test and force-dropped; the shared database is never dropped."""
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -49,20 +52,55 @@ def _dsn_for(database: str) -> str:
     return psycopg.conninfo.make_conninfo(**parts)  # type: ignore[arg-type]
 
 
+_LOOPBACK = ("", "127.0.0.1", "::1", "localhost")
+_PROTECTED = "divesafe-prod"
+
+
+def _docker(*args: str) -> str:
+    return subprocess.run(
+        ["docker", *args], capture_output=True, text=True, check=True, timeout=30
+    ).stdout
+
+
+def _container_for_port(port: str, inspected: list[dict[str, Any]]) -> list[str]:
+    """Names of the containers whose HOST side of a port binding is `port` on loopback (or all
+    interfaces). A container named or labelled as a `divesafe-prod` compose project never counts."""
+    found: list[str] = []
+    for c in inspected:
+        name = str(c.get("Name", "")).lstrip("/")
+        labels = (c.get("Config") or {}).get("Labels") or {}
+        project = str(labels.get("com.docker.compose.project", ""))
+        if name.startswith(_PROTECTED) or project.startswith(_PROTECTED):
+            continue
+        ports = (c.get("NetworkSettings") or {}).get("Ports") or {}
+        if any(
+            str(b.get("HostPort", "")) == port and str(b.get("HostIp", "")) in _LOOPBACK
+            for bindings in ports.values()
+            for b in (bindings or [])
+        ):
+            found.append(name)
+    return found
+
+
 def _container() -> str:
+    """The test database container, by its host port binding (`docker inspect`), never by
+    `docker ps --filter publish=`, which can match the container-side port. Skips unless exactly
+    one container qualifies."""
     assert DSN is not None
     port = str(psycopg.conninfo.conninfo_to_dict(DSN).get("port", "5432"))
     if shutil.which("docker") is None:
         pytest.skip("docker is not available to run pg_dump / pg_restore")
-    found = subprocess.run(
-        ["docker", "ps", "-q", "--filter", f"publish={port}"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    ).stdout.split()
+    try:
+        ids = _docker("ps", "-q").split()
+        inspected = json.loads(_docker("inspect", *ids)) if ids else []
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pytest.skip("could not list the running containers")
+    return _only(_container_for_port(port, inspected))
+
+
+def _only(found: list[str]) -> str:
     if len(found) != 1:
-        pytest.skip("no single test database container publishes the DSN's port")
+        pytest.skip("not exactly one non-production container binds the DSN's port on the host")
     return found[0]
 
 
@@ -176,3 +214,29 @@ def test_a_no_acl_restore_opens_the_guards_and_the_restore_sql_closes_them(
         assert conn.execute(check).fetchone() == ("5 5",)
         # Nothing else PUBLIC may do differs from the database the schema was made in.
         assert _public_may(conn) == before
+
+
+def test_the_container_is_chosen_by_host_port_and_never_a_production_one() -> None:
+    """Offline: the selection rule alone, on inspect-shaped data."""
+
+    def c(name: str, host_port: str, ip: str = "127.0.0.1", project: str = "") -> dict[str, Any]:
+        return {
+            "Name": f"/{name}",
+            "Config": {"Labels": {"com.docker.compose.project": project} if project else {}},
+            "NetworkSettings": {
+                "Ports": {"5432/tcp": [{"HostIp": ip, "HostPort": host_port}], "9/tcp": None}
+            },
+        }
+
+    assert _container_for_port("55432", [c("pg16", "55432"), c("pg17", "55433")]) == ["pg16"]
+    # The container-side port 5432 is not a host binding.
+    assert _container_for_port("5432", [c("pg16", "55432")]) == []
+    assert _container_for_port("55432", [c("pg16", "55432", ip="0.0.0.0")]) == []
+    assert _container_for_port("55432", [c("pg16", "55432", ip="")]) == ["pg16"]
+    assert _container_for_port("55432", [c("divesafe-prod-db-1", "55432")]) == []
+    assert _container_for_port("55432", [c("db-1", "55432", project="divesafe-prod")]) == []
+    assert _container_for_port("55432", [c("a", "55432"), c("b", "55432")]) == ["a", "b"]
+    assert _only(["pg16"]) == "pg16"
+    for found in ([], ["a", "b"]):
+        with pytest.raises(pytest.skip.Exception):
+            _only(found)
