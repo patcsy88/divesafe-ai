@@ -479,7 +479,9 @@ def run(request: Request, settings: LoaderSettings) -> Outcome:
     except kb_screen.UnicodeNotReviewed:
         return FAILED_CONFIGURATION
     try:
-        checked = hash_must_be_checked(settings.production, request)
+        checked = hash_must_be_checked(
+            settings.production or settings.dsn_from_secrets_dir, request
+        )
         target = settings.require_corpus_target()
     except HashRequired:
         return FAILED_HASH_REQUIRED

@@ -53,6 +53,20 @@ DSN = "postgresql://u:never-echoed@127.0.0.1:1/x_test"
 DEV_URL = DSN + "?connect_timeout=5"
 SECRET_URL = "postgresql://divesafe_loader:Zq9@db/divesafe?sslmode=require&connect_timeout=5\n"
 REFUSAL = (24, "refused: production load gates (ADR 0024 A6) are not closed; nothing written")
+HASH_REQUIRED = (15, "refused: approved manifest hash required; nothing written")
+CONFIGURATION = (3, "refused: loader configuration; nothing written")
+DEV_FLAG_ARGVS = [
+    ["load", "--development-no-manifest-hash"],
+    ["approve", "site-guide", "1", "--development-no-manifest-hash"],
+]
+# Each breaks one production rule of the loader settings; user and password are present.
+BAD_SHAPE_URLS = [
+    "postgresql://divesafe_loader:Zq9@db/divesafe?sslmode=disable&connect_timeout=5\n",
+    "postgresql://divesafe_loader:Zq9@db/divesafe?connect_timeout=5\n",
+    "postgresql://divesafe_loader@db/divesafe?sslmode=require&connect_timeout=5\n",
+    "postgresql://divesafe_loader:Zq9@db/divesafe?sslmode=require&service=x&connect_timeout=5\n",
+]
+ALL_ENVIRONMENTS = ["production", *["development", "test", "", None]]
 SRC = Path(inspect.getfile(kb_load))
 SHIPPED = "PRODUCTION_LOAD_GATES_CLOSED = True"
 SHUT = "PRODUCTION_LOAD_GATES_CLOSED = False"
@@ -120,11 +134,15 @@ def no_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
-def _secrets_dir(tmp_path: Path) -> Path:
+def _secrets_dir(tmp_path: Path, url: str = SECRET_URL) -> Path:
     secrets = tmp_path / "secrets"
-    secrets.mkdir()
-    (secrets / secret_file_name("loader_database_url")).write_text(SECRET_URL)
+    secrets.mkdir(parents=True)
+    (secrets / secret_file_name("loader_database_url")).write_text(url)
     return secrets
+
+
+def _no_connection(dsn: str) -> Any:
+    raise AssertionError("connected where a refusal was expected")
 
 
 def _environment(
@@ -215,13 +233,18 @@ def withdraw_works_from_a_secrets_dir(
 def gets_past_the_gate_in_production(
     module: Any, monkeypatch: pytest.MonkeyPatch, corpus: tuple[Path, str]
 ) -> None:
-    """With the module's own literal: production, and a string from the secrets directory in any
-    environment, reach the connection and the write (a fake connection)."""
-    cases = [_settings("production", corpus[0], from_secrets_dir=True)] + [
+    """With the module's own literal: production (string from the secrets directory or from the
+    environment), and a string from the secrets directory in any environment, reach the connection
+    and the write (a fake connection) with the approved hash, and never with the development flag
+    (security review S1, 2026-11-12)."""
+    cases = [_settings("production", corpus[0])] + [
         _settings(environment, corpus[0], from_secrets_dir=True)
         for environment in ("production", "development", "test")
     ]
     for settings in cases:
+        monkeypatch.setattr(kb_common, "connect", _no_connection)
+        for argv in DEV_FLAG_ARGVS:
+            assert _run(module, argv, settings) == HASH_REQUIRED, (settings.environment, argv[0])
         for argv, expected in zip(
             _argvs(corpus[1]), (kb_load.OK_LOAD, kb_load.OK_APPROVE), strict=True
         ):
@@ -498,10 +521,9 @@ def test_mutation_the_literal_back_to_false_fails_the_on_tests(
             SRC.read_text().replace(SHIPPED, SHUT)
         )
     refuses_in_production(mutant, corpus, no_reads)
-    monkeypatch.undo()
-    monkeypatch.setattr(kb_common, "connect", lambda dsn: (_ for _ in ()).throw(AssertionError()))
-    with pytest.raises(AssertionError):
-        gets_past_the_gate_in_production(mutant, monkeypatch, corpus)
+    # Outside `no_reads` (which fails on any connection): the helper installs its own fake.
+    with pytest.MonkeyPatch.context() as patch, pytest.raises(AssertionError):
+        gets_past_the_gate_in_production(mutant, patch, corpus)
 
 
 def test_with_the_shipped_literal_production_reaches_the_hash_rules(
@@ -515,6 +537,199 @@ def test_with_the_shipped_literal_production_reaches_the_hash_rules(
     settings = _settings("production", corpus[0], from_secrets_dir=True)
     assert _run(kb_load, _argvs(corpus[1])[0], settings)[0] == 0
     assert _run(kb_load, ["load"], settings)[0] == 15
+
+
+# --- security review S1 (2026-11-12): a secrets-directory string gets the production rules ------
+
+
+def dev_flag_refused_with_a_secrets_dir_dsn(
+    module: Any, corpus: tuple[Path, str], seen: list[str]
+) -> None:
+    for environment in ("production", "development", "test"):
+        settings = _settings(environment, corpus[0], from_secrets_dir=True)
+        for argv in DEV_FLAG_ARGVS:
+            assert _run(module, argv, settings) == HASH_REQUIRED, (environment, argv[0])
+    assert seen == [], "the refusal must come before any corpus read or connection"
+
+
+def main_refuses_the_dev_flag_from_a_secrets_dir(
+    main: Callable[[list[str]], Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    corpus: tuple[Path, str],
+    seen: list[str],
+) -> None:
+    secrets = _secrets_dir(tmp_path)
+    for environment in ALL_ENVIRONMENTS:
+        _environment(
+            monkeypatch,
+            tmp_path,
+            environment,
+            DIVESAFE_SECRETS_DIR=str(secrets),
+            DIVESAFE_CORPUS_TARGET=str(corpus[0]),
+        )
+        for argv in DEV_FLAG_ARGVS:
+            outcome = main(argv)
+            assert (outcome.status, outcome.message) == HASH_REQUIRED, (environment, argv[0])
+    assert seen == [], "the refusal must come before any corpus read or connection"
+
+
+def settings_refuse_a_bad_shape_from_a_secrets_dir(
+    load: Callable[..., Any], tmp_path: Path
+) -> None:
+    for index, url in enumerate(BAD_SHAPE_URLS):
+        secrets = _secrets_dir(tmp_path / str(index), url)
+        for environment in ALL_ENVIRONMENTS:
+            env = {"DIVESAFE_SECRETS_DIR": str(secrets)}
+            if environment is not None:
+                env["DIVESAFE_ENVIRONMENT"] = environment
+            # The error class of the module under test (a mutant COPY defines its own).
+            with pytest.raises(load.__globals__["LoaderConfigError"]) as caught:
+                load(env)
+            assert "Zq9" not in str(caught.value), (environment, index)
+
+
+def settings_refuse_a_relative_target_from_a_secrets_dir(
+    load: Callable[..., Any], tmp_path: Path
+) -> None:
+    secrets = _secrets_dir(tmp_path)
+    for environment in ALL_ENVIRONMENTS:
+        for target in ("corpus", "./corpus", "../corpus"):
+            env = {"DIVESAFE_SECRETS_DIR": str(secrets), "DIVESAFE_CORPUS_TARGET": target}
+            if environment is not None:
+                env["DIVESAFE_ENVIRONMENT"] = environment
+            with pytest.raises(load.__globals__["LoaderConfigError"], match="absolute"):
+                load(env)
+
+
+def test_the_development_flag_is_refused_with_a_secrets_dir_dsn_in_any_environment(
+    corpus: tuple[Path, str], no_reads: list[str]
+) -> None:
+    """Load and approve exit 15 before any read or connection; nothing is written."""
+    dev_flag_refused_with_a_secrets_dir_dsn(kb_load, corpus, no_reads)
+
+
+def test_main_refuses_the_development_flag_from_a_secrets_dir_whatever_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corpus: tuple[Path, str], no_reads: list[str]
+) -> None:
+    """Production, development, test, empty and unset, through `_main` and the real settings."""
+    main_refuses_the_dev_flag_from_a_secrets_dir(
+        kb_load._main, monkeypatch, tmp_path, corpus, no_reads
+    )
+
+
+def test_the_development_flag_still_works_without_a_secrets_dir(
+    monkeypatch: pytest.MonkeyPatch, corpus: tuple[Path, str]
+) -> None:
+    """Development and test with DIVESAFE_LOADER_DATABASE_URL are unchanged."""
+    for environment in ("development", "test"):
+        for argv, expected in zip(
+            DEV_FLAG_ARGVS, (kb_load.OK_LOAD, kb_load.OK_APPROVE), strict=True
+        ):
+            fake = LoadFakeConnection()
+            monkeypatch.setattr(kb_common, "connect", lambda dsn, fake=fake: fake)
+            monkeypatch.setattr(sys, "stdout", Out(fake))
+            got = _run(kb_load, argv, _settings(environment, corpus[0]))
+            assert got == (expected.status, expected.message), (environment, argv[0])
+
+
+def test_a_secrets_dir_dsn_gets_the_production_shape_rules_in_any_environment(
+    tmp_path: Path,
+) -> None:
+    settings_refuse_a_bad_shape_from_a_secrets_dir(loader_settings.load_loader_settings, tmp_path)
+
+
+def test_a_secrets_dir_dsn_needs_an_absolute_corpus_target_in_any_environment(
+    tmp_path: Path,
+) -> None:
+    settings_refuse_a_relative_target_from_a_secrets_dir(
+        loader_settings.load_loader_settings, tmp_path
+    )
+
+
+@pytest.mark.parametrize("environment", ALL_ENVIRONMENTS)
+def test_main_refuses_a_bad_shape_or_a_relative_target_from_a_secrets_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corpus: tuple[Path, str],
+    no_reads: list[str],
+    environment: str | None,
+) -> None:
+    """Exit 3 before any read or connection, for load and approve."""
+    cases = [(BAD_SHAPE_URLS[0], str(corpus[0])), (SECRET_URL, "corpus")]
+    for index, (url, target) in enumerate(cases):
+        secrets = _secrets_dir(tmp_path / str(index), url)
+        _environment(
+            monkeypatch,
+            tmp_path,
+            environment,
+            DIVESAFE_SECRETS_DIR=str(secrets),
+            DIVESAFE_CORPUS_TARGET=target,
+        )
+        for argv in _argvs(corpus[1]):
+            outcome = kb_load._main(argv)
+            assert (outcome.status, outcome.message) == CONFIGURATION, (index, argv[0])
+    assert no_reads == []
+
+
+def test_without_a_secrets_dir_the_shape_and_target_rules_are_unchanged(tmp_path: Path) -> None:
+    """Development and test with DIVESAFE_LOADER_DATABASE_URL: no TLS rule, relative target."""
+    for environment in ("development", "test", ""):
+        env = {
+            "DIVESAFE_ENVIRONMENT": environment,
+            "DIVESAFE_LOADER_DATABASE_URL": DEV_URL,
+            "DIVESAFE_CORPUS_TARGET": "corpus",
+        }
+        got = loader_settings.load_loader_settings(env)
+        assert got.corpus_target == Path("corpus") and got.dsn_from_secrets_dir is False
+
+
+SECRETS_DIR_HASH_SITE = (
+    "        checked = hash_must_be_checked(\n"
+    "            settings.production or settings.dsn_from_secrets_dir, request\n"
+    "        )\n",
+    "        checked = hash_must_be_checked(settings.production, request)\n",
+)
+SECRETS_DIR_SHAPE_SITE = (
+    "    if production_rules:\n        _require_production_shape(url)\n",
+    '    if name == "production":\n        _require_production_shape(url)\n',
+)
+SECRETS_DIR_TARGET_SITE = (
+    "    if production_rules and target and not Path(target).is_absolute():\n",
+    '    if name == "production" and target and not Path(target).is_absolute():\n',
+)
+
+
+def test_mutation_the_hash_rule_without_the_secrets_dir_is_caught(
+    corpus: tuple[Path, str], no_reads: list[str]
+) -> None:
+    mutant = mutated_module(kb_load, SECRETS_DIR_HASH_SITE)
+    with pytest.raises(AssertionError):
+        dev_flag_refused_with_a_secrets_dir_dsn(mutant, corpus, no_reads)
+
+
+def test_mutation_the_hash_rule_without_the_secrets_dir_fails_the_positive_test(
+    monkeypatch: pytest.MonkeyPatch, corpus: tuple[Path, str]
+) -> None:
+    mutant = mutated_module(kb_load, SECRETS_DIR_HASH_SITE)
+    with pytest.raises(AssertionError):
+        gets_past_the_gate_in_production(mutant, monkeypatch, corpus)
+
+
+def test_mutation_the_shape_rule_without_the_secrets_dir_is_caught(tmp_path: Path) -> None:
+    mutant = mutated_module(loader_settings, SECRETS_DIR_SHAPE_SITE)
+    settings_refuse_a_relative_target_from_a_secrets_dir(mutant.load_loader_settings, tmp_path)
+    with pytest.raises(pytest.fail.Exception):
+        settings_refuse_a_bad_shape_from_a_secrets_dir(mutant.load_loader_settings, tmp_path / "m")
+
+
+def test_mutation_the_target_rule_without_the_secrets_dir_is_caught(tmp_path: Path) -> None:
+    mutant = mutated_module(loader_settings, SECRETS_DIR_TARGET_SITE)
+    settings_refuse_a_bad_shape_from_a_secrets_dir(mutant.load_loader_settings, tmp_path)
+    with pytest.raises(pytest.fail.Exception):
+        settings_refuse_a_relative_target_from_a_secrets_dir(
+            mutant.load_loader_settings, tmp_path / "m"
+        )
 
 
 # --- mutations ----------------------------------------------------------------------------------

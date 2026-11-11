@@ -173,10 +173,13 @@ def load_loader_settings(environ: Mapping[str, str] | None = None) -> LoaderSett
     if url is None:
         raise LoaderConfigError("the loader connection string is not set")
     _check_uri_and_timeout(url)
-    if name == "production":
+    # Security review S1 (2026-11-12): a string from the secrets directory is the production
+    # string, whatever DIVESAFE_ENVIRONMENT says, so the production checks apply to it too.
+    production_rules = name == "production" or bool(location)
+    if production_rules:
         _require_production_shape(url)
     target = env.get(CORPUS_TARGET_KEY)
-    if name == "production" and target and not Path(target).is_absolute():
+    if production_rules and target and not Path(target).is_absolute():
         raise LoaderConfigError("DIVESAFE_CORPUS_TARGET must be an absolute path in production")
     return LoaderSettings(
         environment=name,
