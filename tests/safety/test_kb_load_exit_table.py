@@ -43,6 +43,10 @@ EXPECTED: dict[str, tuple[int, str]] = {
     "FAILED_WRONG_STATUS": (21, "refused: version is not in DRAFT status; nothing written"),
     "FAILED_FILE_HASH": (22, "refused: a file hash does not match; nothing written"),
     "FAILED_CHUNK_HASH": (23, "refused: a chunk hash does not match; nothing written"),
+    "FAILED_GATES_OPEN": (
+        24,
+        "refused: production load gates (ADR 0024 A6) are not closed; nothing written",
+    ),
     "OK_LOAD": (0, "loaded as DRAFT"),
     "OK_APPROVE": (0, "approved"),
 }
@@ -59,13 +63,13 @@ def check_table(module: object) -> None:
 
 def test_every_row_of_the_q5_table_is_pinned() -> None:
     check_table(kb_load)
-    assert len(kb_load.EXIT_TABLE) == 24
+    assert len(kb_load.EXIT_TABLE) == 25
 
 
 def test_each_failure_number_has_exactly_one_message_and_success_is_zero_only_for_ok() -> None:
     failures = [o for o in kb_load.EXIT_TABLE if o.status != 0]
-    assert len({o.status for o in failures}) == len(failures) == 22
-    assert len({o.message for o in kb_load.EXIT_TABLE}) == 24
+    assert len({o.status for o in failures}) == len(failures) == 23
+    assert len({o.message for o in kb_load.EXIT_TABLE}) == 25
     zeros = [o for o in kb_load.EXIT_TABLE if o.status == 0]
     assert {o.message for o in zeros} == {"loaded as DRAFT", "approved"}
 

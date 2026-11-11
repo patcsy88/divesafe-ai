@@ -46,6 +46,14 @@ from divesafe.services.kb_manifest import LoadedCorpus
 FLAG_HASH = "--approved-manifest-sha256"
 FLAG_DEV = "--development-no-manifest-hash"
 
+# Owner decisions (2026-11-09): `load` and `approve` refuse until every gate in ADR 0024 A6
+# ("First-production-load gates") is closed, in production AND whenever the connection string came
+# from DIVESAFE_SECRETS_DIR, whatever DIVESAFE_ENVIRONMENT says. The literal is the only switch
+# the code offers. This stops accidents and casual overrides (`-e DIVESAFE_ENVIRONMENT=...`), not
+# an operator with Docker access who replaces the entrypoint or the module, or hand-builds a
+# connection string outside the secrets directory (ADR 0024 A8). `withdraw` is not affected.
+PRODUCTION_LOAD_GATES_CLOSED = False
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -77,6 +85,9 @@ FAILED_SELF_CHECK_INCOMPLETE = Outcome(20, "refused: self-check incomplete; noth
 FAILED_WRONG_STATUS = Outcome(21, "refused: version is not in DRAFT status; nothing written")
 FAILED_FILE_HASH = Outcome(22, "refused: a file hash does not match; nothing written")
 FAILED_CHUNK_HASH = Outcome(23, "refused: a chunk hash does not match; nothing written")
+FAILED_GATES_OPEN = Outcome(
+    24, "refused: production load gates (ADR 0024 A6) are not closed; nothing written"
+)
 OK_LOAD = Outcome(0, "loaded as DRAFT")
 OK_APPROVE = Outcome(0, "approved")
 
@@ -103,6 +114,7 @@ EXIT_TABLE: tuple[Outcome, ...] = (
     FAILED_WRONG_STATUS,
     FAILED_FILE_HASH,
     FAILED_CHUNK_HASH,
+    FAILED_GATES_OPEN,
     OK_LOAD,
     OK_APPROVE,
 )
@@ -451,6 +463,8 @@ def _run_on(
 
 
 def run(request: Request, settings: LoaderSettings) -> Outcome:
+    if (settings.production or settings.dsn_from_secrets_dir) and not PRODUCTION_LOAD_GATES_CLOSED:
+        return FAILED_GATES_OPEN  # first: no corpus read, no connection, nothing written
     seconds = (
         kb_common.LOAD_DEADLINE_SECONDS
         if request.command == "load"

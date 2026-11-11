@@ -18,7 +18,9 @@ from divesafe.config.secret_files import SECRET_FILES, secret_file_name
 
 pytestmark = pytest.mark.safety
 
-SECRET_URL = "postgresql://loader:Zq9-never-echoed@db:5432/divesafe?sslmode=require"
+SECRET_URL = (
+    "postgresql://loader:Zq9-never-echoed@db:5432/divesafe?sslmode=require&connect_timeout=5"
+)
 FILE = secret_file_name("loader_database_url")
 
 
@@ -65,6 +67,7 @@ def test_the_model_has_only_the_listed_fields() -> None:
         "environment",
         "loader_database_url",
         "corpus_target",
+        "dsn_from_secrets_dir",
     }
 
 
@@ -144,17 +147,18 @@ def test_production_without_a_secrets_directory_is_refused_even_with_the_env_var
 
 @pytest.mark.parametrize("mode", ["require", "verify-ca", "verify-full"])
 def test_production_accepts_the_tls_modes(tmp_path: Path, mode: str) -> None:
-    url = f"postgresql://loader:Zq9-never-echoed@db/divesafe?sslmode={mode}"
+    url = f"postgresql://loader:Zq9-never-echoed@db/divesafe?sslmode={mode}&connect_timeout=5"
     load_loader_settings(production(secrets_dir(tmp_path, url)))
 
 
 @pytest.mark.parametrize(
-    "query", ["", "?sslmode=disable", "?sslmode=allow", "?sslmode=prefer", "?sslmode=REQUIRE"]
+    "query", ["", "&sslmode=disable", "&sslmode=allow", "&sslmode=prefer", "&sslmode=REQUIRE"]
 )
 def test_production_refuses_a_string_that_does_not_force_tls_without_echoing_it(
     tmp_path: Path, query: str
 ) -> None:
-    url = f"postgresql://loader:Zq9-never-echoed@db/divesafe{query}"
+    # with a valid timeout, so the refusal is the TLS rule's own
+    url = f"postgresql://loader:Zq9-never-echoed@db/divesafe?connect_timeout=5{query}"
     text = refused(production(secrets_dir(tmp_path, url)))
     assert "sslmode" in text and "Zq9" not in text and "db/divesafe" not in text
 
@@ -166,7 +170,7 @@ def test_an_unparseable_string_is_refused_without_the_parser_message(tmp_path: P
 
 
 def test_the_environment_variable_is_a_fallback_outside_production_only() -> None:
-    env = {"DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:Zq9@127.0.0.1/x_test"}
+    env = {"DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:Zq9@127.0.0.1/x_test?connect_timeout=5"}
     for name in ("development", "test"):
         settings = load_loader_settings({**env, "DIVESAFE_ENVIRONMENT": name})
         assert settings.loader_database_url.get_secret_value().startswith("postgresql://")
@@ -196,7 +200,7 @@ def test_mutation_a_fallback_that_works_in_production_is_caught(
     mutated = namespace["load_loader_settings"]
     env = {
         "DIVESAFE_ENVIRONMENT": "production",
-        "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@db/x?sslmode=require",
+        "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@db/x?sslmode=require&connect_timeout=5",
     }
     assert mutated(env).production  # type: ignore[operator]
     with pytest.raises(LoaderConfigError):
@@ -209,7 +213,9 @@ def test_mutation_a_missing_tls_check_is_caught(tmp_path: Path) -> None:
     assert old in source
     namespace: dict[str, object] = {}
     exec(source.replace(old, "        pass\n"), vars(loader_settings), namespace)  # noqa: S102
-    env = production(secrets_dir(tmp_path, "postgresql://l:p@db/x?sslmode=disable"))
+    env = production(
+        secrets_dir(tmp_path, "postgresql://l:p@db/x?sslmode=disable&connect_timeout=5")
+    )
     namespace["load_loader_settings"](env)  # type: ignore[operator]
     with pytest.raises(LoaderConfigError):
         load_loader_settings(env)
@@ -309,7 +315,7 @@ def test_a_relative_corpus_target_is_allowed_outside_production(tmp_path: Path) 
     for name in ("development", "test"):
         env = {
             "DIVESAFE_ENVIRONMENT": name,
-            "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test",
+            "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test?connect_timeout=5",
             "DIVESAFE_CORPUS_TARGET": "corpus",
         }
         assert load_loader_settings(env).corpus_target == Path("corpus")
@@ -336,7 +342,7 @@ def test_mutation_the_absolute_rule_applied_outside_production_is_caught(tmp_pat
     exec(mutated_source, vars(loader_settings), namespace)  # noqa: S102
     env = {
         "DIVESAFE_ENVIRONMENT": "development",
-        "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test",
+        "DIVESAFE_LOADER_DATABASE_URL": "postgresql://l:p@127.0.0.1/x_test?connect_timeout=5",
         "DIVESAFE_CORPUS_TARGET": "corpus",
     }
     load_loader_settings(env)  # the real rule allows it

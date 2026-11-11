@@ -17,8 +17,16 @@
     rest is listed under "Not solved".
   The text after round 6 has not been seen by either reviewer.
 - **Amendment 1 (2026-10-21), the knowledge loader,** is at the end of "Conditions before
-  acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **Nothing in
-  the amendment is built or run**. Both reviewers accepted its second, third and fourth revisions as
+  acceptance", as ADR 0022 requires. Status stays PROPOSED; open conditions unchanged. **A1 to A7
+  are built** on branch `deploy-a1-a7` (2026-11-09, commits `a2c1e68`, `59381de`, `f4879a5`,
+  `9f5b3ea`; see "Build state" at the end of A8). **Both reviewers reviewed `9f5b3ea` once** (no
+  blockers); the findings were fixed in the commits listed in "Build state", and the final round
+  (`8eface8`..`99ace68`) was **reviewed by both reviewers on 2026-11-09, no blockers and no
+  should-fix**; its nits are fixed in the docs-only commit after it. Not run on the owner's host; the A7 hand run and the owner gates in A6
+  remain. **In production, and whenever the loader string comes from the secrets directory,
+  `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
+  decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
+  access, A8). Both reviewers accepted its second, third and fourth revisions as
   recorded designs (no blockers; the fourth is committed as `c0457ef`), and the fifth (committed as
   `6545bd7`) likewise; the sixth revision (small, text only) has not been seen by either (see the
   notes at its start).
@@ -165,9 +173,16 @@ and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-h
 ```
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
 # add by hand: docker/secrets/divesafe_llm_api_key and docker/secrets/divesafe_api_key_hashes
-cp docker/production.env.example docker/production.env   # fill in the blanks
-docker compose -f docker/docker-compose.production.yml --env-file docker/production.env up --build
+cp docker/production.env.example docker/production.env   # fill in the blanks, incl. DIVESAFE_CORPUS_DIR
+C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
+$C up -d --wait db              # 1. the database only
+# 2. the loader role script, exactly as in docs/knowledge-loader.md section 2 (A1)
+$C up -d --build --wait api    # 3. db-init, then the API
 ```
+
+Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`risk-reviewer`
+should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
+from the deploy commit.
 
 `docker/secrets/` and `docker/production.env` are git-ignored.
 
@@ -629,6 +644,10 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
     existing `10-create-app-role.sh` has the same hole and does not set them; recorded in A8, not
     changed here.
   - **To verify** also: that the bootstrap superuser may read that path in the container.
+    **Verified (2026-11-09)** on a throwaway `pgvector` PG16 container with `log_statement = all`:
+    `pg_read_file` read the mounted secret file, the role was created, and the password
+    appeared in no psql output and nowhere in the server log. **The `pg_read_file` design was
+    built; the `\getenv` fallback was not used** (`docker/db/20-create-loader-role.sql`).
   If it does not work, the fallback is the existing script's `\getenv` pattern. With `VERBOSITY
   terse` the `LINE n:` excerpt is gone, so the residual risk of a quoted statement is **mostly
   closed in both designs**; the ADR text at code time says which was built. **Choosing the
@@ -735,7 +754,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   `condition: service_healthy` and nothing else. `kb_load` has:
   - **depends_on:** as above. It does not depend on
     `db-init` (a `run` of a service that depends on the one-off schema job might start that job
-    again: **to verify**); the loader's own self-check and schema check refuse when the grants or
+    again: **verified 2026-11-09** on a throwaway project: `compose run` starts the whole
+    `depends_on` chain, including a one-off job that already completed, so the design stands); the loader's own self-check and schema check refuse when the grants or
     tables are absent. No service depends on either loader service.
   - **Network:** `[data]` only. It has no route out.
   - **Secrets:** exactly one, the loader connection string, mounted as a file under the
@@ -1070,7 +1090,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
          Approved.
     - Q10. The compose profile name (A3 says "for example `knowledge`"), and the process and
       memory limit values for both services ("as `api` has" is a reference, not numbers); decided
-      at the docker stage.
+      at the docker stage. **Decided (2026-11-09, engineer's choice, for review):** profile
+      `knowledge`; `mem_limit: 1g` and `pids_limit: 256` on both, equal to `api`'s.
   - **Runbook when it refuses on the lock:** (1) stop the `kb_load` run container (the server rolls
     the load back) and retry; (2) or the bootstrap superuser finds the stuck loader backend in
     `pg_stat_activity` and runs `pg_terminate_backend`; (3) else fallback (b) below.
@@ -1337,7 +1358,9 @@ condition; the mutation check is to break the compose file once and watch it fai
   **including the schema migration with `hash_checked`** (the owner answered YES on 2026-10-21; A3): `db_init`
   grants and its loader-role check, the loader code, and a
   **development-only** `kb_load` against a developer database with a developer-created role.
-- **Wait for this amendment** (made, and reviewed by both reviewers): everything under `docker/`
+- **Wait for this amendment** (made; the design revisions and the build at `9f5b3ea` were each
+  reviewed by both reviewers, the build once, with findings fixed in the commits listed in A8
+  "Build state"): everything under `docker/`
   (the new script, `make-secrets.sh`, `pg_hba.conf`, the backup scripts) and the compose files, and
   therefore any production use. The knowledge connector, the prompt path, the record fields and
   the citation guard are later stages of ADR 0022 and are outside this amendment.
@@ -1356,6 +1379,35 @@ condition; the mutation check is to break the compose file once and watch it fai
 - **Shipping gates (this amendment).** The feature does not ship until, besides the build and both
   reviews: the **location of the withdrawal log** is settled, and the **owner has re-acknowledged
   the changed ADR 0022 decision 11**. Both are also in ADR 0022 "Still open".
+- **The gates are enforced in code (owner decisions, 2026-11-09).** `kb_load load` and
+  `kb_load approve` return exit status 24, "refused: production load gates (ADR 0024 A6) are not
+  closed; nothing written", as the **first statement** of `kb_load.run` (before the Unicode check,
+  the corpus read and the connection) when **either** the loader's settings say production
+  (`DIVESAFE_ENVIRONMENT=production`) **or** the loader connection string was read from
+  `DIVESAFE_SECRETS_DIR`, whatever `DIVESAFE_ENVIRONMENT` says (development, test, empty or
+  unset). The second condition was added after both reviewers found that `run -e
+  DIVESAFE_ENVIRONMENT=development` (or `test`, or empty) lifted the first. How the string was
+  obtained is the field `LoaderSettings.dsn_from_secrets_dir`, set only by `load_loader_settings`
+  from where it found the string (default `False`), never from an environment value. `kb_load` has
+  no other commands; `withdraw` (`kb_withdraw`) is not affected and works from the secrets
+  directory in every environment. Development and test with `DIVESAFE_LOADER_DATABASE_URL` and no
+  secrets directory are unchanged. The only switch the code offers is a reviewed change of the
+  module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in `src/divesafe/services/kb_load.py`,
+  made after every gate in the list below is closed and reviewed by both reviewers.
+  **What it stops:** accidents and casual overrides (a single environment value, a setting, a
+  file).
+  **What it does not stop:** a determined operator with Docker access (A8). Pinned by
+  `tests/safety/test_kb_load_production_gate.py`: refusal before any read or connection, in
+  production and with a secrets-directory string in development and test; through `_main` with
+  the real settings for environment `production` (with variables that try to lift it) and for
+  `development`, `test`, empty and unset with a secrets directory; `withdraw` from a secrets
+  directory in every environment; development and test without a secrets directory unchanged,
+  also through `_main`; an AST pin that the literal is assigned once to `False` and read only by
+  that check, which reads only `settings.production` and `settings.dsn_from_secrets_dir`; an AST
+  pin that the field is passed once, as `bool(location)` with `location` read from
+  `DIVESAFE_SECRETS_DIR`. A live test checks the database is unchanged for both conditions
+  (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`). Mutations: see A8
+  "Build state".
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
   (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
   0022 decision 11**; (3) the **A7 hand run** on a throwaway volume; (4) **ADR 0022 condition 10**
@@ -1441,6 +1493,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     (commit `433b569` for an archive from before migration 3; for later archives the scripts at
     `75cbd58`, a docs-only commit, so today's scripts). Both are plausible from `git log`;
     **to verify:** that `git diff 6840d2b 75cbd58 -- docker/backup*.sh docker/restore.sh` is empty.
+    **Verified empty (2026-11-09)**, and also from `75cbd58` to the branch base `915285c`.
     **Run them from a `git worktree` of that commit**, because `restore.sh` sources
     `backup-common.sh` from its own directory (the same commit). The old scripts' `tables_line`
     pins four tables, so **they cannot back up a database that has `kb_*` tables**; a restore with
@@ -1484,6 +1537,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   - **Backup and restore refuse while a loader runs.** Both stop if a `kb_load` or `kb_withdraw`
     container exists, found by the compose service label (**to verify:** whether a `docker compose
     run` container carries that label; if not, a name or a lock check is used instead).
+    **Verified (2026-11-09):** a `run` container carries `com.docker.compose.service` (with
+    `oneoff=True`); the label check is built, with `docker ps -a` so a stopped container counts.
   - **`docs/backup-and-restore.md`** says in plain words that **dumps and archives contain the
     licensed corpus text**, that a licence revoked later cannot be honoured in an existing dump or
     off-machine copy, that the archive must be kept as the owner would keep the licensed sources,
@@ -1581,8 +1636,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The loader password file stays mounted into `db` permanently** (owner decision; A1).
 - **The corpus variable is required by every compose command**, so `docker/production.env` needs it
   (A3), and a placeholder defeats the stop-on-unset purpose.
-- **The `pg_read_file` password design is unverified** (A1), as are the label check and the
-  `depends_on` behaviour for `run`.
+- **The `pg_read_file` password design, the label check and the `depends_on` behaviour for `run`
+  were verified on throwaway containers (2026-11-09)**; not yet on the owner's host.
 - **`withdraw` departs from ADR 0022 decision 11** (A3). Both reviewers looked at the exemption on
   2026-10-21 and their findings are folded in; the owner has not re-acknowledged it. The
   "report but do not refuse" privilege self-check is an owner-delegated default that
@@ -1613,9 +1668,13 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   with "migration 4 was changed after it was applied"; migration 4 has only ever been applied to
   throwaway test databases.
 - **Not solved by the loader design:** `LOCK TABLE` denial of service by the loader; default
-  privileges for the owner role are not checked; the post-migration check looks at trigger names
-  and `tgenabled` only until `migrate()` and `verify()` are extended (must land before migration 5
-  or the connector stage, whichever is first; ADR 0022 condition 9).
+  privileges for the owner role are not checked. ~~The post-migration check looks at trigger
+  names and `tgenabled` only until `migrate()` and `verify()` are extended~~ **Out of date
+  (corrected 2026-11-09):** `migrate()` and `verify()` now run `knowledge_problems`, which also
+  checks the trigger type and shape, a pinned definition hash per guard function and PostgreSQL
+  major version, rules, row-level security, inheritance, persistence, owners, ACLs and the
+  ordering sequence (ADR 0022 conditions 9 and 11); what it does not detect is listed in its
+  docstring and in ADR 0022 Known gaps.
 - **No approval of an empty version (owner decision, 2026-10-22).** The database refuses an APPROVED
   event for a version with no chunks (`kb_status_events_insert`; fixed message; ordinary `P0001`).
   The `approve` runbook should expect that refusal, not treat it as an outage (ADR 0022 decision 10).
@@ -1701,12 +1760,123 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   ADR 0022 decision 11 (A6). The first production load has further gates, including the
   default-ignorable code point table (A6, "First-production-load gates").
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
-- **Nothing in this amendment is built or run.** Every pin above is a description of a test to be
-  written, with its mutation check to be run when it is.
+- **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
+  - The role script's check of an **existing** role ignores `rolconnlimit`, `rolvaliduntil`,
+    objects the role owns and grants made to it. Owned objects and grants on the knowledge
+    objects are covered elsewhere: `db-init`'s `migrate()` and the API's `verify()` check the
+    owners and ACLs of the knowledge tables, sequence and functions (ADR 0022 condition 11), and
+    the loader's self-checks refuse a role that owns a knowledge table, `public` or the database
+    or holds write privileges (`db-init` itself checks only that the role exists). A connection
+    limit or an expiry is checked by nothing and would show only as a failed connection.
+  - The loader **password file is read twice**: once by `make-secrets.sh` for the connection
+    string, once by the server through `pg_read_file` in the role script. If the file is changed in
+    between, the role's password and the connection string differ and the loader cannot connect
+    (fails closed, but the message is only a connection failure).
+  - **The position of the knowledge ordering sequence is not a backup fact.** A restore recreates
+    it from the archive; a sequence set back onto used values is noticed only when an insert
+    fails (`UNIQUE(event_order)`; ADR 0022 Known gaps).
+  - **A misleading backup message on a database from before migration 4:** the facts queries fail
+    on the missing `kb_*` tables, so `backup.sh` says "the database kept changing, or its facts
+    could not be read" instead of "run `db-init` first". Nothing is kept, so it fails closed; the
+    runbook says to run `db-init` before backing up across migration 4.
+  - **`no_loader` sees only this compose project's labels.** A loader started under another
+    project name (`-p`), or with plain `docker run`, is invisible to it. The before/after facts
+    check and the loader role's narrow rights are what protect the archive; `no_loader` is a
+    point-in-time convenience check (`docs/backup-and-restore.md`).
+  - **The load gate does not stop a determined operator with Docker access** (owner decision,
+    2026-11-09; A6). It stops accidents and casual overrides only. Someone who can run `docker`
+    on the host can still load or approve in production by: replacing the entrypoint
+    (`--entrypoint`) or the command so that other code runs; shadowing or editing
+    `divesafe.services.kb_load` (a mounted or copied module, `PYTHONPATH`, a rebuilt image) so
+    the literal or the check changes; or putting a hand-built loader string in
+    `DIVESAFE_LOADER_DATABASE_URL` without `DIVESAFE_SECRETS_DIR` and a non-production
+    `DIVESAFE_ENVIRONMENT`, which the settings treat as development. Such a person can also write
+    as the owner with `psql`, so the gate cannot be the control against them; review, the
+    loader role's narrow rights and the database triggers are. The A7 hand run gets its rows from
+    a test-only seed (`docs/backup-and-restore.md`), not by any of these. **Copying the loader
+    string out of the secret into `-e DIVESAFE_LOADER_DATABASE_URL=...` also exposes the loader
+    password** (process arguments and `ps`, shell history, `docker inspect`); if that ever
+    happens, the loader password must be rotated (`docs/knowledge-loader.md`).
+  - **The loaders share the live image tag** (A5 pin 11: same `image` and `build` as `api`). A
+    `build` or `--build` with the `knowledge` profile would replace the image the running API was
+    started from; the compose header and the runbook say never to do that, and nothing
+    mechanical stops it.
+- **Build state (2026-11-09, branch `deploy-a1-a7`, not pushed; `9f5b3ea` reviewed once; the
+  final round `8eface8`..`99ace68` reviewed by both reviewers on 2026-11-09 with no blockers and
+  no should-fix; its nits are fixed in the docs-only commit after `99ace68`):**
+  - A1 and A2 (`a2c1e68`): `docker/db/20-create-loader-role.sql` (`pg_read_file`, refusal by a
+    failing cast after a `\warn`, `search_path = pg_catalog, pg_temp`), `make-secrets.sh` loader
+    files (`connect_timeout=5`), the `pg_hba.conf` rule, `docs/knowledge-loader.md`. 35/35
+    mutations caught.
+  - A3 and A5 (`59381de`): `kb_load` and `kb_withdraw` under profile `knowledge`, corpus at
+    `/corpus`, staging ignore lines `/corpus/` (`.gitignore`) and `corpus` (`.dockerignore`;
+    both are `**/corpus` since the review fixes), pins
+    for A5 items 1-15, 18 and 19. 41/41 mutations caught.
+  - A4: the `SECRET_FILES` entry and the API's refusal were built in earlier stages; unchanged.
+  - A6: the rule is kept. This branch is the one that may later reach the owner's deploy branch,
+    only after review and the gates below.
+  - A7 (`f4879a5`): 19 facts (`kb_documents`, `kb_chunks`, `kb_status_events`, `kb_digest` of one
+    `json_build_array` per row over every column, `kb_guards`, `kb_guard_defs`), `format=2`, the
+    loader-container refusal, the TEMP revoke after the load, the not-WITHDRAWN and
+    `hash_checked = false` report. 20/20 mutations caught (golden-copy test deselected); **one of
+    them, "`kb_guards` accepts a disabled trigger", first survived** and was caught only after a
+    pin was added for it. The facts SQL ran on empty PG16 and PG17 test databases.
+  - ADR text (`9f5b3ea`): this build state, verifications, Q10. **Reviewed once by both reviewers
+    (2026-11-09), no blockers**; the findings were fixed in the commits below. **The final round
+    (`8eface8`..`99ace68`) was reviewed by both reviewers on 2026-11-09: no blockers, no
+    should-fix**; its nits (the A7 hand-run steps, the password exposure of a copied loader
+    string, wording) are fixed in the docs-only commit after `99ace68`.
+  - **Production gate (`10f13cf`; owner decision 2026-11-09; A6):** `PRODUCTION_LOAD_GATES_CLOSED = False`
+    in `kb_load.py`; `load` and `approve` exit 24 in production before any read, connection or
+    write; `withdraw` unaffected. The two production hash-rule tests in `test_kb_load_flow.py` now
+    set the literal to `True` for their own run, so they keep testing the hash rules that apply
+    once the gate is lifted.
+  - **Harder gate (`8eface8`; owner decision 2026-11-09, round 3):** `load` and `approve` also
+    refuse when the loader string came from the secrets directory, in any environment
+    (`LoaderSettings.dsn_from_secrets_dir`); the docs now say what the gate does not stop (A8).
+    **Mutants of the round-2 gate (9 + 1):** in round 2, five were in the tree as tests ("gate
+    open", "check removed", "environment ignored", "load only", "approve only") and five were run
+    by hand only ("also outside production", "from an environment variable", "after the
+    connection", "message changed", "withdraw gated"). Since `8eface8` all ten are in the tree,
+    adapted to the new check, plus the round-3 ones: the secrets-directory condition dropped,
+    keyed on the environment again (three forms), the field never set, set from the environment
+    name or from an environment value, an extra condition in the check, the literal reassigned in
+    a function, and `withdraw` gated. The round-3 list was also run by hand on the real sources
+    (9/9 caught).
+  - **A7 seed (`68f0537`):** `tests/hand_run/a7_seed_knowledge.sh` and `.sql` write synthetic
+    knowledge rows as the owner into a `throwaway-*` compose project only, never through
+    `kb_load`; the SQL ran on PG16 and PG17 test databases; 8/8 mutations caught. **In the
+    tree** (`tests/unit/test_a7_seed_script.py`): 3 on the script ("any project", "prod name
+    allowed", "count not checked"). **Run by hand only**: 2 on the script ("bad characters
+    allowed", "no ON_ERROR_STOP") and 3 on the SQL against PG16 ("not-empty check dropped",
+    "withdrawn missing", "label dropped"; the last first survived and the test was tightened).
+  - **S1 (`9452eb3` and this ADR commit; risk-reviewer should-fix):** the first-run order is `up -d --wait db`, the role script,
+    `up -d --wait api` (`docs/first-run-on-the-real-host.md`, "How to run it" above, the compose
+    header); without the role script `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume.
+    The compose header says never to use `--build` or `build` with the `knowledge` profile (the
+    loaders share the api image tag) and to build only from the deploy commit.
+  - **Nits (`d7427e1`; the doc corrections in the ADR and backup-doc commit):** the role script starts with `\set ON_ERROR_STOP on` (the runbook's
+    `-v ON_ERROR_STOP=1` stays; both pinned; re-run live on a throwaway container without the
+    flag: an unclean role stops at the refusal, before `GRANT`); `no_loader` refuses when
+    `docker ps -a` fails; the staging ignore lines are `**/corpus` in both files; **a loader
+    string without `connect_timeout` is now refused in every environment**, as A1 always said (the
+    code accepted it before); `docs/knowledge-loader.md` and `docs/backup-and-restore.md`
+    corrections.
+  - **Still needed before production use:** review of every change by `risk-reviewer` and
+    `security-reviewer` (including the golden-copy round); **the A7 hand run on a throwaway volume**
+    (backup and restore with knowledge rows, role-before-restore order, the "used database" check);
+    the owner gates (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable
+    code point table, per-source licence and `display_permitted` evidence); and
+    `DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env` before any compose command.
 
 ## Not solved
 
-- **The knowledge loader (Amendment 1) is not built or run.** Both reviewers accepted its second,
+- **The knowledge loader (Amendment 1) is built; the build was reviewed once (`9f5b3ea`, no
+  blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
+  `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
+  (A8 "Build state"); the A7 hand run is not done. Production `load` and `approve` refuse in code
+  until the A6 gates are closed (also from the secrets directory in any environment; not a
+  control against an operator with Docker access, A8). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.

@@ -22,7 +22,11 @@ trap 'exit 1' INT TERM HUP
 cp "$dump" "$work/archive.dump"
 cp "$manifest" "$work/manifest"
 
-grep -qx 'format=1' "$work/manifest" || { echo "refusing: the manifest is not format 1" >&2; exit 1; }
+if grep -qx 'format=1' "$work/manifest"; then
+  echo "refusing: the archive is the old format 1, from before the knowledge tables; restore it with the old scripts (docs/backup-and-restore.md)" >&2
+  exit 1
+fi
+grep -qx 'format=2' "$work/manifest" || { echo "refusing: the manifest is not format 2" >&2; exit 1; }
 expected="$(grep '^dump_sha256=' "$work/manifest" | cut -d= -f2-)"
 actual="$(sha256_of "$work/archive.dump")"
 if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
@@ -31,16 +35,17 @@ if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
 fi
 want="$(compared_facts <"$work/manifest")"
 if ! facts_complete "$want"; then
-  echo "refusing: the manifest does not hold all thirteen facts" >&2
+  echo "refusing: the manifest does not hold all nineteen facts" >&2
   exit 1
 fi
 if ! shape_ok "$want"; then
-  echo "refusing: the manifest does not show the three guard triggers, the four tables, no settings and hardening=0" >&2
+  echo "refusing: the manifest does not show the three guard triggers, the nine knowledge guard triggers, the seven tables, no settings and hardening=0" >&2
   exit 1
 fi
 
 db="$(one_container db)"
 single_database
+no_loader kb_load kb_withdraw
 echo "project '$project' (volume ${project}_db-data)" >&2
 
 if [ "$check_only" -eq 1 ]; then
@@ -88,18 +93,27 @@ if [ "$want" != "$got" ]; then
   exit 1
 fi
 
-echo "restored and matched the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided)=' | tr '\n' ' ')" >&2
+echo "restored and matched the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided|kb_documents|kb_status_events)=' | tr '\n' ' ')" >&2
+printf '%s\n' "REVOKE TEMPORARY ON DATABASE divesafe FROM PUBLIC;" |
+  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1 >/dev/null || {
+  echo "restored and matched, but TEMP could not be revoked from PUBLIC. Do not start the api; run db-init and check (docs/backup-and-restore.md)." >&2
+  exit 1
+}
 report="$(printf '%s\n' \
   "BEGIN READ ONLY;" \
   "SET LOCAL search_path = pg_catalog, pg_temp;" \
   "SELECT 'latest assessment created (UTC): ' || COALESCE(to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), 'none') FROM public.assessments;" \
   "SELECT 'runs whose outcome is unknown (marked running in the backup), before the api marks them failed:';" \
   "SELECT id || ' ' || to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM public.pending_runs WHERE state = 'RUNNING' ORDER BY created_at;" \
+  "SELECT 'knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); compare with the withdrawal log and the approval record:';" \
+  "SELECT d.document_id || ' ' || d.version || ' ' || COALESCE((SELECT e.status FROM public.kb_status_events e WHERE e.document_id = d.document_id AND e.version = d.version ORDER BY e.event_order DESC LIMIT 1), 'none') || ' ' || d.manifest_sha256 FROM public.kb_documents d WHERE NOT EXISTS (SELECT 1 FROM public.kb_status_events w WHERE w.document_id = d.document_id AND w.version = d.version AND w.status = 'WITHDRAWN') ORDER BY d.document_id COLLATE \"C\", d.version;" \
+  "SELECT 'approvals with hash_checked = false (the manifest hash was not compared):';" \
+  "SELECT a.document_id || ' ' || a.version || ' ' || to_char(a.recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM public.kb_status_events a WHERE a.status = 'APPROVED' AND NOT a.hash_checked ORDER BY a.event_order;" \
   "COMMIT;" |
   in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1)" || {
-  echo "restored and matched, but the latest-assessment time and the unknown runs could not be read." >&2
+  echo "restored and matched, but the latest-assessment time, the unknown runs or the knowledge versions could not be read." >&2
   echo "Do not start the api. Read them with psql as divesafe_owner first (docs/backup-and-restore.md)." >&2
   exit 1
 }
 printf '%s\n' "$report" | LC_ALL=C tr -cd '[:print:]\n' >&2
-echo "next: reconcile (docs/backup-and-restore.md), then start the api (db-init re-applies the grants)" >&2
+echo "the grants are NOT yet applied. next, with the api stopped: (1) up db-init; (2) re-apply every logged withdrawal listed above as not WITHDRAWN (kb_withdraw); (3) reconcile (docs/backup-and-restore.md); (4) start the api; (5) take a backup" >&2

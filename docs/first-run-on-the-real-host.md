@@ -27,8 +27,14 @@ any secret into a chat, a ticket or a file inside the repository.
 
 ```sh
 cp docker/production.env.example docker/production.env
-# edit docker/production.env: set DIVESAFE_LLM_MODEL and DIVESAFE_EVIDENCE_MAX_AGE_MINUTES
+# edit docker/production.env: set DIVESAFE_LLM_MODEL, DIVESAFE_EVIDENCE_MAX_AGE_MINUTES and
+# DIVESAFE_CORPUS_DIR
 ```
+
+`DIVESAFE_CORPUS_DIR` is needed by **every** compose command on the production file, even `up` and
+`down` (ADR 0024 A3). Set it to an absolute path of a directory outside the repository; it may be
+empty. No knowledge is loaded in this run (production refuses `load` and `approve` until the ADR
+0024 A6 gates are closed).
 
 `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` has no built-in default and no recorded reason yet (ADR 0024,
 condition 4). For this run pick a value and write down that it is a test value; do not copy it into
@@ -57,10 +63,26 @@ have a token, in which case that source is simply missing and the result says so
 
 ## 2. Start the stack
 
+Three steps, in this order. `db-init` refuses with `LOADER_ROLE_MISSING` if the knowledge loader
+role does not exist, and nothing else creates it, so the role script runs between the database
+and the API:
+
 ```sh
+# 1. the database only (on a new volume this creates the owner and app roles)
+docker compose -f docker/docker-compose.production.yml --env-file docker/production.env up -d --wait db
+
+# 2. the loader role (docs/knowledge-loader.md, section 2; the password is read inside the container)
+docker compose -f docker/docker-compose.production.yml --env-file docker/production.env \
+  exec -T -u postgres db sh -c 'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \
+  exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \
+  < docker/db/20-create-loader-role.sql
+
+# 3. the schema job and the API
 docker compose -f docker/docker-compose.production.yml --env-file docker/production.env up -d --build --wait api
 curl -sS http://127.0.0.1:8000/health
 ```
+
+Build only from the commit you deploy. Never use `--build` or `build` with `--profile knowledge`.
 
 Expect `"status":"ok"` and `"storage":"durable"`. If `api` does not become healthy, run
 `docker compose -f docker/docker-compose.production.yml logs api db-init` and stop there. The API

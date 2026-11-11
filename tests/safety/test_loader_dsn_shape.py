@@ -20,6 +20,7 @@ pytestmark = pytest.mark.safety
 
 BASE = "postgresql://loader:Zq9-never-echoed@db.example/divesafe"
 SSL = "sslmode=require"
+CT = "connect_timeout=5"  # required in every environment (ADR 0024 A1)
 
 
 def dev(url: str) -> dict[str, str]:
@@ -50,6 +51,19 @@ REFUSED_TIMEOUT_URLS = [
     "mysql://loader:Zq9-never-echoed@db/divesafe",
     "http://loader:Zq9-never-echoed@db/divesafe",
     "",
+    # A missing connect_timeout is refused (ADR 0024 A1; review nit 2026-11-09).
+    BASE,
+    f"{BASE}?{SSL}",
+    "postgres://u:p@h/d",
+    f"{BASE}?",
+    f"{BASE}?connect_timeoutx=5",
+    f"{BASE}?xconnect_timeout=5",
+    # Refused ONLY by the scheme check: each has a valid `connect_timeout=5` query, so without
+    # that check all three would pass (checked by removing it, 2026-11-09). A string with no query
+    # is refused by the timeout rule as well.
+    "mysql://loader:Zq9-never-echoed@db/divesafe?connect_timeout=5",
+    "http://loader:Zq9-never-echoed@db/divesafe?connect_timeout=5",
+    "host=db user=loader password=Zq9-never-echoed?connect_timeout=5",  # keyword/value form
 ]
 
 
@@ -77,9 +91,21 @@ def test_a_timeout_of_one_to_five_is_accepted(value: str) -> None:
     assert load_loader_settings(dev(f"{BASE}?connect_timeout={value}")).loader_database_url
 
 
-@pytest.mark.parametrize("url", [BASE, f"{BASE}?{SSL}", "postgres://u:p@h/d"])
-def test_an_absent_timeout_is_accepted(url: str) -> None:
-    loader_settings._check_uri_and_timeout(url)
+@pytest.mark.parametrize("url", [BASE, f"{BASE}?{SSL}", "postgres://u:p@h/d", f"{BASE}?"])
+def test_an_absent_timeout_is_refused_in_every_environment(url: str) -> None:
+    """ADR 0024 A1: a loader string without connect_timeout is refused (it was accepted before the
+    review of 9f5b3ea; the ADR always said refused)."""
+    with pytest.raises(LoaderConfigError) as caught:
+        loader_settings._check_uri_and_timeout(url)
+    assert "Zq9" not in str(caught.value) and "db.example" not in str(caught.value)
+    for name in ("development", "test"):
+        with pytest.raises(LoaderConfigError):
+            load_loader_settings(
+                {"DIVESAFE_ENVIRONMENT": name, "DIVESAFE_LOADER_DATABASE_URL": url}
+            )
+    # the same string with the timeout added passes the check
+    joined = url + CT if url.endswith("?") else url + ("&" if "?" in url else "?") + CT
+    loader_settings._check_uri_and_timeout(joined)
 
 
 def _checker(old: str, new: str) -> Callable[[str], None]:
@@ -113,6 +139,16 @@ def test_the_unmutated_check_refuses_every_bad_string() -> None:
         ),
         ("keyword form allowed", "if not dsn.startswith(_URI_SCHEMES):", "if False:"),
         ("scheme unchecked", "if not dsn.startswith(_URI_SCHEMES):", "if not dsn:"),
+        (
+            "absent timeout accepted",
+            '    if "connect_timeout" not in seen:\n        raise refused\n',
+            "",
+        ),
+        (
+            "empty query accepted",
+            "    if not query:\n        raise refused  # no connect_timeout\n",
+            "    if not query:\n        return\n",
+        ),
     ],
 )
 def test_mutation_a_weaker_timeout_check_is_caught(label: str, old: str, new: str) -> None:
@@ -169,24 +205,25 @@ def test_mutation_a_connect_that_drops_the_keyword_is_caught(
 
 # --- the production shape ---
 
-GOOD_PROD = f"{BASE}?{SSL}"
+GOOD_PROD = f"{BASE}?{SSL}&{CT}"
 BAD_SHAPES = [
-    f"postgresql://db.example/divesafe?{SSL}",  # no user, no password
-    f"postgresql://loader@db.example/divesafe?{SSL}",  # no password
-    f"postgresql://:Zq9-never-echoed@db.example/divesafe?{SSL}",  # no user
-    f"postgresql://loader:@db.example/divesafe?{SSL}",  # empty password
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=/var/run/postgresql&{SSL}",
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=db.example,/var/run&{SSL}",
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=/tmp,db.example&{SSL}",
-    "postgresql://loader:Zq9-never-echoed@db.example/divesafe",  # sslmode defaults to prefer
-    "postgresql://loader:Zq9-never-echoed@db.example/divesafe?sslmode=disable",
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?{SSL}",  # no host at all
-    f"postgresql://u:p@/db?{SSL}",
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=db.example,&{SSL}",  # empty last entry
-    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=,db.example&{SSL}",  # empty first entry
-    f"{BASE}?{SSL}&service=other",
-    f"{BASE}?{SSL}&hostaddr=192.0.2.1",
-    f"{BASE}?{SSL}&passfile=/tmp/pgpass",
+    f"postgresql://db.example/divesafe?{SSL}&{CT}",  # no user, no password
+    f"postgresql://loader@db.example/divesafe?{SSL}&{CT}",  # no password
+    f"postgresql://:Zq9-never-echoed@db.example/divesafe?{SSL}&{CT}",  # no user
+    f"postgresql://loader:@db.example/divesafe?{SSL}&{CT}",  # empty password
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=/var/run/postgresql&{SSL}&{CT}",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=db.example,/var/run&{SSL}&{CT}",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=/tmp,db.example&{SSL}&{CT}",
+    f"postgresql://loader:Zq9-never-echoed@db.example/divesafe?{CT}",  # sslmode defaults to prefer
+    f"postgresql://loader:Zq9-never-echoed@db.example/divesafe?sslmode=disable&{CT}",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?{SSL}&{CT}",  # no host at all
+    f"postgresql://u:p@/db?{SSL}&{CT}",
+    # an empty last entry, then an empty first entry
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=db.example,&{SSL}&{CT}",
+    f"postgresql://loader:Zq9-never-echoed@/divesafe?host=,db.example&{SSL}&{CT}",
+    f"{BASE}?{SSL}&{CT}&service=other",
+    f"{BASE}?{SSL}&{CT}&hostaddr=192.0.2.1",
+    f"{BASE}?{SSL}&{CT}&passfile=/tmp/pgpass",
 ]
 
 
@@ -309,12 +346,12 @@ def test_mutation_no_shape_check_lets_a_signed_or_padded_digit_string_through() 
 def test_production_refuses_each_parameter_source_key_and_names_none_of_the_value(
     key: str,
 ) -> None:
-    url = f"{BASE}?{SSL}&{key}=Zq9-secret-value"
+    url = f"{BASE}?{SSL}&{CT}&{key}=Zq9-secret-value"
     with pytest.raises(LoaderConfigError) as caught:
         prod_check(url)
     text = str(caught.value)
     assert "Zq9" not in text and "db.example" not in text
-    assert prod_check_ok(f"{BASE}?{SSL}")
+    assert prod_check_ok(f"{BASE}?{SSL}&{CT}")
 
 
 def prod_check_ok(url: str) -> bool:
@@ -340,5 +377,5 @@ def test_the_refused_keys_are_exactly_these_three() -> None:
 
 @pytest.mark.parametrize("key", ["service", "hostaddr", "passfile"])
 def test_the_keys_are_refused_in_production_only(key: str) -> None:
-    url = f"{BASE}?{key}=x"
+    url = f"{BASE}?{CT}&{key}=x"
     assert load_loader_settings(dev(url)).loader_database_url.get_secret_value() == url

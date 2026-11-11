@@ -499,6 +499,8 @@ def test_mutation_accepting_a_mismatched_manifest_hash_is_caught(
 def test_missing_hash_or_flag_in_production_is_refused_with_15(
     monkeypatch: pytest.MonkeyPatch, env: Env
 ) -> None:
+    # The hash rule once the A6 gates are closed (the gate itself: test_kb_load_production_gate).
+    monkeypatch.setattr(kb_load, "PRODUCTION_LOAD_GATES_CLOSED", True)
     env.corpus()
     env.environment = "production"
     called: list[str] = []
@@ -940,6 +942,8 @@ def test_approve_in_development_without_a_hash_records_an_unchecked_approval(
 def test_approve_in_production_without_a_hash_is_refused_before_connecting(
     monkeypatch: pytest.MonkeyPatch, env: Env
 ) -> None:
+    # The hash rule once the A6 gates are closed (the gate itself: test_kb_load_production_gate).
+    monkeypatch.setattr(kb_load, "PRODUCTION_LOAD_GATES_CLOSED", True)
     env.environment = "production"
     called: list[str] = []
     monkeypatch.setattr(kb_common, "connect", lambda dsn: called.append(dsn))

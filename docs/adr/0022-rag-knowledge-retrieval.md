@@ -936,12 +936,15 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       repository's `.gitignore` entry **and a mandatory `.dockerignore` line** for the corpus
       staging location chosen at code time (`up -d --build` would otherwise bake licensed text into
       the image); a test checks both entries. A development run on the host may still check the path. See ADR 0024
-      Amendment 1, A3.
+      Amendment 1, A3. **Chosen at code time (2026-11-09, ADR 0024 A3 build `59381de`):** the
+      staging location is `corpus/` at the repository root, ignored by `/corpus/` in `.gitignore`
+      and `corpus` in `.dockerignore`, both pinned by `tests/safety/test_production_compose.py`;
+      the mount target in the container is `/corpus`.
     - `kb_load`, the connector and the API text lookup never log chunk text, titles or paths.
     - Documents are never downloaded by the application. No scraping.
     - **Database dumps and backups contain the licensed text.** `docs/backup-and-restore.md` must
       say so (follow-up; that file is not edited by this ADR), and a licence revoked later cannot
-      be honoured in an existing dump.
+      be honoured in an existing dump. **Done** with ADR 0024 A7 (`f4879a5`, 2026-11-09).
 
 ### Failure, absence and the human
 
@@ -1618,7 +1621,9 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   owner and the dive professional choose and keep it).
 - **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
 - **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
-  lock, self-check after commit, exit-status precedence); it gates shipping.
+  lock, self-check after commit, exit-status precedence); it gates shipping. Still open after the
+  ADR 0024 A1 to A7 build (2026-11-09): the build implements the changed decision as written and
+  does not settle this.
 - **The decision 13 default-ignorable code point table** (owner decision, 2026-10-23): a gate for
   the first production load. Slice 2 uses a `unicodedata`-based approximation until it is built.
 - **Gates for the first production load from the slice 2 review (2026-10-23; ADR 0024 A6 (7) to
@@ -1792,7 +1797,9 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   commit messages, not in a history section. Recording the basis and host as typed
   record fields (`egress_basis`, `model_host`) and using the basis in the filter belong to this
   feature and are done (2026-11-10). **ADR 0024 must be amended** (decision 11, "Required ADR 0024
-  amendment") before the feature ships; that is not written here.
+  amendment") before the feature ships; that is not written here. (Amendment 1 is written, and its
+  items A1 to A7 are built and reviewed on branch `deploy-a1-a7`, merged with this work on
+  2026-11-11; see its A8 "Build state".)
 - A name can fit the document id grammar; only the attestation screens for names (decision 6).
 - The two 12-month limits (decisions 3 and 7) are owner policy limits; the other numeric bounds are
   parsing limits that reviewers may change.
