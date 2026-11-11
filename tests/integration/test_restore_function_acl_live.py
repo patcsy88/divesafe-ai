@@ -21,7 +21,7 @@ import subprocess
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import psycopg
 import pytest
@@ -32,7 +32,7 @@ from divesafe.services.postgres import install_schema
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(DSN is None, reason="DIVESAFE_TEST_DATABASE_URL is not set"),
+    pytest.mark.skipif(DSN is None, reason="DIVESAFE_TEST_DATABASE_URL not set"),
 ]
 
 RESTORE = Path(__file__).parents[2] / "docker" / "restore.sh"
@@ -52,8 +52,22 @@ def _dsn_for(database: str) -> str:
     return psycopg.conninfo.make_conninfo(**parts)  # type: ignore[arg-type]
 
 
-_LOOPBACK = ("", "127.0.0.1", "::1", "localhost")
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+_LOOPBACK_BINDINGS = ("127.0.0.1", "::1")
+_ALL_INTERFACES = ("", "0.0.0.0", "::")
 _PROTECTED = "divesafe-prod"
+# CI greps the pytest log for this prefix (.github/workflows/ci.yml): there the test must run.
+SKIP_PREFIX = "restore round trip cannot run:"
+# Only the name, the compose project label and the port bindings: no container env is read.
+_INSPECT_FORMAT = (
+    '{"name":{{json .Name}},'
+    '"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
+    '"ports":{{json .NetworkSettings.Ports}}}'
+)
+
+
+def _skip(reason: str) -> NoReturn:
+    pytest.skip(f"{SKIP_PREFIX} {reason}")
 
 
 def _docker(*args: str) -> str:
@@ -62,19 +76,23 @@ def _docker(*args: str) -> str:
     ).stdout
 
 
-def _container_for_port(port: str, inspected: list[dict[str, Any]]) -> list[str]:
-    """Names of the containers whose HOST side of a port binding is `port` on loopback (or all
-    interfaces). A container named or labelled as a `divesafe-prod` compose project never counts."""
+def _container_for_port(host: str, port: str, inspected: list[dict[str, Any]]) -> list[str]:
+    """Names of the containers whose HOST side of a port binding is `port`, bound on loopback, or
+    on all interfaces (CI's service binds 0.0.0.0 and ::). Nothing unless the DSN host is loopback,
+    so a binding seen here is the server the DSN reaches. A container named or labelled as a
+    `divesafe-prod` compose project never counts."""
+    if host not in LOOPBACK_HOSTS:
+        return []
     found: list[str] = []
     for c in inspected:
-        name = str(c.get("Name", "")).lstrip("/")
-        labels = (c.get("Config") or {}).get("Labels") or {}
-        project = str(labels.get("com.docker.compose.project", ""))
+        name = str(c.get("name") or "").lstrip("/")
+        project = str(c.get("project") or "")
         if name.startswith(_PROTECTED) or project.startswith(_PROTECTED):
             continue
-        ports = (c.get("NetworkSettings") or {}).get("Ports") or {}
+        ports = c.get("ports") or {}
         if any(
-            str(b.get("HostPort", "")) == port and str(b.get("HostIp", "")) in _LOOPBACK
+            str(b.get("HostPort", "")) == port
+            and str(b.get("HostIp", "")) in _LOOPBACK_BINDINGS + _ALL_INTERFACES
             for bindings in ports.values()
             for b in (bindings or [])
         ):
@@ -84,23 +102,28 @@ def _container_for_port(port: str, inspected: list[dict[str, Any]]) -> list[str]
 
 def _container() -> str:
     """The test database container, by its host port binding (`docker inspect`), never by
-    `docker ps --filter publish=`, which can match the container-side port. Skips unless exactly
-    one container qualifies."""
+    `docker ps --filter publish=`, which can match the container-side port. Skips (with
+    SKIP_PREFIX, which fails CI) unless the DSN host is loopback and exactly one container
+    qualifies."""
     assert DSN is not None
-    port = str(psycopg.conninfo.conninfo_to_dict(DSN).get("port", "5432"))
+    parts = psycopg.conninfo.conninfo_to_dict(DSN)
+    host, port = str(parts.get("host") or ""), str(parts.get("port") or "5432")
+    if host not in LOOPBACK_HOSTS:
+        _skip("the DSN host is not loopback")
     if shutil.which("docker") is None:
-        pytest.skip("docker is not available to run pg_dump / pg_restore")
+        _skip("docker is not available to run pg_dump / pg_restore")
     try:
         ids = _docker("ps", "-q").split()
-        inspected = json.loads(_docker("inspect", *ids)) if ids else []
+        lines = _docker("inspect", "--format", _INSPECT_FORMAT, *ids).splitlines() if ids else []
+        inspected = [json.loads(line) for line in lines if line.strip()]
     except (subprocess.SubprocessError, OSError, ValueError):
-        pytest.skip("could not list the running containers")
-    return _only(_container_for_port(port, inspected))
+        _skip("could not list the running containers")
+    return _only(_container_for_port(host, port, inspected))
 
 
 def _only(found: list[str]) -> str:
     if len(found) != 1:
-        pytest.skip("not exactly one non-production container binds the DSN's port on the host")
+        _skip("not exactly one non-production container binds the DSN's port on the host")
     return found[0]
 
 
@@ -217,26 +240,62 @@ def test_a_no_acl_restore_opens_the_guards_and_the_restore_sql_closes_them(
 
 
 def test_the_container_is_chosen_by_host_port_and_never_a_production_one() -> None:
-    """Offline: the selection rule alone, on inspect-shaped data."""
+    """Offline: the selection rule alone, on data shaped like `_INSPECT_FORMAT`'s output."""
 
-    def c(name: str, host_port: str, ip: str = "127.0.0.1", project: str = "") -> dict[str, Any]:
+    def c(name: str, port: str, ip: str = "127.0.0.1", project: str = "") -> dict[str, Any]:
         return {
-            "Name": f"/{name}",
-            "Config": {"Labels": {"com.docker.compose.project": project} if project else {}},
-            "NetworkSettings": {
-                "Ports": {"5432/tcp": [{"HostIp": ip, "HostPort": host_port}], "9/tcp": None}
-            },
+            "name": f"/{name}",
+            "project": project,
+            "ports": {"5432/tcp": [{"HostIp": ip, "HostPort": port}], "9/tcp": None},
         }
 
-    assert _container_for_port("55432", [c("pg16", "55432"), c("pg17", "55433")]) == ["pg16"]
+    lo = "127.0.0.1"
+    assert _container_for_port(lo, "55432", [c("pg16", "55432"), c("pg17", "55433")]) == ["pg16"]
+    assert _container_for_port("::1", "55432", [c("pg16", "55432", ip="::1")]) == ["pg16"]
     # The container-side port 5432 is not a host binding.
-    assert _container_for_port("5432", [c("pg16", "55432")]) == []
-    assert _container_for_port("55432", [c("pg16", "55432", ip="0.0.0.0")]) == []
-    assert _container_for_port("55432", [c("pg16", "55432", ip="")]) == ["pg16"]
-    assert _container_for_port("55432", [c("divesafe-prod-db-1", "55432")]) == []
-    assert _container_for_port("55432", [c("db-1", "55432", project="divesafe-prod")]) == []
-    assert _container_for_port("55432", [c("a", "55432"), c("b", "55432")]) == ["a", "b"]
+    assert _container_for_port(lo, "5432", [c("pg16", "55432")]) == []
+    # Another server on host port 5432 is not the one the DSN's 55432 reaches.
+    assert _container_for_port(lo, "55432", [c("other", "5432"), c("pg16", "55432")]) == ["pg16"]
+    # CI: all interfaces, IPv4 and IPv6, with a loopback DSN host.
+    for ip in ("0.0.0.0", "::", ""):
+        assert _container_for_port("localhost", "5432", [c("svc", "5432", ip=ip)]) == ["svc"]
+        assert _container_for_port(lo, "5432", [c("svc", "5432", ip=ip)]) == ["svc"]
+    both = {
+        "name": "/svc",
+        "project": None,
+        "ports": {
+            "5432/tcp": [
+                {"HostIp": "0.0.0.0", "HostPort": "5432"},
+                {"HostIp": "::", "HostPort": "5432"},
+            ]
+        },
+    }
+    assert _container_for_port("localhost", "5432", [both]) == ["svc"]
+    # A non-loopback DSN host: nothing, whatever the binding.
+    for host in ("db.example", "10.0.0.5", "", "/var/run/postgresql"):
+        for ip in ("0.0.0.0", "::", "", "127.0.0.1"):
+            assert _container_for_port(host, "5432", [c("svc", "5432", ip=ip)]) == []
+    # A binding on another address is not the loopback server.
+    assert _container_for_port(lo, "55432", [c("pg16", "55432", ip="192.168.1.9")]) == []
+    assert _container_for_port(lo, "55432", [c("divesafe-prod-db-1", "55432")]) == []
+    assert _container_for_port(lo, "55432", [c("db-1", "55432", project="divesafe-prod")]) == []
+    assert _container_for_port(lo, "55432", [c("a", "55432"), c("b", "55432")]) == ["a", "b"]
     assert _only(["pg16"]) == "pg16"
     for found in ([], ["a", "b"]):
-        with pytest.raises(pytest.skip.Exception):
+        with pytest.raises(pytest.skip.Exception, match=re.escape(SKIP_PREFIX)):
             _only(found)
+
+
+def test_ci_fails_when_this_round_trip_is_skipped() -> None:
+    """Review K1: a skip here must not pass unnoticed in CI, and the URL guard stays as it was."""
+    ci = (Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml").read_text()
+    assert "run: \"! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log\"" in ci
+    assert f"run: \"! grep -q '{SKIP_PREFIX}' pytest.log\"" in ci
+    assert "run: pytest -rs | tee pytest.log" in ci
+    assert "DIVESAFE_TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:" in ci
+    assert ".Env" not in _INSPECT_FORMAT
+    assert set(re.findall(r"\{\{json ([^}]*)\}\}", _INSPECT_FORMAT)) == {
+        ".Name",
+        '(index .Config.Labels "com.docker.compose.project")',
+        ".NetworkSettings.Ports",
+    }

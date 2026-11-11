@@ -1023,14 +1023,58 @@ def test_check_also_requires_the_guard_functions_to_be_closed_to_others(h: Harne
     assert "guard_acl_ok" in branch and "REVOKE" not in branch
 
 
+def _report_sql(code: str) -> str:
+    """The statements of restore.sh's closing report, one per line, as psql receives them."""
+    start = code.index("report=\"$(printf '%s\\n' \\\n")
+    body = code[start : code.index("  in_db_owner psql", start)].splitlines()[1:]
+    out = []
+    for line in body:
+        line = line.strip()
+        assert line.startswith('"') and line.endswith(('" \\', '" |')), line
+        out.append(line[1 : line.rindex('"')].replace('\\"', '"'))
+    return "\n".join(out)
+
+
 def test_the_documented_recovery_uses_the_scripts_own_revokes_and_read_back() -> None:
     """Review S1 (b): the manual recovery in docs/backup-and-restore.md runs exactly the five
-    revokes and the read-back query of restore.sh, and the A7 hand run checks with that query."""
+    revokes, in one transaction, and the read-back query of restore.sh, and the A7 hand run checks
+    with that query."""
     code = _code("restore.sh")
     query = re.search(r'"(SELECT count\(\*\) FILTER .*?;)"', code)
     assert query is not None
     doc = (ROOT / "docs" / "backup-and-restore.md").read_text()
     assert doc.count(query.group(1)) == 2
-    for fn in KB_GUARD_FUNCTIONS:
-        assert f"\nREVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;\n" in doc, fn
+    revokes = "".join(
+        f"REVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;\n" for fn in KB_GUARD_FUNCTIONS
+    )
+    assert doc.count(f"```sql\nBEGIN;\n{revokes}COMMIT;\n```\n") == 1
     assert "proacl IS NULL" not in doc
+
+
+def test_the_documented_recovery_gives_the_scripts_own_closing_report() -> None:
+    """Review S2 (2026-11-11): every stop that needs the manual recovery comes before the closing
+    report, so the docs give its SQL, equal to the script's, read-only, with the knowledge
+    queries; and step 9 then re-applies every logged withdrawal (kb_withdraw is idempotent)."""
+    report = _report_sql(_code("restore.sh"))
+    assert report.startswith("BEGIN READ ONLY;\n") and report.endswith("\nCOMMIT;")
+    assert "status = 'WITHDRAWN'" in report and "d.manifest_sha256" in report
+    assert "status = 'APPROVED' AND NOT a.hash_checked" in report
+    doc = (ROOT / "docs" / "backup-and-restore.md").read_text()
+    assert doc.count(f"```sql\n{report}\n```\n") == 1
+    recovery = doc[doc.index("**Recovery when the function revoke") : doc.index(report)]
+    after = doc[doc.index(report) : doc.index("The append-only guard is never switched off")]
+    assert "BEGIN;" in recovery and "re-apply every logged withdrawal" in after
+    assert "KB001" in after and "exit 16" in after and "nothing is written" in after
+
+
+def test_kb_withdraw_turns_only_the_already_withdrawn_code_into_exit_16() -> None:
+    """What the documented re-apply-everything step relies on."""
+    from divesafe.services import kb_withdraw
+
+    assert kb_withdraw.SQLSTATE_ALREADY_WITHDRAWN == "KB001"
+    assert kb_withdraw.ALREADY_WITHDRAWN.status == 16
+    migration = (ROOT / "src" / "divesafe" / "services" / "migrations.py").read_text()
+    assert (
+        "IF previous = 'WITHDRAWN' AND NEW.status = 'WITHDRAWN' THEN\n"
+        "        RAISE EXCEPTION 'this version is already withdrawn' USING ERRCODE = 'KB001';"
+    ) in migration

@@ -51,6 +51,8 @@ jobs:
         run: pytest -rs | tee pytest.log
       - name: Fail if the PostgreSQL tests were skipped
         run: "! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log"
+      - name: Fail if the restore round-trip test (pg_dump / pg_restore in the service) was skipped
+        run: "! grep -q 'restore round trip cannot run:' pytest.log"
       - name: Known vulnerabilities in Python dependencies (pip-audit, CI only)
         run: |
           python -m venv /tmp/audit

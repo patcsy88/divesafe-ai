@@ -298,8 +298,35 @@ owner and `proacl`; a missing function or another grantee is not something this 
 SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');
 ```
 
-Then `docker/restore.sh --check <dump>` must say the database matches, and only then continue with
-`db-init` (step 8).
+Then `docker/restore.sh --check <dump>` must say the database matches.
+
+**The closing report did not run** (every stop that needs this recovery comes before it), so step 9
+has no list of versions that are not WITHDRAWN. Run the report yourself, read-only as
+`divesafe_owner`. These are the statements `restore.sh` sends, in its order: the latest assessment
+time and the runs whose outcome is unknown (for the reconciliation below), the knowledge versions
+not WITHDRAWN, and the approvals with `hash_checked = false`:
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL search_path = pg_catalog, pg_temp;
+SELECT 'latest assessment created (UTC): ' || COALESCE(to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'none') FROM public.assessments;
+SELECT 'runs whose outcome is unknown (marked running in the backup), before the api marks them failed:';
+SELECT id || ' ' || to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM public.pending_runs WHERE state = 'RUNNING' ORDER BY created_at;
+SELECT 'knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); compare with the withdrawal log and the approval record:';
+SELECT d.document_id || ' ' || d.version || ' ' || COALESCE((SELECT e.status FROM public.kb_status_events e WHERE e.document_id = d.document_id AND e.version = d.version ORDER BY e.event_order DESC LIMIT 1), 'none') || ' ' || d.manifest_sha256 FROM public.kb_documents d WHERE NOT EXISTS (SELECT 1 FROM public.kb_status_events w WHERE w.document_id = d.document_id AND w.version = d.version AND w.status = 'WITHDRAWN') ORDER BY d.document_id COLLATE "C", d.version;
+SELECT 'approvals with hash_checked = false (the manifest hash was not compared):';
+SELECT a.document_id || ' ' || a.version || ' ' || to_char(a.recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM public.kb_status_events a WHERE a.status = 'APPROVED' AND NOT a.hash_checked ORDER BY a.event_order;
+COMMIT;
+```
+
+Then continue with `db-init` (step 8). In step 9, **re-apply every logged withdrawal** with
+`kb_withdraw`, not only those this report lists: without the script's own report there is nothing
+else to compare with, and a repeat is safe. A version that is already WITHDRAWN is refused by the
+status-event trigger with its own SQLSTATE (`KB001`, migration 4), and `kb_withdraw` turns exactly
+that code into exit 16 "already withdrawn" with the existing `recorded_at`; the refused insert is
+rolled back, so nothing is written (`src/divesafe/services/kb_withdraw.py`, `_send_insert` and
+`_withdraw_on`; tested in `tests/integration/test_kb_withdraw_live.py`, where repeated withdrawals
+leave exactly one WITHDRAWN event). Exit 15 is the same refusal when the time could not be read.
 
 The append-only guard is never switched off: the data is loaded first and the triggers are
 created after it, as part of a normal restore. **That also means a restore is the one way decided
@@ -535,7 +562,8 @@ in the production backup directory, and delete them with it.
   cannot run SQL; the fact queries were run once against empty PostgreSQL 16 and 17 test
   databases. **Required before the first production load.**
 - The read-only post-restore check (documents, versions, manifest hashes and latest status) is
-  the restore's closing report; there is no separate command to run it again later.
+  the restore's closing report; there is no separate command to run it again later (its SQL is
+  given under the recovery above, to run by hand).
 
 - A schedule that actually runs the daily backup (the frequency is decided: daily), a failure
   alert, a retention period, an off-machine copy and encryption (operator decisions).
