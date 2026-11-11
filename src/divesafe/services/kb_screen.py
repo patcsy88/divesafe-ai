@@ -2,8 +2,9 @@
 booleans and never carry or echo the text they screened.
 
 These are screens, not controls (decision 9): paraphrase and splitting across chunks get past the id
-screen. Where the ADR names no table, Python's `unicodedata` general categories are used and the
-gaps are listed in the loader report.
+screen. Default-ignorable code points are refused by an explicit Unicode 16.0.0 table (decision 13);
+elsewhere Python's `unicodedata` general categories are used and the gaps are listed in the loader
+report.
 """
 
 from __future__ import annotations
@@ -68,12 +69,43 @@ _LATIN_NAME_PREFIXES = ("LATIN SMALL LETTER ", "LATIN CAPITAL LETTER ")
 REFUSED_NAME_FRAGMENTS: tuple[str, ...] = ("SMALL CAPITAL", "LIGATURE", "MODIFIER")
 
 
+# Decision 13's default-ignorable table (owner decision 2026-11-12): Unicode 16.0.0
+# DerivedCoreProperties.txt, Default_Ignorable_Code_Point, 4174 code points, inclusive ranges.
+# Refused on their own, whatever the rules below say. Pinned to the official file by a safety test.
+DEFAULT_IGNORABLE_RANGES: tuple[tuple[int, int], ...] = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def default_ignorable(ch: str) -> bool:
+    code = ord(ch)
+    return any(low <= code <= high for low, high in DEFAULT_IGNORABLE_RANGES)
+
+
 def _char_allowed(ch: str, newlines: bool) -> bool:
     if ch == "\n":
         return newlines
     if ch == " " or ch in _ASCII_LETTERS_AND_DIGITS or ch in ALLOWED_PUNCTUATION:
         return True
     if ord(ch) < 128:  # any other ASCII character, controls included
+        return False
+    if default_ignorable(ch):
         return False
     if not unicodedata.category(ch).startswith("L"):
         return False  # marks, format, private use, unassigned, digits, P*, S*, Z* and the rest
