@@ -28,7 +28,8 @@ NO_HOST = (
     "egress cannot be recorded (ADR 0022 Known gap 12)"
 )
 NO_KNOWLEDGE = (
-    "refusing to start in production without the knowledge connector "
+    "refusing to start in production without the knowledge connector, which needs "
+    "DIVESAFE_DATABASE_URL "
     "(ADR 0022, owner decision 2026-11-12)"
 )
 REMOTE_URL = "https://llm.example/v1"

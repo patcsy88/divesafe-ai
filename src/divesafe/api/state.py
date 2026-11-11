@@ -345,7 +345,8 @@ def build_default_state(settings: Settings) -> AppState:
     # knowledge connector, whatever else refuses a missing database.
     if settings.environment == "production" and knowledge_connector is None:
         raise RuntimeError(
-            "refusing to start in production without the knowledge connector "
+            "refusing to start in production without the knowledge connector, which needs "
+            "DIVESAFE_DATABASE_URL "
             "(ADR 0022, owner decision 2026-11-12)"
         )
     return AppState(
