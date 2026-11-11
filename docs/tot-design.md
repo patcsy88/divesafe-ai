@@ -14,14 +14,17 @@ visible to the human. It is a structured comparison tool, **not** a safety deter
 - **Fixed depth:** one expansion level per scenario (evidence -> risk factors -> summary).
   No recursive search, no open-ended self-reflection loops.
 - **Fixed budget:** one structured LLM call per scenario, validated against the `Scenario`
-  schema. Failure to validate drops that scenario and is recorded.
+  schema. Failure to validate drops that scenario and is recorded. The prompt's length limits are
+  deliberately stricter than the schema's (ADR 0007), so a reply that follows the prompt always
+  validates; an over-long reply is refused, never trimmed.
 
 ## Inputs and outputs
 
 Input: validated `EvidenceItem`s, forecast uncertainty and data freshness, and agent
 findings. Output per scenario (`divesafe.domain.Scenario`):
 
-- `summary` (short), `evidence_ids`, `risk_factors`, `conflicting_signals`, `confidence`.
+- `summary` (short), `evidence_ids`, `risk_factors`, `conflicting_signals`, `confidence`. The code (never the model) also sets
+  `flagged_signals`, the positions of lines its wording screen flagged (ADR 0025).
 
 Only these concise summaries and references are stored or shown. The model's private
 reasoning trace is not requested, stored or exposed.
@@ -49,6 +52,14 @@ Implemented in `divesafe.agents.tot`: three scenarios, one level, one validated 
 assigned by code; an invalid scenario is dropped and reported; stored fields are the concise
 `Scenario` only. The "scenario C is more severe than the rules" guardrail needs no code: scenarios
 have no severity and only feed the risk agent, whose proposal `reconcile` can only tighten.
+
+Warning applicability (prompt `2026-10-30.1`): whenever a marine warning item is present, the
+scenario, risk and cross-examination prompts carry trusted wording, outside the untrusted block,
+that a human must read the warning and that no scenario, the favourable one included, may
+conclude a warning applies or does not apply. The deteriorating branch may still describe what
+would follow if a human finds a warning applies, as a condition to check. Added after an ADR 0025 item 6 live run in which the favourable scenario did
+so. Tested in `tests/safety/test_warning_applicability_prompt.py`. Nothing checks that a reply
+obeys; `WarningNeedsHumanReadingRule` and `reconcile` protect the outcome regardless.
 
 ## Guardrails
 

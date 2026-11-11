@@ -90,6 +90,34 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 - Failed or rejected sources never abort the assessment. They are recorded in
   `AssessmentRecord.evidence_issues` and add an `evidence.connector_issues` rule result that
   forces at least `INSUFFICIENT EVIDENCE`, even for categories that are not required.
+- **Evidence id conflicts (owner decision, 2026-10-25).** `evidence.duplicate_ids` can now fire only
+  for direct engine callers. In the pipeline, when two connectors return different items under one
+  id, every item with that id is dropped before the rules run and an `evidence.conflict` issue is
+  recorded, which then yields `evidence.connector_issues`. **A conflict can hide a more severe
+  result:** a dropped item that would have crossed a signed-off limit, or a marine warning, never
+  reaches the rules, so the result is `INSUFFICIENT EVIDENCE` instead of `NO-GO`. This is latent
+  while the repository ships no validated ruleset. A human can override `INSUFFICIENT EVIDENCE`, so
+  the dropped items are kept in the audit record as **withheld evidence**: not cited, not
+  evaluated, and not passed to the engine, the agents or the prompts. They are shown, clearly
+  labelled, to the human. The conflict issue names the category and says the withheld evidence was
+  not in the main result (the variant search reads them only to add severity). A source whose only items were dropped is left out of `data_versions`, so the
+  record does not show that source's version; the withheld items keep their own `source_version`.
+  **Built (ADR 0026, 2026-11-05): the most severe variant decides.** The main run still excludes
+  the conflicting items, but the deterministic engine also runs once for every combination of one
+  variant per conflicting id (no model, no Tree-of-Thought) and, when the worst combination is more
+  severe than the main run, adds one `evidence.conflict_variant` rule result (the category and the
+  variant number, never an id or content; no evidence ids). A hidden NO-GO therefore stays NO-GO.
+  Variants are never cited, never reach an agent or a prompt, and can only add severity. Capacity
+  bounds (not safety limits): at most 4 conflicting ids, 3 variants each, 64 combinations; beyond
+  them nothing is guessed and `evidence.conflict_unbounded` (INSUFFICIENT EVIDENCE) is added. A
+  source can still force NO-GO by sending an invented dangerous variant (the safe direction; the
+  human sees the withheld items and the rule result, and a less severe human outcome needs the `overrider` role (ADR 0026)).
+  **Known gaps (evidence conflicts):** the record has no field for the worst combination (the rationale names the category and variant number, which two conflicting ids of one category cannot tell apart); the withheld items are shown to the human; a conflict
+  across different ids is not a conflict; the combination cap can leave a large conflict at
+  INSUFFICIENT EVIDENCE; and the record validator checks shape only (an `evidence.conflict:` issue exists and each withheld id is on at
+  least two different items). It does not check that the items match the issue's categories or
+  connectors, and it sets no count limit on withheld items. "Withheld" has three meanings in this
+  project; see the terms block in [architecture.md](architecture.md).
 - `confidence` is `None` (not computed) until a risk model exists; it is never defaulted.
 - Every result is `PENDING_HUMAN`. `decide()` derives `is_override` from the decision, requires a
   rationale for overrides, refuses to replace a recorded decision, and returns a new revalidated
@@ -103,7 +131,7 @@ actual conditions require a human decision. A record without a `HumanDecision` h
 
 - **Authentication (interim):** the API takes the actor from an API key (or, in development
   only, a header) and never from the request body ([ADR 0006](adr/0006-api-auth-and-repository.md)).
-  Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013).
+  Only a key with the `decider` role may decide, override or report actual conditions (ADR 0013), and only the current assigned decider; an `admin` key (which cannot also be a decider) can change who that is (ADR 0026).
   Roles do not say who is *qualified* to decide; that is an operator decision when issuing keys.
   Each assessment names one assigned decider (ADR 0014); only that actor can decide it or report
   actual conditions, so another decider cannot lock it. A record with no assignee cannot be decided. `decide()` itself trusts its caller, so it must only be reachable through the API.
@@ -112,6 +140,15 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   need `DIVESAFE_TEST_DATABASE_URL`, see ADR 0012); unvalidated `model_copy` records are untrusted.
 - **Decision-time staleness:** `DIVESAFE_DECISION_MAX_AGE_MINUTES` rejects decisions on old
   assessments, but there is no default (unset means no limit) and evidence is not re-checked.
+  The age is measured from the assessment's `created_at`, not from `planned_start`: a dive planned
+  for later is judged against the assessment's age only. It is enforced whenever the setting is
+  set. The production compose sets 180 (owner choice, ADR 0024). `Settings` still does not refuse
+  an unset value (ADR 0019, "raised, not decided"). **Owner decision (2026-10-25):** leave the
+  anchor as `created_at` and add no `planned_start` cap. `created_at` is the time the run
+  **finished** (ADR 0019), so the evidence can be older than the age implies by the length of the
+  agent stage. With no `planned_start` cap, a decision is accepted after the dive window has started
+  or ended, as long as it is within the age limit. The age check is enforced only at the API
+  decision endpoint; `decide()` itself does not check it.
 - **`now`** is the server clock in the API. `assess_dive` still takes it as a parameter, so
   non-API callers must pass a trusted clock.
 - **Untrusted inputs:** `proposed`, `scenarios` and `explanation` must come only from the agent
@@ -121,8 +158,9 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   share data, and production refuses to start. The API reports `storage` on `/health`.
 - **`confidence=None` means "not computed".** UIs must say so explicitly and never render it as
   0 or as high. The statement that a `GO` rule cannot fire on no evidence only covers an empty
-  required set; unrequired-but-absent data, contradictory data and window coverage remain open
-  (see above).
+  required set; unrequired-but-absent data and contradictory data remain open, as does the gap
+  between instants: two instants days apart still count as covering the window, and a hole between
+  instants is not detected (ADR 0008). Interval coverage is fixed (2026-10-26).
 
 ### Agent output (ADR 0007)
 
@@ -131,7 +169,10 @@ actual conditions require a human decision. A record without a `HumanDecision` h
   `agent_issues`.
 - `explanation`, `findings` and `scenarios` are LLM-generated and unverified. The API labels
   them. Specialist and scenario `confidence` values are uncalibrated self-estimates and are not
-  the record `confidence`, which stays `None`.
+  the record `confidence`, which stays `None` (with `confidence_note`, unchanged). Since
+  2026-10-26 (owner choice, Code Review finding 3) the API shows them to clients as
+  `uncalibrated_self_estimate`, whose description says it is NOT a confidence and not a measure of
+  dive safety; see ADR 0011 and ADR 0007.
 - Known gap: nothing checks a reply for invented hazards, invented reassurances or dropped
   caveats. A reply that is well formed but wrong in these ways is accepted (ADR 0016; pinned by an
   offline test that is explicitly not coverage).
@@ -154,7 +195,7 @@ exempt only for their own categories and only if they have not ended before the 
 An observation cannot be valid after it was retrieved. Degraded evidence can make a category
 sufficient but cannot support `GO` or `CAUTION` unless `degraded_may_support_go=True`, which the
 default and the production configuration do not set, and validated evidence must itself cover the
-window. A `GO` or `CAUTION` that cites stale or unaccepted evidence is downgraded. Rules still
+window. A `GO` or `CAUTION` that cites stale or unaccepted evidence, or nothing, is downgraded. Rules still
 receive all evidence so hazard rules are never blinded.
 
 ## Reserved rule ids
@@ -193,12 +234,33 @@ fully assessed and that the problems found still apply.
 
 ## Human override policy ([ADR 0004](adr/0004-human-override-policy.md))
 
-A human may override any recommendation, including `NO-GO`, to a less severe outcome. The
+A human with the `overrider` role (ADR 0026) may override any recommendation, including `NO-GO`, to
+a less severe outcome; a `decider` without it may accept or choose a more severe one. The
 system's recommendation is never altered; the override is a separate `HumanDecision` that needs
 an identified decision-maker and a non-blank rationale. Less severe overrides are flagged
 (`AssessmentRecord.overrides_to_less_severe`) for review and evaluation.
 
 ## Known gaps (tracked, not yet implemented)
+
+**Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
+ignores intervals whose `valid_until` is before the window start, so such an interval no longer
+stops the chain), and a `GO` or `CAUTION` citing no evidence (now flagged `CITES_UNUSABLE`, so the
+result is `INSUFFICIENT EVIDENCE` with the rationale "The rule cites no evidence."). A `GO` or
+`CAUTION` citing a knowledge item is not yet flagged (ADR 0022 decision 8).
+
+**Reported by the 23 Oct 2026 Code Review, still open (not yet verified or fixed):**
+
+- The `kb_privileges` sequence check passes when the object is missing (`kb_privileges.py` ~277,
+  `COALESCE` gives false); a live test is needed first.
+- The GO explanation is shown only for the interim ruleset (`api/schemas.py` ~241).
+- No connection pooling for PostgreSQL (`postgres.py` ~297).
+
+**Known gap (not owner-approved): a recorded decision can be reported as an error.** On
+`POST /decision` the decision is stored before the response view is built. If
+`AssessmentRecordView.of` ever fails (view/domain drift), the client gets a 500 "internal error" for
+a decision that WAS recorded; a replay and a GET return the same 500; and the app handler logs it
+as "storage integrity failure". Decisions are write-once, so nothing unsafe follows, but the decider
+cannot confirm the decision was saved.
 
 - **MET daily marine ranges (2026-10-16):** `MetApiMarineConnector` items are DEGRADED daily
   ranges under `value["ranges"]`. The engine counts a +08:00 day as covering the dive window, so
@@ -237,8 +299,10 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
     different variable (wave height without swell period) or another grid cell still satisfies the
     category. `grid_distance_km` is recorded but not limited. A reviewed required-variable and
     location rule is needed.
-  - *A `GO` that cites nothing* passes the citation guard (an empty citation is a subset of any
-    pool). Real rules must cite evidence; consider enforcing it when the first real rule lands.
+  - *A `GO` or `CAUTION` that cites nothing* is now refused (fixed 2026-10-26): the engine flags it
+    `CITES_UNUSABLE` and the result is `INSUFFICIENT EVIDENCE` ("The rule cites no evidence."). A
+    future rule based only on the dive plan (no evidence) that returns `GO` or `CAUTION` would
+    therefore be `INSUFFICIENT EVIDENCE`: it fails closed, and such a rule must cite evidence.
   - *Per-category resolution and kind policy:* model currents at about 8 km are accepted as
     DEGRADED evidence; whether that is good enough for `GO` is the owner decision
     `degraded_may_support_go` (default `False`).

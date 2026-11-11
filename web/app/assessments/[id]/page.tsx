@@ -97,7 +97,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <p>{plain(view.outcome_note)}</p>
         {view.agent_note && <p>{plain(view.agent_note)}</p>}
         <dl>
-          <dt>Rules alone</dt>
+          <dt>Deterministic checks</dt>
           <dd>{labelFor(r.deterministic_recommendation)}</dd>
           {r.proposed_recommendation && (
             <>
@@ -121,6 +121,22 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <dl>
             <dt>Decided by</dt>
             <dd>{plain(decision.decided_by)}</dd>
+            <dt>Decided by the requester</dt>
+            <dd>
+              {plain(
+                decision.decided_by_creator === true
+                  ? "Yes: the person who requested this assessment also made this decision"
+                  : decision.decided_by_creator === false
+                    ? "No"
+                    : "Not recorded",
+              )}
+            </dd>
+            {typeof decision.key_id === "string" && decision.key_id && (
+              <>
+                <dt>Key used</dt>
+                <dd>{plain(decision.key_id)}</dd>
+              </>
+            )}
             <dt>Decision</dt>
             <dd>{labelFor(decision.decision)}</dd>
             <dt>Override of the system</dt>
@@ -151,7 +167,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <DecisionForm
             id={r.id}
             system={r.final_recommendation}
-            context={`Rules alone: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
+            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
           />
         </>
       )}
@@ -198,6 +214,19 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <dd>{r.created_by ? plain(r.created_by) : "unknown"}</dd>
           <dt>Decision to be recorded by</dt>
           <dd>{r.assigned_decider ? plain(r.assigned_decider) : "nobody (this record cannot be decided)"}</dd>
+          {(r.reassignments ?? []).length > 0 && <dt>Moved between deciders</dt>}
+          {(r.reassignments ?? []).length > 0 && (
+            <dd>
+              <ul>
+                {(r.reassignments ?? []).map((m, i) => (
+                  <li key={i}>
+                    {plain(m.from_decider)} to {plain(m.to_decider)}, by {plain(m.reassigned_by)} on{" "}
+                    {formatWhen(m.reassigned_at)} (key {plain(m.key_id)})
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          )}
         </dl>
       </section>
 
@@ -259,6 +288,50 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             </p>
           ))}
           {r.explanation && <p>{plain(r.explanation)}</p>}
+        </section>
+      )}
+
+      {[...r.findings, ...r.cross_examination_findings, ...r.scenarios].some(
+        (x) => x.conflicting_signals.length > 0,
+      ) && (
+        <section className="card ai">
+          <h2>Questions and conflicting signals (model-written)</h2>
+          <p className="hint">
+            Written by an AI model and not verified. An automatic wording screen marks some lines
+            FLAGGED. It misses wording, and records made before 2026-11-03 were not screened. An
+            unmarked line has not been checked or endorsed. None of it changes the result; you
+            decide on safety.
+          
+            {r.model_version?.includes("; signal_screen=")
+              ? " This record was made with the wording screen."
+              : " This record was made before the wording screen existed and was not screened."}
+          </p>
+          <ul>
+            {r.findings.flatMap((f, i) =>
+              f.conflicting_signals.map((c, j) => (
+                <li key={`c-${i}-${j}`}>
+                  <strong>{plain(f.agent)}:</strong> {plain(c)}
+                  {f.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
+                </li>
+              )),
+            )}
+            {r.cross_examination_findings.flatMap((f, i) =>
+              f.conflicting_signals.map((c, j) => (
+                <li key={`x-${i}-${j}`}>
+                  <strong>{plain(f.agent)} (second round):</strong> {plain(c)}
+                  {f.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
+                </li>
+              )),
+            )}
+            {r.scenarios.flatMap((s, i) =>
+              s.conflicting_signals.map((c, j) => (
+                <li key={`sc-${i}-${j}`}>
+                  <strong>{plain(s.kind)}:</strong> {plain(c)}
+                  {s.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""}
+                </li>
+              )),
+            )}
+          </ul>
         </section>
       )}
 

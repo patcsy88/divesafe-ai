@@ -48,7 +48,21 @@ class _FixedRule:
         self._outcome = outcome
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
-        return RuleResult(rule_id=self.rule_id, outcome=self._outcome, rationale="synthetic")
+        # A GO or CAUTION that cites nothing is flagged, so cite the supplied evidence that
+        # overlaps the dive window; other outcomes cite nothing, as before.
+        end = plan.planned_start + timedelta(minutes=plan.planned_duration_minutes)
+        ids = (
+            tuple(
+                e.id
+                for e in evidence
+                if e.valid_at <= end and (e.valid_until or e.valid_at) >= plan.planned_start
+            )
+            if self._outcome in (Recommendation.GO, Recommendation.CAUTION)
+            else ()
+        )
+        return RuleResult(
+            rule_id=self.rule_id, outcome=self._outcome, rationale="synthetic", evidence_ids=ids
+        )
 
 
 def _fixed_engine(outcome: Recommendation) -> RiskRulesEngine:

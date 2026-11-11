@@ -241,6 +241,13 @@ def test_archives_partial_files_and_manifests_cannot_be_committed_or_sent_to_a_b
 
 # --- the real scripts against a fake docker ------------------------------------------------------
 
+KB_GUARDS = (
+    "kb_guards=kb_chunks_append_only_guard,kb_chunks_insert_guard,kb_chunks_no_truncate_guard,"
+    "kb_documents_append_only_guard,kb_documents_insert_guard,kb_documents_no_truncate_guard,"
+    "kb_status_events_append_only_guard,kb_status_events_insert_guard,"
+    "kb_status_events_no_truncate_guard"
+)
+
 FACTS = (
     "assessments=2\n"
     "dbsettings=0\n"
@@ -251,10 +258,17 @@ FACTS = (
     "guard_defs=bbbb\n"
     "guards=assessments_append_only_guard,assessments_insert_guard,assessments_no_truncate_guard\n"
     "hardening=0\n"
+    "kb_chunks=3\n"
+    "kb_digest=9999\n"
+    "kb_documents=1\n"
+    "kb_guard_defs=8888\n"
+    f"{KB_GUARDS}\n"
+    "kb_status_events=2\n"
     "migrations=1:cc,2:dd\n"
     "objects=eeee\n"
     "pending_runs=0\n"
-    "tables=assessments:r,pending_runs:r,run_failure_counts:r,schema_migrations:r\n"
+    "tables=assessments:r,kb_chunks:r,kb_documents:r,kb_status_events:r,pending_runs:r,"
+    "run_failure_counts:r,schema_migrations:r\n"
     "server=16.0\n"
 )
 
@@ -275,6 +289,11 @@ case "$1" in
     for arg in "$@"; do
       case "$arg" in
         label=com.docker.compose.service=api) [ "${FAKE_API_UP:-0}" = 1 ] && echo apiid || true ;;
+        label=com.docker.compose.service=kb_load)
+          [ "${FAKE_LOADER_PS_FAIL:-0}" = 1 ] && exit 1
+          [ "${FAKE_LOADER:-}" = kb_load ] && echo kbid || true ;;
+        label=com.docker.compose.service=kb_withdraw)
+          [ "${FAKE_LOADER:-}" = kb_withdraw ] && echo kwid || true ;;
         label=com.docker.compose.service=db) echo dbid ;;
       esac
     done
@@ -295,11 +314,25 @@ case "$1" in
       psql)
         case "$input" in
           *"FROM pg_catalog.pg_class c"*) echo "${FAKE_EXISTING:-0}" ;;
+          *"REVOKE TEMPORARY ON DATABASE divesafe FROM PUBLIC"*)
+            if [ "${FAKE_REVOKE_FAIL:-0}" = 1 ]; then exit 1; fi
+            ;;
+          *"REVOKE EXECUTE ON FUNCTION public.kb_"*)
+            echo "fn-revoke" >>"$FAKE_LOG"
+            if [ "${FAKE_FN_REVOKE_FAIL:-0}" = 1 ]; then exit 1; fi
+            ;;
+          *"pg_catalog.aclexplode(p.proacl)"*)
+            echo "fn-acl" >>"$FAKE_LOG"
+            if [ "${FAKE_FN_ACL_FAIL:-0}" = 1 ]; then exit 1; fi
+            echo "${FAKE_FN_ACL-5 5}"
+            ;;
           *"BEGIN READ ONLY"*)
             if [ "${FAKE_REPORT_FAIL:-0}" = 1 ]; then exit 1; fi
             echo "latest assessment created (UTC): 2026-10-18T10:00:00Z"
             echo "runs whose outcome is unknown (marked running in the backup), before the api:"
             echo "run-1 2026-10-18T09:59:00Z"
+            echo "knowledge versions not WITHDRAWN (document version status manifest):"
+            echo "dive-briefing 1 APPROVED 0000"
             ;;
           *"BEGIN ISOLATION"*)
             if [ "${FAKE_LIVE_UNSTABLE:-0}" = 1 ]; then
@@ -486,7 +519,7 @@ def test_restore_refuses_and_nothing_is_written(h: Harness, case: str) -> None:
             + "\n"
         )
     elif case == "manifest_wrong_format":
-        manifest.write_text(manifest.read_text().replace("format=1", "format=2"))
+        manifest.write_text(manifest.read_text().replace("format=2", "format=3"))
     elif case == "after_restore_differs":
         # The scratch server agrees with the manifest, the real database does not.
         h.live.write_text(FACTS.replace("decided=1", "decided=0"))
@@ -713,3 +746,335 @@ def test_what_the_restore_prints_from_the_archive_is_stripped_to_printable_text(
     assert "'latest assessment created (UTC): '" in report and "max(created_at)" in report
     assert "SET LOCAL search_path = pg_catalog, pg_temp;" in report
     assert "BEGIN READ ONLY;" in report
+
+
+# --- the knowledge tables (ADR 0024 Amendment 1, A7) ---------------------------------------------
+
+
+def test_the_knowledge_facts_are_keys_and_their_digest_names_every_column_that_matters() -> None:
+    """A7 pins (b) and (d): a lost WITHDRAWN event, an altered chunk or a swapped manifest hash
+    changes a count or the digest."""
+    common = _code("backup-common.sh")
+    keys = re.search(r"^fact_keys='([^']*)'$", common, re.M)
+    assert keys is not None
+    for key in (
+        "kb_documents",
+        "kb_chunks",
+        "kb_status_events",
+        "kb_digest",
+        "kb_guards",
+        "kb_guard_defs",
+    ):
+        assert key in keys.group(1).split(), key
+        assert f"SELECT '{key}='" in common, key
+        assert key in common.split("compared_facts()")[1].split("}")[0], key
+    digest = common[common.index("SELECT 'kb_digest='") : common.index("SELECT 'kb_guards='")]
+    for column in (
+        "d.manifest_sha256",
+        "c.chunk_text",
+        "c.content_sha256",
+        "e.document_id",
+        "e.version",
+        "e.status",
+        "e.event_order",
+        "e.hash_checked",
+        "e.recorded_at",
+    ):
+        assert column in digest, column
+    for table in ("public.kb_documents", "public.kb_chunks", "public.kb_status_events"):
+        assert table in digest, table
+    assert "AT TIME ZONE 'UTC'" in digest and 'COLLATE "C"' in digest
+    assert "json_build_array" in digest  # a separator inside a value cannot stand for a row
+    assert common.index("SET LOCAL search_path") < common.index("SELECT 'kb_digest='")
+
+
+def test_the_nine_knowledge_guard_triggers_are_part_of_the_shape(h: Harness) -> None:
+    common = _code("backup-common.sh")
+    assert f"kb_guards_line='{KB_GUARDS}'" in common
+    assert 'grep -qxF "$kb_guards_line"' in common.split("shape_ok()")[1].split("}")[0]
+    query = common[common.index("SELECT 'kb_guards='") : common.index("SELECT 'kb_guard_defs='")]
+    assert "AND NOT tgisinternal AND tgenabled = 'A';" in query  # ENABLE ALWAYS only, by name
+    short = FACTS.replace(",kb_status_events_no_truncate_guard", "")
+    h.live.write_text(short)
+    h.scratch.write_text(short)
+    result = h.run("backup.sh", str(h.out))
+    assert result.returncode != 0 and "guard trigger is missing" in result.stderr
+    assert list(h.out.iterdir()) == []
+
+
+def test_backup_keeps_nothing_when_the_scratch_restore_lost_a_status_event(h: Harness) -> None:
+    """A7 pin (c): an archive that lost a WITHDRAWN event must not be kept."""
+    h.scratch.write_text(FACTS.replace("kb_status_events=2", "kb_status_events=1"))
+    result = h.run("backup.sh", str(h.out))
+    assert result.returncode != 0 and "does NOT match" in result.stderr
+    assert list(h.out.iterdir()) == []
+    h.scratch.write_text(FACTS.replace("kb_digest=9999", "kb_digest=7777"))
+    result = h.run("backup.sh", str(h.out))
+    assert result.returncode != 0 and list(h.out.iterdir()) == []
+
+
+def test_restore_refuses_when_the_scratch_load_lost_a_status_event(h: Harness) -> None:
+    dump = _restore_inputs(h)
+    h.scratch.write_text(FACTS.replace("kb_status_events=2", "kb_status_events=1"))
+    result = h.run("restore.sh", str(dump))
+    assert result.returncode != 0 and "pg_restore" not in h.calls()
+
+
+def test_restore_refuses_a_manifest_without_the_knowledge_facts(h: Harness) -> None:
+    dump = _restore_inputs(h)
+    manifest = dump.with_suffix(".manifest")
+    manifest.write_text(
+        "".join(x for x in manifest.read_text().splitlines(True) if not x.startswith("kb_digest="))
+    )
+    result = h.run("restore.sh", str(dump))
+    assert result.returncode != 0 and "nineteen facts" in result.stderr
+    assert "pg_restore" not in h.calls()
+
+
+def test_the_backup_writes_format_2_and_the_restore_refuses_format_1_as_old(h: Harness) -> None:
+    dump, manifest = h.backup()
+    assert "format=2" in manifest.read_text().splitlines()
+    h.log.write_text("")
+    manifest.write_text(manifest.read_text().replace("format=2", "format=1"))
+    result = h.run("restore.sh", str(dump))
+    assert result.returncode != 0 and "old format 1" in result.stderr
+    assert "old scripts" in result.stderr and "pg_restore" not in h.calls()
+
+
+@pytest.mark.parametrize("loader", ["kb_load", "kb_withdraw"])
+def test_backup_and_restore_refuse_while_a_loader_container_exists(h: Harness, loader: str) -> None:
+    """A7 pin (e). `docker ps -a`: a stopped run container left without --rm counts too."""
+    dump = _restore_inputs(h)
+    for name in list(h.out.iterdir()):
+        name.rename(h.tmp / name.name)
+    dump = h.tmp / dump.name
+    result = h.run("backup.sh", str(h.out), FAKE_LOADER=loader)
+    assert result.returncode != 0 and f"a '{loader}' container exists" in result.stderr
+    assert list(h.out.iterdir()) == [] and "exec pg_dump" not in h.calls()
+    result = h.run("restore.sh", str(dump), FAKE_LOADER=loader)
+    assert result.returncode != 0 and f"a '{loader}' container exists" in result.stderr
+    assert "pg_restore" not in h.calls()
+    common = _code("backup-common.sh")
+    body = common[common.index("no_loader()") : common.index("single_database()")]
+    assert "docker ps -aq" in body and "com.docker.compose.service=$service" in body
+    assert "| grep -q ." not in body  # a pipe would hide the exit status of docker ps
+    for name in ("backup.sh", "restore.sh"):
+        code = _code(name)
+        assert "no_loader kb_load kb_withdraw" in code, name
+    restore = _code("restore.sh")
+    assert restore.index("no_loader kb_load kb_withdraw") < restore.index("in_db_owner pg_restore")
+
+
+def test_the_restore_revokes_temp_and_says_what_comes_next(h: Harness) -> None:
+    """A7 pin (d): the TEMP revoke, the not-WITHDRAWN report, the hash_checked list and the
+    next-step text with the withdrawal re-apply before the api starts."""
+    code = _code("restore.sh")
+    load = code.index("in_db_owner pg_restore")
+    revoke = code.index("REVOKE TEMPORARY ON DATABASE divesafe FROM PUBLIC;")
+    assert load < revoke < code.index('report="$(')
+    report = code[code.index('report="$(') : code.index("tr -cd")]
+    assert "knowledge versions not WITHDRAWN" in report and "status = 'WITHDRAWN'" in report
+    assert "d.manifest_sha256" in report
+    assert "approvals with hash_checked = false" in report
+    assert "status = 'APPROVED' AND NOT a.hash_checked" in report
+    nxt = [x for x in code.splitlines() if "the grants are NOT yet applied" in x]
+    assert len(nxt) == 1
+    line = nxt[0]
+    assert (
+        line.index("db-init")
+        < line.index("re-apply every logged withdrawal")
+        < line.index("start the api")
+    )
+    dump = _restore_inputs(h)
+    ok = h.run("restore.sh", str(dump))
+    assert ok.returncode == 0, ok.stderr
+    assert "knowledge versions not WITHDRAWN" in ok.stderr
+    assert "the grants are NOT yet applied" in ok.stderr
+    assert "exec psql" in h.calls()
+    h.log.write_text("")
+    bad = h.run("restore.sh", str(dump), FAKE_REVOKE_FAIL="1")
+    assert bad.returncode != 0 and "Do not start the api" in bad.stderr
+
+
+def test_backup_and_restore_refuse_when_docker_cannot_list_the_loader_containers(
+    h: Harness,
+) -> None:
+    """Review nit (2026-11-09): a failing `docker ps -a` must refuse, never read as "no loader"."""
+    dump = _restore_inputs(h)
+    for name in list(h.out.iterdir()):
+        name.rename(h.tmp / name.name)
+    dump = h.tmp / dump.name
+    result = h.run("backup.sh", str(h.out), FAKE_LOADER_PS_FAIL="1")
+    assert result.returncode != 0 and "could not list 'kb_load' containers" in result.stderr
+    assert list(h.out.iterdir()) == [] and "exec pg_dump" not in h.calls()
+    result = h.run("restore.sh", str(dump), FAKE_LOADER_PS_FAIL="1")
+    assert result.returncode != 0 and "could not list 'kb_load' containers" in result.stderr
+    assert "pg_restore" not in h.calls()
+
+
+KB_GUARD_FUNCTIONS = (
+    "kb_no_update_delete",
+    "kb_no_truncate",
+    "kb_documents_insert",
+    "kb_chunks_insert",
+    "kb_status_events_insert",
+)
+
+
+def test_the_restore_takes_execute_on_every_knowledge_guard_function_back_from_public() -> None:
+    """A7 hand run (2026-11-11): `pg_restore --no-acl` drops migration 4's REVOKE EXECUTE ... FROM
+    PUBLIC, and a NULL proacl lets PUBLIC execute the SECURITY DEFINER guards. db-init cannot repair
+    it (migrate() refuses before _kb_grants runs). Each of the five must be revoked after the load,
+    in one transaction that stops on the first error, then read back before the comparison and the
+    report; the read-back must name all five and accept only "5 5"."""
+    from divesafe.services.migrations import KNOWLEDGE_FUNCTIONS
+
+    assert set(KB_GUARD_FUNCTIONS) == set(KNOWLEDGE_FUNCTIONS.values())
+    code = _code("restore.sh")
+    load = code.index("in_db_owner pg_restore")
+    begin = code.index('  "BEGIN;" \\\n  "REVOKE EXECUTE', load)
+    commit = code.index('  "COMMIT;" |\n', begin)
+    psql = code[commit:].splitlines()[1]
+    assert psql.startswith("  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq ")
+    assert "-v ON_ERROR_STOP=1 >/dev/null || {" in psql
+    check_call = code.index("if ! guard_acl_ok; then", load)
+    for fn in KB_GUARD_FUNCTIONS:
+        line = f'  "REVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;"'
+        assert code.count(line) == 1, fn
+        assert begin < code.index(line) < commit < check_call < code.index('report="$('), fn
+    assert check_call < code.index('got="$(read_live)"', load)
+    fn_body = code[
+        code.index("guard_acl_ok() {") : code.index("\n}\n", code.index("guard_acl_ok() {"))
+    ]
+    assert code.index("guard_acl_ok() {") < code.index('if [ "$check_only" -eq 1 ]; then')
+    assert "BEGIN TRANSACTION READ ONLY;" in fn_body and "p.proacl IS NOT NULL" in fn_body
+    assert "aclexplode(p.proacl) x WHERE x.grantee <> p.proowner" in fn_body
+    assert '-v ON_ERROR_STOP=1)" || return 1' in fn_body
+    assert fn_body.rstrip().endswith('[ "$guard_acl" = "5 5" ]')
+    names = fn_body[
+        fn_body.index("p.proname IN (") : fn_body.index(");", fn_body.index("p.proname IN ("))
+    ]
+    assert sorted(re.findall(r"'([a-z_]+)'", names)) == sorted(KB_GUARD_FUNCTIONS)
+    assert "nspname = 'public'" in fn_body
+    assert "REVOKE" not in fn_body and "GRANT" not in fn_body
+    after = code[check_call : code.index("fi\n", check_call)]
+    assert "Do not start the api" in after and "exit 1" in after
+
+
+@pytest.mark.parametrize(
+    ("env", "case"),
+    [
+        ({"FAKE_FN_REVOKE_FAIL": "1"}, "revoke fails"),
+        ({"FAKE_FN_ACL_FAIL": "1"}, "read-back fails"),
+        ({"FAKE_FN_ACL": "4 5"}, "one still open to PUBLIC"),
+        ({"FAKE_FN_ACL": "4 4"}, "one missing"),
+        ({"FAKE_FN_ACL": "6 6"}, "one too many"),
+        ({"FAKE_FN_ACL": ""}, "nothing read"),
+    ],
+)
+def test_the_restore_stops_when_a_guard_function_stays_executable_by_others(
+    h: Harness, env: dict[str, str], case: str
+) -> None:
+    dump = _restore_inputs(h)
+    result = h.run("restore.sh", str(dump), **env)
+    assert result.returncode != 0, case
+    assert "Do not start the api" in result.stderr, case
+    assert "the grants are NOT yet applied" not in result.stderr, case
+    assert "restored and matched the manifest" not in result.stderr, case
+
+
+def test_the_restore_runs_the_function_revoke_and_its_check_on_the_happy_path(h: Harness) -> None:
+    dump = _restore_inputs(h)
+    ok = h.run("restore.sh", str(dump))
+    assert ok.returncode == 0, ok.stderr
+    assert "a knowledge guard function may be executed" not in ok.stderr
+    calls = h.calls().splitlines()
+    assert calls.count("fn-revoke") == 1 and calls.count("fn-acl") == 1
+    load = next(i for i, x in enumerate(calls) if x.startswith("exec pg_restore"))
+    assert load < calls.index("fn-revoke") < calls.index("fn-acl")
+
+
+def test_check_also_requires_the_guard_functions_to_be_closed_to_others(h: Harness) -> None:
+    """Review S1 (2026-11-11): a restore stopped after the load but before the function revoke left
+    a database that `--check` called matching (the facts do not cover ACLs). `--check` must also run
+    the read-only read-back and accept only "5 5", and still write nothing."""
+    dump = _restore_inputs(h)
+    ok = h.run("restore.sh", "--check", str(dump))
+    assert ok.returncode == 0 and "matches the manifest" in ok.stderr, ok.stderr
+    assert "fn-acl" in h.calls().splitlines()
+    for env in (
+        {"FAKE_FN_ACL": "0 5"},
+        {"FAKE_FN_ACL": "4 5"},
+        {"FAKE_FN_ACL": "5 4"},
+        {"FAKE_FN_ACL": ""},
+        {"FAKE_FN_ACL_FAIL": "1"},
+    ):
+        h.log.write_text("")
+        bad = h.run("restore.sh", "--check", str(dump), **env)
+        assert bad.returncode != 0, env
+        assert "does NOT pass" in bad.stderr and "Do not start the api" in bad.stderr, env
+        assert "matches the manifest" not in bad.stderr, env
+        calls = h.calls().splitlines()
+        assert "fn-acl" in calls, env
+        assert "fn-revoke" not in calls and "run" not in calls, env
+        assert not any(x.startswith("exec pg_restore") for x in calls), env
+    check = _code("restore.sh")
+    branch = check[check.index('if [ "$check_only" -eq 1 ]; then') : check.index("exit 0\nfi")]
+    assert "guard_acl_ok" in branch and "REVOKE" not in branch
+
+
+def _report_sql(code: str) -> str:
+    """The statements of restore.sh's closing report, one per line, as psql receives them."""
+    start = code.index("report=\"$(printf '%s\\n' \\\n")
+    body = code[start : code.index("  in_db_owner psql", start)].splitlines()[1:]
+    out = []
+    for line in body:
+        line = line.strip()
+        assert line.startswith('"') and line.endswith(('" \\', '" |')), line
+        out.append(line[1 : line.rindex('"')].replace('\\"', '"'))
+    return "\n".join(out)
+
+
+def test_the_documented_recovery_uses_the_scripts_own_revokes_and_read_back() -> None:
+    """Review S1 (b): the manual recovery in docs/backup-and-restore.md runs exactly the five
+    revokes, in one transaction, and the read-back query of restore.sh, and the A7 hand run checks
+    with that query."""
+    code = _code("restore.sh")
+    query = re.search(r'"(SELECT count\(\*\) FILTER .*?;)"', code)
+    assert query is not None
+    doc = (ROOT / "docs" / "backup-and-restore.md").read_text()
+    assert doc.count(query.group(1)) == 2
+    revokes = "".join(
+        f"REVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;\n" for fn in KB_GUARD_FUNCTIONS
+    )
+    assert doc.count(f"```sql\nBEGIN;\n{revokes}COMMIT;\n```\n") == 1
+    assert "proacl IS NULL" not in doc
+
+
+def test_the_documented_recovery_gives_the_scripts_own_closing_report() -> None:
+    """Review S2 (2026-11-11): every stop that needs the manual recovery comes before the closing
+    report, so the docs give its SQL, equal to the script's, read-only, with the knowledge
+    queries; and step 9 then re-applies every logged withdrawal (kb_withdraw is idempotent)."""
+    report = _report_sql(_code("restore.sh"))
+    assert report.startswith("BEGIN READ ONLY;\n") and report.endswith("\nCOMMIT;")
+    assert "status = 'WITHDRAWN'" in report and "d.manifest_sha256" in report
+    assert "status = 'APPROVED' AND NOT a.hash_checked" in report
+    doc = (ROOT / "docs" / "backup-and-restore.md").read_text()
+    assert doc.count(f"```sql\n{report}\n```\n") == 1
+    recovery = doc[doc.index("**Recovery when the function revoke") : doc.index(report)]
+    after = doc[doc.index(report) : doc.index("The append-only guard is never switched off")]
+    assert "BEGIN;" in recovery and "re-apply every logged withdrawal" in after
+    assert "KB001" in after and "exit 16" in after and "nothing is written" in after
+
+
+def test_kb_withdraw_turns_only_the_already_withdrawn_code_into_exit_16() -> None:
+    """What the documented re-apply-everything step relies on."""
+    from divesafe.services import kb_withdraw
+
+    assert kb_withdraw.SQLSTATE_ALREADY_WITHDRAWN == "KB001"
+    assert kb_withdraw.ALREADY_WITHDRAWN.status == 16
+    migration = (ROOT / "src" / "divesafe" / "services" / "migrations.py").read_text()
+    assert (
+        "IF previous = 'WITHDRAWN' AND NEW.status = 'WITHDRAWN' THEN\n"
+        "        RAISE EXCEPTION 'this version is already withdrawn' USING ERRCODE = 'KB001';"
+    ) in migration

@@ -15,6 +15,18 @@ export class ApiError extends Error {
 
 const ID = /^[0-9a-f]{32}$/;
 
+// The API's own 503 texts for a write that certainly recorded nothing (app.py). Any other 503,
+// including a proxy's page or a lost commit reply, may follow a write that landed.
+const NOTHING_RECORDED_503 = new Set([
+  "storage is unavailable; nothing was recorded",
+  "the server is shutting down; nothing was recorded",
+  "the evidence policy is not configured on this server; nothing was recorded",
+  "server configuration is unsafe; nothing was recorded",
+]);
+
+const READ_UNAVAILABLE = "The service is unavailable, so this could not be checked right now. Try again shortly.";
+const READ_NO_ANSWER = "The DiveSafe service did not answer, so this could not be checked right now. Try again shortly.";
+
 export function describeFailure(status: number, detail: unknown, retryAfter: string | null): string {
   if (status === 401) return "The server did not accept this API key.";
   if (status === 403) {
@@ -39,8 +51,19 @@ export function describeFailure(status: number, detail: unknown, retryAfter: str
     }
     return "The request was not accepted.";
   }
-  if (status === 503) return "The service is unavailable. Nothing was recorded.";
+  if (status === 503) {
+    if (typeof detail === "string" && NOTHING_RECORDED_503.has(detail)) {
+      return "The service is unavailable. Nothing was recorded.";
+    }
+    return "The service is unavailable and the outcome is unknown: check whether it was recorded before trying again.";
+  }
   return "Something went wrong. The outcome is unknown: check whether it was recorded before trying again.";
+}
+
+// A read records nothing, so neither "nothing was recorded" nor "check whether it was recorded"
+// fits a failed one. A request with a body is never treated as a read.
+export function isRead(init: RequestInit): boolean {
+  return init.body === undefined && (init.method ?? "GET").toUpperCase() === "GET";
 }
 
 async function call(
@@ -50,6 +73,7 @@ async function call(
   source?: string,
   idempotencyKey?: string,
 ): Promise<unknown> {
+  const read = isRead(init);
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl()}${path}`, {
@@ -66,6 +90,7 @@ async function call(
       },
     });
   } catch {
+    if (read) throw new ApiError(0, READ_NO_ANSWER);
     throw new ApiError(0, "The DiveSafe service did not answer, so the outcome is unknown: check whether it was recorded before trying again.");
   }
   let body: unknown = null;
@@ -76,6 +101,7 @@ async function call(
   }
   if (!response.ok) {
     const detail = (body as { detail?: unknown } | null)?.detail;
+    if (read && response.status >= 500) throw new ApiError(response.status, READ_UNAVAILABLE);
     throw new ApiError(
       response.status,
       describeFailure(response.status, detail, response.headers.get("retry-after")),
@@ -144,8 +170,8 @@ export async function getAssessment(key: string, id: string): Promise<Fetched> {
   } catch (error) {
     // A failed read changes nothing, so "nothing was recorded" would be untrue: the run may well
     // still finish.
-    if (error instanceof ApiError && error.status === 503) {
-      throw new ApiError(503, "Could not check right now, so the outcome is unknown. Try again shortly.");
+    if (error instanceof ApiError && (error.status === 0 || error.status >= 500)) {
+      throw new ApiError(error.status, "Could not check right now, so the outcome is unknown. Try again shortly.");
     }
     throw error;
   }
@@ -157,7 +183,12 @@ export async function getAssessment(key: string, id: string): Promise<Fetched> {
 
 export async function getEvidence(key: string, id: string): Promise<EvidenceView> {
   if (!ID.test(id)) throw new ApiError(404, "Not found.");
-  return (await call(`/v1/assessments/${encodeURIComponent(id)}/evidence`, key)) as EvidenceView;
+  const body = await call(`/v1/assessments/${encodeURIComponent(id)}/evidence`, key);
+  // A reply about some other assessment must never be shown under this address.
+  if (typeof body !== "object" || body === null || (body as { assessment_id?: unknown }).assessment_id !== id) {
+    throw new ApiError(0, UNREADABLE);
+  }
+  return body as EvidenceView;
 }
 
 export async function listSites(key: string): Promise<SiteListView> {

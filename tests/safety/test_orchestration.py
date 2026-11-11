@@ -76,7 +76,13 @@ class _GoRule:
     citation = "test fixture (synthetic, not a real safety source)"
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
-        return RuleResult(rule_id=self.rule_id, outcome=R.GO, rationale="synthetic")
+        # Cites the evidence the pipeline supplied: a GO that cites nothing is flagged.
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=R.GO,
+            rationale="synthetic",
+            evidence_ids=tuple(e.id for e in evidence),
+        )
 
 
 def _engine(
@@ -105,6 +111,8 @@ def _run(marine: Any = MARINE, warnings: Any = WARNINGS, **kwargs: Any) -> Asses
         "connectors": connectors,
         "engine": _engine(with_warning_rule=False),
         "now": NOW,
+        "egress_basis": None,
+        "model_host": None,
     }
     options.update(kwargs)
     return asyncio.run(assess_dive(**options))

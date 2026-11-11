@@ -53,3 +53,18 @@ test("a rate-limit answer from the API is not shown as a wrong key", async () =>
   reply(429, { detail: "nothing was recorded; too many failed attempts; wait and try again" });
   await assert.rejects(() => checkKey("any-key-12345678"), (e: unknown) => (e as { status?: number }).status === 429);
 });
+
+test("a server error at sign-in says neither that nothing was recorded nor that something may have been", async () => {
+  const fair = (error: Error) =>
+    /could not be checked right now/.test(error.message) && !/Nothing was recorded|whether it was recorded/i.test(error.message);
+  for (const status of [500, 502, 503, 504]) {
+    for (const body of [{ detail: "storage is unavailable; nothing was recorded" }, { detail: "x" }, null]) {
+      reply(status, body);
+      await assert.rejects(() => checkKey("a-valid-key-123"), fair, String(status));
+    }
+  }
+  globalThis.fetch = (async () => {
+    throw new Error("down");
+  }) as typeof fetch;
+  await assert.rejects(() => checkKey("a-valid-key-123"), fair);
+});

@@ -9,18 +9,80 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Literal
 
 from divesafe.config.settings import CONNECTOR_BUDGET_SECONDS
 from divesafe.data import Connector, ConnectorError, DiveSite, FetchResult
-from divesafe.domain import DataCategory, EvidenceItem
+from divesafe.domain import DataCategory, DataKind, EvidenceItem, is_knowledge_id, knowledge_ref
 
 logger = logging.getLogger(__name__)
 
+# The fixed prefix `gather_evidence` gives a timed-out connector's error (a class name).
+_TIMEOUT_CLASS = "TimeoutError:"
+
+# ADR 0022 decision 5: fixed issue texts (no id, title or content) for items dropped because the
+# connector may not emit them. `build_evidence_set` prefixes the connector's registered name.
+KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE = (
+    "evidence.knowledge_refused: knowledge items or reserved kb: ids from a connector that is "
+    "not the knowledge connector were dropped"
+)
+NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE = (
+    "evidence.knowledge_refused: items from the knowledge connector that are not knowledge "
+    "items with a kb: id were dropped"
+)
+
+
+def _is_knowledge_item(item: EvidenceItem) -> bool:
+    return item.data_kind is DataKind.KNOWLEDGE or is_knowledge_id(item.id)
+
+
+def _well_formed_knowledge(item: EvidenceItem) -> bool:
+    """A KNOWLEDGE item whose id follows the decision 6 `kb:` grammar (security N3)."""
+    if item.data_kind is not DataKind.KNOWLEDGE or not is_knowledge_id(item.id):
+        return False
+    try:
+        return knowledge_ref(item.id) is not None
+    except ValueError:
+        return False
+
+
+def screen_knowledge(
+    connector: Connector, knowledge_connector: Connector | None, result: FetchResult
+) -> FetchResult:
+    """ADR 0022 decision 5, both directions of the reserved `kb:` prefix. Only the knowledge
+    connector (by identity: `is`, never its name and never `isinstance`) may emit KNOWLEDGE
+    items or `kb:` ids, and it may emit nothing else. Anything else is dropped before it reaches
+    a rule or a prompt and reported as an evidence issue with a fixed text."""
+    if connector is knowledge_connector:
+        kept = tuple(i for i in result.items if _well_formed_knowledge(i))
+        issue = NON_KNOWLEDGE_FROM_KNOWLEDGE_CONNECTOR_ISSUE
+    else:
+        kept = tuple(i for i in result.items if not _is_knowledge_item(i))
+        issue = KNOWLEDGE_FROM_OTHER_CONNECTOR_ISSUE
+    if len(kept) == len(result.items):
+        return result
+    logger.warning("knowledge items refused", extra={"connector": connector.name})
+    return FetchResult(items=kept, issues=(*result.issues, issue))
+
 
 class DuplicateEvidenceError(ValueError):
-    """Two different evidence items claimed the same id."""
+    """Two different evidence items claimed the same id. Kept exported for compatibility;
+    `build_evidence_set` no longer raises it (a conflict drops the items and adds an issue, so the
+    run gets more cautious instead of failing). Nothing in the package raises it now."""
+
+
+ConnectorOutcomeKind = Literal["ok", "issues", "failed", "timed_out"]
+
+
+@dataclass(frozen=True)
+class ConnectorOutcome:
+    """How one connector ended, as a fixed label: the structured source for the stage trace,
+    so nothing ever parses `issues`. `name` is the connector's registered name."""
+
+    name: str
+    outcome: ConnectorOutcomeKind
 
 
 @dataclass(frozen=True)
@@ -28,6 +90,26 @@ class EvidenceSet:
     items: tuple[EvidenceItem, ...]
     issues: tuple[str, ...]
     data_versions: dict[str, str]
+    # Items dropped because two different items shared an id. For the audit record only: they are
+    # never cited, and never passed to the main engine run, the agents or a prompt (ADR 0026: only
+    # the variant search sees them, to add severity).
+    withheld: tuple[EvidenceItem, ...] = ()
+    # One per connector, in call order. Defaulted so callers that build a set by hand still work.
+    connector_outcomes: tuple[ConnectorOutcome, ...] = ()
+
+    @property
+    def variants(self) -> tuple[tuple[EvidenceItem, ...], ...]:
+        """The distinct items of each conflicting id, in the withheld order (ADR 0026). For the
+        deterministic variant check only: never cited, never given to an agent or a prompt."""
+        by_id: dict[str, list[EvidenceItem]] = {}
+        for item in self.withheld:
+            by_id.setdefault(item.id, []).append(item)
+        return tuple(tuple(items) for items in by_id.values())
+
+    @property
+    def conflicts(self) -> int:
+        """Ids withheld because different items shared them."""
+        return len({i.id for i in self.withheld})
 
     def by_category(self, category: DataCategory) -> tuple[EvidenceItem, ...]:
         return tuple(i for i in self.items if i.category == category)
@@ -41,22 +123,59 @@ def build_evidence_set(
     results: Sequence[tuple[str, FetchResult | None, str | None]],
 ) -> EvidenceSet:
     """Merge (connector name, result, error) triples. Exactly one of result/error is set."""
-    by_id: dict[str, EvidenceItem] = {}
     issues: list[str] = []
-    versions: dict[str, str] = {}
+    # id -> (connector, item) in arrival order, so a third or later duplicate is seen too.
+    claims: dict[str, list[tuple[str, EvidenceItem]]] = {}
     for name, result, error in results:
         if result is None:
             issues.append(f"{name}: {error or 'failed'}")
             continue
         issues.extend(f"{name}: {issue}" for issue in result.issues)
         for item in result.items:
-            existing = by_id.get(item.id)
-            if existing is not None and existing != item:
-                raise DuplicateEvidenceError(f"conflicting evidence for id {item.id}")
-            by_id[item.id] = item
-            versions[item.source] = item.source_version or "unversioned"
-    ordered = tuple(sorted(by_id.values(), key=lambda i: (i.category.value, i.valid_at, i.id)))
-    return EvidenceSet(ordered, tuple(issues), versions)
+            claims.setdefault(item.id, []).append((name, item))
+    kept: list[EvidenceItem] = []
+    withheld: list[EvidenceItem] = []
+    versions: dict[str, str] = {}
+    for claimed in claims.values():
+        first = claimed[0][1]
+        if any(item != first for _, item in claimed[1:]):
+            # Different items under one id: use none of them, whichever connector sent them. They
+            # are kept apart in `withheld` so a reviewer can see them; they may hold a more severe
+            # result than anything evaluated. The issue names the connectors and the categories
+            # (fixed names and enum values) and not the id or any content.
+            connectors = sorted({name for name, _ in claimed})
+            categories = sorted({item.category.value for _, item in claimed})
+            issues.append(
+                f"evidence.conflict: {', '.join(connectors)} returned different "
+                f"{', '.join(categories)} evidence under one id; none of it used "
+                "(withheld from the main result; checked separately for a more severe one)"
+            )
+            for _, item in claimed:
+                if item not in withheld:
+                    withheld.append(item)
+            logger.warning("conflicting evidence dropped", extra={"connectors": connectors})
+            continue
+        kept.append(first)
+        versions[first.source] = first.source_version or "unversioned"
+    ordered = tuple(sorted(kept, key=lambda i: (i.category.value, i.valid_at, i.id)))
+    held = tuple(sorted(withheld, key=lambda i: (i.category.value, i.valid_at, i.id)))
+    return EvidenceSet(ordered, tuple(issues), versions, held)
+
+
+def connector_outcomes(
+    results: Sequence[tuple[str, FetchResult | None, str | None]],
+) -> tuple[ConnectorOutcome, ...]:
+    """One fixed label per connector from the same triples `build_evidence_set` merges. The
+    timeout label comes from the class-name prefix `gather_evidence` itself sets; nothing here
+    reads a message meant for people."""
+    labels: list[ConnectorOutcome] = []
+    for name, result, error in results:
+        if result is None:
+            timed_out = error is not None and error.startswith(_TIMEOUT_CLASS)
+            labels.append(ConnectorOutcome(name, "timed_out" if timed_out else "failed"))
+        else:
+            labels.append(ConnectorOutcome(name, "issues" if result.issues else "ok"))
+    return tuple(labels)
 
 
 async def gather_evidence(
@@ -67,9 +186,14 @@ async def gather_evidence(
     now: datetime,
     *,
     timeout_seconds: float = CONNECTOR_BUDGET_SECONDS,
+    knowledge_connector: Connector | None = None,
 ) -> EvidenceSet:
     """Fetch from every connector at once. A connector that has not answered within the overall
-    timeout becomes an issue, like any other failure, so one stuck source cannot hold a run."""
+    timeout becomes an issue, like any other failure, so one stuck source cannot hold a run.
+
+    `knowledge_connector` is the single knowledge connector instance built at start-up, or None
+    (none configured: every KNOWLEDGE item and `kb:` id is then refused). See
+    `screen_knowledge`."""
     if not (0 < timeout_seconds <= CONNECTOR_BUDGET_SECONDS):  # also false for NaN
         raise ValueError("timeout_seconds must be positive and within the connector budget")
 
@@ -78,12 +202,13 @@ async def gather_evidence(
             result = await asyncio.wait_for(
                 connector.fetch(site, window_start, window_end, now), timeout_seconds
             )
-            return connector.name, result, None
+            return connector.name, screen_knowledge(connector, knowledge_connector, result), None
         except TimeoutError:
             logger.warning("connector timed out", extra={"connector": connector.name})
-            return connector.name, None, "TimeoutError: no answer within the time allowed"
+            return connector.name, None, f"{_TIMEOUT_CLASS} no answer within the time allowed"
         except ConnectorError as exc:
             logger.warning("connector failed", extra={"connector": connector.name, "site": site.id})
             return connector.name, None, f"{type(exc).__name__}: {exc}"
 
-    return build_evidence_set(await asyncio.gather(*(run(c) for c in connectors)))
+    results = await asyncio.gather(*(run(c) for c in connectors))
+    return replace(build_evidence_set(results), connector_outcomes=connector_outcomes(results))

@@ -14,7 +14,7 @@ import pytest
 from pydantic import SecretStr
 
 from divesafe.models import ChatMessage, LLMRequest
-from divesafe.models import ollama as shared
+from divesafe.models import limits as shared
 from divesafe.models.openai_compatible import OpenAICompatibleError, OpenAICompatibleProvider
 
 REQUEST = LLMRequest(messages=(ChatMessage(role="user", content="SECRET-PROMPT"),))
@@ -214,3 +214,27 @@ def test_each_provider_has_its_own_pool_and_concurrency_limit(server: str) -> No
     one = OpenAICompatibleProvider("m", server, transport=transport, max_concurrent_calls=1)
     asyncio.run(one.complete(REQUEST))
     assert names[0].startswith("openai-compat")
+
+
+def test_calls_beyond_the_slot_limit_are_refused_without_a_connection() -> None:
+    import threading
+
+    from divesafe.models.openai_compatible import OpenAICompatibleError, _post, failure_reason
+
+    slots = threading.BoundedSemaphore(1)
+    assert slots.acquire(blocking=False)
+    with pytest.raises(OpenAICompatibleError) as caught:
+        _post(
+            "http://127.0.0.1:1/v1",
+            b"{}",
+            0.05,
+            api_key=None,
+            loopback=True,
+            slots=slots,
+            socket_timeout=1.0,
+        )
+    assert failure_reason(caught.value) == "slots_full"
+
+
+def test_the_response_cap_is_one_mebibyte() -> None:
+    assert shared.MAX_RESPONSE_BYTES == 1024 * 1024

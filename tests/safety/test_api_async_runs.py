@@ -447,6 +447,8 @@ def test_the_pipeline_passes_its_connector_budget_on_to_the_gather() -> None:
         connectors=[_Stuck()],
         engine=client.app.state.divesafe.engine,
         now=now,
+        egress_basis=None,
+        model_host=None,
         connector_timeout_seconds=0.05,
     )
     # The ceiling is below the 30 s default, so a budget that is not passed on fails here.
@@ -570,6 +572,8 @@ def test_a_connector_budget_that_is_not_positive_finite_and_within_the_ceiling_i
                 connectors=[],
                 engine=client.app.state.divesafe.engine,
                 now=now,
+                egress_basis=None,
+                model_host=None,
                 connector_timeout_seconds=bad,
             )
         )
@@ -587,3 +591,26 @@ def test_the_full_connector_budget_and_a_small_one_are_accepted() -> None:
     for ok in (0.001, CONNECTOR_BUDGET_SECONDS):
         got = asyncio.run(gather_evidence([], site, now, now, now, timeout_seconds=ok))
         assert got.items == ()
+
+
+def _storage_down(repo: Any) -> None:
+    from divesafe.services import RepositoryUnavailableError
+
+    def down(*args: object, **kwargs: object) -> Any:
+        raise RepositoryUnavailableError("storage unavailable")
+
+    for method in ("get", "get_run", "admit", "create"):
+        setattr(repo, method, down)
+
+
+def test_a_503_on_a_read_never_claims_that_nothing_was_recorded() -> None:
+    """A read changes nothing, and a run may still finish: the 503 for a GET must not say
+    "nothing was recorded" (it would be untrue), while a write's 503 must still say it."""
+    client, _, repo = _build()
+    _storage_down(repo)
+    read = client.get(f"/v1/assessments/{'a' * 32}", headers=AUTH_A)
+    assert read.status_code == 503
+    assert read.json() == {"detail": "storage is unavailable; try again later"}
+    write = client.post("/v1/assessments", json=PLAN, headers=H)
+    assert write.status_code == 503
+    assert write.json() == {"detail": "storage is unavailable; nothing was recorded"}

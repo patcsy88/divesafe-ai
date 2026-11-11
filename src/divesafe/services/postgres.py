@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import timedelta
 from typing import Any
 
@@ -25,11 +26,18 @@ import psycopg
 from psycopg import sql
 from psycopg.errors import UniqueViolation
 from pydantic import ValidationError
+from pydantic_core import to_jsonable_python
 
+from divesafe.config.roles import RESERVED_ROLE_NAMES
 from divesafe.domain import AssessmentRecord, DivePlan
 from divesafe.services.migrations import (
     GUARD_FUNCTIONS,
     GUARD_TRIGGERS,
+    KNOWLEDGE_FUNCTIONS,
+    KNOWLEDGE_SEQUENCE,
+    KNOWLEDGE_TABLES,
+    _harden,
+    knowledge_problems,
     migrate,
     schema_problems,
 )
@@ -39,6 +47,7 @@ from divesafe.services.repository import (
     RecordExistsError,
     RecordNotFoundError,
     RepositoryIntegrityError,
+    RepositoryOutcomeUnknownError,
     RepositoryUnavailableError,
     UnstorableRecordError,
     check_successor,
@@ -58,6 +67,19 @@ CONNECT_TIMEOUT_SECONDS = 5
 STATEMENT_TIMEOUT_MS = 5000
 LOCK_TIMEOUT_MS = 3000
 _OPTIONS = f"-c statement_timeout={STATEMENT_TIMEOUT_MS} -c lock_timeout={LOCK_TIMEOUT_MS}"
+# `options` cannot pin DateStyle or client_encoding (PGDATESTYLE and PGCLIENTENCODING win over
+# it, and a stored role or database setting also applies); a session SET wins over both. psycopg
+# cannot load a timestamp in another DateStyle, nor encode every character in another encoding.
+_DATE_STYLE = "SET DateStyle = 'ISO, MDY'"
+_CLIENT_ENCODING = "SET client_encoding = 'UTF8'"
+# A stored serializable default would turn a certain refusal at commit into an unknown outcome,
+# and a stored read-only default would refuse every write.
+_ISOLATION = "SET default_transaction_isolation = 'read committed'"
+_READ_WRITE = "SET default_transaction_read_only = off"
+_SERVER_ENCODING = "SELECT current_setting('server_encoding')"
+_SESSION_SETUP = (_DATE_STYLE, _CLIENT_ENCODING, _ISOLATION, _READ_WRITE)
+
+logger = logging.getLogger(__name__)
 
 _RUNS_LOCK_KEY = 7_281_903_115
 _RUN_COLUMNS = (
@@ -68,16 +90,126 @@ _RUN_COLUMNS = (
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
-def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
+LOADER_ROLE_MISSING = "the knowledge loader role does not exist; create it before running db_init"
+# Columns the loader may insert into kb_status_events: never the ordering key or recorded_at.
+_LOADER_EVENT_COLUMNS = ("document_id", "version", "status", "hash_checked")
+
+
+class LoaderRoleError(RuntimeError):
+    """The knowledge loader role is missing or its name is not acceptable. Fixed messages."""
+
+
+class TempPrivilegeError(LoaderRoleError):
+    """TEMPORARY on the database is still held by PUBLIC or the loader after the revokes."""
+
+
+TEMP_STILL_HELD = "TEMPORARY on the database is still held by PUBLIC or the loader role"
+LOADER_ROLE_INVALID = "invalid loader role name"
+
+
+def check_role_name(role: str, *, what: str) -> None:
+    if not _ROLE_NAME.fullmatch(role) or role == "public" or role.startswith("pg_"):
+        raise ValueError(f"invalid {what} role name")
+
+
+def check_loader_role_name(role: str, app_role: str | None = None) -> None:
+    """Everything `install_schema` refuses for a loader role name, without echoing the value."""
+    check_role_name(role, what="loader")
+    if role == app_role or role in RESERVED_ROLE_NAMES:
+        raise ValueError(LOADER_ROLE_INVALID)
+
+
+def _kb_grants(
+    conn: psycopg.Connection[Any], app_role: str | None, loader_role: str | None
+) -> None:
+    _harden(conn)  # the read-backs below must use the built-in functions and catalogues
+    tables = sql.SQL("public.kb_documents, public.kb_chunks, public.kb_status_events")
+    conn.execute(sql.SQL("REVOKE ALL ON {} FROM PUBLIC").format(tables))
+    conn.execute(
+        "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete(), public.kb_no_truncate(), "
+        "public.kb_documents_insert(), public.kb_chunks_insert(), "
+        "public.kb_status_events_insert() FROM PUBLIC"
+    )
+    conn.execute("REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM PUBLIC")
+    row = conn.execute("SELECT current_database()").fetchone()
+    if row is None:
+        raise RepositoryUnavailableError("could not install the schema")
+    conn.execute(
+        sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(row[0]))
+    )
+    for role_name in (app_role, loader_role):
+        if role_name is None:
+            continue
+        role = sql.Identifier(role_name)
+        conn.execute(sql.SQL("REVOKE ALL ON {} FROM {}").format(tables, role))
+        conn.execute(
+            sql.SQL("REVOKE ALL ON SEQUENCE public.kb_status_event_order_seq FROM {}").format(role)
+        )
+        conn.execute(
+            sql.SQL(
+                "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete(), "
+                "public.kb_no_truncate(), public.kb_documents_insert(), "
+                "public.kb_chunks_insert(), public.kb_status_events_insert() FROM {}"
+            ).format(role)
+        )
+        conn.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(tables, role))
+    if loader_role is not None:
+        role = sql.Identifier(loader_role)
+        conn.execute(
+            sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM {}").format(sql.Identifier(row[0]), role)
+        )
+        conn.execute(sql.SQL("GRANT INSERT ON public.kb_documents TO {}").format(role))
+        conn.execute(sql.SQL("GRANT INSERT ON public.kb_chunks TO {}").format(role))
+        columns = sql.SQL(", ").join(sql.Identifier(c) for c in _LOADER_EVENT_COLUMNS)
+        conn.execute(
+            sql.SQL("GRANT INSERT ({}) ON public.kb_status_events TO {}").format(columns, role)
+        )
+    # REVOKE only warns when it changes nothing, so read the result back.
+    public_temp = conn.execute(
+        "SELECT has_database_privilege('public', current_database(), 'TEMPORARY')"
+    ).fetchone()
+    held = public_temp is None or public_temp[0] is not False
+    if loader_role is not None:
+        loader_temp = conn.execute(
+            "SELECT has_database_privilege(%s, current_database(), 'TEMPORARY')", (loader_role,)
+        ).fetchone()
+        held = held or loader_temp is None or loader_temp[0] is not False
+        # NOINHERIT / SET ROLE: any role the loader is a member of that holds TEMPORARY counts.
+        member_temp = conn.execute(
+            "SELECT r.rolname FROM pg_roles r "
+            "WHERE has_database_privilege(r.oid, current_database(), 'TEMPORARY') IS NOT FALSE "
+            "AND COALESCE(pg_has_role(%s, r.oid, 'MEMBER'), true) "
+            "AND r.rolname <> %s LIMIT 1",
+            (loader_role, loader_role),
+        ).fetchone()
+        held = held or member_temp is not None
+    if held:
+        raise TempPrivilegeError(TEMP_STILL_HELD)
+
+
+def install_schema(
+    admin_dsn: str, app_role: str | None = None, *, loader_role: str | None = None
+) -> None:
     """Create the table and guard as the OWNER role, and optionally grant a least-privilege
-    application role. Idempotent. Never run with the application's own credentials."""
-    if app_role is not None and (
-        not _ROLE_NAME.fullmatch(app_role) or app_role == "public" or app_role.startswith("pg_")
-    ):
-        raise ValueError("invalid application role name")
+    application role and the knowledge loader role (which must already exist; it is never created
+    here). Idempotent. Never run with the application's own credentials."""
+    if app_role is not None:
+        check_role_name(app_role, what="application")
+    if loader_role is not None:
+        check_loader_role_name(loader_role, app_role)
     migrate(admin_dsn, app_role=app_role)
     try:
         with psycopg.connect(admin_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
+            _harden(conn)
+            if loader_role is not None:
+                owner = conn.execute("SELECT current_user").fetchone()
+                found = conn.execute(
+                    "SELECT 1 FROM pg_roles WHERE rolname = %s", (loader_role,)
+                ).fetchone()
+                if owner is not None and owner[0] == loader_role:
+                    raise LoaderRoleError(LOADER_ROLE_INVALID)
+                if found is None:
+                    raise LoaderRoleError(LOADER_ROLE_MISSING)
             conn.execute("REVOKE ALL ON public.assessments FROM PUBLIC")
             conn.execute("REVOKE ALL ON public.pending_runs FROM PUBLIC")
             conn.execute("REVOKE ALL ON public.run_failure_counts FROM PUBLIC")
@@ -119,6 +251,7 @@ def install_schema(admin_dsn: str, app_role: str | None = None) -> None:
                         "REVOKE DELETE, TRUNCATE, TRIGGER, REFERENCES ON public.assessments FROM {}"
                     ).format(role)
                 )
+            _kb_grants(conn, app_role, loader_role)
     except psycopg.Error:
         raise RepositoryUnavailableError("could not install the schema") from None
 
@@ -149,6 +282,69 @@ def _same(a: Any, b: Any) -> bool:
     return bool(a == b)
 
 
+# Defaulted keys added inside the items of a top-level list (ADR 0012: each needs its own plan).
+_NESTED_NEW_DEFAULTS = {
+    "findings": "flagged_signals",
+    "cross_examination_findings": "flagged_signals",
+    "scenarios": "flagged_signals",
+}
+
+
+# Defaulted keys added inside the write-once `human_decision` (ADR 0026). A decision made before
+# they existed must come back unchanged when actual conditions are added later.
+_DECISION_NEW_DEFAULTS = ("key_id", "decided_by_creator")
+
+
+def _without_new_decision_defaults(data: dict[str, Any], stored: dict[str, Any]) -> None:
+    old, new = stored.get("human_decision"), data.get("human_decision")
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return
+    for key in _DECISION_NEW_DEFAULTS:
+        if key not in old and new.get(key) is None:
+            new.pop(key, None)
+
+
+def _without_new_nested_defaults(data: dict[str, Any], stored: dict[str, Any]) -> None:
+    """For the lists above: when a stored item lacks the key and the successor holds the empty
+    default, leave the key out so the append-only trigger sees the item unchanged."""
+    _without_new_decision_defaults(data, stored)
+    for name, key in _NESTED_NEW_DEFAULTS.items():
+        old_items, new_items = stored.get(name), data.get(name)
+        if not isinstance(old_items, list) or not isinstance(new_items, list):
+            continue
+        if len(old_items) != len(new_items):
+            continue
+        for old, item in zip(old_items, new_items, strict=True):
+            if (
+                isinstance(old, dict)
+                and isinstance(item, dict)
+                and key not in old
+                and _same(item.get(key), [])
+            ):
+                del item[key]
+
+
+def _without_new_defaults(new: AssessmentRecord, stored: Any) -> dict[str, Any]:
+    """The successor's JSON, minus top-level keys the stored row does not have whose value is the
+    model default. A row written before a field existed lacks its key, and the append-only
+    trigger refuses any other change to the record, so adding the default key would refuse every
+    update. Keys present in the stored row are always kept. Top-level keys are handled
+    generally; nested ones only for the lists in `_NESTED_NEW_DEFAULTS` (a nested field added later
+    needs its own entry).
+    The omitted key still loads as the same default, which the read-back checks."""
+    data: dict[str, Any] = json.loads(new.model_dump_json())
+    if not isinstance(stored, dict):
+        return data
+    _without_new_nested_defaults(data, stored)
+    for name, field in AssessmentRecord.model_fields.items():
+        if name in stored or name not in data or field.is_required():
+            continue
+        default = to_jsonable_python(field.get_default(call_default_factory=True))
+        if _same(default, data[name]):
+            del data[name]
+    return data
+
+
 @contextmanager
 def _storage_errors() -> Iterator[None]:
     """Translate driver and validation failures into typed errors that carry no connection
@@ -177,6 +373,77 @@ def _storage_errors() -> Iterator[None]:
 
 # has_parameter_privilege() exists from PostgreSQL 15.
 _PARAMETER_PRIVILEGES_FROM = 150000
+_MAINTAIN_PRIVILEGE_FROM = 170000
+_MAINTAIN = "MAINTAIN"
+_KB_TABLE_LIST = ", ".join(f"'{t}'" for t in KNOWLEDGE_TABLES)
+_KB_FUNCTION_LIST = ", ".join(f"'{f}'" for f in sorted(set(KNOWLEDGE_FUNCTIONS.values())))
+
+
+def _any_kb_table(condition: str) -> str:
+    return (
+        "EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        f"WHERE n.nspname = 'public' AND c.relname IN ({_KB_TABLE_LIST}) AND {condition})"
+    )
+
+
+def _self_or_member(function: str, args: str) -> str:
+    """`function(args)` for the current role, or `function(role, args)` for any other role it is a
+    member of: a NOINHERIT member, or one whose grant has INHERIT FALSE, does not inherit the
+    privilege but can still SET ROLE to it."""
+    return (
+        f"({function}({args}) OR EXISTS (SELECT 1 FROM pg_roles r "
+        "WHERE r.rolname <> current_user AND pg_has_role(current_user, r.oid, 'MEMBER') "
+        f"AND {function}(r.oid, {args})))"
+    )
+
+
+_KB_TABLE_WRITES = "'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'"
+_KB_COLUMN_WRITES = "'INSERT, UPDATE, REFERENCES'"
+_KB_SEQUENCE_USE = "'USAGE, SELECT, UPDATE'"
+_REPLICATION_ROLE_SET = "'session_replication_role', 'SET'"
+
+
+def _knowledge_privilege_checks() -> tuple[tuple[str, str], ...]:
+    """ADR 0022 conditions 11.4 and 11.5, app side: the application role may only SELECT the
+    knowledge tables, holds no column privilege, nothing on the ordering sequence, and neither
+    owns nor may EXECUTE a knowledge function. Each privilege counts when held directly, inherited,
+    or held by any role the application role is a member of (it could SET ROLE to it). A missing
+    object reads as false here; the knowledge catalogue check reports it."""
+    kb_function = (
+        "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+        f"WHERE n.nspname = 'public' AND p.proname IN ({_KB_FUNCTION_LIST}) AND {{}})"
+    )
+    sequence = f"to_regclass('public.{KNOWLEDGE_SEQUENCE}')"
+    return (
+        (
+            _any_kb_table("pg_has_role(current_user, c.relowner, 'MEMBER')"),
+            "owns a knowledge table",
+        ),
+        (
+            _any_kb_table(_self_or_member("has_table_privilege", f"c.oid, {_KB_TABLE_WRITES}")),
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            _any_kb_table(
+                _self_or_member("has_any_column_privilege", f"c.oid, {_KB_COLUMN_WRITES}")
+            ),
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            "COALESCE("
+            + _self_or_member("has_sequence_privilege", f"{sequence}, {_KB_SEQUENCE_USE}")
+            + ", false)",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            kb_function.format(_self_or_member("has_function_privilege", "p.oid, 'EXECUTE'")),
+            "can EXECUTE a knowledge function",
+        ),
+        (
+            kb_function.format("pg_has_role(current_user, p.proowner, 'MEMBER')"),
+            "owns a knowledge function",
+        ),
+    )
 
 
 class PostgresAssessmentRepository:
@@ -186,7 +453,32 @@ class PostgresAssessmentRepository:
         self._dsn = dsn
 
     def _connect(self) -> psycopg.Connection[Any]:
-        return psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
+        conn = psycopg.connect(self._dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS, options=_OPTIONS)
+        try:
+            for statement in _SESSION_SETUP:
+                conn.execute(statement)
+            conn.commit()  # each caller then starts its own transaction, as before
+        except BaseException:
+            conn.close()
+            raise
+        return conn
+
+    @contextmanager
+    def _transaction(self) -> Iterator[psycopg.Connection[Any]]:
+        """One write transaction on a new connection. A failure while committing raises
+        RepositoryOutcomeUnknownError: the server may have committed before the reply was lost.
+        Any earlier failure closes the connection uncommitted, so nothing was recorded."""
+        conn = self._connect()
+        try:
+            yield conn
+            try:
+                conn.commit()
+            except psycopg.Error:
+                raise RepositoryOutcomeUnknownError("storage unavailable") from None
+        finally:
+            # A failing close must never replace the outcome being raised.
+            with suppress(Exception):
+                conn.close()
 
     def verify(self, *, least_privilege: bool, owner_not_superuser: bool = False) -> list[str]:
         """Problems that make this store unsafe to use. Empty means the guard is in place.
@@ -196,7 +488,9 @@ class PostgresAssessmentRepository:
         schema or the database, is (or can become) a superuser, can create objects in the public
         schema or schemas in the database (a schema owner can drop the table without firing any
         trigger), may set the replica mode, can create roles, or can delete, truncate or create
-        triggers."""
+        triggers; and, for the knowledge tables (ADR 0022 condition 11), any privilege beyond
+        SELECT, a column privilege, the ordering sequence, EXECUTE on or ownership of a knowledge
+        function, or (PostgreSQL 17+) MAINTAIN."""
         problems: list[str] = []
         with _storage_errors(), self._connect() as conn:
             # A role or database setting of search_path must not let an object in another schema
@@ -204,6 +498,10 @@ class PostgresAssessmentRepository:
             conn.execute("SET search_path = pg_catalog, pg_temp")
             if conn.execute("SELECT to_regclass('public.assessments')").fetchone() == (None,):
                 return ["the assessments table does not exist (run db_init as the owner role)"]
+            # The session's UTF8 client encoding converts nothing for a SQL_ASCII database, and
+            # another server encoding refuses or loses some characters a record may hold.
+            if conn.execute(_SERVER_ENCODING).fetchone() != ("UTF8",):
+                problems.append("the database encoding is not UTF8 (create it with UTF8)")
             try:
                 with conn.transaction():
                     problems += schema_problems(conn)
@@ -216,6 +514,7 @@ class PostgresAssessmentRepository:
                     problems.append(
                         f"the {table} table does not exist (run db_init as the owner role)"
                     )
+            problems += self._knowledge_problems(conn)
             # Each guard trigger must be enabled and call its own function in `public`.
             calls = {
                 str(name): str(function)
@@ -263,6 +562,26 @@ class PostgresAssessmentRepository:
         return problems
 
     @staticmethod
+    def _knowledge_problems(conn: psycopg.Connection[Any]) -> list[str]:
+        """ADR 0022 condition 9. Read-only through SET LOCAL transaction_read_only, sent inside a
+        savepoint: when the savepoint is released the setting (and the rest of `_harden`) stays
+        until the end of the top-level transaction, so the rest of `verify()` runs read-only too;
+        if the savepoint rolls back, it is undone. A missing knowledge table is one problem (the
+        schema check also reports the pending migration); the detailed checks need all three."""
+        missing = [
+            f"the {table} table does not exist (run db_init as the owner role)"
+            for table in KNOWLEDGE_TABLES
+            if conn.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone() == (None,)
+        ]
+        if missing:
+            return missing
+        try:
+            with conn.transaction():
+                return knowledge_problems(conn, owner_is_current_user=False, read_only=True)
+        except psycopg.errors.InsufficientPrivilege:
+            return ["the application role cannot read the knowledge table definitions"]
+
+    @staticmethod
     def _privilege_problems(conn: psycopg.Connection[Any]) -> list[str]:
         """Ownership counts through role membership too: a member of the owning role has the
         owner's powers. Tables are passed as oids, so a missing table reads as false, not an
@@ -275,10 +594,14 @@ class PostgresAssessmentRepository:
             )
 
         def can(table: str, privileges: str) -> str:
-            return f"COALESCE(has_table_privilege(to_regclass('{table}'), '{privileges}'), false)"
+            held = _self_or_member("has_table_privilege", f"to_regclass('{table}'), '{privileges}'")
+            return f"COALESCE({held}, false)"
 
         functions = ", ".join(f"'{f}'" for f in sorted(set(GUARD_FUNCTIONS.values())))
         checks = (
+            # Every check below judges current_user; a stored `role` setting would make that a
+            # different role from the login role, whose own grants would go unchecked.
+            ("current_user <> session_user", "runs as a different role from its login role"),
             (owns("public.assessments"), "owns the table"),
             (
                 "COALESCE((SELECT pg_has_role(current_user, nspowner, 'MEMBER') FROM pg_namespace "
@@ -291,11 +614,15 @@ class PostgresAssessmentRepository:
                 "owns the database",
             ),
             (
-                "COALESCE(has_schema_privilege('public', 'CREATE'), false)",
+                "COALESCE("
+                + _self_or_member("has_schema_privilege", "'public', 'CREATE'")
+                + ", false)",
                 "can create objects in the public schema",
             ),
             (
-                "COALESCE(has_database_privilege(current_database(), 'CREATE'), false)",
+                "COALESCE("
+                + _self_or_member("has_database_privilege", "current_database(), 'CREATE'")
+                + ", false)",
                 "can create schemas in the database",
             ),
             (
@@ -334,21 +661,32 @@ class PostgresAssessmentRepository:
                 "AND pg_has_role(current_user, p.proowner, 'MEMBER'))",
                 "owns a guard function",
             ),
+            *_knowledge_privilege_checks(),
         )
         all_checks = list(checks)
         version = conn.execute("SELECT current_setting('server_version_num')::int").fetchone()
+        if version is not None and version[0] >= _MAINTAIN_PRIVILEGE_FROM:
+            all_checks.append(
+                (
+                    _any_kb_table(_self_or_member("has_table_privilege", f"c.oid, '{_MAINTAIN}'")),
+                    "holds MAINTAIN on a knowledge table",
+                )
+            )
         if version is not None and version[0] >= _PARAMETER_PRIVILEGES_FROM:
             # With this right the role could set session_replication_role = replica, which skips
             # ordinary triggers and constraints (the guard triggers are ENABLE ALWAYS, so they
             # still fire; the right stays refused as defence in depth).
             all_checks.append(
                 (
-                    "COALESCE(has_parameter_privilege('session_replication_role', 'SET'), false)",
+                    "COALESCE("
+                    + _self_or_member("has_parameter_privilege", _REPLICATION_ROLE_SET)
+                    + ", false)",
                     "may set session_replication_role (replica mode skips ordinary triggers)",
                 )
             )
         row = conn.execute("SELECT " + ", ".join(sql for sql, _ in all_checks)).fetchone()
-        assert row is not None
+        if row is None:
+            raise RepositoryUnavailableError("storage unavailable")
         return [
             f"the application role {name}"
             for (_, name), flag in zip(all_checks, row, strict=True)
@@ -361,7 +699,7 @@ class PostgresAssessmentRepository:
         _storable(record.model_dump())
         with _storage_errors():
             try:
-                with self._connect() as conn:
+                with self._transaction() as conn:
                     conn.execute(
                         "INSERT INTO public.assessments (id, record) VALUES (%s, %s::jsonb)",
                         (record.id, record.model_dump_json()),
@@ -381,7 +719,7 @@ class PostgresAssessmentRepository:
         if expected.id != new.id:
             raise InvalidSuccessorError("id may not change")
         _storable(new.model_dump())
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             row = conn.execute(
                 "SELECT record::text FROM public.assessments WHERE id = %s FOR UPDATE",
                 (expected.id,),
@@ -391,22 +729,31 @@ class PostgresAssessmentRepository:
             if AssessmentRecord.model_validate_json(row[0]) != expected:
                 raise ConflictError(expected.id)
             check_successor(expected, new)
+            intended = _without_new_defaults(new, json.loads(row[0]))
             cursor = conn.execute(
                 "UPDATE public.assessments SET record = %s::jsonb WHERE id = %s",
-                (new.model_dump_json(), new.id),
+                (json.dumps(intended), new.id),
             )
             if cursor.rowcount != 1:
                 raise RepositoryIntegrityError("the update did not apply")
-            self._read_back_must_match(conn, new)
+            self._read_back_must_match(conn, new, intended)
 
     @staticmethod
-    def _read_back_must_match(conn: psycopg.Connection[Any], record: AssessmentRecord) -> None:
+    def _read_back_must_match(
+        conn: psycopg.Connection[Any],
+        record: AssessmentRecord,
+        intended: dict[str, Any] | None = None,
+    ) -> None:
+        """`intended` is the exact JSON object that was written (default: the full dump). The
+        stored text must equal it exactly (types included), and must also load as a record equal
+        to `record`, so an omitted default key is tolerated only because it loads as the default."""
         row = conn.execute(
             "SELECT record::text FROM public.assessments WHERE id = %s", (record.id,)
         ).fetchone()
         if row is None:
             raise RepositoryIntegrityError("the record did not persist")
-        if not _same(json.loads(record.model_dump_json()), json.loads(row[0])):
+        wanted = json.loads(record.model_dump_json()) if intended is None else intended
+        if not _same(wanted, json.loads(row[0])):
             raise UnstorableRecordError("the record would not read back identical")
         if AssessmentRecord.model_validate_json(row[0]) != record:
             raise UnstorableRecordError("the record would not read back identical")
@@ -429,6 +776,22 @@ class PostgresAssessmentRepository:
         )
 
     @staticmethod
+    def _fetch_run(conn: psycopg.Connection[Any], run_id: str) -> tuple[Any, ...] | None:
+        """psycopg raises NotImplementedError (not a psycopg.Error) when it cannot load the run's
+        timestamps, as under a non-ISO DateStyle. `_connect` sets DateStyle, so this is a
+        backstop. Caught only here, so other bugs stay logged 500s."""
+        try:
+            return conn.execute(
+                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
+            ).fetchone()
+        except NotImplementedError:
+            logger.error(
+                "the driver could not load a stored run (check DateStyle or the column types)",
+                extra={"error_type": "NotImplementedError"},
+            )
+            raise RepositoryUnavailableError("storage unavailable") from None
+
+    @staticmethod
     def _expire(conn: psycopg.Connection[Any], run_id: str) -> None:
         conn.execute(
             "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
@@ -442,14 +805,12 @@ class PostgresAssessmentRepository:
     ) -> Admission:
         _storable(run.plan.model_dump(mode="json"))
         token = secrets.token_urlsafe(32)
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
             self._expire(conn, run.id)
             # The run is read before the record: a completion that commits between the two reads
             # is then seen by the second, so a finished id never starts a second run.
-            row = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
-            ).fetchone()
+            row = self._fetch_run(conn, run.id)
             if (
                 row is None
                 and conn.execute(
@@ -492,18 +853,14 @@ class PostgresAssessmentRepository:
                     lease,
                 ),
             )
-            stored = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run.id,)
-            ).fetchone()
+            stored = self._fetch_run(conn, run.id)
             assert stored is not None
             return Admission(kind="started", run=self._run_from(stored), run_token=token)
 
     def get_run(self, run_id: str) -> PendingRun | None:
         with _storage_errors(), self._connect() as conn, conn.transaction():
             self._expire(conn, run_id)
-            row = conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM public.pending_runs WHERE id = %s", (run_id,)
-            ).fetchone()
+            row = self._fetch_run(conn, run_id)
             return None if row is None else self._run_from(row)
 
     def complete(self, record: AssessmentRecord, run_token: str) -> bool:
@@ -512,7 +869,7 @@ class PostgresAssessmentRepository:
         if record.human_decision is not None or record.actual_conditions is not None:
             raise InvalidSuccessorError("a new record cannot already carry a decision")
         _storable(record.model_dump())
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             row = conn.execute(
                 "SELECT token_hash FROM public.pending_runs WHERE id = %s AND state = 'RUNNING' "
                 "AND lease_expires_at > clock_timestamp() FOR UPDATE",
@@ -535,7 +892,7 @@ class PostgresAssessmentRepository:
             return True
 
     def fail(self, run_id: str, run_token: str, code: FailureCode) -> bool:
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             cursor = conn.execute(
                 "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "
                 "failure_code = %s WHERE id = %s AND state = 'RUNNING' AND token_hash = %s",
@@ -546,7 +903,7 @@ class PostgresAssessmentRepository:
     def cleanup(self, *, retention: timedelta, batch: int) -> CleanupResult:
         """Mark expired running rows failed, then delete failed rows older than `retention` in a
         bounded batch, counting them by code first. Never touches `assessments`."""
-        with _storage_errors(), self._connect() as conn, conn.transaction():
+        with _storage_errors(), self._transaction() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (_RUNS_LOCK_KEY,))
             marked = conn.execute(
                 "UPDATE public.pending_runs SET state = 'FAILED', failed_at = clock_timestamp(), "

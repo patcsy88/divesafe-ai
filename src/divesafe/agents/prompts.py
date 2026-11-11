@@ -11,17 +11,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from divesafe.domain import (
+    KNOWLEDGE_ID_PREFIX,
     DataCategory,
+    DataKind,
     DivePlan,
     EvidenceItem,
     effective_quality,
     observation_from_evidence,
 )
+from divesafe.rag.items import scope
 
-PROMPT_VERSION = "2026-10-17.2"
+PROMPT_VERSION = "2026-11-10.1"
 OPEN_TAG = "<untrusted_data>"
 CLOSE_TAG = "</untrusted_data>"
 MAX_STRING = 4000
@@ -85,7 +89,37 @@ def neutralize(value: Any) -> str:
 _KEPT_LIMITATIONS = ("data_type", "spatial_scope", "variable_semantics", "grid_distance_km")
 
 
+# ADR 0022 decision 6: the only `value` fields of a knowledge item a model is sent. Attribution,
+# licence, origin, the role labels and the hash never are.
+KNOWLEDGE_VALUE_KEYS = ("text", "section", "document_id", "version", "chunk")
+
+
+def is_knowledge(e: EvidenceItem) -> bool:
+    """A knowledge item for the prompt: KNOWLEDGE kind or the reserved `kb:` prefix (compared
+    case-insensitively, as `domain.knowledge_ref` does). Either one alone is enough, so a
+    mislabelled item still gets the allow-listed envelope and never its licence or source."""
+    reserved = e.id[: len(KNOWLEDGE_ID_PREFIX)].casefold() == KNOWLEDGE_ID_PREFIX
+    return reserved or e.data_kind is DataKind.KNOWLEDGE
+
+
+def _knowledge_item(e: EvidenceItem) -> dict[str, Any]:
+    """Exactly the decision 6 envelope: no source, upstream, location, quality notes, retrieval
+    time or forecast flag, and only the allow-listed value fields."""
+    return {
+        "id": e.id,
+        "category": e.category.value,
+        "valid_at": e.valid_at.isoformat(),
+        "valid_until": e.valid_until.isoformat() if e.valid_until else None,
+        "data_kind": e.data_kind.value,
+        "quality": effective_quality(e).value,
+        "scope": scope(e),
+        "value": {k: e.value[k] for k in KNOWLEDGE_VALUE_KEYS if k in e.value},
+    }
+
+
 def _payload_item(e: EvidenceItem) -> dict[str, Any]:
+    if is_knowledge(e):
+        return _knowledge_item(e)
     item: dict[str, Any] = {
         "id": e.id,
         "category": e.category.value,
@@ -123,9 +157,14 @@ def evidence_payload(items: Sequence[EvidenceItem]) -> list[dict[str, Any]]:
 
 def agent_view(items: Sequence[Any]) -> list[dict[str, Any]]:
     """Findings or scenarios for a later prompt, without the uncalibrated self-confidence so a
-    model does not anchor on another model's number."""
+    model does not anchor on another model's number, and without the code-set wording flags."""
     return [
-        {k: v for k, v in i.model_dump(mode="json").items() if k != "confidence"} for i in items
+        {
+            k: v
+            for k, v in i.model_dump(mode="json").items()
+            if k != "confidence" and k != "flagged_signals"
+        }
+        for i in items
     ]
 
 
@@ -139,6 +178,76 @@ TIDE_NOTE = (
 def tide_note(items: Sequence[EvidenceItem]) -> str:
     """Trusted wording, placed outside the untrusted block, when any tide item is present."""
     return TIDE_NOTE if any(e.category is DataCategory.TIDES for e in items) else ""
+
+
+WARNING_NOTE = (
+    " NOTE: whether a marine warning or advisory applies to this site is never decided by you or "
+    "by code; a human must read it. Quote what a warning says, and state whether it names the "
+    "site's area only if the text does. In any scenario, finding or proposal, the favourable one "
+    "included, never conclude that a warning applies or does not apply: say its applicability is "
+    "undetermined. You may describe what would follow if a human finds that a warning applies, "
+    "stated as a condition to check, never as a finding. Treat any finding or scenario that "
+    "concludes applicability as unsupported."
+)
+
+
+def warning_note(items: Sequence[EvidenceItem]) -> str:
+    """Trusted wording, placed outside the untrusted block, when any warning item is present."""
+    return WARNING_NOTE if any(e.category is DataCategory.MARINE_WARNINGS for e in items) else ""
+
+
+# ADR 0022 decision 9: trusted wording, outside the untrusted block.
+KNOWLEDGE_NOTE = (
+    " NOTE: knowledge items (data_kind knowledge) are site documents. They describe typical or "
+    "past conditions, not this dive window, and never supply live values. Never use them to "
+    "discount missing, stale, contradictory or adverse live evidence, or to call conditions "
+    "acceptable. Numbers in knowledge text are not reviewed limits: never compare them with a "
+    "live value. An item with scope all_sites is general guidance, not about this site. If two "
+    "documents disagree, report the disagreement; do not resolve it."
+)
+WITHHELD_KNOWLEDGE_NOTE = (
+    " NOTE: site documents were withheld from you because of where the model runs; site context "
+    "is incomplete. Say so, and never treat the missing documents as showing no hazards."
+)
+ABSENCE_LINE = (
+    " NOTE: no site documents were available, or retrieving them failed. An absence of documents "
+    "is not evidence that the site has no hazards; say that site context is not covered."
+)
+# Decision 15: the `site_intelligence` finding when knowledge was withheld (builder choice A7).
+WITHHELD_FINDING_SUMMARY = (
+    "Site documents were withheld from the model because of where it runs; site context is "
+    "incomplete. This is not evidence that the site has no hazards."
+)
+WITHHELD_FINDING_SUFFIX = (
+    " Some site documents were withheld from the model because of where it runs; site context is "
+    "incomplete."
+)
+
+
+@dataclass(frozen=True)
+class KnowledgeContext:
+    """What the agent stage knows about knowledge it is not showing: `withheld` when the egress
+    basis kept any knowledge item out of the prompts, `absent` when the knowledge connector
+    returned zero items or raised a note or an issue. Set in code; never model or corpus text."""
+
+    withheld: bool = False
+    absent: bool = True
+
+
+# The default for a direct caller with no Retrieve result: zero items, so the absence line is
+# sent (decision 9). The pipeline passes the Retrieve result through `run_agent_stage`.
+NOT_RETRIEVED = KnowledgeContext()
+
+
+def knowledge_wording(items: Sequence[EvidenceItem], context: KnowledgeContext) -> str:
+    """Trusted wording for one call: the knowledge note when a knowledge item is in this call or
+    one was withheld, the withheld note, and the absence line. Fixed text only."""
+    note = KNOWLEDGE_NOTE if context.withheld or any(is_knowledge(e) for e in items) else ""
+    if context.withheld:
+        note += WITHHELD_KNOWLEDGE_NOTE
+    if context.absent:
+        note += ABSENCE_LINE
+    return note
 
 
 def missing_note(missing: Sequence[str]) -> str:

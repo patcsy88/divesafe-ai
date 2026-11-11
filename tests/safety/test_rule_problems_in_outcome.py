@@ -258,7 +258,6 @@ def test_the_token_limit_error_keeps_its_fixed_message_through_copy_and_pickle()
     import pickle
 
     from divesafe.models import TokenLimitError
-    from divesafe.models.ollama import OllamaError, OllamaTokenLimitError
     from divesafe.models.openai_compatible import (
         OpenAICompatibleError,
         OpenAICompatibleTokenLimitError,
@@ -266,7 +265,6 @@ def test_the_token_limit_error_keeps_its_fixed_message_through_copy_and_pickle()
 
     for cls, base in (
         (TokenLimitError, TokenLimitError),
-        (OllamaTokenLimitError, OllamaError),
         (OpenAICompatibleTokenLimitError, OpenAICompatibleError),
     ):
         for clone in (copy.copy(cls()), pickle.loads(pickle.dumps(cls()))):  # noqa: S301

@@ -10,13 +10,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from divesafe.agents.prompts import build_user_message, evidence_payload, tide_note
+from divesafe.agents.prompts import (
+    NOT_RETRIEVED,
+    WITHHELD_FINDING_SUFFIX,
+    WITHHELD_FINDING_SUMMARY,
+    KnowledgeContext,
+    build_user_message,
+    evidence_payload,
+    knowledge_wording,
+    tide_note,
+)
 from divesafe.agents.runner import MAX_EVIDENCE_ITEMS, AgentError, call_structured
 from divesafe.agents.schemas import FindingOutput
+from divesafe.agents.signal_screen import screen
 from divesafe.domain import DataCategory, DivePlan, EvidenceItem, Finding
 from divesafe.models import LLMProvider
 
 C = DataCategory
+SITE_INTELLIGENCE = "site_intelligence"
+NO_EVIDENCE_SUMMARY = "No evidence is available for this domain."
 
 
 @dataclass(frozen=True)
@@ -50,7 +62,7 @@ SPECIALISTS: tuple[SpecialistSpec, ...] = (
         "currents are coarse and not site-level.",
     ),
     SpecialistSpec(
-        "site_intelligence",
+        SITE_INTELLIGENCE,
         frozenset({C.SITE_INFORMATION, C.LOCAL_GUIDANCE, C.HISTORICAL_OBSERVATIONS}),
         "site characteristics, local guidance and history relevant to this plan.",
     ),
@@ -60,7 +72,9 @@ SPECIALISTS: tuple[SpecialistSpec, ...] = (
             {C.WEATHER, C.WIND, C.WAVES_SWELL, C.CURRENTS, C.TIDES, C.HISTORICAL_OBSERVATIONS}
         ),
         "the expected trend across the dive window and how reliable the forecasts are "
-        "(model run age, resolution, disagreement). Do not extrapolate beyond the evidence.",
+        "(model run age, resolution, disagreement). Do not extrapolate beyond the evidence. "
+        "Site documents describe typical or past conditions: never take a trend, a forecast or a "
+        "live value from them.",
     ),
 )
 
@@ -70,13 +84,18 @@ def relevant_evidence(spec: SpecialistSpec, evidence: Sequence[EvidenceItem]) ->
 
 
 async def run_specialist(
-    provider: LLMProvider, spec: SpecialistSpec, plan: DivePlan, evidence: Sequence[EvidenceItem]
+    provider: LLMProvider,
+    spec: SpecialistSpec,
+    plan: DivePlan,
+    evidence: Sequence[EvidenceItem],
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> Finding:
     items = relevant_evidence(spec, evidence)
+    withheld_here = knowledge.withheld and spec.name == SITE_INTELLIGENCE
     if not items:
-        return Finding(
-            agent=spec.name, summary="No evidence is available for this domain.", no_evidence=True
-        )
+        # ADR 0022 decision 15: never the false "no evidence" when site documents were withheld.
+        summary = WITHHELD_FINDING_SUMMARY if withheld_here else NO_EVIDENCE_SUMMARY
+        return Finding(agent=spec.name, summary=summary, no_evidence=True)
     if len(items) > MAX_EVIDENCE_ITEMS:
         raise AgentError(f"specialist:{spec.name}: too much evidence for one call")
 
@@ -85,7 +104,7 @@ async def run_specialist(
         instructions=(
             f"You are the {spec.name} specialist. Interpret {spec.focus} Report risk factors and "
             "conflicting signals, and cite the evidence ids behind each claim. Do not recommend "
-            "GO, CAUTION or NO-GO." + tide_note(items)
+            "GO, CAUTION or NO-GO." + tide_note(items) + knowledge_wording(items, knowledge)
         ),
         plan=plan,
         allowed_ids=[e.id for e in items],
@@ -99,11 +118,13 @@ async def run_specialist(
         output=FindingOutput,
         allowed_ids=frozenset(e.id for e in items),
     )
+    signals, flagged = screen(out.conflicting_signals, frozenset(e.id for e in items))
     return Finding(
         agent=spec.name,
-        summary=out.summary,
+        summary=out.summary + (WITHHELD_FINDING_SUFFIX if withheld_here else ""),
         risk_factors=out.risk_factors,
-        conflicting_signals=out.conflicting_signals,
+        conflicting_signals=signals,
+        flagged_signals=flagged,
         evidence_ids=out.evidence_ids,
         confidence=out.confidence,
     )

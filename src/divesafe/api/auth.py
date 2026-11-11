@@ -14,8 +14,9 @@ import hmac
 import json
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ACTOR = 100
+DEV_KEY_ID = "dev"
 _REFUSED = "nothing was recorded; an assessment without a recorded decision is still pending. "
 
 
@@ -38,18 +40,35 @@ class Role(StrEnum):
     VIEWER = "viewer"  # read assessments, evidence and sites
     ASSESSOR = "assessor"  # create assessments
     DECIDER = "decider"  # record the human decision and actual conditions
+    OVERRIDER = (
+        "overrider"  # as a decider, choose a LESS severe outcome than the system's (ADR 0026)
+    )
+    ADMIN = "admin"  # move a pending assessment to another decider; cannot decide (ADR 0026)
 
 
 @dataclass(frozen=True)
 class Principal:
     actor: str
     roles: frozenset[Role] = frozenset()
+    # A non-secret label of the key used (first 12 hex characters of its sha256, ADR 0026), or
+    # "dev". Empty only for a principal built by hand.
+    key_id: str = ""
+    # Read scope (ADR 0026): names of the groups this key belongs to. Empty = no scoping.
+    groups: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class KeyEntry:
     actor: str
     roles: frozenset[Role]
+    groups: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        # Normalised here too, so an entry built by hand compares like a parsed one.
+        names = {normalise_group(g) if isinstance(g, str) else None for g in self.groups}
+        if None in names:
+            raise ValueError(_FORMAT_ERROR)
+        object.__setattr__(self, "groups", frozenset(n for n in names if n is not None))
 
 
 class Authenticator(Protocol):
@@ -58,6 +77,14 @@ class Authenticator(Protocol):
     def canonical_decider(self, actor: str) -> str | None:
         """The configured name of `actor` if they are a known key holder who may decide."""
         ...
+
+    def groups_of(self, actor: str) -> frozenset[str]:
+        """The groups of the key holder called `actor` (empty when unknown)."""
+        ...
+
+
+def key_id_of(digest: str) -> str:
+    return digest[:12]
 
 
 def _actor(value: str) -> str | None:
@@ -79,7 +106,19 @@ class ApiKeyAuthenticator:
         for known, entry in self._hashes.items():  # no early exit: constant-ish time
             if hmac.compare_digest(known, digest):
                 match = entry
-        return Principal(match.actor, match.roles) if match else None
+        if match is None:
+            return None
+        principal = Principal(match.actor, match.roles, key_id_of(digest))
+        return replace(principal, groups=match.groups)
+
+    def groups_of(self, actor: str) -> frozenset[str]:
+        """The groups of the key holder called `actor` (empty when unknown)."""
+        wanted = actor.strip().casefold()
+        found: set[str] = set()
+        for e in self._hashes.values():
+            if e.actor.casefold() == wanted:
+                found |= e.groups
+        return frozenset(found)
 
     def canonical_decider(self, actor: str) -> str | None:
         wanted = actor.strip().casefold()
@@ -94,15 +133,51 @@ class DevAuthenticator:
 
     def authenticate(self, request: Request) -> Principal | None:
         actor = _actor(request.headers.get("x-dev-actor", ""))
-        return Principal(actor, frozenset(Role)) if actor else None
+        return Principal(actor, frozenset(Role), DEV_KEY_ID) if actor else None
 
     def canonical_decider(self, actor: str) -> str | None:
         return _actor(actor)
+
+    def groups_of(self, actor: str) -> frozenset[str]:
+        return frozenset()
 
 
 _FORMAT_ERROR = (
     'DIVESAFE_API_KEY_HASHES entries must be sha256-hex -> {"actor": name, "roles": [...]}'
 )
+
+
+_ENTRY_KEYS = {"actor", "roles", "groups"}
+_MAX_GROUPS = 20
+_GROUP_PUNCTUATION = frozenset(" ._-")
+
+
+def normalise_group(raw: str) -> str | None:
+    """NFKC, inner whitespace collapsed, casefolded; letters, digits, space, `.`, `_`, `-` only.
+    None when the name is empty, too long or has any other character. A control character is
+    refused before splitting, so `str.split` cannot turn it into a space."""
+    if any(unicodedata.category(c) in {"Cc", "Zl", "Zp"} for c in raw):
+        return None
+    name = " ".join(unicodedata.normalize("NFKC", raw).split())
+    folded = unicodedata.normalize("NFKC", name.casefold())
+    if not folded or len(folded) > _MAX_ACTOR:
+        return None
+    if not all(c.isalnum() or c in _GROUP_PUNCTUATION for c in folded):
+        return None
+    return folded
+
+
+def _groups(raw: object) -> frozenset[str]:
+    """At most 20 group names per key, each normalised by `normalise_group`."""
+    if not isinstance(raw, list) or len(raw) > _MAX_GROUPS:
+        raise ValueError(_FORMAT_ERROR)
+    names: set[str] = set()
+    for item in raw:
+        name = normalise_group(item) if isinstance(item, str) else None
+        if name is None:
+            raise ValueError(_FORMAT_ERROR)
+        names.add(name)
+    return frozenset(names)
 
 
 def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
@@ -122,7 +197,7 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
     for digest, value in data.items():
         if not isinstance(digest, str) or not _HEX64.fullmatch(digest):
             raise ValueError(_FORMAT_ERROR)
-        if not isinstance(value, dict) or set(value) != {"actor", "roles"}:
+        if not isinstance(value, dict) or not {"actor", "roles"} <= set(value) <= _ENTRY_KEYS:
             raise ValueError(_FORMAT_ERROR)
         actor = _actor(value["actor"]) if isinstance(value["actor"], str) else None
         roles = value["roles"]
@@ -137,7 +212,18 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
         role_set = frozenset(Role(r) for r in roles)
         if Role.DECIDER in role_set and Role.VIEWER not in role_set:
             raise ValueError("a decider key must also be a viewer: a decision needs the evidence")
-        entries[digest] = KeyEntry(actor, role_set)
+        if Role.OVERRIDER in role_set and not {Role.DECIDER, Role.VIEWER} <= role_set:
+            raise ValueError("an overrider key must also be a decider and a viewer")
+        if Role.ADMIN in role_set and Role.VIEWER not in role_set:
+            raise ValueError("an admin key must also be a viewer: moving needs the assessment")
+        if Role.ADMIN in role_set and Role.DECIDER in role_set:
+            raise ValueError(
+                "an admin key may not also be a decider: it could take over and decide"
+            )
+        entries[digest] = KeyEntry(actor, role_set, _groups(value.get("groups", [])))
+    labels = [key_id_of(d) for d in entries]
+    if len(set(labels)) != len(labels):
+        raise ValueError("DIVESAFE_API_KEY_HASHES has two keys with the same key id")
     names = [e.actor.casefold() for e in entries.values()]
     if len(set(names)) != len(names):
         raise ValueError("DIVESAFE_API_KEY_HASHES gives two keys the same actor name")
@@ -151,7 +237,18 @@ def build_authenticator(settings: Settings) -> Authenticator:
     if settings.api_key_hashes is None:
         logger.warning("no API keys configured; every authenticated request will be rejected")
         return ApiKeyAuthenticator({})
-    return ApiKeyAuthenticator(parse_api_key_hashes(settings.api_key_hashes.get_secret_value()))
+    entries = parse_api_key_hashes(settings.api_key_hashes.get_secret_value())
+    if settings.environment == "production" and any(
+        Role.VIEWER in e.roles and not e.groups for e in entries.values()
+    ):
+        unscoped = sorted(
+            key_id_of(d) for d, e in entries.items() if Role.VIEWER in e.roles and not e.groups
+        )
+        logger.warning(
+            "a viewer key has no groups, so it can read every assessment (ADR 0026)",
+            extra={"unscoped_viewers": unscoped},
+        )
+    return ApiKeyAuthenticator(entries)
 
 
 def client_source(request: Request, trusted_proxies: frozenset[str]) -> str:
@@ -212,7 +309,8 @@ def require_principal(request: Request) -> Principal:
 def require_role(role: Role, *, limit_key: str) -> Callable[[Request], Principal]:
     """Authenticate, check the role (403), then apply the actor's rate limit (429).
 
-    A denied request is not charged to the limiter."""
+    A request denied here is not charged to the limiter. (A 403 raised later, inside a handler,
+    such as "not the assigned decider" or "needs overrider", is charged.)"""
     return require_any_role((role,), limit_key=limit_key)
 
 

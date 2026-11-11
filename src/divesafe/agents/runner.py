@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from divesafe.agents.prompts import SYSTEM_PROMPT
+from divesafe.domain import MAX_EVIDENCE_ITEMS as _MAX_EVIDENCE_ITEMS
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
 from divesafe.models.llm import TokenLimitError
 
@@ -22,7 +22,7 @@ CALL_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 1500
 MAX_OUTPUT_TOKENS_CEILING = 8000
 MAX_OUTPUT_CHARS = 20_000
-MAX_EVIDENCE_ITEMS = 120
+MAX_EVIDENCE_ITEMS = _MAX_EVIDENCE_ITEMS  # one source: the record's per-stage bound
 MAX_PROMPT_CHARS = 200_000
 STAGE_TIMEOUT_SECONDS = 150.0
 
@@ -67,19 +67,39 @@ def output_tokens(provider: object) -> int:
     return min(value, MAX_OUTPUT_TOKENS_CEILING)
 
 
-_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+_FENCE = "```"
 
 T = TypeVar("T", bound=BaseModel)
 
 
+AgentErrorKind = Literal["failed", "timed_out", "rejected", "skipped"]
+
+
 class AgentError(Exception):
-    """An agent call failed or its output was rejected."""
+    """An agent call failed or its output was rejected. `kind` is a fixed label the callers may
+    branch on; the message text is never used for that. `label` is a fixed reason for a
+    rejection (`schema`, `unknown_evidence_id`, `too_long`); empty when there is none."""
+
+    def __init__(self, message: str, *, kind: AgentErrorKind = "failed", label: str = "") -> None:
+        super().__init__(message)
+        self.kind: AgentErrorKind = kind
+        self.label: str = label
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """A reply that repeats a key is ambiguous; it is refused, never resolved to the last value."""
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate key")
+    return dict(pairs)
 
 
 def _json_text(raw: str) -> str:
     text = raw.strip()
-    fenced = _FENCE.match(text)
-    return fenced.group(1) if fenced else text
+    # String handling, not a regex: overlapping whitespace repeats can backtrack for minutes.
+    if len(text) >= 2 * len(_FENCE) and text.startswith(_FENCE) and text.endswith(_FENCE):
+        inner = text[len(_FENCE) : -len(_FENCE)]
+        return inner.removeprefix("json").strip()
+    return text
 
 
 async def call_structured(
@@ -92,7 +112,7 @@ async def call_structured(
     timeout: float | None = None,
 ) -> T:
     if len(user_message) > MAX_PROMPT_CHARS:
-        raise AgentError(f"{task}: prompt too large")
+        raise AgentError(f"{task}: prompt too large", kind="rejected")
     request = LLMRequest(
         messages=(
             ChatMessage(role="system", content=SYSTEM_PROMPT),
@@ -102,27 +122,45 @@ async def call_structured(
         max_output_tokens=output_tokens(provider),
         json_schema=output.model_json_schema(),
     )
+    # The errors below are raised outside their `except` blocks, so `__context__` never holds a
+    # provider's or a model's text.
+    failure: AgentError | None = None
     try:
         response = await asyncio.wait_for(
             provider.complete(request),
             timeout=timeout if timeout is not None else call_timeout(provider),
         )
     except TimeoutError:
-        raise AgentError(f"{task}: provider timed out") from None
+        failure = AgentError(f"{task}: provider timed out", kind="timed_out")
     except TokenLimitError:
-        raise AgentError(f"{task}: output stopped at the token limit") from None
+        failure = AgentError(f"{task}: output stopped at the token limit")
     except Exception as exc:  # provider adapters may raise anything; never chain their text
-        raise AgentError(f"{task}: provider error ({type(exc).__name__})") from None
+        failure = AgentError(f"{task}: provider error ({type(exc).__name__})")
+    if failure is not None:
+        raise failure from None
 
     if len(response.text) > MAX_OUTPUT_CHARS:
-        raise AgentError(f"{task}: output too long")
+        raise AgentError(f"{task}: output too long", kind="rejected", label="too_long")
+    parsed: T | None = None
     try:
-        parsed = output.model_validate(json.loads(_json_text(response.text)))
-    except (json.JSONDecodeError, ValidationError, RecursionError) as exc:
-        raise AgentError(f"{task}: output rejected (not valid for the schema)") from exc
+        parsed = output.model_validate(
+            json.loads(_json_text(response.text), object_pairs_hook=_no_duplicate_keys)
+        )
+    except (json.JSONDecodeError, ValueError, ValidationError, RecursionError):
+        parsed = None
+    if parsed is None:
+        raise AgentError(
+            f"{task}: output rejected (not valid for the schema)",
+            kind="rejected",
+            label="schema",
+        ) from None
 
     cited: tuple[str, ...] = getattr(parsed, "evidence_ids", ())
     unknown = set(cited) - allowed_ids
     if unknown:
-        raise AgentError(f"{task}: output cites {len(unknown)} unknown evidence id(s)")
+        raise AgentError(
+            f"{task}: output cites {len(unknown)} unknown evidence id(s)",
+            kind="rejected",
+            label="unknown_evidence_id",
+        )
     return parsed

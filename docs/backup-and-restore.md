@@ -9,17 +9,25 @@ secrets. It has not been run on Linux, with real data, or with an archive from a
 
 | Covered | Not covered |
 | --- | --- |
-| Every table in the `divesafe` database: assessments (with human decisions and actual conditions), pending and failed runs, the migration record. | The secrets directory (`docker/secrets`). Keep it separately and securely: without it you cannot start the stack. The database passwords are not in the backup, and new ones are fine for a restored database. |
-| The schema, the three guard triggers and their functions. | Roles and passwords (the role script creates them on a new volume), and grants (`db-init` re-applies them). |
+| Every table in the `divesafe` database: assessments (with human decisions and actual conditions), pending and failed runs, the migration record, and the knowledge tables (documents, chunks with their **licensed text**, status events). | The secrets directory (`docker/secrets`). Keep it separately and securely: without it you cannot start the stack. The database passwords are not in the backup, and new ones are fine for a restored database. |
+| The schema, the three guard triggers, the nine knowledge guard triggers and their functions. | Roles and passwords (the role script creates them on a new volume), and grants (`db-init` re-applies them). |
 | | The TLS volume `db-tls` (a new certificate is made on the next start). |
 | | Anything outside the database: the signed ruleset, logs, `docker/production.env`. |
+
+## The archive contains the licensed corpus text
+
+Since ADR 0024 Amendment 1 (A7), **every dump and archive contains the knowledge corpus text**,
+which is licensed from its sources (ADR 0022 decision 13). A licence that is revoked later
+**cannot be honoured** in a dump or an off-machine copy that already exists: withdrawing the
+document removes it from use, not from old archives. Keep archives as you would keep the licensed
+sources themselves, and only where those licences allow.
 
 ## Who the scripts act as
 
 **Neither script uses the database superuser.** Anything that the owner role or an archive put into
 the database (a view over a function, an operator or aggregate in the `public` schema) can run
 when a superuser reads it, so reading as the superuser is not harmless. The dump, the fact queries
-and the restore all run as `divesafe_owner`, which owns the four tables and is not a superuser.
+and the restore all run as `divesafe_owner`, which owns the tables and is not a superuser.
 They connect from inside the `db` container; the password is read there, so it is on no command
 line and in no file or variable of the host. The fact queries also pin the search path to the
 system catalog and cast names to text, so nothing in `public` can stand in for the built-in
@@ -52,6 +60,24 @@ the person who already operates the stack. The API may stay up. Two cautions:
 
         docker/backup.sh /path/to/backups
 
+- **Upgrading across migration 4** (the knowledge tables): run `db-init` first (it applies the
+  migration), then back up with these scripts. The scripts before this change cannot back up a
+  database with knowledge tables, and these scripts refuse a database without them.
+- **Take a backup right after every `approve` or `withdraw`** (ADR 0024 A7, R1), so the newest
+  archive carries it.
+- Backup and restore **refuse while a `kb_load` or `kb_withdraw` container exists** in the project,
+  running or stopped (found by its compose service label; `compose run` containers carry it). Run
+  the loader with `--rm`, or remove a leftover container (`docker ps -a`). **If `docker ps -a`
+  itself fails, they refuse too** ("could not list ... containers"); an error is never read as "no
+  loader".
+- **That loader check is a point-in-time check, not the protection.** It looks once, before the
+  work starts; a loader started a moment later, under another compose project name or with plain
+  `docker run` is not seen. What actually protects the archive is the before/after facts check
+  below (a write in between makes it dump again) and the loader role itself, which can only
+  connect and add knowledge rows. **A scheduled backup needs an alert on failure**: a leftover
+  loader container makes every run refuse until someone removes it, and a silent refusal means
+  no backup.
+
 - The directory must be outside this repository, a real directory of yours with mode 0700 and no
   ACL entry (it is created with mode 0700 if missing). On a Mac, `ls -lde` must succeed and show no
   entry, so an ACL is seen even when extended attributes make `ls -l` print `@` instead of `+`. On
@@ -75,11 +101,18 @@ the person who already operates the stack. The API may stay up. Two cautions:
   added and removed in between without the number changing). On a database with steady writes
   all three tries can fail: nothing is kept and nothing is damaged, but there is then no backup
   until you stop the API for a moment.
-- The thirteen facts are: the number of assessments and of decided ones; a SHA-256 digest of every
+- The nineteen facts are: the number of assessments and of decided ones; a SHA-256 digest of every
   assessment (id, creation time in UTC in a fixed format, full record including the human decision
   and actual conditions, in `C` collation order); the number of pending runs and of failure
   counters (counts, not values); the applied migrations with their checksums; the names of the
-  guard triggers that are `ENABLE ALWAYS` (an archive made before migration 3, whose triggers are plain `ENABLE`, is refused); a hash of the definitions of the guard functions and triggers; the four
+  guard triggers that are `ENABLE ALWAYS` (an archive made before migration 3, whose triggers are plain `ENABLE`, is refused); a hash of the definitions of the guard functions and triggers; the
+  number of knowledge documents, chunks and status events; a SHA-256 **knowledge digest** of every
+  column of the three knowledge tables (documents including `manifest_sha256`; chunks including the
+  text and `content_sha256`; status events with document, version, status, ordering key,
+  `hash_checked` and the recording time in UTC in a fixed format; one JSON array per row, `C`
+  collation order), so an archive that lost a WITHDRAWN event, altered a chunk or swapped a
+  manifest hash does not pass; the names of the nine knowledge guard triggers that are `ENABLE
+  ALWAYS` and a hash of the knowledge functions' and triggers' definitions; the seven
   tables and that each is an ordinary table; the installed extensions; the number of settings
   stored for the database; a hash of the names of the relations and functions in `public` (only
   those two kinds); and `hardening`, a count that must be 0: schemas other than `public`, row-level-security policies, tables
@@ -87,8 +120,8 @@ the person who already operates the stack. The API may stay up. Two cautions:
   role, rules on tables in `public`, and `divesafe_owner` being a superuser (it is not one on a
   volume this stack created; a volume from the first version of the stack has a superuser owner and
   is refused). The queries run with `row_security = off`, so a policy makes them fail instead of
-  hiding rows. All thirteen must be present on both sides: a query that fails the same way on both
-  cannot pass as "equal". The backup stops if the three guard triggers are not all ENABLE ALWAYS, if a
+  hiding rows. All nineteen must be present on both sides: a query that fails the same way on both
+  cannot pass as "equal". The backup stops if the three guard triggers or the nine knowledge guard triggers are not all ENABLE ALWAYS, if a
   table is not an ordinary table, or if any setting or `hardening` count is not zero.
 - **Before it keeps the archive** it loads it into the throwaway container and requires the same
   facts there. If not, nothing is kept. That check catches accidents. It cannot stop an archive
@@ -97,10 +130,16 @@ the person who already operates the stack. The API may stay up. Two cautions:
 - The manifest also records the archive's SHA-256.
 
 **What the facts do not cover:** the content of `pending_runs`, the values of the failure
-counters, what other functions do, table grants, casts and operators, and whether the guard functions are
+counters, the position of the knowledge ordering sequence, what other functions do, table grants, casts and operators, and whether the guard functions are
 *correct* rather than unchanged (the owner owns them and could have replaced them before the
 backup; everything then agrees with the replacement). Only the names and the definitions' hash of
 the guard are checked.
+
+**The knowledge guard functions are different:** their bodies are **hash-pinned in the code** and
+checked at start-up, by `db-init` (`migrate()`) and by the API's `verify()`, against a pin per
+PostgreSQL major version (ADR 0022 condition 9). That pin, not the backup facts, is what refuses
+a replaced knowledge guard. The `kb_guard_defs` fact only shows that the archive and the database
+agree with each other.
 
 **The archive holds named human decisions and assessment content.** Treat it like the database:
 keep it off shared places, and encrypt it before it leaves the machine. Encryption, an off-machine
@@ -149,21 +188,54 @@ Then:
 4. Stop the stack. If you are not keeping the old volume, remove `<project>_db-data` (the scripts
    print its exact name). Keep the secrets directory.
 5. Start only the database: `docker compose -f docker/docker-compose.production.yml --env-file
-   docker/production.env up -d --wait db`. On an empty volume this creates the roles and an empty
-   `divesafe` database. **Do not start `db-init` or the API yet**: if either creates the schema
-   while the restore is checking, the load fails on the existing tables.
-6. `docker/restore.sh /path/to/divesafe-<time>.dump`
-7. Reconcile (below), then start the rest: `... up -d --wait api`. `db-init` re-applies the grants
-   and checks the schema ("schema is up to date"), and the API starts only if its start-up checks
-   pass.
+   docker/production.env up -d --wait db`. On an empty volume this creates the owner and app roles
+   and an empty `divesafe` database. **Do not start `db-init` or the API yet**: if either creates
+   the schema while the restore is checking, the load fails on the existing tables.
+   **This needs `DIVESAFE_CORPUS_DIR`** (every compose command on the production file does, even
+   for a service whose profile is off; ADR 0024 A3). If `docker/production.env` is lost or lacks
+   it, put the line back first, or give it on the command line for this one command
+   (`DIVESAFE_CORPUS_DIR=/an/absolute/dir/outside/the/repository docker compose ...`; a variable
+   in the shell wins over `--env-file`; an empty directory is enough, no loader runs here).
+   While compose cannot read the file, use plain `docker` for what you must do anyway: `docker
+   stop <name>` to stop a running API (`docker ps` shows the name).
+6. Create the loader role with the role script (`docs/knowledge-loader.md`), **before** the
+   restore. A role and `GRANT CONNECT` do not count as objects in `public`, so the restore still
+   sees an empty database (read from the script; part of the hand run, not yet done).
+7. `docker/restore.sh /path/to/divesafe-<time>.dump`. Its closing report lists every knowledge
+   version that is **not WITHDRAWN** (with its latest status and manifest hash) and every approval
+   with `hash_checked = false`, and says the grants are not yet applied.
+8. `... up db-init` (the table, sequence and role grants and revokes; `EXECUTE` on the knowledge
+   functions was already taken back from `PUBLIC` by `restore.sh`, and `db-init` stops if it was
+   not). The API must stay stopped.
+9. **Re-apply withdrawals by state, not by time:** every version in the withdrawal log that the
+   report shows as not WITHDRAWN, with `kb_withdraw` (`docs/knowledge-loader.md`). A version that
+   is already WITHDRAWN gets its own message (exit 16) and nothing is written, so this can be
+   repeated. After a manual recovery (below) re-apply **every** logged withdrawal instead. The
+   backup time is taken before the dump, so a withdrawal logged a little earlier may be in the
+   archive or not: compare with the report, never with the clock. A v2 approved after the archive
+   is simply absent and a superseded v1 governs again: re-load v2, or withdraw v1. **Nothing stops
+   the API starting before this step** (operator discipline). The withdrawal log has no agreed
+   home yet; the first production load waits for one.
+10. Reconcile (below), then start the API: `... up -d --wait api`. `db-init` checks the schema
+    again ("schema is up to date"), and the API starts only if its start-up checks pass.
+11. Take a backup.
+
+**An archive from before the knowledge tables (`format=1`) is refused** with a message that says
+it is the old format. Restore it with the old scripts, run from a `git worktree` of the commit they
+come from (`restore.sh` sources `backup-common.sh` from its own directory), into a database without
+the knowledge tables, then **run the role script (step 6, from this checkout) before** `db-init`
+(today's `db-init` refuses with `LOADER_ROLE_MISSING` without the loader role), then run `db-init`: commit `433b569` for an archive from before migration 3,
+and for later ones commit `915285c` (the scripts are unchanged from `6840d2b` through `75cbd58` to
+`915285c`: `git diff` of the three scripts between them is empty, checked 2026-11-09).
 
 `restore.sh` refuses to run when:
 
-- the manifest is missing, is not format 1, lacks any of the thirteen facts, does not list the three
-  guard triggers, four tables, no database setting and `hardening=0`, or the archive's SHA-256 differs from it (both files are copied
+- the manifest is missing, is format 1 (old) or not format 2, lacks any of the nineteen facts, does
+  not list the three guard triggers, the nine knowledge guard triggers, the seven tables, no database setting and `hardening=0`, or the archive's SHA-256 differs from it (both files are copied
   to a private temporary directory first, and the copies are what is read);
 - more than one container labelled as a compose `db` service is running;
 - the API is running;
+- a `kb_load` or `kb_withdraw` container exists in the project;
 - the database already has any table, view, sequence or function in `public` (the message names
   the project and says not to remove a volume that holds data);
 - the archive, loaded in the throwaway container, does not reproduce the manifest's facts.
@@ -171,23 +243,102 @@ Then:
 Only then does it load the archive, as `divesafe_owner`, in one transaction
 (`--single-transaction --exit-on-error`, `--no-owner --no-acl`), so for an archive made by
 `backup.sh` a failure leaves the database empty. (An archive made by hand can contain statements
-that end the transaction early; that is one more reason to restore only your own archives.) Grants come only from `db-init` (a restored function gets PostgreSQL's default `EXECUTE`
-for everyone). Afterwards it reads the restored database and compares it with the manifest again.
-On a mismatch the data stays committed: it tells you not to start the API, and in that case you
+that end the transaction early; that is one more reason to restore only your own archives.) Table
+and sequence grants come only from `db-init`. `--no-acl` also drops every function ACL, and a
+function with no ACL gets PostgreSQL's default: everyone may `EXECUTE` it. For the five
+`SECURITY DEFINER` knowledge guard functions (`kb_no_update_delete`, `kb_no_truncate`,
+`kb_documents_insert`, `kb_chunks_insert`, `kb_status_events_insert`), migration 4 revokes that
+default. `db-init` cannot put it back: its grants (`_kb_grants`) would revoke it, but `migrate()`
+checks the knowledge guard first and stops with "the knowledge guard is not intact after
+migrating: a role other than the owner may EXECUTE ...", so the grants never run (found by the A7
+hand run, 2026-11-11). So right after the load `restore.sh` runs `REVOKE EXECUTE ... FROM PUBLIC`
+on each of the five, in one transaction, then reads them back read-only: each must exist once,
+with an ACL whose only grantee is its owner (the read-back prints `5 5`). If the revoke or the
+read-back fails, it stops and says not to start the API; recover by hand (below). (The three
+`assessments_*` guard functions are not `SECURITY DEFINER`, keep the default ACL in the source
+database too, and are not affected.) **The backup facts do not cover function ACLs:**
+`guard_defs` and `kb_guard_defs` hash `pg_get_functiondef`, which does not include the ACL, and the
+scratch server also loads with `--no-acl`. So the trial load and both manifest comparisons match
+whatever the ACLs are; this read-back is the check. Afterwards it reads the restored database and
+compares it with the manifest again, then revokes `TEMPORARY` on the database from `PUBLIC` (extra
+protection only:
+`10-create-app-role.sh` already revoked everything from `PUBLIC`, `db-init` does again, and the
+loader refuses while `PUBLIC` holds TEMP). On a mismatch the data stays committed: it tells you not to start the API, and in that case you
 remove **the restored** volume only (it names it) and start again.
 
 If the script is interrupted after the load has committed, the final comparison did not run. A
 re-run will say the database is not empty. Run `docker/restore.sh --check <dump>` and start the
-API only after it says the database matches. If `--check` says it does NOT match on a database
+API only after it says the database matches. `--check` compares the manifest's facts **and** runs
+the same read-only read-back of `EXECUTE` on the five knowledge guard functions; it says "does NOT
+pass" unless that reads `5 5`. If `--check` says it does NOT match on a database
 that is empty, nothing committed (the load rolled back); run the restore again. `--check` writes nothing; while the API runs it
 matches only until the next write, so it is a check of a restored database, not a health check.
 A hard kill (`kill -9`) leaves a private copy of the archive in the system temporary directory;
 remove it.
 
+**Recovery when the function revoke or its read-back stopped the restore** (or `--check` says
+"does NOT pass" about a knowledge guard function, for example after an interruption between the
+load and the revoke). The data is loaded and a re-run is refused because `public` is not empty;
+`db-init` refuses too, for the reason above. With the API stopped, as `divesafe_owner` (the
+`in_db_owner` connection the scripts use, or the `owner` helper of the A7 hand run below), run:
+
+```sql
+BEGIN;
+REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_documents_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_chunks_insert() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;
+COMMIT;
+```
+
+then the read-back, which must return `5 5` (anything else: stop, and look at the five functions'
+owner and `proacl`; a missing function or another grantee is not something this fixes):
+
+```sql
+SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');
+```
+
+Then `docker/restore.sh --check <dump>` must say the database matches.
+
+**The closing report did not run** (every stop that needs this recovery comes before it), so step 9
+has no list of versions that are not WITHDRAWN. Run the report yourself, read-only as
+`divesafe_owner`. These are the statements `restore.sh` sends, in its order: the latest assessment
+time and the runs whose outcome is unknown (for the reconciliation below), the knowledge versions
+not WITHDRAWN, and the approvals with `hash_checked = false`:
+
+```sql
+BEGIN READ ONLY;
+SET LOCAL search_path = pg_catalog, pg_temp;
+SELECT 'latest assessment created (UTC): ' || COALESCE(to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'none') FROM public.assessments;
+SELECT 'runs whose outcome is unknown (marked running in the backup), before the api marks them failed:';
+SELECT id || ' ' || to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM public.pending_runs WHERE state = 'RUNNING' ORDER BY created_at;
+SELECT 'knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); compare with the withdrawal log and the approval record:';
+SELECT d.document_id || ' ' || d.version || ' ' || COALESCE((SELECT e.status FROM public.kb_status_events e WHERE e.document_id = d.document_id AND e.version = d.version ORDER BY e.event_order DESC LIMIT 1), 'none') || ' ' || d.manifest_sha256 FROM public.kb_documents d WHERE NOT EXISTS (SELECT 1 FROM public.kb_status_events w WHERE w.document_id = d.document_id AND w.version = d.version AND w.status = 'WITHDRAWN') ORDER BY d.document_id COLLATE "C", d.version;
+SELECT 'approvals with hash_checked = false (the manifest hash was not compared):';
+SELECT a.document_id || ' ' || a.version || ' ' || to_char(a.recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM public.kb_status_events a WHERE a.status = 'APPROVED' AND NOT a.hash_checked ORDER BY a.event_order;
+COMMIT;
+```
+
+Then continue with `db-init` (step 8). In step 9, **re-apply every logged withdrawal** with
+`kb_withdraw`, not only those this report lists: without the script's own report there is nothing
+else to compare with, and a repeat is safe. A version that is already WITHDRAWN is refused by the
+status-event trigger with its own SQLSTATE (`KB001`, migration 4), and `kb_withdraw` turns exactly
+that code into exit 16 "already withdrawn" with the existing `recorded_at`; the refused insert is
+rolled back, so nothing is written (`src/divesafe/services/kb_withdraw.py`, `_send_insert` and
+`_withdraw_on`; tested in `tests/integration/test_kb_withdraw_live.py`, where repeated withdrawals
+leave exactly one WITHDRAWN event). Exit 15 is the same refusal when the time could not be read.
+Two other exits are expected here: **exit 10** (version not found) for a version loaded after the
+archive was taken, which is simply absent, so there is nothing to withdraw (note it as a lost
+newer version, as above); **exit 12** (outcome unknown): re-run the same command, which is safe.
+
 The append-only guard is never switched off: the data is loaded first and the triggers are
 created after it, as part of a normal restore. **That also means a restore is the one way decided
 rows get into the database without the insert guard and without an authenticated actor.** The
-manifest check catches damage; it does not make an archive trustworthy.
+same holds for the knowledge tables: restored `kb_*` rows **skip the knowledge insert triggers**
+(the checks and stamps they make on a normal insert); damage to them is caught by the `kb_digest`
+fact, which covers every column of every row. The manifest check catches damage; it does not make
+an archive trustworthy.
 
 ## After a restore: reconcile before anyone acts on the data
 
@@ -281,7 +432,155 @@ A `pg_dump` archive is restorable by a newer server (documented behaviour, not r
 the last point above. Run the restore on a copy first, and keep the old volume until you have
 compared.
 
+## Knowledge rows for the A7 hand run
+
+The A7 hand run (ADR 0024 A7) needs a database with knowledge rows, but `kb_load load` and
+`approve` refuse on the production stack until the A6 gates are closed (exit 24, also with
+`DIVESAFE_ENVIRONMENT` changed, because the loader string comes from the secrets directory). **Do
+not lift that refusal for the hand run** (no `--entrypoint`, no edited module, no hand-made loader
+string). Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
+through the insert triggers, which still check and stamp every row. It never runs `kb_load`.
+
+- `tests/hand_run/a7_seed_knowledge.sh` runs `tests/hand_run/a7_seed_knowledge.sql` with `psql`
+  in the `db` container of the project named by `DIVESAFE_COMPOSE_PROJECT`. It refuses (exit 2,
+  before any `docker exec`) unless the name is `throwaway-<lower-case letters, digits, ->` and does
+  not contain `divesafe-prod`, and unless exactly one running `db` container has that project's
+  label. The SQL refuses a database that already holds any knowledge row.
+- It writes three documents, each version 1, all marked SYNTHETIC: `a7-approved` (DRAFT, APPROVED
+  with `hash_checked = true`), `a7-withdrawn` (DRAFT, APPROVED with `hash_checked = false`,
+  WITHDRAWN) and `a7-draft` (DRAFT). Four chunks. These cover the restore report's not-WITHDRAWN
+  list and its `hash_checked = false` list.
+- `tests/` is not in the image (`.dockerignore`), so the seed is run from the repository on the
+  host. A test runs the SQL against PostgreSQL 16 and 17 test databases
+  (`tests/integration/test_a7_seed_knowledge.py`); another runs the script's refusals against a
+  fake `docker` (`tests/unit/test_a7_seed_script.py`).
+
+Steps (on a developer machine with its own `docker/secrets` and `docker/production.env`; **not on
+the owner's production host unless the owner decides otherwise**. The owner did so on 2026-11-11
+for run 1, because the `single_database` check refuses while two compose `db` containers run and
+no other machine was available. If so: stop production first, with test secrets and env in a
+separate worktree and the model at `127.0.0.1:9`, `throwaway-*` projects only, a test image tag,
+never `divesafe-api:local`; only stop and start the production containers, never touch the
+production volume; and if any step fails, stop and restart production at once, before
+investigating. Run 1 left production stopped for about 6h20m instead of 5-10 minutes because the
+restart waited for the investigation.) Every compose command goes through `$C`, which names the throwaway
+project with `-p` and adds a test-only override that sets a **test image tag**; nothing here builds,
+tags or runs `divesafe-api:local`, and nothing touches a `divesafe-prod` project. Never add
+`--build` to a `$C` command. The work directory is outside the repository and is **never** the
+production backup directory. Run the blocks in one `bash` session (zsh does not split `$C` into
+words); `docker/production.env` needs `DIVESAFE_CORPUS_DIR` (an empty directory is enough).
+
+```sh
+# 0. A private work directory (mode 0700, outside the repository), a test image and its override.
+W="$(mktemp -d)"; mkdir -m 0700 "$W/backups"
+A7_IMAGE="divesafe-api:a7-test-$(date +%s)"
+docker build -f docker/Dockerfile -t "$A7_IMAGE" .
+cat >"$W/a7.override.yml" <<YML
+services:
+  db-init: { image: "$A7_IMAGE" }
+  api: { image: "$A7_IMAGE" }
+  kb_load: { image: "$A7_IMAGE" }
+  kb_withdraw: { image: "$A7_IMAGE" }
+YML
+use() {  # use <project>: sets the project for the scripts and for $C
+  export DIVESAFE_COMPOSE_PROJECT="$1"
+  C="docker compose -p $1 -f docker/docker-compose.production.yml -f $W/a7.override.yml --env-file docker/production.env"
+}
+role() {  # the role script (docs/knowledge-loader.md, section 2) in THIS project's db
+  $C exec -T -u postgres db sh -c 'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \
+    exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \
+    < docker/db/20-create-loader-role.sql
+}
+owner() {  # one read-only query as divesafe_owner in THIS project's db
+  $C exec -T db sh -c 'PGPASSWORD="$(cat /run/secrets/db_owner_password)" PGSSLMODE=require \
+    exec psql -X -At -v ON_ERROR_STOP=1 -h db -U divesafe_owner -d divesafe' <<SQL
+$1
+SQL
+}
+
+# 1. The source project.
+use throwaway-a7
+$C up -d --wait db            # new volume throwaway-a7_db-data
+role                          # exit 0
+$C up db-init                 # exits 0
+tests/hand_run/a7_seed_knowledge.sh
+                              # exit 0; last line: seeded documents=3 chunks=4 events=6
+docker/backup.sh "$W/backups" # prints "backup written: ..." and "scratch restore equals the
+                              # live database: assessments=0 decided=0"; the manifest in
+                              # $W/backups holds all 19 facts, with kb_documents=3,
+                              # kb_chunks=4, kb_status_events=6
+
+# 2. Stop the source db: the scripts refuse while two compose `db` containers run
+#    (single_database).
+$C stop db
+
+# 3. Restore into a second throwaway project: db, role BEFORE restore, restore, db-init.
+use throwaway-a7-restore
+$C up -d --wait db
+role                          # the "used database" check must still see an empty database
+docker/restore.sh "$W"/backups/divesafe-*.dump
+```
+
+Expected from `restore.sh`: "restored and matched the manifest: assessments=0 decided=0
+kb_documents=3 kb_status_events=6" (all 19 facts equal); **no** line "TEMP could not be revoked" and
+**no** line about the knowledge guard functions;
+then the report, whose knowledge part is exactly:
+
+```text
+knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); ...
+a7-approved 1 APPROVED aaaa...a (64 a)
+a7-draft 1 DRAFT cccc...c (64 c)
+approvals with hash_checked = false (the manifest hash was not compared):
+a7-withdrawn 1 <its recorded_at>
+```
+
+and finally "the grants are NOT yet applied. next, ...". Then:
+
+```sh
+owner "SELECT has_database_privilege('public', 'divesafe', 'TEMPORARY')"   # f (TEMP revoked)
+owner "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');"
+                                                                          # 5 5
+$C up db-init                                                             # exits 0
+owner "SELECT max(event_order) FROM public.kb_status_events"              # note it: M
+$C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its
+                                                                          # recorded_at, "withdrawn"
+owner "SELECT event_order, status FROM public.kb_status_events
+       WHERE document_id = 'a7-approved' ORDER BY event_order DESC LIMIT 1"
+                                                                          # WITHDRAWN, above M
+```
+
+A withdrawal whose `event_order` is not above `M`, or that fails on `UNIQUE(event_order)`, means
+the restored sequence was set back (ADR 0022 Known gaps): record it as a finding.
+
+Cleanup, always, whatever failed (the API is never started in either project):
+
+```sh
+use throwaway-a7-restore; $C --profile knowledge down -v
+use throwaway-a7;         $C --profile knowledge down -v
+rm -rf "$W"                   # the hand-run archives, manifests and the override file
+docker image rm "$A7_IMAGE"
+docker volume ls -q | grep throwaway-a7 || echo "no volumes left"
+```
+
+The archives hold only synthetic rows, but they are still archives: keep them in `$W` only, never
+in the production backup directory, and delete them with it.
+
 ## Not done
+
+- **The hand run of the knowledge changes (ADR 0024 A7) on a throwaway volume:** a backup and a
+  restore of a database with knowledge rows, the role-before-restore order and the "used database"
+  check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker`
+  cannot run SQL; the fact queries were run once against empty PostgreSQL 16 and 17 test
+  databases. **Run 1 (2026-11-11) failed** at `db-init` after the restore (the lost function
+  revoke, fixed above; everything before the restore matched this document). **Run 2
+  (2026-11-12) passed:** every result matched this document, production was stopped for 32
+  seconds, and the throwaway projects, image and archives were removed (ADR 0024 A7). What
+  remains: the live restore test restores as `postgres`, not `divesafe_owner`, so run 2 is the
+  only end-to-end check; the backup manifest has no fact for function ACLs, so only the
+  restore's read-back detects a lost revoke.
+- The read-only post-restore check (documents, versions, manifest hashes and latest status) is
+  the restore's closing report; there is no separate command to run it again later (its SQL is
+  given under the recovery above, to run by hand).
 
 - A schedule that actually runs the daily backup (the frequency is decided: daily), a failure
   alert, a retention period, an off-machine copy and encryption (operator decisions).

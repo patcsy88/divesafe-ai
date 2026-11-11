@@ -35,8 +35,8 @@ minimum interval per host; a request that would break it fails closed as a conne
 - Decisions are attributable to a configured actor, not to claimed free text.
 - Records are lost on restart until the PostgreSQL adapter exists. The in-memory adapter is for
   development and tests only.
-- API keys give an actor name but no roles; every authenticated actor can create, decide and
-  report. Role separation (for example only qualified dive leaders may override) is not built.
+- Superseded by ADR 0013 and ADR 0026: keys carry explicit roles, and a less severe human outcome
+  needs `overrider`.
 - Rate limiting is per process; multiple workers would each allow their own quota.
 
 ## Hardening applied after review
@@ -55,12 +55,12 @@ minimum interval per host; a request that would break it fails closed as a conne
 ## Production gates (not yet met)
 
 1. A tested PostgreSQL adapter (durable, single source of truth across workers).
-2. Roles: at minimum a permission for overriding, and ownership or group scoping of records
+2. Roles: a permission for overriding now exists (`overrider`, ADR 0026); still open: ownership or group scoping of records
    (GET by id currently relies on unguessable 128-bit ids only).
 3. Per-client and per-IP throttling and a repository size cap (the provider-limit guard protects
    upstream quotas, not the server). Terminate TLS and apply security headers at a proxy.
-4. Dev authentication is only blocked when `DIVESAFE_ENVIRONMENT=production`; set the
-   environment explicitly in every deployment. API keys must be random 256-bit values; the
-   decision record does not yet capture which key was used.
+4. Dev authentication is refused in production and whenever a database is configured (ADR 0026).
+   Set the environment explicitly in every deployment. API keys must be random 256-bit values. The
+   decision record captures which key was used (`key_id`, ADR 0026).
 5. Free text (`rationale`, `observations`) is untrusted audit data; it must be delimited and not
    sent to an LLM provider unless needed.

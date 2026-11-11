@@ -84,6 +84,22 @@ reachable but not yet approved or implemented. Nothing here has been called from
 - **HTTP hardening** (`divesafe.data.http`): https only; host allow-list on the first request
   and every redirect; at most 2 redirects; 2 MiB response cap; 30 s total deadline; error text
   omits query strings. Provider text echoed into issues is clipped and sanitised.
+- **Total deadline and own thread pool (owner choice, 2026-10-26; Code Review finding 4).** The
+  deadline is monotonic and enforced inside the worker thread. Body reads in the deadline path use
+  `response.read1` (one receive per call, up to 16 KiB, bounded by the time left); the size cap is
+  unchanged. The socket timeout is only ever lowered, to `min(current, remaining)` with a 1 ms
+  floor, and no connection is opened if the deadline has already passed. Each call has a `_Job`
+  that holds the open socket. When the caller times out or is cancelled, `abort()` sets the
+  `cancelled` flag and then shuts down and closes the socket from the event-loop side, so a worker
+  blocked in a read ends. The socket is registered only after connect and headers, so connect, DNS,
+  TLS and header stalls still rely on the socket timeout, capped at the remaining deadline.
+  `job.cancelled` is checked before connecting and on every read pass. Connector HTTP calls run on
+  a dedicated `ThreadPoolExecutor` (thread prefix `divesafe-http`), not asyncio's default pool.
+  Queued work whose caller gave up never opens a connection. Pool size is connectors x `DIVESAFE_MAX_RUNS_IN_FLIGHT`, floor
+  1, ceiling `HTTP_POOL_CEILING` = 64 (the maximum of that setting); by default 4 x 4 = 16 (20 with
+  MET or PHN, 24 with both). It is built at start-up in `api/state.py` and shut down in the app
+  lifespan with `wait=False, cancel_futures=True`. Code that builds getters without the app uses a
+  default 8-worker pool. Gaps are listed in "Not yet done (connectors)".
 - **Tests** use recorded real responses in `tests/fixtures` (see its README) and no live calls.
 
 ### Wind connector behaviour (verified 2026-10-09)
@@ -324,6 +340,16 @@ request at data.gov.my/data-request; (2) until answered, nothing is built.
 
 **TICON-4 check (2026-10-17; nothing built):** a Tioman gauge exists in the openly licensed (CC BY 4.0) TICON-4 tidal constants, from which tide.is computes its predictions. Datum, units and phase convention are unverified. The owner withdrew this route on 2026-10-17 ("Ignore TICON"); [ADR 0020](adr/0020-tide-predictions-from-ticon4.md) is kept as a record only.
 
+**Decided 2026-10-31 (owner): WorldTides and Tideschart not pursued.** WorldTides' terms
+(re-read, updated 2026-10-26) still bar use where anyone could come to harm, including
+safety-critical operations, and use as the only source for life-safety decisions. They also
+limit each request to one user. A display-only panel was considered and not pursued.
+Tideschart (`tideschart.com`, Terms of Use updated 2026-10-22, read with the owner's go-ahead)
+has no API or data licence and bars reproducing or copying any part of the site, so the only
+route would be scraping. Its predictions blend several national and global models with its own,
+so no source or station can be traced, and its methodology page says to use official tide tables
+from the national hydrographic office instead. Neither source gives tidal streams.
+
 **PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording is still not on file.
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
@@ -407,6 +433,32 @@ has no built-in default and must be chosen per category with a documented reason
   - The data.gov.my licence and attribution are unverified, and no attribution is emitted for
     either data.gov.my connector.
 
+- **HTTP deadline and pool: known gaps (2026-10-26).**
+  - **Corrected (2026-10-26):** the earlier note that a thread can outlive the deadline by about
+    `timeout_seconds` was too narrow for the earlier code, which on a slow drip could hold a thread
+    up to about 16K reads x the socket timeout. That is fixed by `read1` plus the cancel-time
+    close. The remaining overrun is connect, DNS, TLS and header stalls only, which rely on the
+    socket timeout (capped at the remaining deadline) because the socket is registered only after
+    the headers arrive.
+  - A slow `json.loads` of a capped body cannot be interrupted.
+  - The per-read tightening and the cancel-time close reach into the private
+    `response.fp.raw._sock`. If it is missing, a warning is logged once per process and both are
+    skipped. An offline test now proves the path exists on a real `http.client.HTTPResponse` (a
+    `socketpair`), but a later Python could still move it. The real slow-drip case against a live
+    server has not been run (a live check needs a network call and the owner's yes).
+  - No per-host thread limit: one misbehaving allow-listed host can hold every pool worker until
+    the deadline or a cancel, so every connector fails closed to INSUFFICIENT EVIDENCE. This is an
+    availability problem only.
+  - The executor queue is unbounded: cancelled jobs are skipped but sit in memory until a worker
+    reaches them. In practice it is bounded by `DIVESAFE_MAX_RUNS_IN_FLIGHT` and the rate limits.
+  - Process exit joins workers still held in connect or DNS, for up to the socket timeout.
+  - The pool swap in `configure_http_pool` and `shutdown_http_pool` is not locked.
+  - At shutdown, queued calls are cancelled, so awaiting runs see `CancelledError` (after
+    `runner.shutdown`); the run ends `FAILED` with no recommendation.
+  - Resizing the pool while runs are in flight lets running calls finish on the old pool.
+  - Several apps in one process share one module-level pool: the last `configure` wins, and one
+    app's shutdown reverts it.
+  - Connectors added to `AppState` elsewhere are not counted in the pool size.
 - **Rate limiting and caching (done, per process):** `CachingRateLimitedGetter` caches for 60 s
   and enforces a per-host minimum interval (0.5 s for Open-Meteo) and call budgets: 4 a minute for
   data.gov.my (of which the forecast may use 1, so it cannot starve the warnings), and Open-Meteo's

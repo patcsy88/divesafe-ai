@@ -73,7 +73,16 @@ def scripted(
             reply = overrides[task]
             return reply(request) if callable(reply) else reply
         ids = allowed_ids(request)[:2]
-        if task.startswith("specialist:"):
+        if task.startswith("cross_examination:"):
+            # ADR 0025 item 5: a second-round FindingOutput, a question only, citing allowed ids.
+            body = {
+                "summary": f"{task} peer question.",
+                "risk_factors": [],
+                "conflicting_signals": ["peer reading to check against the evidence"],
+                "evidence_ids": ids,
+                "confidence": 0.4,
+            }
+        elif task.startswith("specialist:"):
             body: dict[str, Any] = {
                 "summary": f"{task} reading of the cited evidence.",
                 "risk_factors": ["example risk factor"],
@@ -106,7 +115,13 @@ class _GoRule:
     citation = "test fixture (synthetic, not a real safety source)"
 
     def evaluate(self, plan: DivePlan, evidence: Sequence[EvidenceItem]) -> RuleResult:
-        return RuleResult(rule_id=self.rule_id, outcome=R.GO, rationale="synthetic")
+        # Cites the evidence supplied: the engine flags a GO that cites nothing.
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=R.GO,
+            rationale="synthetic",
+            evidence_ids=tuple(e.id for e in evidence),
+        )
 
 
 def engine(*, with_warning_rule: bool) -> RiskRulesEngine:
@@ -156,9 +171,17 @@ def run_pipeline(
             now=NOW,
             provider=provider,
             clock=lambda: NOW,
-            **extra,
+            **{**_egress(provider), **extra},
         )
     )
+
+
+def _egress(provider: object) -> dict[str, Any]:
+    """Today's behaviour for tests where knowledge is not the subject: a declared local server
+    with a provider, `no_agent_stage` without one. A test may pass its own values."""
+    if provider is None:
+        return {"egress_basis": None, "model_host": None}
+    return {"egress_basis": "declared_local", "model_host": "localhost"}
 
 
 def fake(**kwargs: Any) -> FakeProvider:

@@ -1,5 +1,5 @@
 """The evaluation harness with scripted providers, so it runs offline in CI. None of the five
-scripted models below produced an under-severe final recommendation. That guarantee comes from
+scripted models below produced an under-severe final recommendation. That property is enforced by
 `reconcile` and the record validator; these tests check the metrics would notice if it broke."""
 
 from __future__ import annotations

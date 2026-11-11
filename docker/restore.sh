@@ -5,14 +5,20 @@
 #
 #   docker compose -f docker/docker-compose.production.yml --env-file docker/production.env \
 #     up -d --wait db                      # on a new volume: creates the roles, no tables
+#   (the loader role script, docs/knowledge-loader.md: BEFORE the restore)
 #   docker/restore.sh /path/to/divesafe-<time>.dump
-#   docker compose ... up -d --wait api    # db-init then reports the schema up to date
+#   docker compose ... up db-init          # the grants and revokes; the api must stay stopped
+#   (re-apply every logged withdrawal the report shows as not WITHDRAWN, with kb_withdraw)
+#   docker compose ... up -d --wait api
 #
 #   docker/restore.sh --check /path/to/divesafe-<time>.dump   # compare the database with the
-#       manifest. Writes nothing. While the api runs it only matches until the next write: it is
-#       a check of a restored database, not a health check.
+#       manifest and check EXECUTE on the knowledge guard functions. Writes nothing. While the
+#       api runs it only matches until the next write: it is a check of a restored database, not a
+#       health check.
 #
-# It refuses to run if the API is up, if the database already has any table or function in
+# It refuses an archive in the old format 1 (made before the knowledge tables; restore it with the
+# old scripts, docs/backup-and-restore.md). It refuses to run if the API is up, if a loader
+# container exists, if the database already has any table or function in
 # `public`, or if the archive does not match its manifest. Before anything is written, the archive
 # is loaded into a throwaway server (no network, no secrets) and must reproduce the manifest. The
 # real load runs as divesafe_owner, which is not a superuser, in one transaction. Afterwards the
@@ -47,7 +53,11 @@ trap 'exit 1' INT TERM HUP
 cp "$dump" "$work/archive.dump"
 cp "$manifest" "$work/manifest"
 
-grep -qx 'format=1' "$work/manifest" || { echo "refusing: the manifest is not format 1" >&2; exit 1; }
+if grep -qx 'format=1' "$work/manifest"; then
+  echo "refusing: the archive is the old format 1, from before the knowledge tables; restore it with the old scripts (docs/backup-and-restore.md)" >&2
+  exit 1
+fi
+grep -qx 'format=2' "$work/manifest" || { echo "refusing: the manifest is not format 2" >&2; exit 1; }
 expected="$(grep '^dump_sha256=' "$work/manifest" | cut -d= -f2-)"
 actual="$(sha256_of "$work/archive.dump")"
 if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
@@ -56,22 +66,40 @@ if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
 fi
 want="$(compared_facts <"$work/manifest")"
 if ! facts_complete "$want"; then
-  echo "refusing: the manifest does not hold all thirteen facts" >&2
+  echo "refusing: the manifest does not hold all nineteen facts" >&2
   exit 1
 fi
 if ! shape_ok "$want"; then
-  echo "refusing: the manifest does not show the three guard triggers, the four tables, no settings and hardening=0" >&2
+  echo "refusing: the manifest does not show the three guard triggers, the nine knowledge guard triggers, the seven tables, no settings and hardening=0" >&2
   exit 1
 fi
 
+# guard_acl_ok: read-only. True only if each of the five knowledge guard functions exists once in
+# public and only its owner may EXECUTE it (a NULL proacl means PUBLIC may). The backup facts hash
+# the function definitions, which do not include the ACL, so the manifest cannot show this.
+guard_acl_ok() {
+  guard_acl="$(printf '%s\n' \
+    "BEGIN TRANSACTION READ ONLY;" \
+    "SET LOCAL search_path = pg_catalog, pg_temp;" \
+    "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');" \
+    "COMMIT;" |
+    in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1)" || return 1
+  [ "$guard_acl" = "5 5" ]
+}
+
 db="$(one_container db)"
 single_database
+no_loader kb_load kb_withdraw
 echo "project '$project' (volume ${project}_db-data)" >&2
 
 if [ "$check_only" -eq 1 ]; then
   got="$(read_live)" || got=""
   if [ "$want" != "$got" ]; then
     echo "the database does NOT match the manifest (or its facts could not be read)" >&2
+    exit 1
+  fi
+  if ! guard_acl_ok; then
+    echo "the database does NOT pass: a knowledge guard function may be executed by a role other than its owner (or its ACL could not be read). Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
     exit 1
   fi
   echo "the database matches the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided)=' | tr '\n' ' ')" >&2
@@ -106,6 +134,27 @@ fi
 in_db_owner pg_restore -h db -U divesafe_owner -d divesafe --no-password --no-owner --no-acl \
   --single-transaction --exit-on-error <"$work/archive.dump"
 
+# --no-acl also drops migration 4's REVOKE EXECUTE ... FROM PUBLIC on the five SECURITY DEFINER
+# knowledge guard functions, and a function with no ACL may be executed by PUBLIC. db-init cannot
+# repair that: its grants (_kb_grants) would revoke it, but migrate() checks the knowledge guard
+# first and refuses, so they never run. Put it back in one transaction, then read it back.
+printf '%s\n' \
+  "BEGIN;" \
+  "REVOKE EXECUTE ON FUNCTION public.kb_no_update_delete() FROM PUBLIC;" \
+  "REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM PUBLIC;" \
+  "REVOKE EXECUTE ON FUNCTION public.kb_documents_insert() FROM PUBLIC;" \
+  "REVOKE EXECUTE ON FUNCTION public.kb_chunks_insert() FROM PUBLIC;" \
+  "REVOKE EXECUTE ON FUNCTION public.kb_status_events_insert() FROM PUBLIC;" \
+  "COMMIT;" |
+  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1 >/dev/null || {
+  echo "restored, but EXECUTE on the knowledge guard functions could not be revoked from PUBLIC. Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
+  exit 1
+}
+if ! guard_acl_ok; then
+  echo "restored, but a knowledge guard function may be executed by a role other than its owner (or its ACL could not be read). Do not start the api; revoke it by hand (docs/backup-and-restore.md)." >&2
+  exit 1
+fi
+
 got="$(read_live)" || got=""
 if [ "$want" != "$got" ]; then
   echo "the restored data does NOT match the manifest (or its facts could not be read). Do not start the api." >&2
@@ -113,18 +162,29 @@ if [ "$want" != "$got" ]; then
   exit 1
 fi
 
-echo "restored and matched the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided)=' | tr '\n' ' ')" >&2
+echo "restored and matched the manifest: $(printf '%s\n' "$got" | grep -E '^(assessments|decided|kb_documents|kb_status_events)=' | tr '\n' ' ')" >&2
+# Extra protection only: 10-create-app-role.sh already revoked everything from PUBLIC on this
+# database, and db-init revokes again. The loader refuses while PUBLIC holds TEMP (ADR 0022 decision 10).
+printf '%s\n' "REVOKE TEMPORARY ON DATABASE divesafe FROM PUBLIC;" |
+  in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1 >/dev/null || {
+  echo "restored and matched, but TEMP could not be revoked from PUBLIC. Do not start the api; run db-init and check (docs/backup-and-restore.md)." >&2
+  exit 1
+}
 report="$(printf '%s\n' \
   "BEGIN READ ONLY;" \
   "SET LOCAL search_path = pg_catalog, pg_temp;" \
   "SELECT 'latest assessment created (UTC): ' || COALESCE(to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), 'none') FROM public.assessments;" \
   "SELECT 'runs whose outcome is unknown (marked running in the backup), before the api marks them failed:';" \
   "SELECT id || ' ' || to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM public.pending_runs WHERE state = 'RUNNING' ORDER BY created_at;" \
+  "SELECT 'knowledge versions not WITHDRAWN (document version latest-status manifest-sha256); compare with the withdrawal log and the approval record:';" \
+  "SELECT d.document_id || ' ' || d.version || ' ' || COALESCE((SELECT e.status FROM public.kb_status_events e WHERE e.document_id = d.document_id AND e.version = d.version ORDER BY e.event_order DESC LIMIT 1), 'none') || ' ' || d.manifest_sha256 FROM public.kb_documents d WHERE NOT EXISTS (SELECT 1 FROM public.kb_status_events w WHERE w.document_id = d.document_id AND w.version = d.version AND w.status = 'WITHDRAWN') ORDER BY d.document_id COLLATE \"C\", d.version;" \
+  "SELECT 'approvals with hash_checked = false (the manifest hash was not compared):';" \
+  "SELECT a.document_id || ' ' || a.version || ' ' || to_char(a.recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM public.kb_status_events a WHERE a.status = 'APPROVED' AND NOT a.hash_checked ORDER BY a.event_order;" \
   "COMMIT;" |
   in_db_owner psql -h db -U divesafe_owner -d divesafe -XAtq -v ON_ERROR_STOP=1)" || {
-  echo "restored and matched, but the latest-assessment time and the unknown runs could not be read." >&2
+  echo "restored and matched, but the latest-assessment time, the unknown runs or the knowledge versions could not be read." >&2
   echo "Do not start the api. Read them with psql as divesafe_owner first (docs/backup-and-restore.md)." >&2
   exit 1
 }
 printf '%s\n' "$report" | LC_ALL=C tr -cd '[:print:]\n' >&2
-echo "next: reconcile (docs/backup-and-restore.md), then start the api (db-init re-applies the grants)" >&2
+echo "the grants are NOT yet applied. next, with the api stopped: (1) up db-init; (2) re-apply every logged withdrawal listed above as not WITHDRAWN (kb_withdraw); (3) reconcile (docs/backup-and-restore.md); (4) start the api; (5) take a backup" >&2

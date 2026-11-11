@@ -96,6 +96,8 @@ def run_tide_check(provider: LLMProvider | None) -> TideCheck:
             engine=_engine(),
             now=NOW,
             provider=provider,
+            egress_basis=None if provider is None else "declared_local",
+            model_host=None if provider is None else "localhost",
             clock=lambda: NOW,
         )
     )

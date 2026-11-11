@@ -263,7 +263,9 @@ def test_llm_forced_severity_is_attributed_not_presented_as_a_rule_result() -> N
     from divesafe.api.schemas import AssessmentView
 
     note = AssessmentView.of(record).outcome_note
-    assert note.startswith("Rules alone: GO. An unverified LLM proposal raised this to NO-GO.")
+    assert note.startswith(
+        "Deterministic checks: GO. An unverified LLM proposal raised this to NO-GO."
+    )
 
 
 def test_missing_specialists_are_disclosed_to_later_prompts_and_to_the_user() -> None:
@@ -429,7 +431,7 @@ def test_hosted_providers_need_an_explicit_opt_in(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setitem(llm_module._REGISTRY, "openai", lambda s: _Hosted())
     with pytest.raises(RuntimeError, match="off-machine"):
         build_provider(Settings(llm_provider="openai"))
-    allowed = build_provider(Settings(llm_provider="openai", allow_external_llm=True))
+    allowed, _ = build_provider(Settings(llm_provider="openai", allow_external_llm=True))
     assert allowed is not None and allowed.external is True
 
 

@@ -16,7 +16,6 @@ from divesafe.config import Settings
 from divesafe.models import FakeProvider
 from divesafe.models import llm as llm_module
 from divesafe.models.egress import check_egress
-from divesafe.models.ollama import OllamaProvider
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 pytestmark = pytest.mark.safety
@@ -48,8 +47,10 @@ def test_the_declaration_or_the_external_opt_in_lets_a_loopback_server_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _with_stub(monkeypatch, external=False)
-    assert build_provider(_settings(llm_provider="openai", llm_server_is_local=True)) is not None
-    assert build_provider(_settings(llm_provider="openai", allow_external_llm=True)) is not None
+    provider, basis = build_provider(_settings(llm_provider="openai", llm_server_is_local=True))
+    assert provider is not None and basis == "declared_local"
+    provider, basis = build_provider(_settings(llm_provider="openai", allow_external_llm=True))
+    assert provider is not None and basis == "loopback_external_opt_in"
 
 
 def test_the_declaration_cannot_cover_a_server_that_is_not_on_this_machine(
@@ -60,7 +61,8 @@ def test_the_declaration_cannot_cover_a_server_that_is_not_on_this_machine(
         build_provider(_settings(llm_provider="openai", llm_server_is_local=True))
     with pytest.raises(RuntimeError, match="off-machine"):
         build_provider(_settings(llm_provider="openai"))
-    assert build_provider(_settings(llm_provider="openai", allow_external_llm=True)) is not None
+    provider, basis = build_provider(_settings(llm_provider="openai", allow_external_llm=True))
+    assert provider is not None and basis == "remote_external_opt_in"
 
 
 def test_the_declaration_and_the_external_opt_in_contradict_each_other() -> None:
@@ -79,14 +81,12 @@ def test_only_the_exact_fake_provider_is_exempt() -> None:
         check_egress(_Subclass(), settings)
 
 
-def test_the_real_adapters_on_loopback_need_the_declaration() -> None:
-    compat = OpenAICompatibleProvider("m", LOOPBACK_URL)
-    ollama = OllamaProvider("m", "http://localhost:11434")
-    assert compat.external is False and ollama.external is False
-    for provider in (compat, ollama):
-        with pytest.raises(RuntimeError, match="loopback"):
-            check_egress(provider, _settings())
-        check_egress(provider, _settings(llm_server_is_local=True))
+def test_the_real_adapter_on_loopback_needs_the_declaration() -> None:
+    provider = OpenAICompatibleProvider("m", LOOPBACK_URL)
+    assert provider.external is False
+    with pytest.raises(RuntimeError, match="loopback"):
+        check_egress(provider, _settings())
+    check_egress(provider, _settings(llm_server_is_local=True))
 
 
 def test_the_declaration_defaults_to_off() -> None:
@@ -192,9 +192,8 @@ def test_phn_data_with_a_model_server_not_declared_local_is_warned_about_at_star
 _CALLERS = {
     # name -> the only files that may mention it at all (call, index, pass as a value, iterate)
     "create_provider": {"models/llm.py", "models/__init__.py", "api/state.py"},
-    "OllamaProvider": {"models/ollama.py"},
     "OpenAICompatibleProvider": {"models/openai_compatible.py"},
-    "_factory": {"models/ollama.py", "models/openai_compatible.py"},
+    "_factory": {"models/openai_compatible.py"},
     "_REGISTRY": {"models/llm.py"},
 }
 
@@ -232,13 +231,13 @@ def test_the_caller_scan_pattern_matches_the_ways_a_provider_is_reached() -> Non
     for text in (
         "create_provider(s)",
         "models.create_provider (s)",
-        "OllamaProvider('m', 'u')",
-        "ollama._factory(s)",
-        "llm._REGISTRY['ollama'](s)",
-        "llm._REGISTRY.get('ollama')(s)",
+        "OpenAICompatibleProvider('m', 'u')",
+        "openai_compatible._factory(s)",
+        "llm._REGISTRY['openai_compatible'](s)",
+        "llm._REGISTRY.get('openai_compatible')(s)",
         "for f in llm._REGISTRY.values(): f(s)",
         "loop.run_in_executor(None, create_provider, s)",
-        "list(map(OllamaProvider, xs))",
+        "list(map(OpenAICompatibleProvider, xs))",
         "from divesafe.models import create_provider as cp",
     ):
         assert any(_mentions(name, text) for name in _CALLERS), text
@@ -252,12 +251,11 @@ def test_every_registered_real_adapter_runs_the_loopback_peer_check(
     """`declared_local` is returned for any provider whose address is on this machine, and ADR 0022
     treats it as unfiltered, so each real adapter must verify the connected peer. A new adapter
     fails here until it does (or the exception is written down in ADR 0023)."""
-    import divesafe.models.ollama  # noqa: F401  (registers the adapter)
     import divesafe.models.openai_compatible  # noqa: F401
     from divesafe.models.loopback import LoopbackHTTPHandler, LoopbackHTTPSHandler
 
     real = {name: factory for name, factory in llm_module._REGISTRY.items() if name != "fake"}
-    assert {"ollama", "openai_compatible"} <= set(real)
+    assert {"openai_compatible"} <= set(real)
     seen: dict[str, list[type]] = {}
     for name, factory in real.items():
         handlers: list[type] = []
@@ -269,7 +267,7 @@ def test_every_registered_real_adapter_runs_the_loopback_peer_check(
             _settings(
                 llm_provider=name,
                 llm_model="m",
-                llm_base_url="http://127.0.0.1:1" if name == "ollama" else LOOPBACK_URL,
+                llm_base_url=LOOPBACK_URL,
                 llm_server_is_local=True,
             )
         )
@@ -304,7 +302,9 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
     monkeypatch.setattr(live, "ALLOW_EXTERNAL", "false")
     monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
-    with pytest.raises(pytest.skip.Exception, match="loopback"):
+    with pytest.raises(
+        pytest.skip.Exception, match="egress refused: the LLM server is not declared"
+    ):
         live._setup()
 
     def basis() -> str:
@@ -432,4 +432,52 @@ def test_the_fake_provider_still_turns_the_agent_stage_off_outside_production() 
     that is the only way the stage is off. If this stopped being true the production refusal
     above would no longer be the whole story."""
     for environment in ("development", "test"):
-        assert build_provider(Settings(environment=environment)) is None  # type: ignore[arg-type]
+        assert build_provider(Settings(environment=environment)) == (None, "no_agent_stage")  # type: ignore[arg-type]
+
+
+def test_check_egress_refuses_both_flags_even_when_settings_validation_was_skipped() -> None:
+    """`model_construct` and `model_copy` skip the `Settings` validators, so the gate checks the
+    pair itself: both flags set must never read as `declared_local`."""
+    both = Settings.model_construct(llm_server_is_local=True, allow_external_llm=True)
+    for external in (False, True):
+        with pytest.raises(RuntimeError, match="contradict"):
+            check_egress(_Stub(external), both)
+    with pytest.raises(RuntimeError, match="contradict"):
+        check_egress(OpenAICompatibleProvider("m", LOOPBACK_URL), both)
+    copied = _settings(llm_server_is_local=True).model_copy(update={"allow_external_llm": True})
+    with pytest.raises(RuntimeError, match="contradict"):
+        check_egress(_Stub(False), copied)
+
+
+def test_a_remote_host_must_be_listed_even_with_the_external_opt_in() -> None:
+    """The allow-list is the last guard against a mistyped https host receiving the prompt."""
+    url = "https://llm.example.org/v1"
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OpenAICompatibleProvider("m", url)
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"other.example.org"}))
+    with pytest.raises(ValueError, match="DIVESAFE_LLM_ALLOWED_HOSTS"):
+        build_provider(
+            _settings(
+                llm_provider="openai_compatible",
+                llm_model="m",
+                llm_base_url=url,
+                allow_external_llm=True,
+            )
+        )
+    with pytest.raises(ValueError, match="must use https"):
+        OpenAICompatibleProvider(
+            "m", "http://llm.example.org/v1", allowed_hosts=frozenset({"llm.example.org"})
+        )
+    built, basis = build_provider(
+        _settings(
+            llm_provider="openai_compatible",
+            llm_model="m",
+            llm_base_url=url,
+            llm_allowed_hosts="llm.example.org",
+            allow_external_llm=True,
+        )
+    )
+    assert built is not None and basis == "remote_external_opt_in"
+    listed = OpenAICompatibleProvider("m", url, allowed_hosts=frozenset({"llm.example.org"}))
+    check_egress(listed, _settings(allow_external_llm=True))

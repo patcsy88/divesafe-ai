@@ -15,7 +15,9 @@
 # That check catches accidents; it cannot stop an archive from making the throwaway server print
 # whatever it likes.
 #
-# The archive holds assessments, evidence and named human decisions: treat it like the database.
+# The archive holds assessments, evidence, named human decisions and the licensed knowledge text:
+# treat it like the database and like the licensed sources (a licence revoked later cannot be
+# honoured in an archive that already exists). Take one right after every approve or withdraw.
 # Encrypting it and moving it off this machine are yours (see the document). It never prints the
 # database password, and it contains no role or password. It does not use the database superuser.
 set -eu
@@ -50,6 +52,7 @@ esac
 
 db="$(one_container db)"
 single_database
+no_loader kb_load kb_withdraw
 echo "backing up project '$project' (volume ${project}_db-data)" >&2
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 base="$dir/divesafe-$stamp"
@@ -89,7 +92,7 @@ while :; do
 done
 
 if ! shape_ok "$before"; then
-  echo "a guard trigger is missing, disabled or not ENABLE ALWAYS (a database made before migration 3 needs db-init first), a table is not a table, or the database has a policy, a default privilege, a stored setting, a rule, another schema or an owner with too many rights; not kept" >&2
+  echo "a guard trigger is missing, disabled or not ENABLE ALWAYS (a database made before migration 3 or 4 needs db-init first), a table is not a table, or the database has a policy, a default privilege, a stored setting, a rule, another schema or an owner with too many rights; not kept" >&2
   exit 1
 fi
 scratch="$(read_scratch "$base.dump.part")" || scratch=""
@@ -99,7 +102,7 @@ if [ "$scratch" != "$before" ]; then
 fi
 
 {
-  echo "format=1"
+  echo "format=2"
   echo "created_utc=$stamp"
   echo "dump_file=$(basename "$base.dump")"
   echo "dump_sha256=$(sha256_of "$base.dump.part")"

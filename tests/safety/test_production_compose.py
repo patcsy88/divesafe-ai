@@ -14,6 +14,7 @@ pytestmark = pytest.mark.safety
 COMPOSE = Path(__file__).resolve().parents[2] / "docker" / "docker-compose.production.yml"
 SECRET_WORDS = ("PASSWORD", "API_KEY", "TOKEN", "KEY_HASHES", "DATABASE_URL")
 TOKEN_BUDGET_KEY = "DIVESAFE_LLM_MAX_OUTPUT_TOKENS"
+LOADERS = ("kb_load", "kb_withdraw")
 
 
 def _blocks(text: str, top: str) -> dict[str, list[str]]:
@@ -50,7 +51,9 @@ def text() -> str:
 @pytest.fixture(scope="module")
 def services(text: str) -> dict[str, list[str]]:
     found = _blocks(text, "services")
-    assert set(found) == {"db-tls", "db", "db-init", "api"}, "a service was added or removed"
+    assert set(found) == {"db-tls", "db", "db-init", "api", "kb_load", "kb_withdraw"}, (
+        "a service was added or removed"
+    )
     return found
 
 
@@ -123,6 +126,12 @@ def test_the_secret_name_check_rejects_each_way_round_the_one_exception() -> Non
         "the key in lower case": {"api": {TOKEN_BUDGET_KEY.lower(): "abc123"}},
         "a near-name literal": {"api": {TOKEN_BUDGET_KEY + "_X": "abc123"}},
         "a credential named like the secret files": {"api": {"DIVESAFE_MET_API_TOKEN": "abc"}},
+        "the loader string as a literal": {
+            "kb_load": {
+                "DIVESAFE_LOADER_DATABASE_URL": "postgresql://divesafe_loader:x@db/divesafe"
+            }
+        },
+        "the loader string on kb_withdraw": {"kb_withdraw": {"DIVESAFE_LOADER_DATABASE_URL": "x"}},
     }
     for label, environments in bad.items():
         assert _secret_name_problems(environments), label
@@ -138,6 +147,7 @@ def test_the_api_never_sees_the_owner_credentials(services: dict[str, list[str]]
         "api_key_hashes",
         "met_api_token",
     }
+    assert "loader" not in api.lower(), "the API never receives the loader credential (A4)"
 
 
 def test_only_the_schema_job_sees_the_owner_url(services: dict[str, list[str]]) -> None:
@@ -152,6 +162,7 @@ def test_the_api_runs_in_production_with_the_agent_stage_on(
     assert env["DIVESAFE_ENVIRONMENT"] == "production"
     assert env["DIVESAFE_LLM_PROVIDER"] not in ("fake", "")
     assert env["DIVESAFE_ALLOW_EXTERNAL_LLM"] == '"true"'
+    # Also ADR 0022 decision 15: without the declaration every knowledge item is withheld.
     assert "DIVESAFE_LLM_SERVER_IS_LOCAL" not in env, "contradicts the external opt-in (ADR 0023)"
     assert "DIVESAFE_AUTH_MODE" not in env or "dev" not in env["DIVESAFE_AUTH_MODE"]
     assert env["DIVESAFE_SECRETS_DIR"] == "/run/secrets"
@@ -174,12 +185,13 @@ def test_the_model_host_and_the_evidence_age_have_no_default(
 def test_the_database_is_not_published_and_the_data_network_has_no_route_out(
     text: str, services: dict[str, list[str]]
 ) -> None:
-    for name in ("db", "db-tls", "db-init"):
+    for name in ("db", "db-tls", "db-init", *LOADERS):
         assert not any(line.strip() == "ports:" for line in services[name]), name
     networks = _blocks(text, "networks")
     assert "internal: true" in "\n".join(networks["data"])
     assert "internal: true" not in "\n".join(networks["egress"])
-    assert "egress" not in "\n".join(services["db"] + services["db-init"] + services["db-tls"])
+    for name in ("db", "db-init", "db-tls", *LOADERS):
+        assert "egress" not in "\n".join(services[name]), name
 
 
 def test_the_api_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
@@ -208,7 +220,7 @@ def test_every_service_drops_capabilities_and_blocks_privilege_gain(
 def test_the_api_and_the_schema_job_have_a_read_only_filesystem(
     services: dict[str, list[str]],
 ) -> None:
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         assert "read_only: true" in "\n".join(services[name]), name
 
 
@@ -231,7 +243,7 @@ def test_the_secrets_script_never_prints_or_overwrites_a_secret() -> None:
     script = (COMPOSE.parent / "make-secrets.sh").read_text()
     assert '[ -e "$target" ]' in script
     assert "umask 077" in script
-    assert not re.search(r"echo[^\n]*(\$owner_password|\$app_password)", script)
+    assert not re.search(r"echo[^\n]*(\$owner_password|\$app_password|\$loader_password)", script)
     assert not re.search(r"\b(set -x|set -.*x)\b", script)
 
 
@@ -260,13 +272,15 @@ def test_each_service_is_on_exactly_the_networks_it_should_be(
 ) -> None:
     assert _value(services["db"], "networks") == "[data]"
     assert _value(services["db-init"], "networks") == "[data]"
+    for name in LOADERS:
+        assert _value(services[name], "networks") == "[data]", name
     assert _value(services["api"], "networks") == "[data, egress]"
     assert _value(services["db-tls"], "network_mode") == "none"
     assert _value(services["db-tls"], "networks") is None
 
 
 def test_no_database_service_publishes_a_port_in_any_form(services: dict[str, list[str]]) -> None:
-    for name in ("db", "db-tls", "db-init"):
+    for name in ("db", "db-tls", "db-init", *LOADERS):
         assert _value(services[name], "ports") is None, name
         assert _value(services[name], "expose") is None, name
 
@@ -276,6 +290,8 @@ def test_capabilities_are_the_expected_ones_and_nothing_adds_more(
 ) -> None:
     assert _value(services["api"], "cap_add") is None
     assert _value(services["db-init"], "cap_add") is None
+    for name in LOADERS:
+        assert _value(services[name], "cap_add") is None, name
     assert _value(services["db"], "cap_add") == "[CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]"
     assert _value(services["db-tls"], "cap_add") == "[CHOWN, DAC_OVERRIDE, FOWNER]"
     for name, block in services.items():
@@ -288,8 +304,9 @@ def test_capabilities_are_the_expected_ones_and_nothing_adds_more(
 def test_the_api_and_the_schema_job_do_not_run_as_root_or_write_to_the_image(
     services: dict[str, list[str]],
 ) -> None:
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         assert _value(services[name], "read_only") == "true", name
+    for name in ("api", "db-init", "kb_withdraw"):
         assert _value(services[name], "volumes") is None, name
 
 
@@ -299,6 +316,11 @@ def test_the_api_has_resource_limits_and_a_non_executable_tmp(
     assert _value(services["api"], "mem_limit")
     assert _value(services["api"], "pids_limit")
     assert "noexec" in (_value(services["api"], "tmpfs") or "")
+    for (
+        name
+    ) in LOADERS:  # ADR 0024 A3: "memory and process limits as api has" (Q10: the same values)
+        for key in ("mem_limit", "pids_limit"):
+            assert _value(services[name], key) == _value(services["api"], key), (name, key)
 
 
 def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> None:
@@ -360,11 +382,13 @@ def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> No
         "db_bootstrap_password": "db_bootstrap_password",
         "db_owner_password": "db_owner_password",
         "db_app_password": "db_app_password",
+        "db_loader_password": "db_loader_password",
         "admin_database_url": "divesafe_admin_database_url",
         "database_url": "divesafe_database_url",
         "llm_api_key": "divesafe_llm_api_key",
         "api_key_hashes": "divesafe_api_key_hashes",
         "met_api_token": "divesafe_met_api_token",
+        "loader_database_url": "divesafe_loader_database_url",
     }
 
 
@@ -377,14 +401,36 @@ def test_the_database_command_turns_tls_on_and_loads_the_tls_only_rules(
     assert "./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro" in command
 
 
+_NETWORK_ROLES = {"divesafe_owner", "divesafe_app", "divesafe_loader"}
+
+
+def _hba_rules() -> list[list[str]]:
+    hba = (COMPOSE.parent / "db" / "pg_hba.conf").read_text()
+    return [line.split() for line in hba.splitlines() if line.strip() and line[0] != "#"]
+
+
+def test_the_database_rules_are_exactly_these_four_in_order() -> None:
+    """ADR 0024 A2: the local socket rule, then one TLS rule per network role. An added `local`
+    or `host` rule, a CIDR, `all`, `trust` or a rule for the bootstrap role fails here."""
+    assert _hba_rules() == [
+        ["local", "all", "all", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_owner", "samenet", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_app", "samenet", "scram-sha-256"],
+        ["hostssl", "divesafe", "divesafe_loader", "samenet", "scram-sha-256"],
+    ]
+
+
 def test_the_bootstrap_superuser_is_not_reachable_over_the_network() -> None:
     hba = (COMPOSE.parent / "db" / "pg_hba.conf").read_text()
     rules = [line.split() for line in hba.splitlines() if line.strip() and line[0] != "#"]
+    network_roles = set()
     for rule in rules:
         if rule[0] == "hostssl":
             assert rule[1] == "divesafe", rule
-            assert rule[2] in ("divesafe_owner", "divesafe_app"), rule
+            assert rule[2] in _NETWORK_ROLES, rule
             assert rule[3] == "samenet", rule
+            network_roles.add(rule[2])
+    assert network_roles == _NETWORK_ROLES, "exactly these roles, never a pattern"
     assert not any("bootstrap" in " ".join(r) for r in rules)
     assert not any(":" in field for rule in rules for field in rule[3:-1]), "no IPv6 ranges"
 
@@ -452,7 +498,7 @@ def test_the_secrets_script_prints_no_secret_by_any_command() -> None:
     file) or the assignment that creates it. Continuation lines are joined first."""
     script = (COMPOSE.parent / "make-secrets.sh").read_text().replace("|\n", "| ")
     for line in script.splitlines():
-        if re.search(r"\$\{?(bootstrap|owner|app)_password", line):
+        if re.search(r"\$\{?(bootstrap|owner|app|loader)_password", line):
             assert re.search(r"\|\s*write_new\b", line), line
 
 
@@ -479,7 +525,7 @@ def test_no_service_loosens_its_isolation_in_a_way_the_other_checks_do_not_see(
         for key in ("ipc", "userns_mode", "cgroup", "cgroup_parent", "devices", "uts", "sysctls"):
             assert _value(block, key) is None, (name, key)
         assert _value(block, "security_opt") == '["no-new-privileges:true"]', name
-        if name in ("api", "db-init"):
+        if name in ("api", "db-init", *LOADERS):
             user = _value(block, "user")
             parts = (user or "10001").strip('"').split(":")
             assert all(part not in ("root", "0") and not part.startswith("0") for part in parts), (
@@ -537,7 +583,7 @@ def test_the_image_runs_as_the_unprivileged_user() -> None:
     """Neither service sets `user:`, so the Dockerfile decides: one stage, one USER, and no
     change to the user's groups."""
     instructions = _dockerfile_instructions()
-    assert [x for x in instructions if x.startswith("FROM ")] == ["FROM python:3.12-slim"]
+    assert [x for x in instructions if x.startswith("FROM ")] == ["FROM python:3.14-slim"]
     assert [x for x in instructions if x.startswith("USER ")] == ["USER divesafe"]
     assert "RUN useradd --create-home --uid 10001 divesafe" in instructions
     assert not any("usermod" in x or "groupadd" in x or "adduser" in x for x in instructions)
@@ -545,8 +591,10 @@ def test_the_image_runs_as_the_unprivileged_user() -> None:
 
 def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
     services = _blocks(_strip_comments(COMPOSE.read_text()), "services")
-    for name in ("api", "db-init"):
+    for name in ("api", "db-init", *LOADERS):
         block = services[name]
+        assert _value(block, "image") == "divesafe-api:local", name
+        assert _value(block, "target") is None, name
         start = block.index("    build:")
         build = []
         for line in block[start + 1 :]:
@@ -555,3 +603,484 @@ def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
             build.append(line.strip())
         assert build == ["context: ..", "dockerfile: docker/Dockerfile"], name
         assert _value(block, "user") is None, name
+
+
+# --- the knowledge loader role script (ADR 0024 Amendment 1, A1) ---------------------------------
+
+LOADER_SCRIPT = COMPOSE.parent / "db" / "20-create-loader-role.sql"
+RUNBOOK = COMPOSE.parents[1] / "docs" / "knowledge-loader.md"
+_PASSWORD_FILE = "'/run/secrets/db_loader_password'"
+
+_LOADER_SCRIPT_LINES = [
+    "\\set ON_ERROR_STOP on",
+    "\\set VERBOSITY terse",
+    "\\set SHOW_CONTEXT never",
+    "SET log_statement = 'none';",
+    "SET log_min_duration_statement = -1;",
+    "SET log_min_error_statement = panic;",
+    "SET search_path = pg_catalog, pg_temp;",
+    "SELECT 'divesafe_loader' IN ('divesafe_bootstrap', 'divesafe_owner', 'divesafe_app')"
+    " AS loader_name_reserved \\gset",
+    "\\if :loader_name_reserved",
+    "\\warn 'refusing: the loader role name is reserved'",
+    "SELECT 'refusing: the loader role name is reserved'::integer;",
+    "\\endif",
+    "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'divesafe_loader')"
+    " AS loader_exists \\gset",
+    "\\if :loader_exists",
+    "SELECT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls"
+    " OR NOT r.rolcanlogin OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m"
+    " WHERE m.member = r.oid OR m.roleid = r.oid) OR EXISTS (SELECT 1 FROM"
+    " pg_catalog.pg_db_role_setting s WHERE s.setrole = r.oid)) AS loader_role_unsafe"
+    " FROM pg_catalog.pg_roles r WHERE r.rolname = 'divesafe_loader' \\gset",
+    "\\if :loader_role_unsafe",
+    "\\warn 'refusing: divesafe_loader exists with an attribute, a membership or a stored"
+    " setting; it is not repaired'",
+    "SELECT 'refusing: the existing loader role is not clean'::integer;",
+    "\\endif",
+    "\\else",
+    "SELECT pg_catalog.pg_read_file('/run/secrets/db_loader_password') ~ '^[0-9a-f]{48}$'"
+    " AS loader_password_ok \\gset",
+    "\\if :loader_password_ok",
+    "SELECT pg_catalog.format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE"
+    " NOREPLICATION NOBYPASSRLS PASSWORD %L', 'divesafe_loader',"
+    " pg_catalog.pg_read_file('/run/secrets/db_loader_password')) \\gexec",
+    "\\else",
+    "\\warn 'refusing: db_loader_password is not 48 lower-case hex characters with no newline'",
+    "SELECT 'refusing: the loader password file is not in the expected form'::integer;",
+    "\\endif",
+    "\\endif",
+    "GRANT CONNECT ON DATABASE divesafe TO divesafe_loader;",
+]
+
+
+def _loader_script_lines() -> list[str]:
+    """Split on newline only, refuse anything but printable ASCII, drop empty lines and whole-line
+    `--` comments. psql meta-commands are lines of their own."""
+    raw = LOADER_SCRIPT.read_bytes()
+    assert all(b == 10 or 32 <= b < 127 for b in raw), "only printable ASCII and newlines"
+    return [x for x in raw.decode("ascii").split("\n") if x and not x.startswith("--")]
+
+
+def test_the_loader_role_script_is_exactly_these_lines() -> None:
+    """Any change (a swapped password file, an extra statement, a dropped guard or check, a table
+    grant, another attribute) fails here and has to be read by both reviewers."""
+    assert _loader_script_lines() == _LOADER_SCRIPT_LINES
+
+
+def test_the_loader_password_is_read_by_the_server_and_never_printed() -> None:
+    """The password file is read only by the server, in exactly two places: a boolean check
+    (`\\gset`, never printed) and inside the one format(...) whose statement ends in `\\gexec`. A
+    bare `SELECT format(...)` would print it; a DO block or EXECUTE would put it in CONTEXT."""
+    lines = _loader_script_lines()
+    reads = [x for x in lines if "pg_read_file" in x]
+    assert len(reads) == 2, reads
+    check, create = reads
+    assert check.startswith("SELECT pg_catalog.pg_read_file(" + _PASSWORD_FILE + ") ~ ")
+    assert check.endswith(" AS loader_password_ok \\gset")
+    assert create.startswith("SELECT pg_catalog.format('CREATE ROLE %I ")
+    assert create.endswith(", pg_catalog.pg_read_file(" + _PASSWORD_FILE + ")) \\gexec")
+    assert all(x.count("pg_read_file") == 1 for x in reads)
+    assert [x for x in lines if "format(" in x] == [create]
+    assert [x for x in lines if x.endswith("\\gexec")] == [create]
+    joined = "\n".join(lines).upper()
+    assert not re.search(r"\bDO\b|\bEXECUTE\b|\$\$", joined)
+
+
+def test_the_loader_password_file_is_checked_without_trimming() -> None:
+    """A file written with `echo` ends in a newline and must be refused, not trimmed: a stored
+    newline would break SCRAM logins. The pattern is anchored at both ends."""
+    lines = _loader_script_lines()
+    check = next(x for x in lines if "pg_read_file" in x)
+    assert "~ '^[0-9a-f]{48}$' AS" in check
+    for line in (x for x in lines if "pg_read_file" in x):
+        for word in ("trim", "replace", "substr", "left(", "right(", "split_part", "E'", "chr("):
+            assert word not in line.lower(), (word, line)
+
+
+def test_the_loader_script_silences_echo_context_and_the_server_log_first() -> None:
+    lines = _loader_script_lines()
+    first_read = next(i for i, x in enumerate(lines) if "pg_read_file" in x)
+    for setting in (
+        "\\set VERBOSITY terse",
+        "\\set SHOW_CONTEXT never",
+        "SET log_statement = 'none';",
+        "SET log_min_duration_statement = -1;",
+        "SET log_min_error_statement = panic;",
+    ):
+        assert lines.index(setting) < first_read, setting
+    text = "\n".join(lines)
+    assert "ECHO" not in text and "\\echo" not in text and "\\qecho" not in text
+    assert "\\o" not in text and "\\copy" not in text and "\\!" not in text
+
+
+def test_the_loader_role_is_created_only_when_absent_and_never_repaired() -> None:
+    lines = _loader_script_lines()
+    creates = [i for i, x in enumerate(lines) if "CREATE ROLE" in x]
+    assert len(creates) == 1
+    guard = lines.index("\\if :loader_exists")
+    other = [i for i, x in enumerate(lines) if x == "\\else"]
+    assert other and guard < other[0] < creates[0], "CREATE ROLE only in the absent branch"
+    password_ok = lines.index("\\if :loader_password_ok")
+    assert other[0] < password_ok < creates[0]
+    text = "\n".join(lines)
+    assert "ALTER ROLE" not in text and "DROP" not in text and "REVOKE" not in text
+
+
+def test_an_existing_loader_role_with_any_extra_right_is_refused() -> None:
+    check = next(x for x in _loader_script_lines() if "AS loader_role_unsafe" in x)
+    for part in (
+        "r.rolsuper",
+        "r.rolcreatedb",
+        "r.rolcreaterole",
+        "r.rolreplication",
+        "r.rolbypassrls",
+        "NOT r.rolcanlogin",
+        "pg_catalog.pg_auth_members m WHERE m.member = r.oid OR m.roleid = r.oid",
+        "pg_catalog.pg_db_role_setting s WHERE s.setrole = r.oid",
+    ):
+        assert part in check, part
+    assert " AND " not in check, "every condition refuses on its own"
+
+
+def test_each_refusal_raises_an_error_inside_its_branch() -> None:
+    """`\\quit` exits zero, so a refusal must be a statement that fails under ON_ERROR_STOP."""
+    lines = _loader_script_lines()
+    # The script stops on the first error by itself, before any statement, even without the
+    # runbook's `-v ON_ERROR_STOP=1` (which stays: two independent guards).
+    assert lines[0] == "\\set ON_ERROR_STOP on"
+    assert "ON_ERROR_STOP=1" in _runbook_role_command()
+    for flag in (":loader_name_reserved", ":loader_role_unsafe"):
+        start = lines.index(f"\\if {flag}")
+        assert lines[start + 2].endswith("'::integer;"), flag
+        assert lines[start + 3] == "\\endif", flag
+    bad_file = lines.index("\\if :loader_password_ok") + 2
+    assert lines[bad_file] == "\\else" and lines[bad_file + 2].endswith("'::integer;")
+    assert "\\quit" not in "\n".join(lines) and "\\q" not in lines
+
+
+def test_the_loader_role_is_created_without_privileges_and_only_granted_connect() -> None:
+    lines = _loader_script_lines()
+    create = next(x for x in lines if "CREATE ROLE" in x)
+    assert "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L" in (
+        create
+    )
+    for word in ("SUPERUSER", "CREATEDB", "CREATEROLE", "REPLICATION", "BYPASSRLS"):
+        assert re.findall(rf"\b{word}\b", create) == [], word
+    assert "IN ROLE" not in create and "ADMIN" not in create and "INHERIT" not in create
+    assert [x for x in lines if "GRANT" in x.upper()] == [
+        "GRANT CONNECT ON DATABASE divesafe TO divesafe_loader;"
+    ]
+
+
+def test_the_loader_role_name_is_a_literal_reserved_names_are_refused_and_it_matches_hba() -> None:
+    lines = _loader_script_lines()
+    text = "\n".join(lines)
+    assert ":'" not in text and ':"' not in text and "\\getenv" not in text
+    assert "PASSWORD :" not in text
+    assert lines[7].startswith(
+        "SELECT 'divesafe_loader' IN ('divesafe_bootstrap', 'divesafe_owner', 'divesafe_app')"
+    )
+    names = set(re.findall(r"\bdivesafe_[a-z_]+\b", text)) - {
+        "divesafe_bootstrap",
+        "divesafe_owner",
+        "divesafe_app",
+    }
+    assert names == {"divesafe_loader"}
+    loader_rules = [r for r in _hba_rules() if r[0] == "hostssl" and "loader" in r[2]]
+    assert [r[2] for r in loader_rules] == ["divesafe_loader"]
+
+
+def test_the_loader_role_script_is_not_mounted_into_the_database_init_directory(
+    text: str,
+) -> None:
+    """The script runs by hand on an existing volume (stdin of `exec -T`), never at init."""
+    assert "20-create-loader-role" not in text
+
+
+def _runbook_role_command() -> str:
+    body = RUNBOOK.read_text()
+    blocks = re.findall(r"```sh\n(.*?)```", body, re.S)
+    found = [b for b in blocks if "20-create-loader-role.sql" in b]
+    assert len(found) == 1, "exactly one runbook block runs the role script"
+    return found[0]
+
+
+def test_the_runbook_runs_the_role_script_with_the_password_read_inside_the_container() -> None:
+    """ADR 0024 A1 (c): no `exec -e`, no psql echo option, no `$(cat` outside the single-quoted
+    wrapper, and `-u postgres`. The exact text is pinned."""
+    command = _runbook_role_command()
+    assert command == (
+        "docker compose -f docker/docker-compose.production.yml"
+        " --env-file docker/production.env \\\n"
+        "  exec -T -u postgres db sh -c "
+        '\'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \\\n'
+        "  exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \\\n"
+        "  < docker/db/20-create-loader-role.sql\n"
+    )
+    _assert_role_command_is_quiet(command)
+
+
+def _assert_role_command_is_quiet(command: str) -> None:
+    flat = command.replace("\\\n", " ")
+    assert "-u postgres" in flat and "exec -T" in flat
+    options = flat[flat.index(" exec ") : flat.index(" db sh -c ")]
+    assert options == " exec -T -u postgres", "no -e, --env or other option on exec"
+    inner = flat[flat.index("sh -c '") + len("sh -c '") :]
+    inner, _, outside = inner.partition("'")
+    assert "$(cat" not in flat.replace(inner, ""), "the password is read inside the wrapper only"
+    psql = inner[inner.index("psql") :]
+    assert not re.search(r"\s-[a-zA-Z]*[eab]\b|--echo|ECHO", psql), "psql must not echo"
+    assert "<" in outside
+
+
+def test_the_runbook_quiet_check_rejects_each_echo_or_leak() -> None:
+    good = _runbook_role_command()
+    _assert_role_command_is_quiet(good)
+    bad = {
+        "exec -e": good.replace("exec -T", "exec -T -e PGPASSWORD=x"),
+        "psql -e": good.replace("psql -X", "psql -e -X"),
+        "psql -b": good.replace("psql -X", "psql -b -X"),
+        "psql -a": good.replace("psql -X", "psql -a -X"),
+        "ECHO": good.replace("-v ON_ERROR_STOP=1", "-v ON_ERROR_STOP=1 -v ECHO=errors"),
+        "cat outside": good.replace("docker compose", 'PGPASSWORD="$(cat x)" docker compose'),
+        "no -u postgres": good.replace("-u postgres ", ""),
+    }
+    for label, command in bad.items():
+        with pytest.raises(AssertionError):
+            _assert_role_command_is_quiet(command)
+        assert label
+
+
+def test_the_runbook_fallback_insert_names_hash_checked() -> None:
+    """ADR 0024 A3: the owner `psql` fallback INSERT includes the NOT NULL column."""
+    body = RUNBOOK.read_text()
+    inserts = re.findall(r"INSERT INTO public\.kb_status_events \(([^)]*)\)", body)
+    assert inserts == ["document_id, version, status, hash_checked"]
+    assert "'WITHDRAWN', false)" in body
+
+
+def test_the_secrets_script_writes_the_loader_files_with_the_approved_connect_timeout() -> None:
+    script = (COMPOSE.parent / "make-secrets.sh").read_text()
+    assert 'loader_password="$(random)"' in script
+    assert re.search(r'printf .%s. "\$loader_password" \| write_new db_loader_password\b', script)
+    assert (
+        "postgresql://divesafe_loader:${loader_password}@db:5432/divesafe"
+        '?sslmode=require&channel_binding=require&connect_timeout=5" |\n'
+        "    write_new divesafe_loader_database_url || true"
+    ) in script
+
+
+def test_the_secrets_script_writes_files_only_through_write_new() -> None:
+    """A bare redirect would overwrite a secret, or leave it world-readable with no message."""
+    script = (COMPOSE.parent / "make-secrets.sh").read_text()
+    body = script[script.index("write_new() {") :]
+    function, _, rest = body.partition("\n}\n")
+    assert 'cat >"$target"' in function
+    assert not re.search(r">>?\s*\"?\$(dir|\{dir\})", rest), "only write_new writes a file"
+    assert not re.search(r"\btee\b", rest)
+
+
+# --- the knowledge loader services (ADR 0024 Amendment 1, A3 and A5) -----------------------------
+
+
+def _list(block: list[str], key: str) -> list[str] | None:
+    """The items of a block-style list under a service key, exactly as written."""
+    try:
+        start = block.index(f"    {key}:")
+    except ValueError:
+        return None
+    items: list[str] = []
+    for line in block[start + 1 :]:
+        if not line.startswith("      "):
+            break
+        items.append(line)
+    return items
+
+
+def _corpus_mount_problems(lines: list[str] | None) -> list[str]:
+    """ADR 0024 A5 item 4: one bind in the long form, read-only, never creating the host path,
+    the source only from the required variable. The pin sees the form, not the path."""
+    if lines is None:
+        return ["no volumes"]
+    expected = [
+        "      - type: bind",
+        "        source: ${DIVESAFE_CORPUS_DIR:?set DIVESAFE_CORPUS_DIR in docker/production.env}",
+        "        target: /corpus",
+        "        read_only: true",
+        "        bind:",
+        "          create_host_path: false",
+    ]
+    return [] if lines == expected else ["the corpus mount is not exactly the long read-only bind"]
+
+
+def test_the_loaders_start_only_under_their_profile_and_nothing_waits_for_them(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 items 1 and 18: `up` never starts a loader, and starts every other service."""
+    for name, block in services.items():
+        if name in LOADERS:
+            assert _value(block, "profiles") == "[knowledge]", name
+        else:
+            assert _value(block, "profiles") is None, name
+        depends = "\n".join(_list(block, "depends_on") or [])
+        for loader in LOADERS:
+            assert loader not in depends, (name, loader)
+
+
+def test_the_loaders_wait_only_for_a_healthy_database(services: dict[str, list[str]]) -> None:
+    """A5 item 2: `run` starts the whole dependency chain (checked with Compose: a one-off job
+    further down the chain is started too), so never db-init."""
+    for name in LOADERS:
+        assert _list(services[name], "depends_on") == [
+            "      db:",
+            "        condition: service_healthy",
+        ], name
+
+
+def test_kb_load_mounts_only_the_corpus_read_only_in_the_long_form(
+    services: dict[str, list[str]],
+) -> None:
+    assert _corpus_mount_problems(_list(services["kb_load"], "volumes")) == []
+    assert _value(services["kb_load"], "tmpfs") is None
+
+
+def test_the_corpus_mount_check_rejects_each_weaker_form() -> None:
+    good = _list(_blocks(_strip_comments(COMPOSE.read_text()), "services")["kb_load"], "volumes")
+    assert good is not None and _corpus_mount_problems(good) == []
+    source = "${DIVESAFE_CORPUS_DIR:?set DIVESAFE_CORPUS_DIR in docker/production.env}"
+    bad = {
+        "short syntax": [f"      - {source}:/corpus:ro"],
+        "no read_only": [x for x in good if "read_only" not in x],
+        "read_only false": [x.replace("true", "false") for x in good],
+        "creates the host path": [
+            x.replace("create_host_path: false", "create_host_path: true") for x in good
+        ],
+        "no bind options": good[:4],
+        "a literal path": [x.replace(source, "/srv/corpus") for x in good],
+        "a relative path": [x.replace(source, "./corpus") for x in good],
+        "a default instead of :?": [x.replace(":?", ":-") for x in good],
+        "a second volume": [*good, "      - /var/run/docker.sock:/var/run/docker.sock"],
+        "a writable second bind": [*good, "      - type: bind"],
+        "another target": [x.replace("target: /corpus", "target: /app") for x in good],
+        "a volume, not a bind": [x.replace("type: bind", "type: volume") for x in good],
+    }
+    for label, lines in bad.items():
+        assert _corpus_mount_problems(lines), label
+
+
+def test_kb_withdraw_has_no_volumes_and_no_corpus_setting(services: dict[str, list[str]]) -> None:
+    """A3/A5 item 4: nothing about the corpus can stop a withdrawal."""
+    block = services["kb_withdraw"]
+    assert _value(block, "volumes") is None and _value(block, "tmpfs") is None
+    assert "CORPUS" not in "\n".join(block).upper()
+
+
+def test_the_database_mounts_exactly_these_and_no_loader_script(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 4: A1 runs its script by hand on purpose, never from the init directory."""
+    assert _list(services["db"], "volumes") == [
+        "      - db-data:/var/lib/postgresql/data",
+        "      - db-tls:/tls:ro",
+        "      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro",
+        "      - ./db/10-create-app-role.sh:/docker-entrypoint-initdb.d/10-create-app-role.sh:ro",
+    ]
+
+
+def test_each_loader_gets_only_the_loader_connection_string(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 items 6 and 14: one secret per loader; the string reaches no other service, and the
+    loader password reaches only the database."""
+    for name in LOADERS:
+        assert _list(services[name], "secrets") == [
+            "      - source: loader_database_url",
+            "        target: divesafe_loader_database_url",
+        ], name
+    holders = {n for n, b in services.items() if "loader_database_url" in "\n".join(b)}
+    assert holders == set(LOADERS)
+    assert {n for n, b in services.items() if "db_loader_password" in "\n".join(b)} == {"db"}
+    assert _list(services["db"], "secrets") == [
+        "      - db_bootstrap_password",
+        "      - db_owner_password",
+        "      - db_app_password",
+        "      - db_loader_password",
+    ]
+
+
+def test_the_loaders_get_exactly_these_settings(services: dict[str, list[str]]) -> None:
+    """A5 item 7 (ADR 0022 condition 1): production, the secrets directory and, for kb_load
+    only, the corpus target. No model setting, hash, manifest or development flag."""
+    assert _environment(services["kb_load"]) == {
+        "DIVESAFE_ENVIRONMENT": "production",
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+        "DIVESAFE_CORPUS_TARGET": "/corpus",
+    }
+    assert _environment(services["kb_withdraw"]) == {
+        "DIVESAFE_ENVIRONMENT": "production",
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+    }
+
+
+def test_the_schema_job_gets_exactly_these_settings_and_the_loader_name_matches_hba(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 8."""
+    env = _environment(services["db-init"])
+    assert env == {
+        "DIVESAFE_SECRETS_DIR": "/run/secrets",
+        "DIVESAFE_APP_DB_ROLE": "divesafe_app",
+        "DIVESAFE_LOADER_DB_ROLE": "divesafe_loader",
+    }
+    assert ["hostssl", "divesafe", env["DIVESAFE_LOADER_DB_ROLE"], "samenet", "scram-sha-256"] in (
+        _hba_rules()
+    )
+
+
+def test_the_loaders_run_one_fixed_module_with_no_shell(services: dict[str, list[str]]) -> None:
+    """A5 items 9 and 10: exec form, no `command`, kb_withdraw's list ends in `withdraw`; the
+    subcommand and its arguments come from `compose run` as process arguments."""
+    expected = {
+        "kb_load": '["python", "-m", "divesafe.services.kb_load"]',
+        "kb_withdraw": '["python", "-m", "divesafe.services.kb_withdraw", "withdraw"]',
+    }
+    for name, entrypoint in expected.items():
+        block = services[name]
+        assert _value(block, "entrypoint") == entrypoint, name
+        assert _value(block, "command") is None, name
+        assert _value(block, "restart") == '"no"', name
+        assert "${" not in entrypoint and "sh" not in entrypoint.split('"')
+
+
+def test_no_approved_hash_or_development_flag_can_come_from_compose(
+    services: dict[str, list[str]],
+) -> None:
+    """A5 item 12: the approved hash is an operator argument only, so whoever can change the
+    corpus or this file cannot also supply the hash that approves it."""
+    for name in LOADERS:
+        joined = "\n".join(services[name]).lower()
+        for word in ("manifest", "sha256", "approved", "development", "hash"):
+            assert word not in joined, (name, word)
+
+
+def test_every_required_compose_variable_has_a_line_in_the_example_file(text: str) -> None:
+    """A5 item 15: once the corpus variable is required, every compose command needs it."""
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", text))
+    assert "DIVESAFE_CORPUS_DIR" in required
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    names = {line.partition("=")[0] for line in lines if line and not line.startswith("#")}
+    assert required <= names, sorted(required - names)
+
+
+def test_the_example_corpus_path_is_an_obvious_placeholder() -> None:
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert "DIVESAFE_CORPUS_DIR=/set/me/outside/the/repository" in lines
+
+
+def test_the_corpus_staging_location_is_ignored_by_git_and_the_build() -> None:
+    """A5 item 19: `up -d --build` must never bake licensed text into the image."""
+    root = COMPOSE.parents[1]
+    # `**/corpus`: a directory named corpus at ANY depth (review nit 2026-11-09), not only the root.
+    assert "**/corpus" in [x.strip() for x in (root / ".dockerignore").read_text().splitlines()]
+    assert "**/corpus" in [x.strip() for x in (root / ".gitignore").read_text().splitlines()]

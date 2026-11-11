@@ -7,11 +7,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from divesafe.agents.prompts import (
+    NOT_RETRIEVED,
+    KnowledgeContext,
     agent_view,
     build_user_message,
     evidence_payload,
+    knowledge_wording,
     missing_note,
     tide_note,
+    warning_note,
 )
 from divesafe.agents.runner import call_structured
 from divesafe.agents.schemas import ProposalOutput
@@ -35,6 +39,7 @@ async def propose(
     rule_results: Sequence[RuleResult],
     deterministic: Recommendation,
     missing: Sequence[str] = (),
+    knowledge: KnowledgeContext = NOT_RETRIEVED,
 ) -> ProposalOutput:
     message = build_user_message(
         task="risk_assessment",
@@ -47,6 +52,8 @@ async def propose(
             "contradictory evidence prefer INSUFFICIENT EVIDENCE."
             + missing_note(missing)
             + tide_note(evidence)
+            + warning_note(evidence)
+            + knowledge_wording(evidence, knowledge)
         ),
         plan=plan,
         allowed_ids=[e.id for e in evidence],

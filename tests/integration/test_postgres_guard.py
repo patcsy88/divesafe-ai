@@ -7,10 +7,12 @@ import json
 import os
 
 import psycopg
+import psycopg.conninfo
 import pytest
 from tests.unit.test_repository_contract import _decided, _postgres, _record
 
 from divesafe.services import PostgresAssessmentRepository
+from divesafe.services.migrations import KNOWLEDGE_FUNCTIONS
 from divesafe.services.postgres import GUARD_TRIGGERS
 
 DSN = os.environ.get("DIVESAFE_TEST_DATABASE_URL")
@@ -29,8 +31,17 @@ def _printed(exc: BaseException) -> str:
 
 def _sql(statement: str, params: tuple[object, ...] = ()) -> None:
     assert DSN is not None
-    with psycopg.connect(DSN) as conn:
+    # A lock wait fails within 5 s instead of hanging, so the caller's `finally` still runs.
+    with psycopg.connect(DSN, options="-c lock_timeout=5000") as conn:
         conn.execute(statement, params)  # type: ignore[call-overload]
+
+
+def _sql_value(statement: str) -> str:
+    assert DSN is not None
+    with psycopg.connect(DSN) as conn:
+        row = conn.execute(statement).fetchone()  # type: ignore[call-overload]
+    assert row is not None
+    return str(row[0])
 
 
 @pytest.fixture
@@ -415,6 +426,7 @@ def app_role_dsn() -> str:
         conn.execute("CREATE ROLE divesafe_app_test LOGIN PASSWORD 'app-test-only'")
     install_schema(DSN, "divesafe_app_test")
     base.update(user="divesafe_app_test", password="app-test-only")
+    base.pop("options", None)  # the options tests below supply their own
     return psycopg.conninfo.make_conninfo(**base)
 
 
@@ -667,6 +679,132 @@ def test_installing_again_takes_back_write_access_to_the_migration_history(
 # --- pending runs (ADR 0019) -----------------------------------------------------------------
 
 
+@pytest.mark.parametrize("source", ["environment", "stored-role-setting"])
+def test_a_non_iso_datestyle_from_outside_never_reaches_the_apps_sessions(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """PGDATESTYLE wins over `options`, and a stored ALTER ROLE ... SET DateStyle applies too;
+    psycopg cannot load a timestamp in either. `_connect` sets the session's DateStyle, so runs
+    are admitted and read back. Positive control: a plain connection does get the other style."""
+    from datetime import timedelta
+
+    from tests.unit.test_run_store_contract import _run
+
+    assert DSN is not None
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    run = _run()
+    with monkeypatch.context() as m, psycopg.connect(DSN, autocommit=True) as owner:
+        if source == "environment":
+            m.setenv("PGDATESTYLE", "SQL, DMY")
+        else:
+            owner.execute("ALTER ROLE divesafe_app_test SET DateStyle = 'SQL, DMY'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute("SHOW DateStyle").fetchone() == ("SQL, DMY",)
+            with app._connect() as conn:
+                assert conn.execute("SHOW DateStyle").fetchone() == ("ISO, MDY",)
+            admission = app.admit(run, max_in_flight=4, max_per_actor=4, lease=timedelta(minutes=5))
+            assert admission.kind == "started" and admission.run is not None
+            stored = app.get_run(run.id)
+            assert stored is not None and stored.created_at == admission.run.created_at
+        finally:
+            owner.execute("ALTER ROLE divesafe_app_test RESET DateStyle")
+
+
+@pytest.mark.parametrize("source", ["environment", "stored-role-setting"])
+def test_a_non_utf8_client_encoding_from_outside_never_reaches_the_apps_sessions(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """PGCLIENTENCODING wins over `options`, and a stored ALTER ROLE ... SET client_encoding
+    applies too; under LATIN1 psycopg cannot encode a character such as a curly quote or an
+    emoji. `_connect` sets UTF8 for the session, so such a record is stored and read back.
+    Positive control: a plain connection does get LATIN1."""
+    assert DSN is not None
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    record = _record()
+    record = record.model_copy(update={"ruleset_version": "test \u2019 \U0001f41f"})
+    with monkeypatch.context() as m, psycopg.connect(DSN, autocommit=True) as owner:
+        if source == "environment":
+            m.setenv("PGCLIENTENCODING", "LATIN1")
+        else:
+            owner.execute("ALTER ROLE divesafe_app_test SET client_encoding = 'LATIN1'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute("SHOW client_encoding").fetchone() == ("LATIN1",)
+            with app._connect() as conn:
+                assert conn.execute("SHOW client_encoding").fetchone() == ("UTF8",)
+            app.create(record)
+            assert app.get(record.id) == record
+        finally:
+            owner.execute("ALTER ROLE divesafe_app_test RESET client_encoding")
+
+
+@pytest.mark.parametrize(
+    ("setting", "stored", "shown"),
+    [
+        ("default_transaction_read_only", "on", ("off",)),
+        ("default_transaction_isolation", "serializable", ("read committed",)),
+    ],
+)
+def test_a_stored_transaction_default_never_reaches_the_apps_sessions(
+    app_role_dsn: str, setting: str, stored: str, shown: tuple[str]
+) -> None:
+    """A stored read-only default would refuse every write; a serializable one would turn a
+    certain refusal at commit into an unknown outcome. `_connect` sets both back for the session.
+    Positive control: a plain connection does get the stored value."""
+    assert DSN is not None
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    record = _record()
+    with psycopg.connect(DSN, autocommit=True) as owner:
+        owner.execute(f"ALTER ROLE divesafe_app_test SET {setting} = '{stored}'")
+        try:
+            with psycopg.connect(app_role_dsn) as plain:
+                assert plain.execute(f"SHOW {setting}").fetchone() == (stored,)
+            with app._connect() as conn:
+                assert conn.execute(f"SHOW {setting}").fetchone() == shown
+            app.create(record)
+            app.replace(record, _decided(record))
+            decided = app.get(record.id)
+            assert decided is not None and decided.human_decision is not None
+        finally:
+            owner.execute(f"ALTER ROLE divesafe_app_test RESET {setting}")
+
+
+def test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server commits, then the reply is lost: the repository must not let anyone say that
+    nothing was recorded. Positive control: the decision really is stored."""
+    from divesafe.services import RepositoryOutcomeUnknownError
+
+    _postgres()
+    app = PostgresAssessmentRepository(app_role_dsn)
+    pending = _record()
+    app.create(pending)
+    connect = app._connect
+
+    def committed_then_lost() -> psycopg.Connection[object]:
+        conn = connect()
+        real = conn.commit
+
+        def commit() -> None:
+            real()
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+        conn.commit = commit  # type: ignore[method-assign]
+        return conn
+
+    monkeypatch.setattr(app, "_connect", committed_then_lost)
+    with pytest.raises(RepositoryOutcomeUnknownError):
+        app.replace(pending, _decided(pending))
+    monkeypatch.undo()
+    stored = app.get(pending.id)
+    assert stored is not None and stored.human_decision is not None
+
+
 def test_the_application_role_can_use_runs_but_cannot_touch_assessments_through_them(
     app_role_dsn: str,
 ) -> None:
@@ -883,6 +1021,233 @@ def test_verification_counts_membership_in_the_owning_role_as_ownership(
     assert app.verify(least_privilege=True) == []
 
 
+@pytest.mark.parametrize(
+    ("grant", "undo", "problem"),
+    [
+        (
+            "GRANT INSERT ON public.kb_chunks TO divesafe_app_test",
+            "REVOKE INSERT ON public.kb_chunks FROM divesafe_app_test",
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            "GRANT INSERT (status) ON public.kb_status_events TO divesafe_app_test",
+            "REVOKE INSERT (status) ON public.kb_status_events FROM divesafe_app_test",
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            "GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO divesafe_app_test",
+            "REVOKE USAGE ON SEQUENCE public.kb_status_event_order_seq FROM divesafe_app_test",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO divesafe_app_test",
+            "REVOKE EXECUTE ON FUNCTION public.kb_no_truncate() FROM divesafe_app_test",
+            "can EXECUTE a knowledge function",
+        ),
+        (
+            "ALTER FUNCTION public.kb_chunks_insert() OWNER TO divesafe_app_test",
+            "ALTER FUNCTION public.kb_chunks_insert() OWNER TO CURRENT_USER",
+            "owns a knowledge function",
+        ),
+        (
+            "ALTER TABLE public.kb_documents OWNER TO divesafe_app_test",
+            "ALTER TABLE public.kb_documents OWNER TO CURRENT_USER",
+            "owns a knowledge table",
+        ),
+    ],
+    ids=["insert", "column-insert", "sequence", "execute", "function-owner", "table-owner"],
+)
+def test_verification_flags_an_application_role_with_knowledge_privileges(
+    app_role_dsn: str, grant: str, undo: str, problem: str
+) -> None:
+    """ADR 0022 conditions 11.4 / 11.5, application side, on a real server."""
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(grant)
+    try:
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(undo)
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_maintain_on_a_knowledge_table_from_postgresql_17(
+    app_role_dsn: str,
+) -> None:
+    if int(_sql_value("SHOW server_version_num")) < 170000:
+        pytest.skip("MAINTAIN exists from PostgreSQL 17")
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql("GRANT MAINTAIN ON public.kb_chunks TO divesafe_app_test")
+    try:
+        problems = app.verify(least_privilege=True)
+        assert any("holds MAINTAIN on a knowledge table" in p for p in problems)
+    finally:
+        _sql("REVOKE MAINTAIN ON public.kb_chunks FROM divesafe_app_test")
+    assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize(
+    ("grant", "problem"),
+    [
+        (
+            "GRANT INSERT ON public.kb_chunks TO {group}",
+            "holds a privilege other than SELECT on a knowledge table",
+        ),
+        (
+            "GRANT INSERT (status) ON public.kb_status_events TO {group}",
+            "holds a column privilege on a knowledge table",
+        ),
+        (
+            "GRANT USAGE ON SEQUENCE public.kb_status_event_order_seq TO {group}",
+            "holds a privilege on the knowledge ordering sequence",
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION public.kb_no_truncate() TO {group}",
+            "can EXECUTE a knowledge function",
+        ),
+        ("GRANT MAINTAIN ON public.kb_chunks TO {group}", "holds MAINTAIN on a knowledge table"),
+    ],
+    ids=["insert", "column-insert", "sequence", "execute", "maintain"],
+)
+def test_verification_flags_a_privilege_reachable_only_by_set_role(
+    app_role_dsn: str, grant: str, problem: str
+) -> None:
+    """ADR 0022 condition 11.5: a membership granted WITH INHERIT FALSE gives no inherited
+    privilege, but the application role can still SET ROLE to the group and use it."""
+    if "MAINTAIN" in grant and int(_sql_value("SHOW server_version_num")) < 170000:
+        pytest.skip("MAINTAIN exists from PostgreSQL 17")
+    group = "divesafe_kb_setrole_group_test"
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(grant.format(group=group))
+        _sql(f"GRANT {group} TO divesafe_app_test WITH INHERIT FALSE")
+        assert _sql_value(f"SELECT pg_has_role('divesafe_app_test', '{group}', 'USAGE')") in (
+            "False",
+            "false",
+        )  # really not inherited
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize(
+    ("grant", "problem"),
+    [
+        ("GRANT DELETE ON public.assessments TO {group}", "can DELETE"),
+        ("GRANT TRIGGER ON public.assessments TO {group}", "can create triggers"),
+        (
+            "GRANT INSERT ON public.schema_migrations TO {group}",
+            "can write the migration history",
+        ),
+        ("GRANT CREATE ON SCHEMA public TO {group}", "can create objects in the public schema"),
+        (
+            "GRANT CREATE ON DATABASE {database} TO {group}",
+            "can create schemas in the database",
+        ),
+        (
+            "GRANT SET ON PARAMETER session_replication_role TO {group}",
+            "may set session_replication_role",
+        ),
+    ],
+    ids=["delete", "trigger", "migrations", "schema-create", "database-create", "parameter"],
+)
+def test_verification_flags_an_audit_privilege_reachable_only_by_set_role(
+    app_role_dsn: str, grant: str, problem: str
+) -> None:
+    """The same SET ROLE rule as the knowledge checks, for the audit-table, schema, database and
+    parameter checks."""
+    group = "divesafe_audit_setrole_group_test"
+    database = _sql_value("SELECT current_database()")
+    app = PostgresAssessmentRepository(app_role_dsn)
+    assert app.verify(least_privilege=True) == []
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(grant.format(group=group, database=f'"{database}"'))
+        _sql(f"GRANT {group} TO divesafe_app_test WITH INHERIT FALSE")
+        assert _sql_value(f"SELECT pg_has_role('divesafe_app_test', '{group}', 'USAGE')") in (
+            "False",
+            "false",
+        )
+        assert any(problem in p for p in app.verify(least_privilege=True))
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
+def test_verification_flags_a_stored_role_setting_on_the_application_role(
+    app_role_dsn: str,
+) -> None:
+    """`ALTER ROLE app SET role = group` makes every session run as the group, so the checks
+    would judge the group instead of the login role."""
+    group = "divesafe_session_role_group_test"
+    app = PostgresAssessmentRepository(app_role_dsn)
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(f"GRANT {group} TO divesafe_app_test")
+        _sql(f"ALTER ROLE divesafe_app_test SET role = {group}")
+        problems = app.verify(least_privilege=True)
+        assert any("runs as a different role from its login role" in p for p in problems)
+    finally:
+        _sql("ALTER ROLE divesafe_app_test RESET role")
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+    assert app.verify(least_privilege=True) == []
+
+
+@pytest.mark.parametrize("where", ["connection string", "PGOPTIONS"])
+def test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server(
+    app_role_dsn: str, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """The app passes its own `options`, which replaces any `options` in the connection string
+    and `PGOPTIONS` (ADR 0022 Known gaps). The positive control proves the smuggled setting does
+    reach a connection without that override, so the test cannot pass because libpq ignored it.
+    `PGOPTIONS` is set only around the two connections, never for the setup or cleanup."""
+    group = "divesafe_options_role_group_test"
+    smuggled = f"-c role={group}"
+    if where == "PGOPTIONS":
+        dsn = app_role_dsn
+    else:
+        dsn = psycopg.conninfo.make_conninfo(app_role_dsn, options=smuggled)
+    app = PostgresAssessmentRepository(dsn)
+    who = "SELECT current_user, session_user"
+    _sql(f"DROP ROLE IF EXISTS {group}")
+    _sql(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        _sql(f"GRANT {group} TO divesafe_app_test")
+        with monkeypatch.context() as m:
+            if where == "PGOPTIONS":
+                m.setenv("PGOPTIONS", smuggled)
+            with psycopg.connect(dsn) as plain:
+                control = plain.execute(who).fetchone()  # type: ignore[call-overload]
+            with app._connect() as conn:
+                row = conn.execute(who).fetchone()
+        assert control == (group, "divesafe_app_test")
+        assert row == ("divesafe_app_test", "divesafe_app_test")
+    finally:
+        _sql(f"DROP OWNED BY {group}")
+        _sql(f"DROP ROLE {group}")
+
+
+def test_the_application_role_can_read_the_acl_and_sequence_catalogues(app_role_dsn: str) -> None:
+    with psycopg.connect(app_role_dsn) as conn:
+        acl = conn.execute(
+            "SELECT pg_catalog.count(*) FROM pg_catalog.pg_class c, "
+            "pg_catalog.aclexplode(c.relacl) x WHERE c.relname = 'kb_chunks'"
+        ).fetchone()
+        sequence = conn.execute("SELECT pg_catalog.count(*) FROM pg_catalog.pg_sequence").fetchone()
+    assert acl is not None and acl[0] > 0
+    assert sequence is not None and sequence[0] > 0
+
+
 def test_verification_flags_a_guard_function_the_application_role_owns(
     app_role_dsn: str,
 ) -> None:
@@ -1046,18 +1411,22 @@ def test_an_insert_that_breaks_the_insert_guard_is_refused_in_replica_mode() -> 
 
 def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> None:
     """A database at version 2 (triggers 'O') is brought to 'A' by db_init, and not before."""
+    from tests.unit.test_repository_contract import drop_knowledge_objects
+
     from divesafe.services.migrations import MIGRATIONS, migrate
 
     _postgres()
     try:
-        _sql("DELETE FROM schema_migrations WHERE version = 3")
+        # Back to version 2: migrations 4 and 5 sit above 3, so they go too (4 with its objects).
+        _sql("DELETE FROM schema_migrations WHERE version >= 3")
+        drop_knowledge_objects()
         for trigger in GUARD_TRIGGERS:
             _sql(f"ALTER TABLE assessments ENABLE TRIGGER {trigger}")
         repo = PostgresAssessmentRepository(DSN)  # type: ignore[arg-type]
         problems = repo.verify(least_privilege=False)
         assert any("schema version 2" in p for p in problems)
         assert all(any(t in p for p in problems) for t in GUARD_TRIGGERS)
-        assert migrate(DSN) == [3]  # type: ignore[arg-type]
+        assert migrate(DSN) == [3, 4, 5]  # type: ignore[arg-type]
         assert repo.verify(least_privilege=False) == []
     finally:
         _postgres()
@@ -1089,9 +1458,27 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
 ) -> None:
     assert DSN is not None
     app = PostgresAssessmentRepository(app_role_dsn)
+    # The knowledge guard (ADR 0022 condition 9) judges the kb tables and the public schema against
+    # the owner of public.assessments, so a new assessments owner must own them too, as one owner
+    # does in a real deployment. (Changing only assessments made it report 4 owner problems.)
+    # Condition 11.3 / 11.4 judge the ordering sequence and the guard functions the same way.
+    kb_tables = ("kb_documents", "kb_chunks", "kb_status_events")
+    kb_owned = (
+        "SEQUENCE public.kb_status_event_order_seq",
+        *(f"FUNCTION public.{f}()" for f in sorted(set(KNOWLEDGE_FUNCTIONS.values()))),
+    )
+    original_public_owner = _sql_value(
+        "SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace "
+        "WHERE nspname = 'public'"
+    )
     _sql("DROP ROLE IF EXISTS divesafe_plain_owner_test")
     _sql("CREATE ROLE divesafe_plain_owner_test NOLOGIN")
     _sql("ALTER TABLE assessments OWNER TO divesafe_plain_owner_test")
+    for table in kb_tables:
+        _sql(f"ALTER TABLE {table} OWNER TO divesafe_plain_owner_test")
+    for owned in kb_owned:
+        _sql(f"ALTER {owned} OWNER TO divesafe_plain_owner_test")
+    _sql("ALTER SCHEMA public OWNER TO divesafe_plain_owner_test")
     try:
         assert app.verify(least_privilege=True, owner_not_superuser=True) == []
         _sql("ALTER ROLE divesafe_plain_owner_test SUPERUSER")
@@ -1100,6 +1487,12 @@ def test_the_owner_superuser_check_passes_for_an_ordinary_owner_and_flags_a_supe
         assert not any("superuser" in p for p in app.verify(least_privilege=True))
         _sql("ALTER ROLE divesafe_plain_owner_test NOSUPERUSER")
     finally:
+        _sql("ALTER ROLE divesafe_plain_owner_test NOSUPERUSER")
+        _sql(f'ALTER SCHEMA public OWNER TO "{original_public_owner}"')
+        for table in kb_tables:
+            _sql(f"ALTER TABLE {table} OWNER TO CURRENT_USER")
+        for owned in kb_owned:
+            _sql(f"ALTER {owned} OWNER TO CURRENT_USER")
         _sql("ALTER TABLE assessments OWNER TO CURRENT_USER")
         _sql("DROP ROLE divesafe_plain_owner_test")
 
@@ -1146,3 +1539,571 @@ def test_a_search_path_setting_cannot_let_a_look_alike_view_hide_a_superuser_own
     finally:
         _sql("ALTER ROLE divesafe_app_test RESET search_path")
         _sql("DROP VIEW public.pg_roles")
+
+
+def _withheld_record() -> object:
+    """A record that carries WITHHELD evidence: two different items under one id, none evaluated."""
+    from tests.conftest import make_evidence
+
+    from divesafe.domain import AssessmentRecord, DataCategory
+
+    base = _record()
+    held = tuple(
+        make_evidence(DataCategory.WIND, speed=speed).model_copy(update={"source": source})
+        for speed, source in ((1, "x"), (2, "y"))
+    )
+    issue = (
+        "evidence.conflict: x, y returned different wind evidence under one id; none of it used "
+        "(withheld from the main result; checked separately for a more severe one)"
+    )
+    return AssessmentRecord.model_validate(
+        {
+            **base.model_dump(),
+            "withheld_evidence": [i.model_dump() for i in held],
+            "evidence_issues": (issue,),
+        }
+    )
+
+
+def test_a_record_with_withheld_evidence_is_stored_and_read_back_identical() -> None:
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    loaded = repo.get(record.id)
+    assert loaded == record
+    assert loaded is not None
+    assert len(loaded.withheld_evidence) == 2
+    stored = _sql_value("SELECT jsonb_array_length(record -> 'withheld_evidence') FROM assessments")
+    assert stored == "2"
+
+
+def test_a_row_stored_before_the_field_existed_still_loads_with_no_withheld_items() -> None:
+    repo = _postgres()
+    repo.create(_record())
+    old = _base()
+    del old["withheld_evidence"]  # the shape written before the field existed
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _sql_value("SELECT (record ? 'withheld_evidence')::text FROM assessments") == "false"
+    loaded = repo.get("r1")
+    assert loaded is not None
+    assert loaded.withheld_evidence == ()
+    assert loaded == _record()
+
+
+def test_a_stored_row_whose_withheld_id_is_also_an_evidence_id_fails_validation() -> None:
+    from divesafe.services import RepositoryIntegrityError
+
+    repo = _postgres()
+    repo.create(_record())
+    forged = _base()
+    forged["withheld_evidence"] = forged["evidence"]  # same ids as the evaluated evidence
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(forged)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(RepositoryIntegrityError):
+        repo.get("r1")
+
+
+@pytest.mark.parametrize(
+    "where", ["evidence-no-kb", "evidence-kb-live", "withheld-no-kb", "withheld-kb-live"]
+)
+def test_a_stored_row_breaking_the_knowledge_id_rule_fails_validation(where: str) -> None:
+    """Owner decision 2026-11-10: a stored record carrying KNOWLEDGE without a `kb:` id, or a
+    `kb:` id on another kind, in either evidence field, is refused on load with the fixed error.
+    SYNTHETIC rows."""
+    from tests.safety.test_record_egress import _knowledge
+    from tests.safety.test_record_knowledge_identity import _live, _with_evidence, _with_withheld
+
+    from divesafe.services import RepositoryIntegrityError
+
+    item = _knowledge("syn-site") if where.endswith("no-kb") else _live("kb:site-guide:2:8")
+    forged = (_with_evidence if where.startswith("evidence") else _with_withheld)(item)
+    forged = {**forged, "id": "r1"}
+    repo = _postgres()
+    repo.create(_record())
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(forged)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(RepositoryIntegrityError) as caught:
+        repo.get("r1")
+    assert str(caught.value) == "a stored record failed validation"
+    assert "syn-site" not in _printed(caught.value)
+
+
+def _has_withheld_key() -> str:
+    return _sql_value(
+        "SELECT (record ? 'withheld_evidence')::text FROM assessments WHERE id = 'r1'"
+    )
+
+
+def _store_old_shape() -> PostgresAssessmentRepository:
+    """A pending row exactly as written before `withheld_evidence` existed (the key is absent)."""
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    repo.create(_record())
+    old = _base()
+    del old["withheld_evidence"]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _has_withheld_key() == "false"
+    return repo
+
+
+def _with_actual(decided: object) -> object:
+    from datetime import timedelta
+
+    from tests.conftest import NOW
+
+    from divesafe.domain import ActualConditions, AssessmentRecord
+
+    assert isinstance(decided, AssessmentRecord)
+    actual = ActualConditions(
+        reported_at=NOW + timedelta(hours=2), reported_by="a", observations={"v": 1}
+    )
+    return AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+
+
+def test_an_old_shape_row_can_be_decided_and_given_actual_conditions_without_gaining_the_key() -> (
+    None
+):
+    from divesafe.domain import AssessmentRecord
+
+    repo = _store_old_shape()
+    pending = _record()
+    decided = _decided(pending, "alice")
+    repo.replace(pending, decided)  # must not be refused by the append-only guard
+    assert _has_withheld_key() == "false"
+    after_decision = repo.get("r1")
+    assert after_decision == decided
+    assert after_decision is not None and after_decision.withheld_evidence == ()
+    assert after_decision.human_decision is not None
+
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _has_withheld_key() == "false"  # still the old shape
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and final.withheld_evidence == ()
+    assert final.actual_conditions is not None
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert "withheld_evidence" not in stored
+    assert stored["human_decision"]["decided_by"] == "alice"
+
+
+def test_a_new_shape_row_keeps_its_withheld_key_when_decided_and_given_actual_conditions() -> None:
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    assert _has_withheld_key() == "true"
+    decided = _decided(record, "alice")
+    repo.replace(record, decided)
+    assert _has_withheld_key() == "true"
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _has_withheld_key() == "true"
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and len(final.withheld_evidence) == 2
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert len(stored["withheld_evidence"]) == 2
+
+
+def test_a_successor_that_changes_another_field_is_still_refused_on_an_old_shape_row() -> None:
+    from divesafe.domain import AssessmentRecord
+    from divesafe.services import InvalidSuccessorError
+
+    repo = _store_old_shape()
+    pending = _record()
+    decided = _decided(pending, "alice")
+    changed = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "explanation": "rewritten after the fact"}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, changed)
+    withheld = _withheld_record()
+    assert isinstance(withheld, AssessmentRecord)
+    smuggled = AssessmentRecord.model_validate(
+        {
+            **decided.model_dump(),
+            "withheld_evidence": [i.model_dump() for i in withheld.withheld_evidence],
+            "evidence_issues": withheld.evidence_issues,
+        }
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(pending, smuggled)  # a non-default value is never dropped or added silently
+    assert _has_withheld_key() == "false"
+    assert repo.get("r1") == pending
+
+
+def test_a_successor_that_changes_another_field_is_still_refused_on_a_new_shape_row() -> None:
+    from divesafe.domain import AssessmentRecord
+    from divesafe.services import InvalidSuccessorError
+
+    repo = _postgres()
+    record = _withheld_record()
+    assert isinstance(record, AssessmentRecord)
+    repo.create(record)
+    changed = AssessmentRecord.model_validate(
+        {**_decided(record, "alice").model_dump(), "withheld_evidence": []}
+    )
+    with pytest.raises(InvalidSuccessorError):
+        repo.replace(record, changed)  # emptying withheld_evidence is a change, not a default
+    assert repo.get("r1") == record
+
+
+def test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_given_actuals() -> None:
+    """ADR 0012 "not solved" case: a nested defaulted field. Old items lack `flagged_signals`.
+    The record must really hold findings and scenarios, or the test proves nothing."""
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.domain import AssessmentRecord
+    from divesafe.orchestration import RunOptions
+
+    pending = run_pipeline(fake(), options=RunOptions(cross_examination=True)).model_copy(
+        update={"id": "r1"}
+    )
+    assert pending.findings and pending.scenarios and pending.cross_examination_findings
+    repo = _postgres()
+    repo.create(pending)
+    old = json.loads(pending.model_dump_json())
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        for item in old[name]:
+            item.pop("flagged_signals")
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    from datetime import timedelta
+
+    from divesafe.domain import ActualConditions, HumanDecision
+
+    decision = HumanDecision(
+        decided_by="alice",
+        decision=pending.final_recommendation,
+        decided_at=pending.created_at + timedelta(minutes=5),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "human_decision": decision.model_dump()}
+    )
+    repo.replace(pending, decided)
+    actual = ActualConditions(
+        reported_at=pending.created_at + timedelta(hours=2),
+        reported_by="a",
+        observations={"v": 1},
+    )
+    done = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+    repo.replace(decided, done)
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert stored["findings"] and stored["scenarios"]
+    for name in ("findings", "cross_examination_findings", "scenarios"):
+        assert all("flagged_signals" not in i for i in stored[name])
+    assert repo.get("r1") == done
+
+
+def test_an_old_shape_decided_row_can_still_be_given_actual_conditions() -> None:
+    """ADR 0026: `key_id` and `decided_by_creator` are new keys inside the write-once decision. A
+    decision stored before they existed must come back unchanged when actuals are added."""
+    from datetime import timedelta
+
+    from tests.agent.scripted_llm import fake, run_pipeline
+
+    from divesafe.domain import ActualConditions, AssessmentRecord, HumanDecision
+
+    pending = run_pipeline(fake()).model_copy(update={"id": "r1"})
+    repo = _postgres()
+    repo.create(pending)
+    decision = HumanDecision(
+        decided_by="alice",
+        decision=pending.final_recommendation,
+        decided_at=pending.created_at + timedelta(minutes=5),
+        is_override=False,
+    )
+    decided = AssessmentRecord.model_validate(
+        {**pending.model_dump(), "human_decision": decision.model_dump()}
+    )
+    repo.replace(pending, decided)
+    old = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    del old["human_decision"]["key_id"], old["human_decision"]["decided_by_creator"]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    actual = ActualConditions(
+        reported_at=pending.created_at + timedelta(hours=2),
+        reported_by="alice",
+        observations={"v": 1},
+    )
+    done = AssessmentRecord.model_validate(
+        {**decided.model_dump(), "actual_conditions": actual.model_dump()}
+    )
+    repo.replace(decided, done)
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    assert "key_id" not in stored["human_decision"]
+    assert "decided_by_creator" not in stored["human_decision"]
+    assert repo.get("r1") == done
+
+
+# --- ADR 0026: the database allows one appended reassignment of a pending row, nothing else -----
+
+
+def _move(frm: str, to: str, at: str = "2026-10-08T12:30:00Z") -> dict[str, object]:
+    return {
+        "from_decider": frm,
+        "to_decider": to,
+        "reassigned_by": "root",
+        "reassigned_at": at,
+        "key_id": "0123456789ab",
+    }
+
+
+def _assigned_row() -> dict[str, object]:
+    return {**_base(), "assigned_decider": "ann", "reassignments": []}
+
+
+@pytest.fixture
+def pending_row(stored: PostgresAssessmentRepository) -> dict[str, object]:
+    row = _assigned_row()
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(row)  # the starting row is set up directly; every later write meets the guard
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    return row
+
+
+def test_the_database_allows_one_appended_move_of_a_pending_row(
+    pending_row: dict[str, object],
+) -> None:
+    _set_record({**pending_row, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]})
+    again = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "bob"), _move("bob", "cara")],
+    }
+    _set_record(again)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        pytest.param(lambda r: {**r, "assigned_decider": "bob"}, id="assignee-without-a-move"),
+        pytest.param(
+            lambda r: {**r, "reassignments": [_move("ann", "bob")]}, id="move-without-assignee"
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "cara",
+                "reassignments": [_move("ann", "bob"), _move("bob", "cara")],
+            },
+            id="two-moves-at-once",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "bob", "reassignments": [_move("zed", "bob")]},
+            id="move-from-the-wrong-person",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "ANN ", "reassignments": [_move("ann", "ANN ")]},
+            id="move-to-the-same-person",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob"), _move("bob", "bob")],
+            },
+            id="two-moves-the-second-to-the-same-person",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob")],
+                "ruleset_version": "other",
+            },
+            id="move-plus-another-change",
+        ),
+        pytest.param(
+            lambda r: {
+                **r,
+                "assigned_decider": "bob",
+                "reassignments": [_move("ann", "bob")],
+                "final_recommendation": "GO",
+            },
+            id="move-plus-a-recommendation-change",
+        ),
+        pytest.param(
+            lambda r: {**r, "assigned_decider": "bob", "reassignments": "not a list"},
+            id="moves-not-a-list",
+        ),
+    ],
+)
+def test_the_database_refuses_a_forged_move(pending_row: dict[str, object], forged: object) -> None:
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(forged(pending_row))  # type: ignore[operator]
+    assert json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'")) == (
+        json.loads(json.dumps(pending_row))
+    )
+
+
+def test_the_database_refuses_to_remove_or_rewrite_an_earlier_move(
+    pending_row: dict[str, object],
+) -> None:
+    moved = {**pending_row, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]}
+    _set_record(moved)
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(pending_row)  # undo
+    rewritten = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "cara")],
+    }
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(rewritten)
+    forged_history = {
+        **pending_row,
+        "assigned_decider": "cara",
+        "reassignments": [_move("ann", "dan"), _move("dan", "cara")],
+    }
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(forged_history)
+
+
+def test_the_database_refuses_a_move_of_a_decided_row(stored: PostgresAssessmentRepository) -> None:
+    decided = json.loads(_decided(_record()).model_dump_json())
+    decided = {**decided, "assigned_decider": "ann", "reassignments": []}
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(decided)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record({**decided, "assigned_decider": "bob", "reassignments": [_move("ann", "bob")]})
+
+
+def test_the_database_caps_the_number_of_moves(pending_row: dict[str, object]) -> None:
+    moves: list[dict[str, object]] = []
+    names = [f"d{i}" for i in range(12)]
+    current = "ann"
+    row = pending_row
+    for i in range(10):
+        moves.append(_move(current, names[i]))
+        row = {**pending_row, "assigned_decider": names[i], "reassignments": list(moves)}
+        _set_record(row)
+        current = names[i]
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(
+            {
+                **pending_row,
+                "assigned_decider": "last",
+                "reassignments": [*moves, _move(current, "last")],
+            }
+        )
+
+
+def test_the_database_refuses_a_move_that_rewrites_an_earlier_one_in_place(
+    pending_row: dict[str, object],
+) -> None:
+    """The earlier move keeps its from and to; only another field of it changes. Only the check
+    that the old moves are an unchanged prefix can see this."""
+    first = _move("ann", "bob")
+    _set_record({**pending_row, "assigned_decider": "bob", "reassignments": [first]})
+    rewritten_first = {**first, "reassigned_by": "mallory"}
+    with pytest.raises(psycopg.errors.RaiseException):
+        _set_record(
+            {
+                **pending_row,
+                "assigned_decider": "cara",
+                "reassignments": [rewritten_first, _move("bob", "cara")],
+            }
+        )
+
+
+_EGRESS_KEYS = ("egress_basis", "model_host", "withheld_knowledge")
+
+
+def _egress_keys_present() -> list[str]:
+    stored = json.loads(_sql_value("SELECT record::text FROM assessments WHERE id = 'r1'"))
+    return [k for k in _EGRESS_KEYS if k in stored]
+
+
+def test_a_row_without_the_egress_keys_is_decided_and_given_actuals_without_gaining_them() -> None:
+    """ADR 0022 condition 7: rows written before the egress fields existed stay as they were."""
+    from divesafe.domain import AssessmentRecord
+
+    repo = _postgres()
+    assert isinstance(repo, PostgresAssessmentRepository)
+    pending = _record()
+    repo.create(pending)
+    old = _base()
+    for key in _EGRESS_KEYS:
+        del old[key]
+    _sql("ALTER TABLE assessments DISABLE TRIGGER assessments_append_only_guard")
+    _set_record(old)
+    _sql("ALTER TABLE assessments ENABLE ALWAYS TRIGGER assessments_append_only_guard")
+    assert _egress_keys_present() == []
+    decided = _decided(pending, "alice")
+    repo.replace(pending, decided)
+    done = _with_actual(decided)
+    assert isinstance(done, AssessmentRecord)
+    repo.replace(decided, done)
+    assert _egress_keys_present() == []
+    final = repo.get("r1")
+    assert final == done
+    assert final is not None and final.egress_basis is None and final.withheld_knowledge == ()
+
+
+def test_a_record_with_withheld_knowledge_round_trips() -> None:
+    from datetime import timedelta
+
+    from tests.conftest import NOW
+
+    from divesafe.domain import (
+        AssessmentRecord,
+        DataCategory,
+        DataKind,
+        EvidenceItem,
+        KnowledgeRef,
+        RecordEgressBasis,
+    )
+
+    item = EvidenceItem(  # SYNTHETIC knowledge item, record form
+        id="kb:site-guide:2:7",
+        category=DataCategory.SITE_INFORMATION,
+        source="kb:site-guide",
+        retrieved_at=NOW,
+        valid_at=NOW,
+        valid_until=NOW + timedelta(days=1),
+        is_forecast=False,
+        data_kind=DataKind.KNOWLEDGE,
+        value={},
+    )
+    base = _record()
+    record = AssessmentRecord.model_validate(
+        {
+            **base.model_dump(),
+            "evidence": [*base.model_dump()["evidence"], item.model_dump()],
+            "egress_basis": "remote_external_opt_in",
+            "model_host": "models.example.org",
+            "withheld_knowledge": [{"document_id": "site-guide", "version": 2, "chunk": 7}],
+        }
+    )
+    repo = _postgres()
+    repo.create(record)
+    decided = _decided(record, "alice")
+    repo.replace(record, decided)
+    assert _egress_keys_present() == list(_EGRESS_KEYS)
+    final = repo.get("r1")
+    assert final == decided
+    assert final is not None and final.egress_basis is RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN
+    assert final.withheld_knowledge == (KnowledgeRef(document_id="site-guide", version=2, chunk=7),)

@@ -39,8 +39,8 @@ as a recorded design, no blockers):** in `withdraw`
 the privilege self-check runs **after** the WITHDRAWN commit, in its own read-only transaction;
 "already withdrawn" is decided by the status-event trigger's distinct refusal of WITHDRAWN to
 WITHDRAWN (never by a check outside the lock); exit statuses have a published precedence
-(decision 11). The approval's `hash_checked` column is **proposed by `risk-reviewer`; the owner has
-not been asked** (decisions 3 and 10). Two items gate shipping: the withdrawal log's location and
+(decision 11). The approval's `hash_checked` column was **proposed by `risk-reviewer`; the owner
+answered YES on 2026-10-21** (decisions 3 and 10; see "Owner answers"). Two items gate shipping: the withdrawal log's location and
 the owner's re-acknowledgement of decision 11 (see "Still open"). The decision is still not
 re-accepted.
 (Note on numbering: the "fourth", "fifth" and "sixth" revisions in the updates below are
@@ -63,13 +63,66 @@ stale cross-references to the migration are fixed.
 it as a recorded design, no blockers):** an unchecked
 APPROVED event still counts as approved for governing and hiding, and the family returns nothing
 with an evidence issue (decision 3, table row, decision 12); `hash_checked` has fixed values on
-DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gates the stage-1
-migration, not only shipping**; "must not approve their own load" is reworded; the exit-status
+DRAFT and WITHDRAWN events (decision 10); **the owner's answer on `hash_checked` gated the stage-1
+migration, not only shipping** (the owner has since answered: YES, 2026-10-21); "must not approve their own load" is reworded; the exit-status
 table gains "outcome unknown: re-run" and a check on the exact SQLSTATE for "already withdrawn"
 (decision 11).
 Decision 13's claim that `kb_load` refuses a manifest root inside the repository is reworded,
 because the check cannot work inside the container, and condition 1 gains the explicit development
 flag form. The status above is otherwise unchanged.
+
+**Update (2026-11-10, build record and owner decisions; text amendment, the decisions above are
+not re-accepted).** Two code stages are built and reviewed by `risk-reviewer` and
+`security-reviewer` with no open blockers or should-fix items; neither is wired into the Retrieve
+stage yet, so no run produces knowledge evidence today.
+- **Domain stage (branch `rag-domain`, commits `0d80cfa`, `db32359`, `92f7645`, `3b6d3d0`):** the
+  stage trace split (Observe lists live ids, Retrieve lists the `kb:` ids; A1); the Retrieve trace
+  codes (`not_configured` kept for older records, plus `knowledge_not_configured`,
+  `knowledge_failed`, `knowledge_timed_out`, `knowledge_issue`; A2); the KNOWLEDGE validator on
+  `EvidenceItem` (two categories, `valid_until` required; A10); in `risk/engine.py`
+  `WINDOW_EXEMPT[KNOWLEDGE]` drops `historical_observations`, `_exempt` is strict for knowledge
+  (`valid_until > window_end`, `valid_at <= window_end`, `None` not exempt), non-exempt knowledge is
+  never coverage (`_covers_window`), never relevant (`_relevant_to_window`) and never a
+  nearest-instant sample (`_citation_guard`), and `_usable` ignores KNOWLEDGE outside its two
+  categories; `services.evidence.screen_knowledge` applies the identity filter both ways with the
+  fixed issue `evidence.knowledge_refused` and drops malformed `kb:` ids; and the notes channel of
+  decision 14 (`KnowledgeNoteCode`, `KnowledgeNote`, `KnowledgeVersionRef`, record `notes` and
+  `superseded_knowledge`, the view's `knowledge_note`; owner decision A4, 2026-11-09: ships now).
+  Tests: `tests/safety/test_knowledge_identity_exempt.py`, `test_knowledge_record_notes.py`,
+  `test_record_knowledge_identity.py`.
+- **Connector stage (branch `rag-connector`, commits `c24e680`, `6037517`):**
+  `src/divesafe/rag/{store,selection,items,connector}.py`: SQL selection checked again in code,
+  the bounds, the items and the notes. Builder choices, reviewed: a site document maps to
+  `site_information` and an all-sites document to `local_guidance` (the category records scope,
+  not content; see Known gaps); the live test is `integration` only; safety-marked connector tests
+  live in `tests/agent/`. The read-time screen reuses `services.kb_screen`, so `rag -> services` is
+  a new sibling import (no cycle; recorded in `docs/architecture.md`).
+- **Owner decisions, 2026-11-09:** (B1) the per-run bound issue is raised at **20 or more** chunks
+  (decision 12); (B2) where the decision 3 table and its prose disagreed, **the prose wins** (walk
+  down from the governing version; the table is amended, see decision 3); (A4) the notes channel
+  ships now; (A1-A3, A10) domain changes land first, then the Retrieve wiring, with **no
+  feature-flagged half state**.
+- **Owner decision, 2026-11-10, reversing the 2026-11-06 narrowing of condition 7:** the record
+  refuses a KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind, in both `evidence`
+  and `withheld_evidence`, with fixed messages (`domain/models.py`, `_check_egress`;
+  `tests/safety/test_record_knowledge_identity.py`). See decision 15 and condition 7.
+- **Conditions for the Retrieve wiring** are listed in a new section before "Options not taken".
+- **Prompt path, egress filter and Retrieve wiring (branch `rag-connector`, 2026-11-10; reviewed
+  by `risk-reviewer` and `security-reviewer`, no blockers, no should-fix):** `7c2b07b` the prompt
+  path (decision 6 envelope allow-list, decision 9 trusted wording, the absence line, the
+  withheld-aware `site_intelligence` finding); `ddcfccf` the egress filter (decision 15:
+  `build_provider` returns `(provider, basis)`, knowledge is sent only under exactly
+  `declared_local`, the record's `sent_evidence_ids`, Supervise checks the ids actually sent,
+  `withheld()` hides `model_host` from create-only keys with `model_host_withheld: true`);
+  `92ad3d1` the Retrieve wiring (see "Conditions for the Retrieve wiring", Status). Builder
+  choices accepted by the reviewers: a host-needing basis without a host records `none` and
+  withholds everything, with a fixed `egress.host_missing` (or `egress.basis_unrecognised`)
+  first in `agent_issues`, not counted as a failed call; the host is hidden by a private flag
+  and a wrap serializer; retrieval starts as a background task during Observe under the
+  connector timeout; the knowledge connector is refused if it is also an Observe connector;
+  the connector's `NO_DOCUMENTS` folds into `NONE_RETURNED` with count 0. The new Known gaps are
+  items 11-25 of the 2026-11-10 list. **The feature is built end to end; shipping still waits on
+  the ADR 0024 amendment and the operations check of wiring condition 10.**
 
 **Required follow-up outside this ADR (not written here; the feature does not ship without it):**
 amendments to ADR 0024 (decision 11, "Required ADR 0024 amendment") and to ADR 0023's text (done
@@ -91,8 +144,9 @@ The engine already treats knowledge in fixed ways that this ADR relies on:
   `historical_observations` from that exemption for knowledge.
 - `INTERIM_REQUIRED_CATEGORIES` holds none of those categories.
 - The `site_constraint` placeholder reads `site_information` and `local_guidance` and returns
-  INSUFFICIENT EVIDENCE, so it cannot return GO or CAUTION. It cites knowledge ids; the citation
-  guard in decision 8 only looks at GO and CAUTION results, so it is unaffected.
+  INSUFFICIENT EVIDENCE, so it cannot return GO or CAUTION. It cites knowledge ids; the knowledge
+  half of the citation guard in decision 8 (not built yet) will only look at GO and CAUTION
+  results, so it will not affect this placeholder.
 
 Today GO and CAUTION are unreachable anyway (no signed limits; `degraded_may_support_go` is
 false). The reviews found that several guarantees above hold only by accident of the current
@@ -173,8 +227,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      without ever having been approved is ignored**: it neither governs nor hides a lower version.
      A version that takes effect during the window governs the whole window and replaces the
      version in force at its start. This is stated on purpose and has a test row.
-   - **`hash_checked` (third and fourth revisions; proposed by `risk-reviewer`, the owner has not
-     been asked).** **An APPROVED event with `hash_checked = false` still counts as "approved at
+   - **`hash_checked` (third and fourth revisions; proposed by `risk-reviewer`; DECIDED by the
+     owner, 2026-10-21: YES, the column is added, see decision 10).** **An APPROVED event with `hash_checked = false` still counts as "approved at
      some point"** for choosing the governing version and for hiding lower versions (reading it as
      "not approved" would drop that version out of selection, let the lower version govern and
      return its text, which is the fall-back this decision forbids; and an unchecked version that
@@ -187,7 +241,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      **only from the APPROVED event**; the other statuses carry a fixed value (decision 10). The
      per-site chunk check (decision 12) uses the same "approved" meaning. The column records a
      **client claim, not proof**: a raw `psql` insert by the loader credential can claim true
-     (ADR 0024 A3). **The owner's answer on this column gates the stage-1 migration** (decision 10).
+     (ADR 0024 A3). **The owner answered YES on 2026-10-21, so the stage-1 migration includes the
+      column** (decision 10).
    - A governing version that is WITHDRAWN returns nothing from the family (unless its approval date
      is after `now`, in which case the clock-disagreement issue below takes precedence). **A withdrawn higher
      version hides the lower versions too** (owner answer): a document withdrawn because it was
@@ -214,21 +269,31 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
 
    | Situation | Returned | Classification |
    | --- | --- | --- |
-   | Governing (highest approved) version whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
-   | Governing version whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
+   | **Any version between the governing (highest approved) version and the first clean one, inclusive,** whose approval date is after `now`, **withdrawn or not, expired or not, checked or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "store/run clock disagreement" (decision 3) |
+   | **Any version between the governing version and the first clean one, inclusive,** whose APPROVED event has `hash_checked = false`, approval date not after `now`, **withdrawn or not, expired or not** | nothing from the family; no fall-back to a lower version | **evidence issue**: "an approved document family has an unchecked approval" (decision 3) |
    | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end before 00:00 local on the day after review-by | its chunks | none |
    | Governing version approved **and checked**, **current status APPROVED (no WITHDRAWN event)**, approval date not after `now`, window end at or after that instant (including a dive that runs past review-by) | nothing | expired (decision 14) |
-   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now`, **in date or expired** | nothing from the family | withdrawn (note) |
-   | Higher version approved or withdrawn, effective after window end | the lower governing version, classified by rows 1-5 | as for that version |
+   | Governing version withdrawn (higher or only), had been approved, approval checked, approval date not after `now`, **in date or expired**, and no lower approved version below it is unchecked or dated after `now` | nothing from the family | withdrawn (note) |
+   | Governing version withdrawn, **above a lower approved version that is unchecked or dated after `now`** | nothing from the family | **evidence issue** (the matching issue row), not a note |
+   | Higher version approved or withdrawn, effective after window end | the lower governing version, classified by rows 1-6 | as for that version |
    | Higher version takes effect inside the window | the higher version | as for any governing version |
    | Draft or never-approved version | ignored; does not hide a lower version | none |
-   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, classified by rows 1-5 | as for that version |
+   | Draft withdrawn without ever being approved, above an approved lower version | the lower version, classified by rows 1-6 | as for that version |
    | Only future-effective, only draft or only never-approved-and-withdrawn versions | nothing | not in force (note) |
 
    **Precedence.** The table is read top to bottom. **The two issue rows come before every other
    row**: the clock-disagreement row first, then the unchecked-approval row, then the in-date,
    expired and withdrawn rows (so an unchecked approval is an issue even when withdrawn or expired,
-   and an unchecked in-date version never matches the "its chunks" row). **Decision 3 defines
+   and an unchecked in-date version never matches the "its chunks" row). **Walk down from the
+   governing version (owner decision B2, 2026-11-09: the prose wins over the earlier table, which
+   is amended above).** Selection starts at the governing version and walks down the family's
+   approved versions until the first **clean** one: a checked version, dated on or before `now`,
+   whose current status is APPROVED. The two issue rows apply to **every** version between the
+   governing one and that first clean one, inclusive, not only to the governing version: a
+   withdrawn version sitting over an unchecked one (or over one dated after `now`) is the
+   **issue**, not the withdrawn note, because the withdrawn version hides the lower one and the
+   lower one's defect would otherwise go unreported. The connector (`rag/selection.py`,
+   `rag-connector` branch) is built this way. **Decision 3 defines
    "approved" as having an APPROVED event whether or not it was later withdrawn, so rows 3 and 4
    also require the current status to be APPROVED (no WITHDRAWN event)**: a withdrawn, checked
    governing version, in date or expired, never matches them and is classified by the withdrawn row
@@ -269,12 +334,24 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       becomes the strict `valid_until > window_end`, because re-assessing stored record-form evidence
       skips the connector's filter. The NOTICE branch is unchanged; the tests are in "Identity and
       exemption". The engine does not rely on the connector having removed an expired document.
+      **Built (2026-11-10, `rag-domain`):** all of the above, and (review fix, `92f7645`) a
+      knowledge item that is not exempt is **never coverage** (`_covers_window` leaves it out as if
+      absent), **never relevant** to the window (`_relevant_to_window`: knowledge counts only when
+      exempt, never by overlap) and **never a nearest-instant sample** in `_citation_guard`.
+      `tests/safety/test_knowledge_identity_exempt.py`.
    - `kb_load` refuses any `variables`, `ranges` or `units` key in a knowledge `value`.
    - Only the knowledge connector may emit KNOWLEDGE items or `kb:` ids. `gather_evidence` passes
      the connector object itself, and the check is identity (`is`) with the single instance built
      at start-up, not the self-declared name and not `isinstance`. Items from any other connector
      that carry KNOWLEDGE or a `kb:` id are **dropped** before they reach a rule or a prompt and
-     reported as an evidence issue. The `kb:` prefix is reserved in both directions.
+     reported as an evidence issue. The `kb:` prefix is reserved in both directions. **Built
+     (2026-11-10, `services.evidence.screen_knowledge`):** the filter runs both ways (another
+     connector emitting KNOWLEDGE or `kb:`; the knowledge connector emitting anything else), with
+     the fixed issue `evidence.knowledge_refused` and no id, title or content in the text, and it
+     drops a malformed `kb:` id from the knowledge connector. `gather_evidence` takes the connector
+     instance (`knowledge_connector=`); the wiring must pass the same instance it registers
+     ("Conditions for the Retrieve wiring"). Known gap: the filter trusts validated items (it tests
+     `data_kind is DataKind.KNOWLEDGE`), see Known gaps.
    - The KNOWLEDGE validator does not require `text`, so the record form (decision 16) validates.
 6. **Item fields.**
    - `id`: `kb:<document_id>:<version>:<chunk>`. **Document id grammar:** lowercase letters and
@@ -291,8 +368,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      id screen of decision 9 and a word list (no `ignore`, `system`, `assistant`, `instruction`,
      `recommend`, `go`, `approve` and similar tokens as a whole token), so an id cannot read as an
      instruction; the list is a screen, not a control. The database has a unique constraint on
-     (document, version, chunk). A collision at run time becomes an evidence issue, not an
-     uncaught `DuplicateEvidenceError`.
+     (document, version, chunk). A collision at run time becomes an evidence issue. As of
+     2026-10-25 (owner decision) `gather_evidence` and `build_evidence_set` no longer raise: when two
+     connectors return different items under one id, every item with that id is dropped and a fixed
+     `evidence.conflict` issue is recorded, so the existing connector-issues rule yields
+     INSUFFICIENT EVIDENCE. The dropped items are kept as withheld evidence (not evaluated, not
+     passed to the engine, agents or prompts), and a conflict can hide a more severe result
+     (INSUFFICIENT EVIDENCE instead of NO-GO); see `docs/risk-model.md` and ADR 0008.
    - `data_kind` KNOWLEDGE, `is_forecast` false, `upstream_known` false, `quality` DEGRADED, with a
      `quality_notes` entry saying why, and a `transformations` entry for chunking.
    - `location` is the site for a site document. An all-sites document has no location and an
@@ -315,7 +397,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      `location`, `quality_notes`, `retrieved_at` and `is_forecast`. (Today `_payload_item` sends
      `source`, `upstream`, `upstream_known`, `quality_notes`, `retrieved_at` and `is_forecast`
      for every item; the knowledge branch must send exactly the fields listed as sent above and
-     none of these.) A test asserts this. The record form holds the label `kb:<document_id>` as
+     none of these.) A test asserts this. **Built (`7c2b07b`, 2026-11-10;
+     `tests/agent/test_knowledge_prompts.py`).** The record form holds the label `kb:<document_id>` as
      `source` and the version as `source_version` (decision 16), so the provenance of AGENTS
      section 10 still holds in the record; only the scoped lookup shows title, attribution and
      licence, from the store.
@@ -348,6 +431,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      the document id, section, title, attribution, **licence text** or status-event rows (process
      controls, not guarantees; code cannot detect a name). `kb_load` refuses a manifest without
      the attestation, and the failure test covers the licence text as well as the other fields.
+   - **Chunks are written only before a version's first status event (known; recorded
+     2026-10-21).** The trigger `kb_chunks_insert` refuses a chunk INSERT once any status event
+     exists for that document version; `kb_load` therefore writes the document and its chunks
+     **before** the DRAFT event, in one transaction (decision 11, "Commands and events"). A chunk
+     cannot be added to, or replaced in, a version that has an event; a correction is a new
+     version. Checked against the text: decision 11 and ADR 0024 A3 list the writes (documents,
+     chunks, DRAFT) in this order and say "together"/"one transaction", but they do not state the
+     refusal as a rule; this paragraph does. Nothing in the text contradicts it.
    - **Review-by limit (normative; an owner policy limit, not a parsing limit; only the owner changes it):** the review-by date is at most **12 calendar months after the
      document's effective date**, counted from the effective date, not from approval or load.
      `kb_load` refuses a later date. Twelve months from 29 February resolves to the **last day of
@@ -417,7 +508,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    produce with no provider; with an agent stage and egress basis `declared_local` the knowledge
    items can still lead an agent to *tighten* the result by proposal (never relax it), so the
    "knowledge changes nothing" safety test runs against the deterministic result / with no provider.
-   - **A citation-guard rule in the engine, independent of `degraded_may_support_go`:** a GO or
+   - **A citation-guard rule in the engine, independent of `degraded_may_support_go`** (the
+      "cites nothing" half is built, 2026-10-26; the knowledge half is **not built yet**): a GO or
      CAUTION that cites nothing, or cites **any** KNOWLEDGE item, becomes INSUFFICIENT EVIDENCE
      (stricter than "only", because no rule may read knowledge text, so a knowledge citation on a
      GO or CAUTION is suspect either way). The rule has an engine-reserved rule id and fixed API
@@ -427,8 +519,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
    - A future `site_constraint` rule never reads knowledge text. Two checks: a static check that
      `risk/` never reads a knowledge item's `text` **and never refers to the KNOWLEDGE kind or the
      two knowledge categories outside the allowed places**, which are exactly these, as the files
-     exist today: (1) `risk/engine.py`: `WINDOW_EXEMPT`, `_exempt`, `EvidencePolicy` (the refusal
-     of a knowledge category as required) and the new citation guard; (2) `risk/placeholders.py`:
+     exist today (2026-11-10): (1) `risk/engine.py`: `WINDOW_EXEMPT`, `_exempt`, `_usable`,
+     `_covers_window`, `_relevant_to_window`, `_citation_guard`, and `EvidencePolicy` (the refusal
+     of a knowledge category as required, not built) and the knowledge half of the citation guard
+     (not built); (2) `risk/placeholders.py`:
      the `site_constraint` placeholder's category set (`K.SITE_CONSTRAINT`). No other file in
      `risk/` (`rules.py`, `definition_rules.py`, `interfaces.py`, `__init__.py`) may mention them.
      The check catches only the obvious forms and is a screen. It needs a **positive control**: a
@@ -458,7 +552,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
      - **To change when the citation guard lands:** `tests/agent/scripted_llm.py` (`_GoRule`
        cites nothing, so it would be turned into INSUFFICIENT EVIDENCE; it must cite a usable
        synthetic item), and `docs/risk-model.md` (the bullet "A `GO` that cites nothing" at about
-       lines 240-241 says an empty citation passes the guard; it must say it is now refused).
+       lines 240-241 said an empty citation passes the guard; it now says it is refused).
+        **Status (2026-10-26): the empty-citation part has landed** (a `GO` or `CAUTION` citing
+        nothing is flagged `CITES_UNUSABLE`, giving INSUFFICIENT EVIDENCE). **The
+        knowledge-citation part is still open and is NOT built:** `risk/engine.py` has no
+        knowledge-citation guard today (KNOWLEDGE items appear only in the window-exemption table),
+        so a `GO` or `CAUTION` citing a knowledge item passes the guard. It is not yet flagged; it
+        will be when decision 8 lands.
 9. **Trusted prompt wording, outside the untrusted block, whenever a knowledge item or a
    withheld one exists, and the absence line below whenever the knowledge connector returned zero
    items or raised a note or issue** (as `tide_note` does for tides, ADR 0021), wired into specialists, ToT,
@@ -544,18 +644,28 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       DRAFT to APPROVED, DRAFT to WITHDRAWN and APPROVED to WITHDRAWN. On APPROVED it also checks
       that the effective date is at most 12 calendar months after the approval's local date and
       that review-by is on or after it (decisions 3 and 7); "approval not in the future" is true
-      by construction at insert. **WITHDRAWN to WITHDRAWN is refused with a distinct error code and
+      by construction at insert. **Owner decision, 2026-10-22: the database refuses to approve a
+      version that has no chunks.** The `kb_status_events_insert` trigger refuses an APPROVED
+      event for a version with no row in `kb_chunks`, with a fixed message and an ordinary
+      `P0001` (no distinct SQLSTATE, unlike the WITHDRAWN to WITHDRAWN refusal). It needs a
+      failure test and a mutation (drop the check; an empty version must then be approved). **WITHDRAWN to WITHDRAWN is refused with a distinct error code and
       message**; `withdraw` uses that refusal to report "already withdrawn" (decision 11). **The
-      status-event row has a column `hash_checked`, `NOT NULL` with no default** (proposed by
-      `risk-reviewer`; owner not yet asked; decision 3). **Selection reads it only from the APPROVED
-      event; the other statuses carry fixed values** (a CHECK or the trigger enforces them, the
-      values fixed at code time and stated in the ADR then): `load` writes the fixed value for DRAFT
-      and `withdraw` the fixed value for WITHDRAWN, so a WITHDRAWN event with `hash_checked = false`
-      still withdraws. **The owner `psql` fallback INSERT must include the column** (pinned in the
-      runbook scan). **The owner's answer on this column gates the stage-1 MIGRATION, not only
-      shipping:** migrations are forward-only and checksum-pinned and the rows are not updatable, so
-      a NOT NULL column with no default cannot be added later; **the column is not written until
-      the owner answers.** Independently of order, selection treats
+      status-event row has a column `hash_checked`, `NOT NULL` with no default.** **Owner decision,
+      2026-10-21: YES, add `kb_status_events.hash_checked`** (proposed by `risk-reviewer`; decision
+      3). **Selection reads it only from the APPROVED event. DRAFT and WITHDRAWN rows carry the
+      fixed value `false`, enforced by a DB CHECK: `status = 'APPROVED' OR hash_checked = false`.**
+      `load` writes `false` for DRAFT and `withdraw` writes `false` for WITHDRAWN, so a WITHDRAWN
+      event still withdraws (selection does not read the column there). **The DB accepts APPROVED
+      with `hash_checked = false`**: `approve` writes `true` only when the manifest hash was
+      supplied and compared; the development flag (ADR 0024 A3) leaves it `false`; the DB does not
+      refuse that row and **selection, not the DB, handles it**: in production an unchecked
+      approval makes the family return nothing and raises an evidence issue (decision 3), and it
+      applies **in every environment**. An unchecked APPROVED event still counts as "approved at
+      some point" for choosing the governing version and for hiding lower versions. **The owner
+      `psql` fallback INSERT must include the column** (pinned in the runbook scan). Migrations are
+      forward-only and checksum-pinned and the rows are not updatable, so a NOT NULL column with no
+      default could not be added later; the answer was needed before the stage-1 migration, and
+      the column goes into it. Independently of order, selection treats
       any WITHDRAWN event as final (decision 3). The approval date is
       `(recorded_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date` of the APPROVED event (decision 3,
       "Dates").
@@ -567,7 +677,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       (owner decision, 2026-10-21).** SELECT is there because `kb_load` reads the store for the
       per-site chunk check (decision 12) and for version conflicts. No UPDATE, DELETE, TRUNCATE,
       TRIGGER or REFERENCES, and the INSERT column list excludes the ordering and recorded-at
-      columns and **includes `hash_checked`** (proposed; see above). PostgreSQL grants TEMP on a database to PUBLIC by default, so `db_init` revokes it from PUBLIC
+      columns and **includes `hash_checked`** (owner decision, 2026-10-21; see above). PostgreSQL grants TEMP on a database to PUBLIC by default, so `db_init` revokes it from PUBLIC
       and from the loader **on every run**. `pg_dump` without `--create` does not carry database
       ACLs, so after a restore TEMP is back on PUBLIC until `db_init` runs; meanwhile the loader
       self-check finds TEMP and `kb_load` refuses (it fails closed). The database owner keeps TEMP
@@ -575,14 +685,29 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       creates temporary tables (a check at code time). The app role is not checked for TEMP, which
       is acceptable: schema qualification and `pg_temp` last (above) are the defence; the loader's
       TEMP is checked because the loader is the writing role.
-    - Each knowledge trigger is checked as a pair with the function it must call, in `public`, as
-      for the assessment guard, after migrating and in `verify()`. `guarded()` keeps every
+    - **Stage 1a checked trigger names and `tgenabled` only, in `migrate()` only; condition 9
+      (2026-10-25) replaces that.** Stage 1a's `migrate()` checked that the nine named knowledge
+      triggers were present and `ENABLE ALWAYS` (a subset check). Condition 9 now checks, in
+      `migrate()` and in `verify()` (start-up only), that the non-internal triggers on the three
+      `kb_*` tables are exactly the nine, each paired with its function in `public`, with the
+      expected shape and pinned function bodies (see condition 9 and condition 11 for what it does
+      not cover). `guarded()` keeps every
       migration-1 forbidden word applying to every later migration, including this one, and adds
       the knowledge trigger and function names as forbidden only in migrations **after** the one
       that creates them. It also forbids DROP and RENAME of any knowledge table in later
-      migrations (the same gap exists today for `assessments`; closing it is a follow-up). The migration's checksum is pinned in a safety test. No
-      `DROP TRIGGER IF EXISTS`.
-    - The production start-up check extends to these tables: it also tests column-level privileges
+      migrations (the same gap exists today for `assessments`; closing it is a follow-up). **Known
+      (2026-10-21): the `REVIEWED_GUARD_MIGRATIONS` entry for migration 4 skips the whole
+      forbidden-word scan for that version**; it is compensated by the pinned checksum and by the
+      check in `migrate()` that the nine named knowledge triggers are present and `ENABLE ALWAYS`
+      (a subset check), not by the scan. The migration's checksum is pinned in a safety test. No
+      `DROP TRIGGER IF EXISTS`. Any lasting database that applied an earlier text of migration 4
+      will refuse with "migration 4 was changed after it was applied"; migration 4 has only ever
+      been applied to throwaway test databases.
+    - **A version whose DRAFT was written with no chunks can never be approved** (the database
+      refuses, above); it can only be withdrawn or replaced by a new version. `kb_load` must
+      refuse a zero-chunk manifest before writing the DRAFT, with a test (later stage; not built
+      in stage 1a).
+    - **Later stage, not built:** the production start-up check extends to these tables: it also tests column-level privileges
       (`has_any_column_privilege` for INSERT, UPDATE, REFERENCES), and refuses an app role that can
       DELETE, TRUNCATE or alter triggers, owns a knowledge table or function (directly or by
       membership), or is a member of the loader role. Outside production these checks are skipped,
@@ -591,7 +716,11 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     string and a role-name setting validated like `postgres.py` does for the app role.
     - `db_init` creates the grants; the loader role itself is created by the bootstrap superuser
       (see "Required ADR 0024 amendment" below). **`db_init` FAILS, with a fixed message, if the
-      loader role does not exist; it never creates the role.** **`kb_load`'s privilege self-check
+      loader role does not exist; it never creates the role.** **Order (owner decision,
+      2026-10-22):** on a missing loader role the check runs **after** the migration, so the schema
+      stays migrated, `db_init` exits non-zero and the loader grants are not applied. **If
+      `DIVESAFE_LOADER_DB_ROLE` is unset, `db_init` skips the loader grants and the loader check**
+      (the production pin comes with the compose stage, ADR 0024 A1, A5). **`kb_load`'s privilege self-check
       is the app role's existing check plus further items, and does not claim to match it.** The
       existing app check (`services/postgres.py`, `_privilege_problems`) tests: ownership of
       tables, schema and database (directly or by membership), CREATE on `public` and on the
@@ -661,7 +790,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       family's lock without limit. A missing corpus
       *variable* still blocks `compose run kb_withdraw` (Compose interpolates the whole file); only
       a plain `docker exec` avoids it. The reasoning: a WITHDRAWN event is final whatever its order
-      (decision 3) and the trigger validates it under the per-document lock; the global lock
+      (decision 3; enforced by the selection query, not built yet, see Known gaps) and the trigger validates it under the per-document lock; the global lock
       serialises the per-site chunk check and version inserts, which a withdrawal does not do. The
       loader's privilege self-check runs in `withdraw` but **reports and does not refuse**: the
       WITHDRAWN event is committed first, then the check runs in its own read-only transaction, and
@@ -716,7 +845,12 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     meaning of approved: an APPROVED event counts whether or not `hash_checked` is true), so reaching the bound in operation
     always means a mistake that fails closed. Reaching the per-run bound is an **evidence issue**
     (owner answer; it forces INSUFFICIENT EVIDENCE) with the count returned and the count
-    available (after the decision 3 filters). Exceeding the agent stage's existing
+    available (after the decision 3 filters). **Owner decision B1 (2026-11-09): the issue is
+    raised at 20 or more chunks** (`total >= MAX_KNOWLEDGE_ITEMS`), so exactly 20 is an issue too
+    (the loader's per-site check means 20 in operation is already a mistake). The connector cuts
+    the result at 20 items; the cut can split the last family mid-document (owner's choice; see
+    Known gaps: it does not follow the connector's own whole-family-or-nothing rule for a dropped
+    chunk). Exceeding the agent stage's existing
     `MAX_EVIDENCE_ITEMS` cap skips the agent stage, as today. Prompt escaping expands non-ASCII
     text, so the 20-chunk bound must be tested against `MAX_PROMPT_CHARS` for the risk agent and
     ToT; a prompt over the cap fails the agent stage closed.
@@ -746,15 +880,50 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       bytes, the stored text and `content_sha256` therefore describe the same text. The same NFC
       check applies to every manifest string field (decision 7). Newlines are `\n` only; a `\r` is
       refused.
-    - Characters are checked against an **allow-list**: Latin-script letters, digits, common
-      punctuation and symbols, space and newline. English and Bahasa Melayu are both Latin, and
-      this also stops other scripts posing as Latin letters. Combining marks are refused (the text
-      is precomposed NFC). A second check refuses every default-ignorable code point from the
+    - Characters are checked against a **fixed allow-list** (owner decision, 2026-10-23, narrowing
+      the earlier "common punctuation and symbols" wording). Allowed: ASCII letters; ASCII digits;
+      space; newline only where newlines are allowed; accented Latin letters whose Unicode name
+      starts with `LATIN SMALL LETTER` or `LATIN CAPITAL LETTER`; and exactly these ASCII
+      punctuation and symbol characters: `. , ; : ! ? ' " ( ) [ ] - / % + = < >`. Everything else
+      is refused: all non-ASCII punctuation and symbols (curly quotes, en and em dashes, U+2010,
+      U+2212, U+2236, U+A789, U+0589), `LATIN LETTER ...` letters (small capitals such as U+1D0B
+      and U+0299) and Latin modifier letters. The **prefix rule** (`LATIN SMALL LETTER` /
+      `LATIN CAPITAL LETTER`) already refuses `œ` (U+0153, `LATIN SMALL LIGATURE OE`) and the
+      modifier letters. The name-based fragments `LIGATURE` and `MODIFIER` are defence in depth
+      and have **no effect under Unicode 16.0.0**; only `SMALL CAPITAL` does work (U+A7AE, whose
+      name starts with `LATIN CAPITAL LETTER`). A test goes red if a future Unicode version makes
+      the LIGATURE or MODIFIER fragment reachable. **Consequence:** corpus text with typographic quotes
+      or dashes is refused and must be written with the ASCII forms. No corpus exists yet, so no
+      known break. English and Bahasa Melayu are both Latin, and this also stops other scripts
+      posing as Latin letters. Accepted letters include the ones NFKC does not decompose (ß æ ø
+      ð þ ı); `œ` is refused by the prefix rule (its name is `LATIN SMALL LIGATURE OE`); the digraphs
+      DŽ, LJ, NJ and DZ (and their case forms) are accepted, which is harmless for id matching.
+      **The accepted set follows the Python `unicodedata` version.** A safety test pins
+      `unidata_version` and the count and hash of the accepted non-ASCII code points, so a Python
+      upgrade that changes the set fails the test and needs an ADR review.
+      **Runtime control (OWNER-APPROVED 2026-10-24, option "runtime check plus 3.14"):** the
+      reviewed set is for Unicode 16.0.0 (Python 3.14). `kb_load` and `approve` refuse to run
+      unless `unicodedata.unidata_version == "16.0.0"` (exit 3, fixed message, before any
+      connection). The safety test pins the set on 16.0.0 and, on any other interpreter, asserts
+      that the loader refuses (it does not skip). **Update 2026-11-06 (owner ruling):** the 3.11
+      CI leg failed 111 load-flow safety tests, because the loader refused there as designed and
+      those tests expect it to run. The project now requires Python 3.14 (`requires-python`), CI
+      runs 3.14 only, and `docker/Dockerfile` is `python:3.14-slim`. Confirmed by running
+      (2026-11-06): local Python 3.14.10 reports `unidata_version` 16.0.0; the CI `image` job
+      asserts 16.0.0 inside the built image (locally 3.14.10); the CI test interpreter is
+      confirmed indirectly, by the load-flow tests passing. A move to a new
+      minor Python (3.15 and later) needs a Unicode review first; `requires-python` does not cap it,
+      and on another Unicode version the loader fails closed (exit 3). Combining marks are
+      refused (the text is precomposed NFC). A second
+      check refuses every default-ignorable code point from the
       code's own table (Python's `unicodedata` lacks the property), which covers variation
       selectors, the combining grapheme joiner and Hangul fillers. Control, bidi, zero-width,
       private-use, tag, other format characters, unassigned code points and noncharacters are
       refused too. Widening the set needs an ADR. The allow-list and the second check apply to
-      the manifest string fields as well.
+      the manifest string fields as well, **including `display_permission_reference`, which gets
+      the same NFC, allow-list and id screen as `licence_reference`**. The one exception is
+      `file.path`, which gets the NFC check only (not the allow-list), because it names a file
+      on disk and is never shown or used as an id.
     - Every path is resolved and must lie inside the manifest root. Each path component is
       opened from a directory handle without following links, so a directory swapped after the
       check is not followed. The open handle must be a regular file with a single hard link, and
@@ -767,12 +936,15 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       repository's `.gitignore` entry **and a mandatory `.dockerignore` line** for the corpus
       staging location chosen at code time (`up -d --build` would otherwise bake licensed text into
       the image); a test checks both entries. A development run on the host may still check the path. See ADR 0024
-      Amendment 1, A3.
+      Amendment 1, A3. **Chosen at code time (2026-11-09, ADR 0024 A3 build `59381de`):** the
+      staging location is `corpus/` at the repository root, ignored by `/corpus/` in `.gitignore`
+      and `corpus` in `.dockerignore`, both pinned by `tests/safety/test_production_compose.py`;
+      the mount target in the container is `/corpus`.
     - `kb_load`, the connector and the API text lookup never log chunk text, titles or paths.
     - Documents are never downloaded by the application. No scraping.
     - **Database dumps and backups contain the licensed text.** `docs/backup-and-restore.md` must
       say so (follow-up; that file is not edited by this ADR), and a licence revoked later cannot
-      be honoured in an existing dump.
+      be honoured in an existing dump. **Done** with ADR 0024 A7 (`f4879a5`, 2026-11-09).
 
 ### Failure, absence and the human
 
@@ -802,12 +974,24 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       prompts.
     - **Notes need a channel that does not exist today, and so do the other record fields.** One
       shape change to `AssessmentRecord` adds: `notes` (typed codes plus counts, never free
-      connector strings), `withheld_knowledge` (document id, version and chunk, never titles),
+      connector strings), `withheld_knowledge` (document id, version and chunk, never titles; one of three meanings of
+      "withheld", see the terms block in `docs/architecture.md`, and not `withheld_evidence` of ADR 0008),
       `superseded_knowledge` (ids only), and the typed egress fields of decision 15
       (`egress_basis`, `model_host`). All default to empty or absent so older records still
       validate, none enters a prompt, and each is shown to the human in fixed wording, with a test
       that it reaches the user. Notes never force an outcome. This changes the shape of the domain
       record: it needs **`risk-reviewer` and `security-reviewer`**, and ADR 0015's rules apply.
+      **Built (2026-11-10, owner decision A4, 2026-11-09: the notes channel ships now, ahead of
+      the wiring):** `KnowledgeNoteCode` (`knowledge_not_configured`, `knowledge_withdrawn`,
+      `knowledge_not_in_force`, `knowledge_expired`, `knowledge_none_returned`), `KnowledgeNote`
+      (code plus a family count, 0 for codes that count none), `KnowledgeVersionRef`, the record
+      fields `notes` and `superseded_knowledge` (one note per code; "not configured" stands alone;
+      a "no knowledge" note contradicts `kb:` evidence; a superseded version cannot be in the
+      evidence), and the API view's `knowledge_note` in fixed wording, reviewed by both reviewers
+      (`tests/safety/test_knowledge_record_notes.py`). The connector's "no documents" case maps to
+      `NONE_RETURNED` with count 0; the wiring uses this one enum, not a second one ("Conditions
+      for the Retrieve wiring"). When knowledge failed only as an issue (no note), the view adds a
+      fixed sentence from the Retrieve trace code (Known gap 4, closed at wiring).
 15. **Egress: corpus text reaches a model only under `declared_local`.** A loopback address proves
     nothing about where a model server sends data: the local proxy used in the 2026-10-17 run was
     counted as local before ADR 0023 yet forwards off the machine. ADR 0023 (ACCEPTED 2026-10-20)
@@ -870,7 +1054,44 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       **validator on `AssessmentRecord`**, not only by a test: a record whose `egress_basis` is
       anything but `declared_local` (including absent) is invalid if any knowledge evidence item in
       it is missing from `withheld_knowledge`. Older records have no knowledge items, so they still
-      validate.
+      validate. **As built, "knowledge item" here means an evidence item with a `kb:` id; since the
+      owner decision of 2026-11-10 (reversing the 2026-11-06 narrowing of condition 7) the two
+      meanings coincide:** the record refuses a KNOWLEDGE-kind item without a `kb:` id and a `kb:`
+      id on any other kind, in both `evidence` and `withheld_evidence`, with fixed messages that
+      carry no id (`domain/models.py`, `_check_egress`;
+      `tests/safety/test_record_knowledge_identity.py`, including an item built with
+      `model_construct`). The validator also refuses (review fixes, 2026-11-06): a `model_host` that
+      does not match the basis (`declared_local` and `loopback_external_opt_in` need `localhost`
+      or a loopback IP, IPv4-mapped included; `remote_external_opt_in` needs a non-loopback host);
+      a host with a zone id (`%`), a `0x` label or a label over 63 characters; more than 20 `kb:`
+      items (`MAX_KNOWLEDGE_ITEMS`, decision 12); and a withheld id cited by findings,
+      cross-examination findings, scenarios, the proposal or the Reason stage trace (rule results
+      and the other traces may cite it: `placeholder.site_constraint` does). Validation errors on
+      the record hide the input (`hide_input_in_errors`).
+    - **Conditions on the filter stage (risk review of condition 7, 2026-11-06).** The record
+      validator is a backstop; a breach makes `_gate` raise and nothing is stored, so the filter
+      stage MUST keep model and connector mistakes from reaching it:
+      - Supervise's `citations_valid` and the runner's allowed ids use the ids actually sent, not
+        all evidence, with a test that a model citing a withheld id gives a degraded **stored**
+        record.
+      - The filter decides "knowledge" with `domain.knowledge_ref`, the validator's definition.
+      - The knowledge connector drops malformed `kb:` ids and items past `MAX_KNOWLEDGE_ITEMS`,
+        each with a fixed issue. **Built** in the connector (`rag-connector`) and, as a second
+        line, in `screen_knowledge` (`rag-domain`); the connector tests for a malformed id depend
+        on the chunk text passing the screen (Known gaps).
+      - The wiring takes `model_host` from `urllib.parse.urlsplit(...).hostname` (no `[::1]`
+        brackets), with a test for `http://[::1]:8000`.
+      - The human view shows withheld knowledge in fixed wording (decision 14), with a test.
+      - **`model_host` is hidden from create-only keys (owner decision 2026-11-06, security
+        review note 7).** A host name can reveal deployment layout and a create-only key does not
+        need it; `egress_basis` and `withheld_knowledge` stay visible to every reader. The host is
+        removed in the API view only (the stored record keeps it), and is marked as hidden with a
+        separate flag (e.g. `model_host_withheld: true`, like ADR 0019's `decision_withheld`),
+        never with null, because null means "no model server". Viewer, decider, overrider and
+        admin keys see it. Tests: a create-only key never receives the host, on creation, polling
+        and later reads; the other roles do. **Not built (2026-11-10):** `withheld()` does not hide
+        `model_host` yet; it must land in the same commit as the egress wiring (a condition on that
+        commit, "Conditions for the Retrieve wiring").
     - **The live evaluation path applies the same basis filter**, as `tide_check_allowed` does for
       tides (ADR 0023 decision 7): it must not put corpus text in a prompt unless its basis is
       `declared_local`.
@@ -880,7 +1101,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       same stage as the filter, never later, so the rule can be checked afterwards. Both are
       domain-record changes (decision 14), so `risk-reviewer` and `security-reviewer` are needed.
       The basis does not go into `model_version` (ADR 0023's text now says so): the typed fields
-      are required here and **not yet built**. **Safety invariant, checkable from
+      are required here; **the fields and the validator are built (2026-11-06, condition 7;
+      widened 2026-11-10), and so are the filter, the `(provider, basis)` pair and the wiring
+      through `assess_dive` (`ddcfccf`, `92ad3d1`, 2026-11-10)**, so every new record writes
+      them (older records keep them absent). **Safety invariant, checkable from
       the record alone:** any record whose prompt held knowledge items has `egress_basis` equal to
       `declared_local`; a record with knowledge evidence and `egress_basis` of `no_agent_stage`
       (or any other value) holds only withheld items.
@@ -933,7 +1157,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   collision or all-expired site becomes an evidence issue; an approved family dated after the
   run's `now` becomes an evidence issue with the fixed "store/run clock disagreement" wording; the
   bound becomes an issue; any other
-  connector emitting KNOWLEDGE or `kb:` is an issue.
+  connector emitting KNOWLEDGE or `kb:` is an issue (**done 2026-11-10**, both directions and the
+  malformed id: `tests/safety/test_knowledge_identity_exempt.py`).
 - Loader failure tests: a review-by 12 months and one day after the effective date is refused, and
   12 months exactly is accepted; an effective date of 29 February resolves to the last day of
   February in a non-leap target year (a review-by one day later is refused); a missing
@@ -946,13 +1171,20 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `.gitignore` entry and the `.dockerignore` line exist;
   the loader setting is in `SECRET_FILES`. (The loader's own refusals are listed under "Loader
   role" below.)
+- **Slice 2 risk-review test obligations (2026-10-23). Required before slice 2 is committed**
+  (the test-engineer marks each done here when it lands, with its mutation check): (1) a live test
+  of the idle-timeout stall (P2); (2) a live test of a black-holed `connect_timeout`; (3) a live
+  test of two concurrent loads and the per-site bound; (4) a live test of an opposite-order raw
+  writer; (5) an offline mutation check for the idle setting and for `withdraw`'s idle position.
+  Status: none done.
 - Status-event tests: a loader-supplied ordering key is refused or overwritten, including with
   `OVERRIDING SYSTEM VALUE`; a loader-supplied recorded-at is refused or overwritten; the loader
   has no INSERT privilege on the ordering column and none on the recorded-at column; a refused
   event (APPROVED first) does not advance the sequence, and the recorded-at is taken after the
   lock is held (order: lock, validate, then `nextval` and `clock_timestamp()`); two loaders
   racing an APPROVED and a WITHDRAWN event on one version leave it withdrawn, and a WITHDRAWN
-  event is final whatever the order. **Shadowing:** a session that creates temporary tables and
+  event is final whatever the order (including a WITHDRAWN ordered below the version's DRAFT after
+  a sequence setback, then an accepted APPROVED: still excluded; see Known gaps). **Shadowing:** a session that creates temporary tables and
   sequences named like the real ones (TEMP granted for this test only, because the loader
   self-check forbids it) cannot change what the triggers do, and they still refuse. Mutation
   checks: drop the trigger, grant a column, make selection take the latest event only, drop the
@@ -968,7 +1200,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   approver, author, role label, attribution or licence reaches a prompt; an item from any other
   connector carrying KNOWLEDGE or `kb:` is dropped; the absence line is sent when zero items were
   returned; the app role cannot write, delete, truncate or hold column privileges; the
-  status-events triggers hold; the notes channel reaches the user; the record form carries a hash,
+  status-events triggers hold; the notes channel reaches the user (**done 2026-11-10**:
+  `test_knowledge_record_notes.py`, over HTTP, every code with fixed wording and the absence line,
+  no code or wording in any prompt or in the prompt layer's source); the record form carries a hash,
   the lookup is scoped to the record and refuses a mismatch; the 20-chunk bound fits
   `MAX_PROMPT_CHARS`.
 - **Egress safety tests (one per property, each mutation-checked):**
@@ -1132,7 +1366,10 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   `licence_requires_personal_name` is refused (not only `true`); the licence text is covered by
   the no-name attestation test (a manifest without the attestation is refused); no licence or
   display evidence reference is stored in any column (inspect the table).
-- **Identity and exemption (decision 5).** A connector with the same name as the knowledge
+- **Identity and exemption (decision 5). Done 2026-11-10 (`tests/safety/test_knowledge_identity_exempt.py`,
+  mutation-checked; plus `_usable` ignoring KNOWLEDGE outside its categories, knowledge no longer
+  satisfying `historical_observations`, a rule citing non-exempt knowledge flagged as citing
+  unusable evidence, and a knowledge instant never the nearest sample).** A connector with the same name as the knowledge
   connector but not the same object is dropped; a subclass of the knowledge connector is dropped
   (identity `is`, not name, not `isinstance`; mutation: compare by name or `isinstance`; each
   must fail). `_exempt` returns false for a knowledge item with `valid_at` after the window end
@@ -1141,7 +1378,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   a stored record-form item re-assessed without the connector's filter (mutation: `>=`); the NOTICE exemption is unchanged and has its own case. A KNOWLEDGE item with `valid_until` `None`
   is refused by the validator and, built with `model_construct`, is not exempt (mutation: treat
   `None` as exempt). `_exempt` takes the window end (mutation: pass the window start at either call
-  site, about `engine.py` lines 168 and 174).
+  site, `_covers_window` and `_relevant_to_window` in `engine.py`).
 - **No request field reaches SQL (decision 2):** a query-capture test passes hostile values in
   every request field and asserts that the only SQL parameters are `site_id`, the run clock and
   the window. **Order (decision 4):** the result is ordered by document id, version, chunk number
@@ -1168,11 +1405,29 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   it:** the second is refused (mutations: drop the global lock; run the check before taking the
   lock; each must fail). **`kb_load` against a raw writer that bypasses it** and takes per-document
   locks in the opposite order: `kb_load` ends within the lock timeout or the deadlock detector with
-  its fixed refusal and writes nothing; nothing hangs. The migration's checksum is pinned; `verify()` fails when a trigger
-  or its function is missing, disabled or not paired; `guarded()` refuses the forbidden words,
-  DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`. The
-  production start-up check refuses an app role that owns a knowledge table or function
-  (directly or by membership) and one that is a member of the loader role.
+  its fixed refusal and writes nothing; nothing hangs. The migration's checksum is pinned; `migrate()` fails when a named
+  knowledge trigger is missing or not `ENABLE ALWAYS`. **Built 2026-10-25 under condition 9:**
+  `verify()` fails when a trigger or its function is missing, disabled or not paired.
+  `guarded()` refuses the forbidden words,
+  DROP and RENAME of a knowledge table in a later migration, and `DROP TRIGGER IF EXISTS`.
+  **Built 2026-11-06 (condition 11.4 and 11.5):** `verify(least_privilege=True)` refuses an app
+  role that owns a knowledge table or function (directly or by membership), holds any table
+  privilege beyond SELECT (MAINTAIN too, from PostgreSQL 17), any column privilege, anything on the
+  ordering sequence, or EXECUTE on a knowledge function. Membership of the loader role is not
+  checked by name. Each privilege counts when held directly, inherited, or held by any role the app
+  role is a member of, so a NOINHERIT member (or a grant `WITH INHERIT FALSE`) that could
+  `SET ROLE` to the loader is caught too (closed 2026-11-06, live on PostgreSQL 16 and 17:
+  `test_verification_flags_a_privilege_reachable_only_by_set_role`). **Extended 2026-11-07** to
+  the older app checks: DELETE, TRUNCATE and TRIGGER on `assessments`, writes to the other app
+  tables, CREATE on `public` and on the database, and SET on `session_replication_role` count the
+  same SET ROLE paths (`test_verification_flags_an_audit_privilege_reachable_only_by_set_role`), and
+  `verify()` refuses a session whose `current_user` differs from its `session_user` (a stored
+  `ALTER ROLE ... SET role` would otherwise make every check judge another role;
+  `test_verification_flags_a_stored_role_setting_on_the_application_role`). PostgreSQL counts a
+  membership granted `WITH SET FALSE` or with ADMIN only as membership too, so such a membership in
+  a role holding one of these privileges also refuses start-up, although it cannot be used
+  directly; this fails closed and the runbook says to remove the membership. A zero-chunk manifest refused by `kb_load`
+  before the DRAFT is also a later-stage test.
 - **Loader role (decision 11).** Refusals, **one test each**: running as the owner or app role;
   membership in the owner or app role; CREATE on `public` or on the database; ownership of a
   table, the schema or the database (directly or by membership); CREATEROLE; CREATEDB;
@@ -1182,7 +1437,13 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   on any `kb_*` table; any column privilege beyond the grants (INSERT on the ordering column,
   INSERT on the recorded-at column, UPDATE of any column); TEMP on the database (granted
   directly or through PUBLIC); USAGE, SELECT or UPDATE on the ordering sequence; EXECUTE on a
-  knowledge function; no `sslmode` in production; the app refusing to start with the loader
+  knowledge function; a session whose `current_user` differs from its `session_user` (a stored
+  `ALTER ROLE <loader> SET role`, added 2026-11-07: every other check would judge the target role
+  and the session could `RESET ROLE`; live case "stored role setting" in
+  `test_kb_withdraw_live.py`, mutation-checked live by setting the expression to `false`; the
+  no-false-refusal test `test_a_loader_that_logs_in_directly_is_not_flagged_for_its_session_role`
+  was mutation-checked live with `true` and `current_user = session_user`, on 16 and 17; for
+  `withdraw` this is a report after the commit, exit 13, not a refusal); no `sslmode` in production; the app refusing to start with the loader
   credential as its own, and with the loader or owner connection string in its environment in
   production; `db_init` failing with the fixed message when the loader role does not exist, and
   never creating it. **`db_init` TEMP test:** after `db_init`, TEMP is revoked from PUBLIC and the
@@ -1197,10 +1458,21 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   refused; log capture shows no chunk text, title or path from `kb_load`, the connector or the
   lookup.
 - **Failure and notes (decisions 9, 14).** No driver text in an issue and no title in an issue
-  text; notes never appear in a prompt; **not configured** records the `knowledge_not_configured`
-  note code **and** the absence line is sent; the absence line is also sent for a note, an issue
-  and zero items; older stored records (without the new fields) still validate (ADR 0015); a
+  text; notes never appear in a prompt (**done**); **not configured** records the `knowledge_not_configured`
+  note code **and** the absence line is sent (**done** for the placeholder stage:
+  `test_the_pipeline_records_not_configured_and_the_view_says_so_with_the_absence_line`); the absence line is also sent for a note, an issue
+  and zero items; older stored records (without the new fields) still validate (ADR 0015;
+  **done**, including the older `not_configured` Retrieve code); a
   database error is wrapped in a fixed-string `ConnectorError` (assert the exact string).
+- **Stage trace split (A1, A2; done 2026-11-10, `test_knowledge_record_notes.py`):** Observe lists
+  the live ids and may not list a `kb:` id; Retrieve lists exactly the `kb:` ids; `kb:` evidence
+  with a trace but no Retrieve entry is refused; Observe's cut at the bound counts live ids only;
+  the Retrieve codes are fixed.
+- **Record identity (owner decision 2026-11-10; done, `test_record_knowledge_identity.py`):** a
+  KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind are refused in `evidence` and
+  in `withheld_evidence`; the messages carry no id; an item that skipped its own validation
+  (`model_construct`) is still refused by the record; a stored record breaking the rule raises the
+  fixed integrity error on load.
 - **`site_intelligence` (decision 15):** a finding with all items withheld and one with part
   withheld; each has the withheld wording, not "no evidence is available for this domain".
 - **Records and display (decisions 6, 15, 16).** No title appears anywhere in a stored record,
@@ -1223,6 +1495,53 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
   fail (so a check that matches nothing is detected).
 - Mutation checks on each new safety rule. Documents used in tests are SYNTHETIC and labelled; no
   real corpus is committed.
+
+## Conditions for the Retrieve wiring (recorded 2026-11-10)
+
+The domain stage and the connector stage are built; the Retrieve wiring that joins them is the
+next stage and lands as one change, with **no feature-flagged half state** (owner decision,
+2026-11-09). It must meet all of these; each needs a failure test:
+
+1. **One note enum, the domain's** (`KnowledgeNoteCode`). The connector's "no documents" result
+   maps to `NONE_RETURNED` with count 0; no second enum or free text.
+2. **`record_form` before any item reaches the record** (decision 16): the pipeline stores
+   record-form items only; no chunk text is ever in a record.
+3. **The store uses the app role**, never the loader or owner DSN (decision 10: app role SELECT
+   only; the application already refuses the loader's and owner's strings in production).
+4. **The same connector instance** registered at start-up is the one passed to `gather_evidence`
+   as `knowledge_connector` (decision 5 identity filter).
+5. **Items and notes come from one `retrieve` call**: a second call could see a different store
+   state and let items and notes disagree.
+6. **New records write `retrieve.knowledge_not_configured`** when no connector is configured (the
+   older `not_configured` code stays valid for older records only).
+7. **A pipeline-level test with real `kb:` items** through `assess_dive`, not only unit tests of
+   the connector and the record.
+8. **Zero `kb:` items with no issue always carries a note** (decision 14's catch-all), including
+   the not-configured case.
+9. **`withheld()` hides `model_host` from create-only keys** in the same commit as the egress
+   wiring (decision 15; owner decision 2026-11-06).
+10. **Older stored records are checked before deploy** for now-refused forms (a KNOWLEDGE item
+    without a `kb:` id, or a `kb:` id on another kind); believed to be zero rows since no knowledge
+    connector was ever wired (Known gaps).
+
+**Status (2026-11-10): wired** in `orchestration.pipeline`; conditions 1-9 are met and tested in
+`tests/agent/test_retrieve_wiring.py` (safety marker, each with a mutation check); condition 10
+is an operations check before deploy. How it is built:
+
+- The connector is built whenever `DIVESAFE_DATABASE_URL` is set (`api.state.build_knowledge_connector`,
+  owner decision 2026-11-10; no new flag). The in-memory repository gives `knowledge_not_configured`.
+- Observe starts the one `retrieve` call as a task, bounded by the connector timeout, alongside
+  the live connectors; Retrieve awaits it. A `ConnectorError` is `retrieve.knowledge_failed`, a
+  timeout `retrieve.knowledge_timed_out`, a connector issue `retrieve.knowledge_issue`; each is
+  an evidence issue (`knowledge: ...`), so never GO. `assess_dive` refuses the knowledge connector
+  in its Observe list (that would be a second call).
+- The prompts' absence line follows the Retrieve result (zero items, a note or an issue), not
+  the evidence alone (risk-reviewer, 2026-11-10).
+- A basis forced to `none` (missing or unrecognised basis, or no model host) puts a fixed code
+  first in `agent_issues` (`egress.basis_unrecognised`, `egress.host_missing`), shown in fixed
+  wording on the view and not counted as a failed agent call (risk-reviewer, 2026-11-10).
+- Replay fixtures recorded before the wiring keep `retrieve.not_configured`; the evaluation tests
+  map it to the new code in test code.
 
 ## Options not taken
 
@@ -1277,6 +1596,20 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   after approval and review-by up to 12 months after the effective date, so a text can stay in use
   **up to 24 months after approval**. The owner accepted this maximum. Both 12-month limits are
   **owner policy limits**, not parsing limits; only the owner changes them. (Decisions 3, 7)
+- **`hash_checked` (2026-10-21, owner): YES.** Add `kb_status_events.hash_checked`, `NOT NULL`, no
+  default. Selection reads it only from the APPROVED event. DRAFT and WITHDRAWN rows carry the fixed
+  value `false` (DB CHECK `status = 'APPROVED' OR hash_checked = false`). In production an
+  unchecked approval makes the family return nothing and raises an evidence issue. An unchecked
+  APPROVED still counts as "approved at some point" for choosing the governing version and hiding
+  lower versions. It applies in every environment. The column records a client claim, not proof.
+  (Decisions 3, 10)
+- **Loader role missing (2026-10-22, owner):** the loader check runs **after** the migration; the
+  schema stays migrated, `db_init` exits non-zero with a fixed message and the loader grants are
+  not applied (decision 11). If `DIVESAFE_LOADER_DB_ROLE` is unset, `db_init` skips the loader
+  grants and the loader check; the production pin comes with the compose stage (ADR 0024 A1, A5).
+- **No approval of an empty version (2026-10-22, owner):** the database refuses an APPROVED event for
+  a version that has no chunks (`kb_status_events_insert`; fixed message; ordinary `P0001`).
+  (Decisions 7, 10)
 
 ### Still open
 
@@ -1288,14 +1621,146 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   owner and the dive professional choose and keep it).
 - **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
 - **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
-  lock, self-check after commit, exit-status precedence); it gates shipping.
-- **The owner's answer on the proposed `hash_checked` column** (decisions 3 and 10). It gates the
-  stage-1 migration, not only shipping; the column is not written until the owner answers.
+  lock, self-check after commit, exit-status precedence); it gates shipping. Still open after the
+  ADR 0024 A1 to A7 build (2026-11-09): the build implements the changed decision as written and
+  does not settle this.
+- **The decision 13 default-ignorable code point table** (owner decision, 2026-10-23): a gate for
+  the first production load. Slice 2 uses a `unicodedata`-based approximation until it is built.
+- **Gates for the first production load from the slice 2 review (2026-10-23; ADR 0024 A6 (7) to
+  (9))**: (a) the decision 9 id screen was bypassable by lookalike characters (U+2236, U+A789,
+  U+0589 as colons; U+2010, U+2212; Latin small capitals such as U+1D0B, U+0299), because the
+  allow-list accepted every `P*`/`Sm`/`Sk` character and every `LATIN ...` letter. **Owner decision
+  2026-10-23: the decision 13 allow-list is narrowed to a fixed set.** Re-reviewed 2026-10-23:
+  closed for the reported vectors (colon, hyphen and minus lookalikes, LATIN LETTER small
+  capitals, modifier letters, ligatures, fullwidth and mathematical forms, combining marks, other
+  scripts). **RESIDUAL, OWNER-ACCEPTED 2026-10-23 as a recorded gap:** Latin-named letters that
+  look like ASCII id letters and that NFKC does not fold (for example U+0138, U+0185, U+0131,
+  U+0269, U+0251, U+0261, accented k and b forms) pass both screens. U+A78B and U+A78C (saltillo)
+  are a different case: they imitate an apostrophe (ASCII punctuation), not an id letter.
+  UTS #39 and wildcard matching were not adopted. **Escaping non-ASCII as `\uXXXX` in the prompt
+  layer is transport protection only** (a model may still read the escaped form); the real
+  mitigation is the citation check. **`reconcile` only tightens covers the recommendation, not the
+  explanation text a human reads, which a spoofed citation could steer.** Two partial mitigations
+  exist elsewhere: `prompts.neutralize`, and
+  `runner.py` exact-match rejection of top-level `evidence_ids` not in `allowed_ids` (nested
+  `evidence_ids` and a spoof of a REAL id in the same run are unchecked). **Update 2026-11-10:
+  the knowledge connector, the prompt path and the Retrieve wiring are now built (see the status
+  block); both mitigations apply to knowledge text as to any other evidence, and Supervise checks
+  citations against the ids actually sent. The knowledge half of the citation guard (decision 8)
+  is still not built**, so this item must be revisited when it lands. Impact limit: `reconcile`
+  only tightens the recommendation and rules never read LLM values. (b) the newline-inside-`kb:` gap is closed
+  in code (not yet re-reviewed); (c) **stays OPEN**: the "and similar" word-list tail and
+  separators, namely hyphens dropped or replaced in connector prefixes (`openmeteomarine:x`),
+  percent-encoding (`kb%3Aabc`, since `%` is allowed), and allowed ASCII punctuation separators
+  (every allowed ASCII punctuation character as a separator between `k` and `b`:
+  `. , ; : ! ? ' " ( ) [ ] - / % + = < >`, for example `k.b:`, `k,b:`, `k-b:`, `k/b:`), and the
+  colon itself replaced by allowed ASCII (`kb;abc`, `kb=abc`, `kb/abc`). `k_b:` is no longer an
+  open vector (underscore is refused by the allow-list). Instruction wording is screened only in
+  `document_id`, and fields joined at display could form an id (to check when the prompt path is
+  built).
+- **Unicode version gate for the first production load (OWNER-APPROVED 2026-10-24, option
+  "runtime check plus 3.14"; ADR 0024 A6 (10)):** `kb_load` and `approve` refuse unless
+  `unicodedata.unidata_version == "16.0.0"` (exit 3), the safety test pins the set on 16.0.0 and
+  asserts the refusal elsewhere, and `docker/Dockerfile` moves to Python 3.14 first (done
+  2026-11-06: the project requires Python 3.14). See decision 13.
 - The owner's acceptance of the whole ADR, after the code-free re-check by both reviewers; then the
   code and its reviews.
 
 ## Not solved
 
+- **The record validator checks the record, not the prompt.** It cannot see whether a withheld
+  item was actually left out of a prompt; that is the filter's job and its tests (decision 15).
+  It does refuse a record in which model output (findings, scenarios, proposal, Reason trace)
+  cites a withheld item.
+- **The basis/host cross-check is a consistency check, not proof of locality.** A loopback
+  `model_host` under `declared_local` still rests on the operator's declaration (ADR 0023); the
+  record cannot show where the server forwards a prompt.
+- **`kb:` ids in `withheld_evidence` (ADR 0008) are not grammar-checked** (security review,
+  2026-11-06, note 8). Those items never reach a prompt, so the risk is low. Since 2026-11-10 the
+  kind/id pairing is checked there too, but not the grammar.
+- **Until the wiring stage, the API record view shows `model_host` to every key that can read the
+  record, including create-only keys** (security review note 7). Nothing sets the field yet, so no
+  host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
+  a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
+
+### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring)
+
+1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
+   `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
+   plain string could pass it. The record validator catches the kind/id mismatch afterwards
+   (`_check_egress`), so such an item fails the run rather than the prompt filter.
+2. **Closed:** `withheld()` hides `model_host` from create-only keys (wiring condition 9).
+3. **`EvidencePolicy` does not refuse a required knowledge category** (decision 8, not built).
+   Until then an engine-level policy could require knowledge; `INTERIM_REQUIRED_CATEGORIES` does
+   not, and the safety test for "no knowledge category is required" covers the shipped policy
+   only.
+4. **Closed at wiring (2026-11-10):** knowledge that failed only as an issue with no note gets a
+   fixed view sentence, chosen from the Retrieve trace codes (never issue text).
+5. **Older stored records holding now-refused forms** (a KNOWLEDGE item without a `kb:` id, or a
+   `kb:` id on another kind) would fail to load with the fixed integrity error. Believed to be zero
+   rows, since no knowledge connector was ever wired; check before deploy (wiring condition 10).
+6. **The 20-item cut can split the last family mid-document** (owner's choice, decision 12, B1).
+   It raises the bound issue, which forces INSUFFICIENT EVIDENCE, but does not follow the
+   connector's whole-family-or-nothing rule for a dropped chunk.
+7. **`local_guidance` records scope, not content.** The connector maps an all-sites document to
+   `local_guidance` and a site document to `site_information`. No future rule may read
+   `local_guidance` as "this site's local rules".
+8. **No client-side bound on a stalled socket read in the connector** (`tcp_user_timeout` is
+   Linux-only; the statement and lock timeouts are server-side). Listed beside "Connector HTTP
+   limits" in `docs/architecture.md`. **Now on the live path (wiring, N2):** `retrieve` runs on
+   asyncio's default thread pool, shared with Assess, so a database network stall could hold a
+   worker thread and starve Assess until the run's deadline (runs then fail closed; not
+   attacker-triggered). Remedy: a small bounded executor for the store.
+9. **The malformed-id connector tests depend on the chunk text passing the screen**; they should
+   use fixed text so a screen change cannot mask the case under test.
+10. **The static check's allowed places (decision 8)** now include `_usable`, `_covers_window`,
+    `_relevant_to_window` and `_citation_guard`; the earlier mutation references by line number
+    are replaced by function names in the tests list.
+11. **Prompt cap.** 20 chunks of entirely non-ASCII text exceed `MAX_PROMPT_CHARS` (200,000)
+    after escaping; the risk agent and each ToT scenario then refuse and send nothing (fail
+    closed, recorded as an agent issue). A corpus heavy in non-English text would silently lose
+    the risk agent and ToT; `site_intelligence` and cross-examination read the same categories
+    and are not tested against the cap. The only sign today is the agent issue. (Decision 12
+    asked for this test; the 20-chunk bound does not fit the cap for such text.)
+12. **A missing host on a real provider records `egress_basis: none`**, which understates that
+    live evidence went to a model server (the ADR reserves `none` for the fake provider). Not
+    reachable today, since the only adapter requires `llm_base_url`; it becomes reachable with a
+    hosted adapter that has no base URL. Remedy: refuse at start-up in `build_default_state` and
+    keep the run-time fallback. Now partly visible through `egress.host_missing`.
+13. **Hiding `model_host` relies on FastAPI not re-validating the returned view**
+    (`revalidate_instances='never'`). The HTTP-level test in `tests/agent/test_knowledge_egress.py`
+    guards it and must stay at the HTTP layer.
+14. **Unusual hosts** (a trailing dot, `localhost.`; an IPv6 zone id, `%`) make every run fail at
+    `_gate`: visible, nothing stored, no leak. Consider refusing them at start-up.
+15. **Supplied agent output with no provider citing a `kb:` item** (tests and evaluation only):
+    `sent_ids` is `None`, so Supervise uses all ids; the record validator then refuses and the
+    run is lost.
+16. `tests/agent/test_knowledge_prompts.py` (about line 387) should assert
+    `match="prompt too large"`.
+17. **K4: `_retrieve` catches only `TimeoutError` and `ConnectorError`.** A bug-class exception
+    ends the run as `FailureCode.INTERNAL` with no record: the same contract as Observe and ADR
+    0025's accepted crash rule; fail-closed, availability not safety. A deterministic bug in the
+    knowledge path would lose every assessment for the affected sites. Later option: a broad
+    catch into a fixed `retrieve.knowledge_failed` issue that logs the exception type only.
+18. **K5: an exception between Observe and Retrieve orphans the retrieval task.** If `next_stage`
+    or `_record_trace` raise there, the task is neither cancelled nor awaited: the store call runs
+    to the statement timeout, and asyncio may log "Task exception was never retrieved" (fixed
+    text, no driver text). Remedy: a `try/finally` in `assess_dive` that cancels and drains it.
+19. **K6: `build_knowledge_connector` relies on `build_repository` having run
+    `verify(least_privilege=True)` first.** A future caller (a CLI, the evaluation harness) would
+    skip the privilege check. The read-only session limits the damage.
+20. **`domain/models.py` `agent_issues` description is now wrong** ("LLM agent calls that failed
+    or were rejected"): the fixed egress codes live there too. A doc nit for a later code change.
+21. **`tests/evaluation/harness.py` `schema_failure_rate`** (about line 200) would count the
+    egress codes as schema failures once the harness runs with a hosted basis.
+22. **The absence line is also sent when items are present with a note or issue.** Its wording
+    ("no site documents were available, or retrieving them failed") is cautious but imprecise.
+23. **`KnowledgeConnector.fetch` still exists**; only `gather_evidence` calls it, the pipeline
+    never does (it calls `retrieve`). Dead on the live path.
+24. **Wiring condition 10 remains open (operations):** check stored records for now-refused forms
+    before deploy (also gap 5).
+25. **The knowledge half of the citation guard (decision 8) is still not built**; a GO or CAUTION
+    citing a knowledge item is not yet flagged (unreachable today: no signed limits).
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the
@@ -1331,8 +1796,10 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   this ADR (2026-10-20/21, not re-accepted). The build reviews are in the conversation record and the
   commit messages, not in a history section. Recording the basis and host as typed
   record fields (`egress_basis`, `model_host`) and using the basis in the filter belong to this
-  feature and are not done. **ADR 0024 must be amended** (decision 11, "Required ADR 0024
-  amendment") before the feature ships; that is not written here.
+  feature and are done (2026-11-10). **ADR 0024 must be amended** (decision 11, "Required ADR 0024
+  amendment") before the feature ships; that is not written here. (Amendment 1 is written, and its
+  items A1 to A7 are built and reviewed on branch `deploy-a1-a7`, merged with this work on
+  2026-11-11; see its A8 "Build state".)
 - A name can fit the document id grammar; only the attestation screens for names (decision 6).
 - The two 12-month limits (decisions 3 and 7) are owner policy limits; the other numeric bounds are
   parsing limits that reviewers may change.
@@ -1355,6 +1822,331 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 - **The manifest hash is a process control.** Production `kb_load` refuses a load without the
   approved hash and compares it; that the dive professional really approved it is not checkable
   (decisions 7, 11).
+- **The loader can take `LOCK TABLE`** on tables it can read (denial of service); not prevented.
+- **Default privileges for the owner role are not checked** by `db_init` or the loader check.
+- **The catalogue check (conditions 9 and 11) runs in `migrate()` and at `verify()` start-up
+  only.** Condition 11.1-11.5 and 11.7 are built (2026-11-06); still not detected: a renamed CHECK
+  or FOREIGN KEY constraint (the shape digest leaves constraint names out; a renamed UNIQUE or
+  primary key is caught through its index definition), a sequence `RESTART` or `setval` (the
+  current value is not pinned: set below the highest `event_order`, a later event can sort before
+  an earlier one, so a withdrawn version can read as approved again; comparing `last_value` with
+  `max(event_order)` in `migrate()` is possible but not built), and conditions 11.6, 11.8 and
+  11.9. The same sequence edits can also **make `withdraw` fail**: after `setval` or `RESTART`
+  onto values already used, status inserts fail on `UNIQUE(event_order)` until the sequence
+  passes the used values (a failed insert still consumes its value, so a retry can succeed in a
+  gap with an `event_order` below earlier events), and `setval` near MAXVALUE makes every status
+  insert fail. Either sequence edit needs the owner or a superuser (the sequence ACL is checked
+  to be owner-only), but it stops the path that makes the corpus stricter. ADR 0024's fallback
+  (a), the owner's `psql` INSERT, fails the same way; fallback (b), stopping the API, is the one
+  that works until the owner repairs the sequence (`setval` above `max(event_order)`).
+- **Finality of WITHDRAWN after a sequence setback is not enforced on the write side.** The
+  trigger and `approve` take the latest status by `event_order`. So with DRAFT at order N, the
+  sequence set back, and a WITHDRAWN given an order below N, the latest status is still DRAFT: an
+  APPROVED is accepted, and a second WITHDRAWN is accepted instead of refused with KB001. A
+  WITHDRAWN event stays final only if the selection query (not built yet) applies decision 3 as
+  "any WITHDRAWN event excludes the version". The status-event test "a WITHDRAWN event is final
+  whatever the order" must include exactly this case (a WITHDRAWN ordered below the version's
+  DRAFT, followed by an accepted APPROVED; the selection query must still exclude the version),
+  and it is the catcher for the mutation "make selection take the latest event only". Until that
+  test exists, treat a setback as able to make a withdrawn version read as approved (above).
+- **`session_authorization` does not bypass the session-role check (probed 2026-11-07).** On
+  PostgreSQL 16 and 17 a connection-time `-c session_authorization=<role>` and a stored
+  `ALTER ROLE ... SET session_authorization` are accepted but have no effect: `current_user`,
+  `session_user` and the `pg_stat_activity` login all stay the login role, so a superuser login
+  is still seen by the superuser check. Re-check on each new PostgreSQL major.
+- **`options`-borne settings (`-c ...`) cannot reach the app's sessions (owner decision
+  2026-11-07: no config refusal).** The app's only connection path,
+  `PostgresAssessmentRepository._connect`, passes its own `options` (the two timeouts). psycopg
+  merges that keyword over any `options` in the connection string (`make_conninfo`), and libpq
+  takes it before `PGOPTIONS` (both probed live: a `work_mem` set in the string or in
+  `PGOPTIONS` applied only when the code passed no `options`) and, per the libpq documentation
+  (not probed), before a `service=` entry. So `-c role=...` put there never reaches the server.
+  Other libpq environment variables (`PGAPPNAME`, `PGTZ`, `PGDATESTYLE`, `PGCLIENTENCODING`
+  and the like) still apply (`PGTZ` only changes the offset of correct timestamps); `PGUSER`
+  and `PGSERVICE` can choose the login role when the string omits one, which
+  `verify()` then judges, but none can make `current_user` differ from the login role.
+  `PGDATESTYLE` wins over a `-c DateStyle=` in `options` (probed live), so `options` cannot
+  pin it; a stored `ALTER ROLE ... SET DateStyle` or `ALTER DATABASE ... SET DateStyle` (any
+  role may store one for itself) gets through the same way. A non-ISO DateStyle makes psycopg
+  raise `NotImplementedError` (a `RuntimeError`, not a `psycopg.Error`) on the first timestamp
+  it loads. **Owner decision (2026-11-08): the app sets it itself.** `_connect` sends
+  `SET DateStyle = 'ISO, MDY'` (a session setting, which wins over `PGDATESTYLE` and stored
+  settings) and commits it before returning the connection, one extra round trip per
+  connection; a connection on which it fails is closed and the error is the usual typed
+  storage error. Live (`test_a_non_iso_datestyle_from_outside_never_reaches_the_apps_sessions`,
+  `PGDATESTYLE` and a stored `ALTER ROLE ... SET DateStyle`, positive control on a plain
+  connection): runs are admitted and read back, on 16 and 17; removing the `SET` or making it
+  `SET LOCAL` fails both cases. Offline: the exact statement, the commit and the close on
+  failure (of the `SET` or of the commit), each with a mutant; dropping the commit is caught
+  offline only (the live test still sees ISO inside the open transaction).
+  `PGCLIENTENCODING` and a stored `client_encoding` get through the same way (probed live:
+  `LATIN1` from either reached the app; psycopg then raised `UnicodeEncodeError` on `’` or an
+  emoji, and `SQL_ASCII` returned text as bytes). `_connect` also sends
+  `SET client_encoding = 'UTF8'` in the same setup, before the commit (review of 3974b08).
+  Live (`test_a_non_utf8_client_encoding_from_outside_never_reaches_the_apps_sessions`, both
+  sources, positive control): a record with `’` and an emoji is stored and read back on 16 and
+  17; removing the `SET` or making it `SET LOCAL` fails both cases. Offline: the statement,
+  its order and three mutants.
+  A stored `default_transaction_isolation` or `default_transaction_read_only` gets through the
+  same way (probed live: `serializable` and `on` reached the app). The stronger reason to pin
+  READ COMMITTED is that the writes rely on it: `admit` takes its advisory lock and then reads
+  the run, the record and the counts, each with a fresh snapshot. Under REPEATABLE READ or
+  SERIALIZABLE the snapshot is taken before the lock is granted, so those reads could miss
+  what the previous lock holder committed: the in-flight limits could be exceeded, and a
+  same-id admission could fail with a 503 instead of joining (or, in a narrow window, start a
+  run whose record `complete` then refuses; fails closed). `replace`'s `FOR UPDATE` would raise a
+  serialization error instead of `ConflictError`, and a certain refusal at commit would become
+  an unknown outcome. A read-only default would refuse every write.
+  `default_transaction_read_only` is a per-session default that any role may change, not an
+  access control, and the app now ignores a stored value. To freeze writes, revoke INSERT and
+  UPDATE from the app role and check that `has_table_privilege` is false for it on each table
+  (a grant to `PUBLIC` or to a role it belongs to also counts), set it `NOLOGIN` (the app opens
+  a new connection for each operation, so this stops the next request; ending its sessions only
+  matters for statements already running), or stop the API. A revoked grant fails before the
+  commit, with the true "nothing was recorded" 503, and `verify()` checks only for excess
+  privileges, so a restart during a freeze by revoked grants still starts (under `NOLOGIN`,
+  `verify()` cannot connect and the app refuses to start). During a freeze some reads fail too:
+  a `GET` of a running or missing assessment runs `get_run`'s `_expire` UPDATE and gets the read
+  503, and runs in progress can neither complete nor fail; they stay `RUNNING` until the freeze
+  ends and cleanup marks them timed out.
+  `_connect` also sends `SET default_transaction_isolation = 'read committed'` and
+  `SET default_transaction_read_only = off` (review of 740b091). Live
+  (`test_a_stored_transaction_default_never_reaches_the_apps_sessions`, positive control on a
+  plain connection, a create and a decision): removing the `SET`s fails both cases on 16 and 17.
+  Offline: the statements, their order, failure at each step, and six mutants.
+  `SET client_encoding = 'UTF8'` converts nothing for a `SQL_ASCII` database (probed live:
+  `server_encoding` stays `SQL_ASCII`), and another server encoding refuses or loses some
+  characters, so `verify()` reports "the database encoding is not UTF8 (create it with UTF8)"
+  and the app refuses to start in every environment
+  (`test_verify_refuses_a_database_whose_encoding_is_not_utf8`, mutation-checked; offline only,
+  there is no live test on a non-UTF8 database). `db_init` still installs into such a database;
+  the app then refuses it.
+  These are session settings, so a future transaction-mode pooler (PgBouncer and the like;
+  pooling is an open gap, see architecture.md) must keep session state or the settings must
+  move into each transaction. Otherwise, where a stored non-default value applies, each lost
+  setting fails in its own way, all closed or visible: a lost `DateStyle` fires the
+  `_fetch_run` backstop (503); a lost `client_encoding` makes psycopg raise
+  `UnicodeEncodeError` on a write, which is not a `psycopg.Error`, so a logged 500, and on a
+  read of a character the client encoding lacks the server raises SQLSTATE 22P05, a
+  `DataError`, which becomes the 422 "the content cannot be stored; nothing was recorded",
+  even on a `GET`, and the web app shows that detail as it stands on a read; a lost
+  read-only default makes every write a 503 "nothing was recorded"; a lost isolation level
+  brings back the snapshot problem in `admit` and the commit-time ambiguity described above.
+  Backstop, should a timestamp still fail to load (assessments are JSON text and unaffected;
+  `pending_runs` holds the timestamps): the repository catches `NotImplementedError` only
+  where it loads a run row (`_fetch_run`), logs one fixed line ("the driver could not load a
+  stored run (check DateStyle or the column types)", `error_type` only, no driver text) and
+  raises `RepositoryUnavailableError`, a 503, and `admit`'s INSERT is rolled back. That
+  includes a `GET` of an assessment still running or not found (503, not 409 or 404);
+  completed assessments stay readable. A `NotImplementedError` anywhere else stays an
+  unexpected error (logged 500). Pinned offline
+  (`test_an_unloadable_run_row_is_a_logged_storage_error_without_driver_text`,
+  `test_a_not_implemented_error_elsewhere_stays_an_unexpected_error`; mutation-checked by
+  removing the catch, moving it back into `_storage_errors` and logging the exception).
+  **Owner decision (2026-11-08): reads get their own 503 text.** A `GET` or `HEAD` that meets
+  unavailable storage returns "storage is unavailable; try again later" (a read records
+  nothing the caller asked for, though `get_run` may mark an expired run failed, so "nothing
+  was recorded" would mislead); writes keep "storage is unavailable; nothing was recorded"
+  (`test_a_503_on_a_read_never_claims_that_nothing_was_recorded`, both directions
+  mutation-checked).
+  **Owner decision (2026-11-08): a failed commit is an unknown outcome** (review of 3974b08).
+  The server can commit and the reply be lost, so "nothing was recorded" could be untrue for a
+  decision, a reassignment, actual conditions, a create or an admission. Every write
+  (`create`, `replace`, `admit`, `complete`, `fail`, `cleanup`) runs in
+  `PostgresAssessmentRepository._transaction`, which commits explicitly and turns a
+  `psycopg.Error` from the commit into `RepositoryOutcomeUnknownError` (a subclass of
+  `RepositoryUnavailableError`, so the run runner and the decision race handle it as before);
+  any earlier failure closes the connection uncommitted and stays "nothing was recorded". The
+  API answers 503 "storage is unavailable; the outcome is unknown: reload to check before
+  trying again", and the web app shows that the outcome is unknown. Pinned by
+  `tests/safety/test_write_outcome_unknown.py` (the commit check, the close, every write
+  method, both API texts; mutation-checked), live by
+  `test_a_decision_whose_commit_reply_is_lost_is_an_unknown_outcome_though_it_was_recorded`
+  (the decision is stored; fails on 16 and 17 if the commit error is re-raised as is) and in
+  `web/tests/forms.test.ts`. A write refused after its statement ran (a record that would not
+  read back identical, a capacity or conflict error) commits nothing and keeps its error; a
+  failing `close()` is suppressed so it never replaces the outcome; only reads and
+  `_transaction` itself call `_connect()` directly (each pinned, with a mutant). The API logs
+  a separate fixed line, "storage outcome unknown" (path only), so an operator can find writes
+  that may have landed.
+  The web app reverses its default (review of 740b091): a 503 on a write says "Nothing was
+  recorded" only when the API's detail is exactly one of its four texts that say so (storage,
+  shutdown and the two configuration 503s; `NOTHING_RECORDED_503` in `web/lib/api.ts`); any
+  other 503, including a proxy's own page or a text that merely mentions the phrase, shows the
+  outcome as unknown. A read (a `GET`, in any case, with no body: `isRead`) that gets any 5xx
+  or no answer (sign-in check, sites, evidence) says it could not be checked and to try again,
+  since a read records nothing (reviews of 6b2aa6f and a34f8c9). The assessment page's text
+  for the same failures also says "the outcome is unknown": that is the run's result, which
+  may still finish, not a write by the reader. A request with a body is never a read, so a
+  write that lost its method still gets the write wording. Pinned by `forms.test.ts`,
+  `login.test.ts` and `status.test.ts` (every write path, mutation-checked).
+  `tests/safety/test_web_nothing_recorded_texts.py` reads both files and fails if the web set
+  differs from the API's 503 texts that say "nothing was recorded", so drift fails CI instead
+  of silently over-warning (mutation-checked on both sides). Known gap (review of a132265): the
+  scan reads only `app.py` and only a literal `status_code=503` keyword; a 503 raised in
+  another module, with a positional status or with `status.HTTP_503_SERVICE_UNAVAILABLE` would
+  be missed. That can only make the web app over-warn, never say "Nothing was recorded"
+  falsely.
+  Retries stay safe but are not free. Decisions are write-once, so a retry is a replay or a
+  409. If an admission committed and its reply was lost, no worker was started: the run stays
+  `RUNNING` and holds a server and per-actor capacity slot until its lease expires (cleanup
+  then marks it a timeout). A retry with the same key before the lease expires joins it (202)
+  and polls a run no worker owns: it shows as running, then as failed (timeout); a retry after
+  that gets 409 "use a new Idempotency-Key". A request without a key leaves the client no id to
+  reload. The shutdown branch has the same orphan: if `runner.start` refuses after `admit`
+  committed and the following `fail` meets unavailable storage before its commit, the client
+  reads "storage is unavailable; nothing was recorded" (true for the assessment, which never
+  exists) while the `RUNNING` row holds its slot until the lease expires. All fail closed.
+  An early return that only read (an admission that joined or found its run completed,
+  `complete` finding nothing to do, `fail` matching no row) still commits, since `_expire` may
+  have written; if that commit fails the outcome is shown as unknown, and for `complete` the
+  runner then records `STORAGE` rather than `TIMEOUT`. After a committed `complete` the
+  runner's `fail` changes nothing, because `complete` deleted the run row in the same
+  transaction; this is why `STORAGE` after a lost commit reply leaves the stored assessment
+  intact.
+  **Pinned in `tests/safety/test_app_connection_options.py`:**
+  - the repository passes `_OPTIONS` (mutations: `options` dropped, `options=None`);
+  - `make_conninfo` replaces a string's `options`;
+  - a source scan of `src/` finds every `psycopg.connect`, `(Async)Connection.connect`,
+    `psycopg.crdb` and pool call and requires a fixed `options` value: a non-empty string
+    literal; an f-string with a non-blank literal part whose every interpolation is a literal
+    or a module-level `int`/`str` constant; or a module-level constant of either kind. A
+    constant counts only if its name is bound exactly once anywhere in the module (augmented
+    assignment, a rebinding in a block, unpacking, `global`, a shadowing parameter all
+    disqualify it). A literal `None` or `""`, or any other expression, counts as missing.
+    Any fixed text is accepted: the scan stops settings injected from outside, and only
+    `_connect`'s own value is pinned by content.
+    Outside a two-entry allow-list keyed by qualified function name (`install_schema`, the
+    loader's `kb_common.connect`), each holding exactly one connection, it fails. It also
+    refuses any `psycopg_pool` or `psycopg.crdb` import, `from psycopg import
+    connect`/`Connection`, `import psycopg as <other>`, any star import, any connection
+    function used other than by calling it, a connection class anywhere but an annotation or
+    its own `.connect(...)` call, a `.connect` on any other owner (`type(conn)`,
+    `conn.__class__`, a variable, `psycopg.pq.PGconn`) except the loader's `kb_common` and a
+    called `super().connect()` with no arguments in the two named `models/loopback.py` methods
+    (each pinned: one module-level class with an `http.client` base, one bare call; a
+    `super().connect` elsewhere in that file, in a nested function or with arguments is
+    refused, mutation-checked), and any use of
+    `kb_common.connect` outside `kb_load` and `kb_withdraw` (aliased, dotted and relative
+    imports of `kb_common` are refused). Bindings counted include `match` captures and type
+    parameters. The rules are deliberately broad: "a connection class" is any attribute named
+    `Connection`, `AsyncConnection` or `Crdb*`, from any module (`sqlite3.Connection` too);
+    "an annotation" is only a parameter, return or variable annotation, not `cast`,
+    `isinstance`, a type alias or a bound; and the `.connect` rule also refuses non-database
+    uses (`sock.connect`, `sqlite3.connect`). A false positive is resolved by a named
+    allow-list entry with its reason, never by loosening a rule. Out of reach (left to code
+    review): `getattr`, `importlib`, `exec`, `globals()`, `setattr`, rebinding from another
+    module (`postgres._OPTIONS = None`), `psycopg.pq`'s `connect_start` and connection
+    generators, and the owner-role `psql` calls in `docker/`.
+
+  **Live:** `test_a_role_set_through_the_connection_string_or_pgoptions_never_reaches_the_server`
+  in `tests/integration/test_postgres_guard.py` (role granted, both places; a plain connection
+  without `options` runs as the group, the app's does not; mutation-checked live by dropping
+  `options=_OPTIONS`, on 16 and 17). A refusal in `Settings` would add little and would reject
+  harmless uses such as `application_name`. A stored `ALTER ROLE ... SET role` or
+  `ALTER DATABASE ... SET role` is not affected by `options`; `verify()`'s session-role check
+  catches it **at start-up, in production** (`least_privilege`) only. A setting stored after
+  start-up applies to every later connection until the next restart; the app never issues one,
+  and the role must already be a member, whose privileges the checks count.
+  **Not covered: stored durability settings (owner decision 2026-11-08: record, do not
+  override).** `_OPTIONS` does not set `synchronous_commit`, so an
+  `ALTER ROLE ... SET synchronous_commit = off` (any role may store this for itself), an
+  `ALTER DATABASE ... SET` or the server configuration still applies to the app's writes: after
+  a server crash, an assessment or a human decision the API already reported can be lost (a
+  lost decision leaves the record `PENDING_HUMAN`, which fails closed, but the audit trail
+  loses it). Durability is the server owner's setting. Raising it per transaction is possible
+  without lowering `remote_apply` (the loader does it with one raise-only `set_config`
+  statement per write transaction); for the app that was not chosen.
+  **Not covered: the loader.** `kb_common.connect` passes no `options`, so the loader's
+  connection string and `PGOPTIONS` do reach the server.
+  - A `-c role=X` needs the loader to be a member of `X`, which the self-check already flags
+    ("is a member of a role other than itself"), and the session-role check names it. Both
+    **refuse for `load` and `approve`**, but for `withdraw` they **report after the commit**
+    (exit 13), so the WITHDRAWN event is written with `X`'s privileges, still through the
+    trigger.
+  - `-c session_replication_role=replica` needs `SET` on the parameter (PG15+) and is caught
+    by check 17 (proved live through `PGOPTIONS`): it refuses for `load` and `approve`, and for
+    `withdraw` reports after the commit (exit 13). The knowledge triggers are `ENABLE ALWAYS`,
+    so the write still goes through them.
+  - `-c synchronous_commit=off`, which any role may set, would let a reported write be lost in
+    a crash. The two write transactions, `load`/`approve`'s and `withdraw`'s, raise it with
+    `set_config('synchronous_commit', 'on', true)` when it is `off`, `local` or `remote_write`,
+    leaving `on` and `remote_apply` alone, before the first INSERT. This also overrides a stored
+    role or database setting for the loader.
+  - A non-ISO `DateStyle` (`PGDATESTYLE` or `-c DateStyle=`) would make psycopg fail to read
+    `RETURNING recorded_at`, turning a write into OUTCOME_UNKNOWN with nothing committed. Both
+    write transactions run `SET LOCAL DateStyle = 'ISO, MDY'`, as `migrations._harden` does,
+    and so does `withdraw`'s separate read of an earlier `recorded_at` (live: an already
+    withdrawn version under `PGDATESTYLE` still exits 16 with its time; 15 without the line).
+    Both items: offline order tests for load, approve and withdraw with removal mutations; live
+    for `withdraw` with positive controls (`off`, `remote_apply`, `SQL, DMY` reach a plain
+    connection), mutation-checked on 16 and 17 (each line removed; the conditional replaced by
+    an unconditional `SET LOCAL ... = on`).
+  - Other user-settable parameters fail closed, are overridden by the `SET LOCAL` statements
+    (timeouts, `search_path`, `DateStyle`), or only affect performance or formatting. A fixed
+    `options` for the loader belongs to ADR 0024 A3 (the `kb_load` settings model).
+
+  The admin connection in `install_schema` passes none either; it is the owner role and needs no
+  protection from itself.
+- **The app checks do not look at REPLICATION, BYPASSRLS or CREATEDB**, nor, from PostgreSQL 17,
+  at MAINTAIN on `assessments` (granted by `pg_maintain`). MAINTAIN allows `LOCK TABLE`, a denial
+  of service (as do `CLUSTER`, `VACUUM FULL` and `REINDEX`, which MAINTAIN also allows), but
+  cannot change a record. REPLICATION, where `pg_hba.conf` allows a replication
+  connection, can read the whole cluster (confidentiality, not record integrity). The loader
+  self-check does check the three attributes, but not a direct `GRANT MAINTAIN` on PostgreSQL 17
+  (membership of `pg_maintain` is caught as "a member of a role other than itself"); that only adds
+  lock-taking maintenance (`LOCK TABLE`, `CLUSTER`, `VACUUM FULL`, `REINDEX`), a denial of
+  service like the `LOCK TABLE` item above.
+- **The one-inserter rule (condition 11.5) counts direct grantees only.** `_acl_problems` counts
+  the distinct non-owner roles named in the table and column ACLs. It does not check that the one
+  inserter is the loader, and it does not count roles that can INSERT through membership of that
+  role (inherited or by `SET ROLE`) or through a predefined role such as `pg_write_all_data`. The
+  application role is covered by its own membership check in `verify()`; any other role is not.
+  Renaming the loader leaves the old loader's grants in place and is refused (fails closed) until
+  they are revoked by hand (ADR 0024 A1 note, runbook).
+- **Condition 11.7 has false positives.** Any SECURITY DEFINER function in any schema owned by a
+  member of the owner role (a superuser owner counts) makes `migrate()` and `verify()` refuse, even
+  one unrelated to the knowledge tables, such as an extension's. The fix is to change the
+  function's owner to a role outside the owner role, or drop it; there is no allow-list.
+- **The shape pins are per PostgreSQL major (16 and 17).** A new major needs new pins from
+  `kb_pins` before it can start; PostgreSQL 18 adds `pg_constraint.conenforced`, which the
+  constraint query does not read yet and must, before 18 is pinned. The pins detect database drift, not code drift (code
+  drift is covered by the migration checksum plus review).
+- **`verify()` knowledge checks are start-up only** and judge the owner by consistency with the
+  owner of `public.assessments`.
+- **A zero-chunk approved version.** The database refuses to approve a version with no chunks, but
+  an owner or superuser write, or a restore, can still create an APPROVED version with zero
+  chunks. Later stage: the connector should raise an evidence issue for an approved governing
+  version with zero chunks.
+- **`guarded()` is a conservative word screen, not the control.** The control is review of every
+  migration plus the checksum pin. Shapes it is known not to catch (strict xfails in
+  `tests/safety/test_knowledge_guarded_rules.py`): `ALTER TABLE kb_*` with `SET SCHEMA`, `ADD COLUMN`,
+  `ADD CONSTRAINT`, `SET (...)` or `NO FORCE ROW LEVEL SECURITY`; `GRANT ALL ON ALL TABLES IN SCHEMA`;
+  `DROP SCHEMA public CASCADE`; a `;` inside a comment or string; an extra BEFORE trigger on a `kb_*`
+  table that fires after the guard (it could rewrite `chunk_text` or `hash_checked`); a `DO` block with
+  dynamic `EXECUTE` that replaces a guard function body; `ENABLE ROW LEVEL SECURITY` plus `CREATE POLICY`
+  on `kb_*`; `CREATE RULE ... DO INSTEAD` on `kb_*`; `CREATE TABLE ... INHERITS (kb_*)` (retrieval must
+  read `FROM ONLY`); `REASSIGN OWNED BY`; `ALTER TABLE public.kb_status_events SET UNLOGGED` (a
+  crash empties an unlogged table without firing the TRUNCATE guard, losing the status history);
+  `ALTER SCHEMA public OWNER TO` / `RENAME TO`; `CREATE EVENT TRIGGER`. **Condition 9 (2026-10-25)
+  now catches in the database:** an extra trigger, a replaced function body, trigger shape, RLS and
+  policies, rules, inheritance children, UNLOGGED, `public` owner or rename, and `DROP SCHEMA public`.
+  **Partly caught:** `REASSIGN OWNED` (`verify()` judges consistency with the owner of
+  `assessments`, not identity). **Condition 11 (2026-11-06) now catches:** `ADD COLUMN`,
+  `ADD CONSTRAINT`, extra indexes and grants on `kb_*`. **Not caught:** conditions 11.6, 11.8 and
+  11.9, event triggers and superuser catalogue edits.
+- **Loader role attributes and memberships: what is left.** Stage 1a checked them by name only;
+  `kb_load`'s self-check now tests superuser, membership of the owner or app role, CREATEROLE,
+  BYPASSRLS, NOINHERIT/`SET ROLE` paths to a role that holds TEMP, and replication at load time
+  (condition 10, built and live-tested). `db_init` also checks the TEMP path at install time.
+  Remaining: the self-check's privilege checks run in separate transactions, so a change between
+  them is not seen, and `withdraw` checks role names only (ADR 0024 A8).
+- **The advisory-lock denial of service is not limited to the loader.** The app role can also call
+  `pg_advisory_lock(1220001, ...)` (the knowledge lock class) and stall loads; see the ADR 0024
+  runbook note.
+- **Test roles on the test server.** Integration tests create `divesafe_kb_app_test` and
+  `divesafe_kb_loader_test` on the test server. That server MUST stay bound to loopback and must never
+  be a shared or production server.
 - **TEMP revoked from PUBLIC** may affect other users of the database; at code time check that
   `src/` and the backup scripts create no temporary tables, and that `db_init` runs after every
   restore (decision 10; ADR 0024 amendment item 7).
@@ -1365,8 +2157,8 @@ The owner accepted this ADR after the seventh revision, on the reviewers' advice
 to be settled in the first code stage. Each needs a test with a failure condition and a mutation
 check, and the code stages still need both reviewers. Nothing here changes a decision above.
 
-First stage allowed now: schema and migration **except the migration, which waits for the
-owner's answer on `hash_checked`** (decision 10; the column cannot be added later), `db_init`
+First stage allowed now: schema and migration **including the `hash_checked` column** (the owner
+answered YES on 2026-10-21; decision 10), `db_init`
 grants, the loader role and a development-only `kb_load`. Changes under `docker/` and the compose files wait for the ADR 0024
 amendment (items 1-7 above); the knowledge connector, the prompt path, the record fields and the
 citation guard are later stages.
@@ -1406,11 +2198,132 @@ citation guard are later stages.
    `egress_basis` (absent is valid only for records with no knowledge evidence); a knowledge item is
    identified by its KNOWLEDGE kind or a `kb:` id, matched on (document, version, chunk) parsed from
    the id against `withheld_knowledge`; the five-value enum lives in `domain`.
+   **Built 2026-11-06, narrowed by the owner (2026-11-06, "kb: ids only"):** a knowledge item is an
+   evidence item whose id has the reserved `kb:` prefix (compared case-insensitively); such an id
+   must follow the decision 6 grammar or the record is invalid. A KNOWLEDGE-kind item without a
+   `kb:` id was **not** judged; the reason was that synthetic KNOWLEDGE items
+   (`tests/safety/test_cross_examination.py`) reached prompts with no basis.
+   **Reversed by the owner, 2026-11-10:** the record now refuses a KNOWLEDGE item without a `kb:`
+   id and a `kb:` id on any other kind, in both `evidence` and `withheld_evidence`, with fixed
+   messages (`_check_egress`; `tests/safety/test_record_knowledge_identity.py`; the synthetic
+   connector in `test_cross_examination.py` no longer emits KNOWLEDGE, since the identity filter
+   would drop it). The kind and the id now name the same set. Built in
+   `AssessmentRecord._check_egress` (`RecordEgressBasis`, `KnowledgeRef`, `knowledge_ref` in
+   `domain/models.py`), tested with mutations in `tests/safety/test_record_egress.py`. Review
+   fixes (2026-11-06): basis/host cross-check, zone-id / `0x` / long-label hosts refused, a 20-item
+   bound on `kb:` evidence, the Reason trace counted as model output, `hide_input_in_errors`; the
+   conditions the filter stage must meet are listed under decision 15.
 8. **Formatting:** the list indentation at the end of item 7 of decision 11 area (lines ~323-330) and
    the over-long line ~88.
 
+9. **Catalogue post-check (added 2026-10-22; MUST land before migration 5 or the connector stage,
+   whichever is first).** Extend the post-check in `migrate()` and `verify()` so that: the set of
+   non-internal triggers on the three `kb_*` tables equals the nine exactly, each paired with its
+   function in `public`; the SHA-256 of `pg_get_functiondef(...)` of each guard function matches a pinned value (first written as MD5);
+   there are no `pg_rewrite` rules on `kb_*`; `relrowsecurity` is false and there are no `pg_policy`
+   rows; there are no `pg_inherits` children; `relpersistence = 'p'` on the three tables; and the
+   table owners and the `public` schema owner are the expected owner role. Each check has a failure test and a mutation.
+   **Review outcome (2026-10-25).** Implemented in `migrate()` (owner compared with `current_user`)
+   and in `verify()` (start-up only; the expected owner is the owner of `public.assessments`).
+   Pins are SHA-256 of `pg_get_functiondef`, keyed by PostgreSQL major (16, 17); any other major
+   fails closed. **The actual run:** the SHA-256 pins and the `tgtype` values were generated on
+   2026-10-25 by `kb_pins` with `APPLY=1` on fresh scratch databases on PostgreSQL 16 (the
+   `pgvector/pgvector:pg16` image) and PostgreSQL 17, with identical output. The full live suite
+   (3881 passed, 2 skipped, 31 xfailed) and the catalogue live file (92 passed) ran on
+   PostgreSQL 17. **The PostgreSQL 16 live run is done (2026-10-25):** the suite was run against a
+   throwaway `pgvector/pgvector:pg16` container (PostgreSQL 16.15, started with `--pull never`,
+   removed afterwards). `tests/integration/test_kb_catalogue_live.py`: 92 passed; full `pytest`:
+   3881 passed, 2 skipped, 31 xfailed; `pytest -m safety`: 2622 passed, 30 xfailed. The counts are
+   the same as on PostgreSQL 17. This satisfies the earlier requirement to run the live catalogue
+   file on the deployment major, for the current pins. **It must be repeated** whenever the
+   pgvector image tag or digest changes, a PostgreSQL minor version changes, or the pins change; a
+   wrong pin fails closed (an outage, not a safety failure). The owner approved only two changes: the trigger-shape fix with small hardening, and
+   switching the pins from MD5 to SHA-256. Trigger-shape checks: `tgtype`, no WHEN clause, no
+   column list, no arguments, not deferrable, no transition tables.
+   **Caught:** extra trigger, replaced function body, trigger shape, RLS and policies, rules,
+   inheritance, UNLOGGED, `public` owner or rename, `DROP SCHEMA public`. **Partly caught:**
+   `REASSIGN OWNED` (`verify()` judges consistency with the owner of `assessments`, not identity).
+   **Not caught:** see condition 11. This outcome is not an owner acceptance of anything beyond the
+   two items named.
+
+   **Operational notes.**
+   - A PostgreSQL major upgrade: `migrate()` and `verify()` refuse until that major's pins exist.
+     Generate them on a fresh scratch database with `kb_pins` and `APPLY=1`, review them against the
+     migration text, release, and only then upgrade (otherwise a full outage).
+   - Never generate pins from the database being checked.
+   - The `pgvector/pgvector:pg16` tag floats. A minor release that changes `pg_get_functiondef`
+     output would also fail closed; pin the image digest in the Docker stage.
+   - Keep the backup and restore drill on the same major.
+   - Production is at migration 3. An accidental deploy of this branch would apply migration 4 and
+     make the database forward-only; the existing "do not deploy before A1-A7" gate stands.
+   - `kb_pins` ships in the image (`COPY src`) and is harmless without `DIVESAFE_PIN_DSN`; moving it
+     to `tools/` is optional.
+10. **Loader attribute checks (added 2026-10-22; implemented in slice 1, committed `b1d636f`, and
+    live-tested).** `kb_load`'s self-check tests superuser, membership of the owner or app role,
+    CREATEROLE, BYPASSRLS, NOINHERIT/`SET ROLE` to a TEMP role, and replication. **Remaining gap
+    (ADR 0024 A8):** the privilege checks run in separate transactions, and `withdraw` checks role
+    names only.
+11. **Catalogue checks condition 9 does not make (added 2026-10-25; MUST land before the connector
+    stage).** 11.1-11.5 and 11.7 are **built 2026-11-06** (scenarios in `tests/safety/kb_catalogue_fake.py`, mutations in
+    `tests/safety/test_kb_catalogue_mutations.py` and `tests/safety/test_app_kb_privileges.py`,
+    live breaks on PostgreSQL 16 and 17 in `tests/integration/test_kb_catalogue_live.py` and
+    `test_postgres_guard.py`; awaiting review).
+    - **11.1** Constraints (dropped, `NOT VALID` CHECK, NOT NULL, UNIQUE, FK), including
+      `display_permitted`, `licence_reference_present`, `approver_role`, `all_sites`, the review
+      window, `status` / `hash_checked` and `UNIQUE(event_order)`. **Built:** per table, a SHA-256
+      of the sorted constraint and index rows (`KNOWLEDGE_SHAPE_SHA256`, nine pins per major,
+      generated with `kb_pins`). Before the shape queries, `_harden` fixes `search_path`,
+      `quote_all_identifiers`, `IntervalStyle`, `DateStyle` and `TimeZone`, so a role or database
+      setting cannot change how a definition is printed; a row that cannot be serialised is
+      reported as unreadable, never compared. **Gap:** a renamed CHECK or FK constraint is not
+      detected (names are left out; a renamed UNIQUE or primary key changes its index definition).
+      PostgreSQL 18 pins must add `conenforced`.
+    - **11.2** Columns, defaults, types and generated columns. **Built** the same way (a third
+      digest per table; an added or renamed column changes it).
+    - **11.3** `kb_status_event_order_seq` parameters (INCREMENT -1, RESTART), which could make
+      "latest status" read wrongly. **Built:** parameters, owner and ACL (only the owner). **Gap:**
+      `RESTART` or `setval` changes only the current value, which is not pinned; set below
+      `max(event_order)`, a later event sorts before an earlier one and a withdrawn version can
+      read as approved. A `last_value` check in `migrate()` is optional, not built.
+    - **11.4** Function owner and PUBLIC EXECUTE. **Built:** every function a knowledge trigger
+      calls must be owned by the expected owner, with a non-NULL ACL naming only the owner; app
+      side, `verify(least_privilege=True)` refuses an app role that owns or may EXECUTE one.
+    - **11.5** App and loader privileges on `kb_*` tables. **Built:** a role other than the owner
+      may hold only SELECT / INSERT on a table and only INSERT on a column, never with a grant
+      option, never PUBLIC; INSERT on `kb_status_events` is column-level only (its `event_order`
+      and `recorded_at` are the database's), and at most one non-owner role is a direct INSERT
+      grantee on the three tables (table or column grants, counted by role; not checked to be the
+      loader; members of that role are not counted, see Known gaps). App side, only
+      SELECT (and no MAINTAIN on PostgreSQL 17+), counting privileges held directly, inherited, or
+      reachable by `SET ROLE` through any membership.
+    - **11.6** Wholesale re-owning is accepted by `verify()` (consistency, not identity). Open.
+    - **11.7** A SECURITY DEFINER wrapper owned by the owner that disables, inserts and re-enables.
+      **Built:** no SECURITY DEFINER function in any schema other than those the knowledge triggers
+      call may be owned by a member of the owner role (a superuser owner counts; unknown counts).
+      **False positives:** an unrelated definer function (an extension's, say) owned by such a role
+      is refused too; the runbook step is to re-own it outside the owner role or drop it.
+    - **11.8** Tampering between start-ups: the check runs at `migrate()` and start-up only. Open.
+    - **11.9** An owner can drop and recreate a knowledge table with the same triggers and
+      functions. Every check passes, and the status history, including a withdrawal, is lost.
+    - Event triggers and superuser catalogue edits (out of scope).
+
+    **Done 2026-11-06:** `migrate()` runs `_harden` after the pending migrations (which keep the
+    session's own settings, under which their checksums were taken) and before its first
+    post-check; `install_schema`'s grant step runs it before its read-backs. `verify()` is
+    read-only from its knowledge check to the end of its transaction (SET LOCAL inside a released
+    savepoint lasts until the top-level transaction ends).
+
+    The pins detect database drift, not code drift (code drift is covered by the migration checksum
+    plus review).
+
 Still open for the owner (gating shipping: the withdrawal log's location and the
-re-acknowledgement of decision 11; gating the stage-1 **migration**, not only shipping: the
-`hash_checked` answer): the licence and `display_permitted` evidence for each source,
+re-acknowledgement of decision 11; the `hash_checked` answer is no longer open): the licence and `display_permitted` evidence for each source,
 where the private approval record lives, and whether production should refuse to start when the
 knowledge connector is not configured once a corpus exists.
+
+**Owner decision (2026-11-03): the `_fold` id-screen gaps are accepted.** The 9 strict xfails in
+`tests/safety/test_kb_screen.py` stay as recorded gaps: punctuation between the letters of `kb:`
+and a connector prefix that is dropped, spaced with punctuation or percent-encoded are not
+recognised. Stripping punctuation would flag ordinary prose, and decision 9 makes the id screen a
+screen, not a control. Citations are still checked against real evidence ids and retrieved text
+stays untrusted and delimited. Revisit if Retrieve is widened or the screen is promoted to a control.

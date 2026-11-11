@@ -9,6 +9,7 @@ import pytest
 from divesafe.agents import runner
 from divesafe.agents.runner import AgentError, call_structured, call_timeout, stage_timeout
 from divesafe.agents.specialists import Finding
+from divesafe.config import Settings
 from divesafe.models import LLMRequest, LLMResponse
 
 
@@ -87,27 +88,22 @@ def test_the_request_carries_the_providers_output_cap() -> None:
 def test_the_output_cap_boundaries_and_ceilings_agree() -> None:
     from divesafe.agents.runner import output_tokens
     from divesafe.config.settings import Settings
-    from divesafe.models import ollama
-    from divesafe.models.ollama import OllamaProvider
+    from divesafe.models import limits
     from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
-    assert runner.MAX_OUTPUT_TOKENS_CEILING == ollama.MAX_OUTPUT_TOKENS_CEILING == 8000
+    assert runner.MAX_OUTPUT_TOKENS_CEILING == limits.MAX_OUTPUT_TOKENS_CEILING == 8000
     assert Settings(_env_file=None).llm_max_output_tokens == runner.MAX_OUTPUT_TOKENS
     for ok in (256, 8000):
         assert Settings(_env_file=None, llm_max_output_tokens=ok).llm_max_output_tokens == ok
     for ok in (1, 8000):
         assert output_tokens(_Slow(0, max_output_tokens=ok)) == ok
-        assert OllamaProvider("m", "http://localhost:11434", max_output_tokens=ok)
         assert OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=ok)
 
 
 @pytest.mark.parametrize("bad", [float("nan"), 1500.0, 10**9, "1500", None, True])
-def test_both_constructors_refuse_a_bad_output_cap(bad: object) -> None:
-    from divesafe.models.ollama import OllamaProvider
+def test_the_constructor_refuses_a_bad_output_cap(bad: object) -> None:
     from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
-    with pytest.raises(ValueError):
-        OllamaProvider("m", "http://localhost:11434", max_output_tokens=bad)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         OpenAICompatibleProvider("m", "http://localhost:8000/v1", max_output_tokens=bad)  # type: ignore[arg-type]
 
@@ -134,3 +130,26 @@ def test_a_reply_stopped_at_the_token_limit_has_its_own_fixed_message() -> None:
         asyncio.run(call_structured(_Cut(), **kwargs))  # type: ignore[arg-type]
     assert str(caught.value) == "t: output stopped at the token limit"
     assert caught.value.__cause__ is None and caught.value.__suppress_context__
+
+
+def test_the_adapter_ceilings_match_the_settings_bounds() -> None:
+    from divesafe.models import limits
+
+    fields = Settings.model_fields
+    bound = {
+        name: next(m.le for m in fields[name].metadata if hasattr(m, "le"))
+        for name in (
+            "llm_call_timeout_seconds",
+            "llm_stage_timeout_seconds",
+            "llm_first_byte_timeout_seconds",
+            "llm_max_concurrent_calls",
+            "llm_max_output_tokens",
+        )
+    }
+    assert bound == {
+        "llm_call_timeout_seconds": limits.MAX_CALL_TIMEOUT_SECONDS,
+        "llm_stage_timeout_seconds": limits.MAX_STAGE_TIMEOUT_SECONDS,
+        "llm_first_byte_timeout_seconds": limits.MAX_FIRST_BYTE_TIMEOUT_SECONDS,
+        "llm_max_concurrent_calls": limits.MAX_CONCURRENT_CEILING,
+        "llm_max_output_tokens": limits.MAX_OUTPUT_TOKENS_CEILING,
+    }

@@ -28,7 +28,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 | `domain` | Frozen Pydantic types: plan, site, conditions, evidence + provenance, risk results, record, human decision. |
 | `risk` | Deterministic rules engine, placeholder rules, `reconcile`. |
 | `data` | Environmental connectors returning validated `EvidenceItem`s. |
-| `rag` | Contextual knowledge retrieval (pgvector). Not built yet. |
+| `rag` | Contextual knowledge retrieval (pgvector): store, selection and connector; Retrieve calls it once per run (ADR 0022). |
 | `agents` | Specialists, bounded Tree-of-Thought, risk proposal, prompt layer. |
 | `orchestration` | Pipeline and the human gate. |
 | `models` | `LLMProvider` abstraction; adapters register here. |
@@ -38,7 +38,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 
 ## 3. Coding standards
 
-- Python >= 3.11, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
+- Python >= 3.14, fully typed (`mypy --strict` on `src`), Pydantic v2 at every boundary,
   `frozen=True` and `extra="forbid"` for domain values. Domain values use the `Frozen` base.
 - Configuration only through `Settings`; secrets are `SecretStr`, never logged or committed.
 - Code against `LLMProvider`, never a vendor SDK, outside `models/` adapters.
@@ -56,7 +56,11 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Every safety rule needs a test of the **failure** condition, not just the happy path. Prove a
   new safety test has teeth by breaking the code once and watching it fail.
 - **NEVER** weaken, skip or delete a safety test to make a change pass. Strengthening is welcome.
-- `pytest -m safety` MUST always pass.
+- `pytest -m safety` MUST always pass and never skip. Two documented exceptions (owner,
+  2026-11-12): a safety test that needs a test database skips without `DIVESAFE_TEST_DATABASE_URL`,
+  and the case-only path check skips on a case-sensitive volume. CI runs the safety suite with a
+  database and fails on any skip except the case-sensitive check (so that check never runs on
+  Linux CI; it runs on a case-insensitive developer volume).
 
 ## 5. Safety principles
 
@@ -72,8 +76,8 @@ Severity order: `GO < CAUTION < INSUFFICIENT EVIDENCE < NO-GO`.
 ## 6. Human-in-the-loop requirement
 
 - Every assessment is `PENDING_HUMAN` until a human decides; it MUST NOT be acted on before.
-- A human may accept or override, including to a less severe outcome (ADR 0004). An override
-  MUST carry a rationale and an authenticated actor; `is_override` is derived, never supplied.
+- A human may accept or override (ADR 0004); a less severe outcome needs the `overrider` role
+  (ADR 0026). An override MUST carry a rationale and an authenticated actor; `is_override` is derived, never supplied.
 - Decisions are write-once. The system's own recommendation is never changed by a decision.
 - Record: recommendation, evidence, confidence, timestamps, model/ruleset/data versions, human
   decision, override rationale, and the later actual conditions.
@@ -171,7 +175,7 @@ the prompt layer MUST be reviewed by `security-reviewer`. Reviewers never edit.
 ```bash
 pip install -e ".[dev]"
 pytest                    # everything (offline)
-pytest -m safety          # must always pass; never skip
+pytest -m safety          # must always pass; never skip (exceptions: section 4)
 ruff check . && ruff format --check .
 mypy
 ```

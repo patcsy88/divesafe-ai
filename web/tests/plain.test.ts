@@ -32,6 +32,8 @@ const NAMED_SAFE = new Set([
   "index: false, follow: false", "id: s.site.id, label: plain(s.site.name)",
   // Fixed wording, a constant list entry, and the person's own typing.
   'c.threshold_status !== "VALIDATED" && " (a placeholder, not a limit)"',
+  'f.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""',
+  's.flagged_signals?.includes(j) ? " (flagged by the wording screen)" : ""',
   "r", 'r === system ? " (the system\'s recommendation)" : ""', "reason.trim()",
 ]);
 

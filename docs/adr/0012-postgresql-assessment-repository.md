@@ -25,7 +25,9 @@
   refuses to start.
 - **Connections.** Connect, statement and lock timeouts. Production refuses a DSN whose `sslmode`
   is not `require`, `verify-ca` or `verify-full`. Driver and validation errors become
-  `RepositoryUnavailableError` (HTTP 503, "nothing was recorded"), `RepositoryIntegrityError` or
+  `RepositoryUnavailableError` (HTTP 503; the text depends on the request and on whether the
+  commit itself failed, see ADR 0022 Known gaps, "`options`-borne settings"),
+  `RepositoryIntegrityError` or
   `UnstorableRecordError` (HTTP 422), raised `from None` so no DSN or record text reaches logs.
   `create` runs in a worker thread so a slow database cannot stall the event loop.
 - NUL characters are refused at the decision, actual-conditions and connector boundaries.
@@ -48,8 +50,25 @@ Without it these tests are skipped, so a plain `pytest` does not prove the adapt
   hashing, a decision-only function) is not built.
 - **Float values in free-form evidence `value`** that JSONB would re-type (for example 1e22) are
   refused rather than stored; such data cannot be recorded.
-- Stored JSON from an older model version must still validate; no upcasting yet (a failing read is
-  a 500 with no content logged).
+- Stored JSON from an older model version must still validate. There is no general upcasting; the
+  only accommodation is the `replace()` rule below (a failing read is a 500 with no content logged).
+- **`replace()` and keys missing from an old row (2026-10-26).** `replace()` leaves out top-level
+  keys that are missing from the stored row when the successor's value equals the model default.
+  The append-only trigger is unchanged and still requires every key except `human_decision` and
+  `actual_conditions` to stay identical. The read-back compares against the exact JSON written and
+  the loaded model. Verified live on PostgreSQL 17: an old-shape row was decided, then actual
+  conditions were reported, and no new key was written. ADR 0015's "never disable the triggers"
+  still holds.
+- **Partly solved (replace):** a defaulted field added *inside a nested value* is written into an old
+  row's successor and refused by the trigger, so old pending rows would become undecidable. Since
+  2026-11-03 the keys listed in `_NESTED_NEW_DEFAULTS` (`flagged_signals` in `findings`,
+  `cross_examination_findings` and `scenarios`) are left out for stored items that lack them; any
+  other nested field still needs its own entry
+  (proof: `test_an_old_shape_row_without_nested_flag_keys_can_still_be_decided_and_given_actuals`,
+  run against a real PostgreSQL). Without an entry the update fails closed (HTTP 409, "the
+  assessment could not be updated; reload it"). A migration or an upcasting plan is needed before
+  any further nested field is added. Changing an existing field's default
+  silently changes what old rows mean.
 - No connection pool, backups, or replication. An ambiguous commit failure (network drop after the
   server committed) is reported as an error although the write may exist; a retry then conflicts.
 - Roles exist (ADR 0013) but there is no per-assessment ownership: any viewer reads any assessment.

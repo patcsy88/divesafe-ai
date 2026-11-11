@@ -11,6 +11,7 @@ from tests.agent.scripted_llm import fake, run_pipeline, scripted, task_of
 from divesafe.agents import PROMPT_VERSION, AgentError
 from divesafe.agents.runner import call_structured
 from divesafe.agents.schemas import ProposalOutput
+from divesafe.agents.signal_screen import SCREEN_TOKEN
 from divesafe.domain import Recommendation, ScenarioKind
 from divesafe.models import FakeProvider
 
@@ -55,7 +56,7 @@ def test_scenarios_are_exactly_the_three_kinds_with_evidence() -> None:
 
 def test_record_carries_provenance_and_the_explanation() -> None:
     record = run_pipeline(fake())
-    assert record.model_version == f"fake/fake-model; prompts={PROMPT_VERSION}"
+    assert record.model_version == f"fake/fake-model; prompts={PROMPT_VERSION}{SCREEN_TOKEN}"
     assert record.explanation.startswith("Rationale citing the evidence.")
     assert "Uncertainties: model resolution" in record.explanation
 

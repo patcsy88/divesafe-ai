@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from divesafe.domain import (
+    KNOWLEDGE_CATEGORIES,
+    SUPERVISOR_RULE_PREFIX,
     DataCategory,
     DataKind,
     DataQuality,
@@ -59,20 +61,26 @@ logger = logging.getLogger(__name__)
 # connector cannot dodge coverage by labelling weather or wave data as a notice.
 WINDOW_EXEMPT: dict[DataKind, frozenset[DataCategory]] = {
     DataKind.NOTICE: frozenset({DataCategory.MARINE_WARNINGS}),
-    DataKind.KNOWLEDGE: frozenset(
-        {
-            DataCategory.SITE_INFORMATION,
-            DataCategory.LOCAL_GUIDANCE,
-            DataCategory.HISTORICAL_OBSERVATIONS,
-        }
-    ),
+    # ADR 0022 decision 5: `historical_observations` is not a knowledge category.
+    DataKind.KNOWLEDGE: KNOWLEDGE_CATEGORIES,
 }
 
 
-def _exempt(item: EvidenceItem, window_start: datetime) -> bool:
-    """Exempt from window coverage, provided it has not already ended before the dive."""
+def _exempt(item: EvidenceItem, window_start: datetime, window_end: datetime) -> bool:
+    """Exempt from window coverage, provided it has not already ended before the dive.
+
+    Knowledge (ADR 0022 decision 5) must be in force for the whole dive: it takes effect by the
+    window end and its review-by date is strictly after the window end. A knowledge item with no
+    `valid_until` (only possible through `model_construct`) is not exempt. Stored record-form
+    evidence is re-assessed without the connector's filter, so the engine checks this itself."""
     if item.category not in WINDOW_EXEMPT.get(item.data_kind, frozenset()):
         return False
+    if item.data_kind is DataKind.KNOWLEDGE:
+        return (
+            item.valid_until is not None
+            and item.valid_until > window_end
+            and item.valid_at <= window_end
+        )
     return item.valid_until is None or item.valid_until >= window_start
 
 
@@ -82,8 +90,14 @@ def _covers(items: Sequence[EvidenceItem], start: datetime, end: datetime) -> bo
     Intervals (valid_until set) must chain without a gap, which needs no invented number. Instants
     can only be bracketed: a hole inside a series of instants is NOT detected (docs/adr/0008).
     """
+    # An interval that ended before the window starts cannot help cover [start, end]; left in, it
+    # would set the chain's reach too early and hide a later interval that covers the dive.
     intervals = sorted(
-        ((e.valid_at, e.valid_until) for e in items if e.valid_until is not None),
+        (
+            (e.valid_at, e.valid_until)
+            for e in items
+            if e.valid_until is not None and e.valid_until >= start
+        ),
         key=lambda pair: pair[0],
     )
     if intervals:
@@ -110,9 +124,18 @@ EVIDENCE_REQUIRED_PREFIX: Final = "evidence.required."
 EVIDENCE_QUALITY_PREFIX: Final = "evidence.quality"
 CITES_UNUSABLE_PREFIX: Final = "rule.cites_unusable_evidence."
 DUPLICATE_IDS_RULE: Final = "evidence.duplicate_ids"
+CONFLICT_VARIANT_RULE: Final = "evidence.conflict_variant"
+CONFLICT_UNBOUNDED_RULE: Final = "evidence.conflict_unbounded"
 WINDOW_STARTED_RULE: Final = "assessment.window_started"
-# Rule ids a configured rule may not use: the engine and the pipeline emit these themselves.
-RESERVED_RULE_PREFIXES: Final = ("assessment.", "evidence.", "ruleset.", "rule.")
+# Rule ids a configured rule may not use: the engine, the pipeline and the Supervise stage emit
+# these themselves.
+RESERVED_RULE_PREFIXES: Final = (
+    "assessment.",
+    "evidence.",
+    "ruleset.",
+    "rule.",
+    SUPERVISOR_RULE_PREFIX,
+)
 # A signed-off definition id may be 100 characters and is prefixed with "definition.".
 RULE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9._-]{1,128}")
 # Problems with a named rule: it failed, its review expired, or it declares no expiry.
@@ -138,6 +161,8 @@ ENGINE_RULE_PREFIXES: Final = (
     EVIDENCE_QUALITY_PREFIX,
     CITES_UNUSABLE_PREFIX,
     DUPLICATE_IDS_RULE,
+    CONFLICT_VARIANT_RULE,
+    CONFLICT_UNBOUNDED_RULE,
 )
 
 
@@ -164,15 +189,24 @@ class EvidencePolicy:
 
 
 def _covers_window(items: Sequence[EvidenceItem], start: datetime, end: datetime) -> bool:
-    """Exempt items need no cover; everything else must cover [start, end] together."""
-    spans = [e for e in items if not _exempt(e, start)]
+    """Exempt items need no cover; everything else must cover [start, end] together.
+
+    Knowledge is exempt or nothing (ADR 0022 decisions 3 and 5, AGENTS section 8): a knowledge
+    item that fails `_exempt` is never coverage, so it is left out as if absent."""
+    counted = [e for e in items if e.data_kind is not DataKind.KNOWLEDGE or _exempt(e, start, end)]
+    if items and not counted:
+        return False
+    spans = [e for e in counted if not _exempt(e, start, end)]
     return not spans or _covers(spans, start, end)
 
 
 def _relevant_to_window(item: EvidenceItem, start: datetime, end: datetime) -> bool:
-    """Does the item say anything about the window (overlap), or is it exempt?"""
-    if _exempt(item, start):
+    """Does the item say anything about the window (overlap), or is it exempt? A knowledge item
+    is relevant only when exempt (ADR 0022 decision 5): it never counts by overlap."""
+    if _exempt(item, start, end):
         return True
+    if item.data_kind is DataKind.KNOWLEDGE:
+        return False
     return item.valid_at <= end and (item.valid_until or item.valid_at) >= start
 
 
@@ -361,7 +395,14 @@ class RiskRulesEngine:
         """Usable evidence for one category, or the reason there is none and the factor at fault."""
         policy = self._policy
         freshness = RiskFactorKind.DATA_FRESHNESS
-        items = [e for e in evidence if e.category == category]
+        # A KNOWLEDGE item outside the knowledge categories is ignored (ADR 0022 decision 5);
+        # the `EvidenceItem` validator refuses one, but `model_construct` skips validators.
+        items = [
+            e
+            for e in evidence
+            if e.category == category
+            and (e.data_kind is not DataKind.KNOWLEDGE or category in KNOWLEDGE_CATEGORIES)
+        ]
         if not items:
             return [], f"No '{category.value}' evidence is available.", freshness
         fresh = [e for e in items if timedelta(0) <= now - e.retrieved_at <= policy.max_age]
@@ -452,8 +493,13 @@ class RiskRulesEngine:
             # A dive between two samples is exposed to both, so the nearest instant on each side
             # (per category) is legitimate evidence, exactly as DefinitionRule uses it.
             for category in {e.category for e in usable_items}:
+                # Never knowledge: it is relevant only when exempt (ADR 0022 decision 5).
                 instants = [
-                    e for e in usable_items if e.category == category and e.valid_until is None
+                    e
+                    for e in usable_items
+                    if e.category == category
+                    and e.valid_until is None
+                    and e.data_kind is not DataKind.KNOWLEDGE
                 ]
                 before = [e for e in instants if e.valid_at < start]
                 after = [e for e in instants if e.valid_at > end]
@@ -461,19 +507,25 @@ class RiskRulesEngine:
                     pool.add(max(before, key=lambda e: e.valid_at).id)
                 if after:
                     pool.add(min(after, key=lambda e: e.valid_at).id)
+        # A GO or CAUTION that cites nothing rests on nothing: `set() <= pool` is always true, so
+        # the empty case is flagged explicitly.
         return [
             RuleResult(
                 rule_id=f"{CITES_UNUSABLE_PREFIX}{r.rule_id}",
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale=(
-                    "The rule cites evidence that is stale, of unaccepted quality or outside "
-                    "the dive window."
+                    "The rule cites no evidence."
+                    if not r.evidence_ids
+                    else (
+                        "The rule cites evidence that is stale, of unaccepted quality or outside "
+                        "the dive window."
+                    )
                 ),
                 factor=RiskFactorKind.DATA_QUALITY,
             )
             for r in results
             if r.outcome in (Recommendation.GO, Recommendation.CAUTION)
-            and not set(r.evidence_ids) <= pool
+            and (not r.evidence_ids or not set(r.evidence_ids) <= pool)
         ]
 
 

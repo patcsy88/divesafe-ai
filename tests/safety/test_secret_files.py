@@ -159,13 +159,14 @@ def test_binary_content_is_refused(secrets: Path, raw: bytes) -> None:
         load_settings()
 
 
-def test_a_symlinked_file_is_followed(secrets: Path, tmp_path: Path) -> None:
-    """Orchestrators mount secrets as symlinks; a link must work like the file it points to."""
+def test_a_symlinked_file_is_refused(secrets: Path, tmp_path: Path) -> None:
+    """O_NOFOLLOW: a link could point anywhere the process can read, so it is refused."""
     target = tmp_path / "real"
     target.write_text(KEY)
     (secrets / secret_file_name("llm_api_key")).symlink_to(target)
-    settings = load_settings()
-    assert settings.llm_api_key is not None
+    with pytest.raises(SecretFileError, match="cannot be read") as caught:
+        load_settings()
+    assert KEY not in str(caught.value)
 
 
 def test_a_secret_never_appears_in_the_settings_repr(secrets: Path) -> None:
@@ -258,14 +259,23 @@ def test_a_dotenv_file_is_still_read_when_no_secrets_directory_is_set(
     assert load_settings().log_level == "DEBUG"
 
 
-def test_the_allow_list_is_exactly_these_five_names() -> None:
+def test_the_allow_list_is_exactly_these_six_names() -> None:
+    """The sixth, `loader_database_url`, is read only by the loader's own narrow settings (ADR 0024
+    A4); the shared `Settings` has no field for it and the API refuses it in production."""
+    from divesafe.config import Settings
+
     assert set(SECRET_FILES) == {
         "database_url",
         "admin_database_url",
         "llm_api_key",
         "met_api_token",
         "api_key_hashes",
+        "loader_database_url",
     }
+    assert "loader_database_url" not in Settings.model_fields
+    assert all(
+        name in Settings.model_fields for name in SECRET_FILES if name != "loader_database_url"
+    )
 
 
 def test_a_dangling_symlink_is_refused_not_treated_as_unset(secrets: Path, tmp_path: Path) -> None:
@@ -362,3 +372,88 @@ def test_a_dotenv_file_that_appears_after_the_check_is_still_not_read(
 
     monkeypatch.setattr(secret_files, "read_secret_files", late)
     assert load_settings().log_level != "DEBUG"
+
+
+# --- the loader name is opened only when asked for (ADR 0024 A4) ---
+
+
+def _opened_names(monkeypatch: pytest.MonkeyPatch, directory: Path, **kwargs: object) -> list[str]:
+    import os
+
+    from divesafe.config import secret_files
+
+    opened: list[str] = []
+    real = os.open
+
+    def spy(path: object, flags: int, *rest: int) -> int:
+        opened.append(Path(str(path)).name)
+        return real(path, flags, *rest)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(secret_files.os, "open", spy)
+    secret_files.read_secret_files(directory, {}, **kwargs)  # type: ignore[arg-type]
+    return opened
+
+
+def test_the_default_read_never_opens_the_loader_file(
+    secrets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from divesafe.config.secret_files import SECRET_FILES
+
+    for field in SECRET_FILES:
+        (secrets / secret_file_name(field)).write_text("postgresql://u:p@h/d\n")
+    opened = _opened_names(monkeypatch, secrets)
+    assert secret_file_name("loader_database_url") not in opened
+    assert len(opened) == len(SECRET_FILES) - 1
+
+
+def test_the_loader_field_is_read_when_asked_for_and_only_it(
+    secrets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from divesafe.config.secret_files import LOADER_SECRET_FIELD, SECRET_FILES
+
+    for field in SECRET_FILES:
+        (secrets / secret_file_name(field)).write_text("postgresql://u:p@h/d\n")
+    opened = _opened_names(monkeypatch, secrets, fields=(LOADER_SECRET_FIELD,))
+    assert opened == [secret_file_name(LOADER_SECRET_FIELD)]
+
+
+def test_mutation_a_default_that_includes_the_loader_file_is_caught(
+    secrets: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import inspect
+
+    from divesafe.config import secret_files
+
+    source = inspect.getsource(secret_files.read_secret_files)
+    old = "{f for f in SECRET_FILES if f != LOADER_SECRET_FIELD}"
+    assert old in source
+    namespace: dict[str, object] = {}
+    exec(source.replace(old, "set(SECRET_FILES)"), vars(secret_files), namespace)  # noqa: S102
+    (secrets / secret_file_name("loader_database_url")).write_text("postgresql://u:p@h/d\n")
+    found = namespace["read_secret_files"](secrets, {})  # type: ignore[operator]
+    assert "loader_database_url" in found  # the mutant reads it
+    assert "loader_database_url" not in secret_files.read_secret_files(secrets, {})
+
+
+def test_the_loader_settings_call_passes_only_the_loader_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from divesafe.config import loader_settings
+    from divesafe.config.secret_files import LOADER_SECRET_FIELD
+
+    directory = tmp_path / "d"
+    directory.mkdir()
+    (directory / secret_file_name(LOADER_SECRET_FIELD)).write_text(
+        "postgresql://u:p@h/d?sslmode=require\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    seen: list[object] = []
+    real = loader_settings.read_secret_files
+
+    def spy(d: Path, env: object, fields: object = None) -> object:
+        seen.append(fields)
+        return real(d, env, fields=fields)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(loader_settings, "read_secret_files", spy)
+    loader_settings._url_from_secrets_dir(directory, {})
+    assert seen == [(LOADER_SECRET_FIELD,)]

@@ -1,20 +1,24 @@
-"""Agent orchestrator: Observe, Retrieve, Diagnose/Reason, Assess Risk, Propose, Human Gate,
-Validate, Learn. Design: docs/architecture.md and docs/agent-design.md.
+"""Agent orchestrator: the stage graph (`graph.STAGES`: Observe, Retrieve, Assess, Reason,
+Rejudge, Propose, Supervise, Gate) walked by `assess_dive`, and the human gate. Design:
+docs/architecture.md, docs/agent-design.md and ADR 0025.
 
-Implemented so far: evidence gathering, deterministic risk, reconciliation, and the human gate
-(no LLM, RAG or agents yet).
+Retrieve is a placeholder until RAG stage 1 (ADR 0022).
 """
 
+from divesafe.orchestration.graph import STAGES, Stage, next_stage, walk
 from divesafe.orchestration.human_gate import (
     AlreadyDecidedError,
     DecisionRequiredError,
     NotAssignedDeciderError,
+    NotReassignableError,
     check_assigned,
     decide,
+    reassign,
     report_actual_conditions,
 )
 from divesafe.orchestration.pipeline import (
     InvalidPlanError,
+    RunOptions,
     SiteMismatchError,
     StartPassedError,
     UnsafeConfigurationError,
@@ -28,8 +32,15 @@ from divesafe.orchestration.ruleset import (
     load_ruleset_bytes,
     read_ruleset_file,
 )
+from divesafe.orchestration.supervisor import SupervisorInvariantError, supervise
 
 __all__ = [
+    "STAGES",
+    "Stage",
+    "SupervisorInvariantError",
+    "next_stage",
+    "supervise",
+    "walk",
     "LoadedRuleset",
     "Refusal",
     "RulesetError",
@@ -44,7 +55,10 @@ __all__ = [
     "SiteMismatchError",
     "StartPassedError",
     "UnsafeConfigurationError",
+    "RunOptions",
     "assess_dive",
+    "NotReassignableError",
     "decide",
+    "reassign",
     "report_actual_conditions",
 ]

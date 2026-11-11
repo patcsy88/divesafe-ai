@@ -145,6 +145,8 @@ def test_the_user_view_credits_phn() -> None:
             connectors=[PhnEtideConnector(_Getter())],
             engine=engine,
             now=NOW,
+            egress_basis=None,
+            model_host=None,
         )
     )
     assert record.evidence
