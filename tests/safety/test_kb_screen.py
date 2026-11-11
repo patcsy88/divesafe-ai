@@ -567,6 +567,20 @@ def test_mutation_without_the_table_check_the_hangul_fillers_get_through() -> No
     assert all(no_table.allowed_text(ch, newlines=True) for ch in fillers)
 
 
+def test_mutation_without_the_table_check_format_and_mark_ignorables_get_through() -> None:
+    """The same for Cf, Mn and Cn members: with the category rule and the Latin-name rule both
+    loosened, only the table refuses them."""
+    open_rules = (
+        (NON_ASCII_CATEGORY, "    if False:"),
+        (NAME_RULE, "    return True"),
+    )
+    loosened = mutated_module(kb_screen, *open_rules)
+    no_table = mutated_module(kb_screen, *open_rules, (IGNORABLE_RULE, ""))
+    samples = ("\u00ad", "\u034f", "\u200b", "\u202e", "\u2065", "\ufe0f", "\U000e0041")
+    assert not any(loosened.allowed_text(ch, newlines=True) for ch in samples)
+    assert all(no_table.allowed_text(ch, newlines=True) for ch in samples)
+
+
 @pytest.mark.parametrize(
     ("old", "new"),
     [
