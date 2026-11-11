@@ -22,8 +22,15 @@
   `9f5b3ea`; see "Build state" at the end of A8). **Both reviewers reviewed `9f5b3ea` once** (no
   blockers); the findings were fixed in the commits listed in "Build state", and the final round
   (`8eface8`..`99ace68`) was **reviewed by both reviewers on 2026-11-09, no blockers and no
-  should-fix**; its nits are fixed in the docs-only commit after it. Not run on the owner's host; the A7 hand run and the owner gates in A6
-  remain. **In production, and whenever the loader string comes from the secrets directory,
+  should-fix**; its nits are fixed in the docs-only commit after it. **Update 2026-11-11:**
+  `deploy-a1-a7` (`8bbe455`) is merged into `rag-connector` as `8017020`; the owner lifted the A6
+  rule that kept the RAG stages off the deploy branch (A6). **The A7 hand run was made once, on
+  the owner's production Mac with production stopped (owner decision; A7 "Hand run 1"), and
+  FAILED** at `db-init` after the restore: `pg_restore --no-acl` had dropped the `REVOKE EXECUTE`
+  on the five knowledge guard functions. Fixed and reviewed (`83efde5`, `a7bab38`, `f3a103d`; no
+  blockers, no should-fix after two rounds). **A7 is not passed; a re-run is needed** (another
+  production stop, on the owner's go-ahead). The owner gates in A6 remain, and the production
+  load gate (exit 24) still stands. **In production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
   access, A8). Both reviewers accepted its second, third and fourth revisions as
@@ -1371,7 +1378,11 @@ condition; the mutation check is to break the compose file once and watch it fai
   until A1 to A7 are built (recorded here as a rule). **A stage-1 accident is worse than an
   outage:** the knowledge migration applies, `db-init` then fails at the grants, the old backup
   scripts refuse a database that has `kb_*` tables, and the new ones do not exist, so **no backup
-  can be taken**; and going back to the old image may meet a schema it does not know. **Recovery:**
+  can be taken**; and going back to the old image may meet a schema it does not know.
+  **Owner decision 2026-11-11: this rule is lifted.** A1 to A7 are built and reviewed, so
+  `deploy-a1-a7` (`8bbe455`) was merged into `rag-connector` (`8017020`), the branch the owner
+  deploys from. The recovery text below stays for the record. The production load gate (exit 24,
+  below) is **not** lifted. **Recovery:**
   restore the backup taken before the pull into a **new** volume, **using the OLD scripts** (a git
   worktree of the pre-pull commit: the new scripts refuse a format-1 archive) **and the old
   image**. If no backup was taken before the pull, use the latest daily backup; **decisions made
@@ -1459,7 +1470,9 @@ condition; the mutation check is to break the compose file once and watch it fai
   Migrations are forward-only and checksum-pinned and event rows are not updatable, so a NOT NULL
   column with no default could not be added later; it goes into the migration (proposed by
   `risk-reviewer`).
-- **Order on the owner's host once this is built:** add the corpus line to `docker/production.env`;
+- **Order on the owner's host once this is built:** add the corpus line to `docker/production.env`
+  (**done 2026-11-11, owner decision:** `DIVESAFE_CORPUS_DIR=/Users/patcsy88/DiveSafe/corpus`, an
+  empty directory, mode 0700);
   take a backup with the **old** scripts; pull; `make-secrets.sh`; `up -d --wait db`; the role
   script; **`up -d --build`** (without `--build` the old image runs the old `db_init`, the knowledge
   migration is not applied, and the new backup then refuses); take a backup with the **new**
@@ -1525,8 +1538,14 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     writes nothing (A3), so the step can be repeated. The log has no home yet (gap 3), and **the
     first production load stays gated on its location** (owner open item).
   - **Grants after a restore.** `pg_dump` without `--create` carries no database ACLs, so `PUBLIC`
-    has **EXECUTE on the knowledge functions** until `db_init` runs (the restore uses `--no-acl`);
-    `db_init` revokes it on every run. TEMP is **not** newly open on a new volume:
+    has **EXECUTE on the knowledge functions** after the load (the restore uses `--no-acl`).
+    ~~`db_init` revokes it on every run.~~ **Wrong, found by hand run 1 (2026-11-11):** `migrate()`
+    checks the knowledge guard before `_kb_grants` would revoke, so `db-init` refuses and the
+    revoke never runs. Since `83efde5` **`restore.sh` revokes EXECUTE from `PUBLIC` on the five
+    guard functions in one transaction right after `pg_restore`**, then reads the ACLs back
+    read-only and refuses unless that reads `5 5`; `--check` runs the same read-back; `db-init`
+    stays report-only (a tamper detector). The manual recovery is in `docs/backup-and-restore.md`.
+    TEMP is **not** newly open on a new volume:
     `10-create-app-role.sh` already runs `REVOKE ALL ON DATABASE ... FROM PUBLIC`. The explicit TEMP
     revoke stays only as **extra protection**. The restore document says `db-init` is the next step
     and the closing report says the grants are not yet applied; `kb_load` refusing while TEMP is
@@ -1543,6 +1562,37 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     licensed corpus text**, that a licence revoked later cannot be honoured in an existing dump or
     off-machine copy, that the archive must be kept as the owner would keep the licensed sources,
     and the new fact count in place of "thirteen". Docs are written when the scripts are.
+- **Hand run 1 (2026-11-11): FAILED.** **Where (owner decision 2026-11-11):** on the owner's
+  production Mac, by stopping production. This departs from `docs/backup-and-restore.md` ("never on
+  the owner's production host"): the scripts' `single_database` check refuses while two compose
+  `db` containers run, and no other machine was available. The doc now records the exception.
+  Safeguards used: separate test secrets and env in the worktree, with the model at `127.0.0.1:9`;
+  `throwaway-*` projects only; a test image tag, never `divesafe-api:local`; stop and start of the
+  production containers only, the volume untouched; stop and restart at once if any step fails.
+  **Timing:** production stopped 01:33:26 UTC, restarted 07:53:11 UTC, about 6h20m against an
+  estimate of 5-10 minutes. The run itself took minutes; the restart was delayed by investigating
+  the failure. **Lesson: restart first, investigate after.** Production came back healthy on the
+  same image (`sha256:c97d9d35fe49`); everything throwaway was cleaned up.
+  **What matched the docs, up to the restore:** the role script; `db-init` "schema is up to date";
+  the seed "documents=3 chunks=4 events=6"; backup and scratch restore equal; a manifest of 23
+  lines (4 header lines plus the 19 facts); the restore matched the manifest; the closing report
+  listed the right knowledge lines; TEMP revoked.
+  **Defect:** after the restore, `up db-init` refused with "a role other than the owner may
+  EXECUTE" for the five `kb_*` guard functions, and `kb_withdraw` was then refused. Cause:
+  `restore.sh` runs `pg_restore --no-owner --no-acl`, which drops migration 4's `REVOKE EXECUTE
+  ... FROM PUBLIC`; the backup facts hash function definitions, not ACLs, so neither the backup
+  nor the restore comparison saw it; `db-init` refuses before its own `_kb_grants` would revoke.
+  It failed closed, but the documented recovery was broken. Real exposure was nil: they are
+  trigger functions and no connecting role could create a trigger.
+  **Fix (`83efde5`, `a7bab38`, `f3a103d`; `risk-reviewer` and `security-reviewer`, two rounds, no
+  blockers, no should-fix):** `restore.sh` revokes EXECUTE from `PUBLIC` on the five functions in
+  one transaction right after `pg_restore`, then a read-only read-back that must read `5 5`, and
+  refuses otherwise; `--check` runs the same read-back; the manual recovery is documented,
+  including the closing report's SQL and re-applying every logged withdrawal (`kb_withdraw` is
+  idempotent: `KB001` becomes exit 16); a live dump/restore integration test exists and CI fails
+  if it skips; `db-init` stays report-only.
+  **A7 is not yet passed; a re-run is needed**, which is another production stop and needs the
+  owner's go-ahead. Gaps from the fix reviews are in A8.
 - **Golden-copy and script-review round.** `tests/safety/golden_backup/backup-common.sh.txt` and
   `restore.sh.txt` (and `backup.sh.txt` if it changes) are line-by-line change detectors, so these
   edits fail `test_backup_scripts.py` until someone reads the diff and updates the copies. That is
@@ -1569,13 +1619,16 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   text scan only, as for the existing facts.
 - **Documented gaps.** (1) The fake `docker` cannot run SQL, so the content of the new facts, the
   role-before-restore order and the "used database" check are covered by scans and by a hand run on
-  a throwaway volume, **which has not been done and is required before the first production load**.
+  a throwaway volume, **made once on 2026-11-11 and FAILED at `db-init` (above); a re-run is
+  required before the first production load**.
   (2) The digest detects damage, not tampering, as today (the manifest sits next to its archive).
   (3) The withdrawal log has no defined home, so R1 depends on the operator keeping it, and
   **nothing technically stops the API starting before the re-apply** (operator discipline). (4) The
   count and digest cover what is in the tables; they do not show that a text matches its approved
-  manifest (ADR 0022 condition 5 is separate). (5) A restore that is not followed by `db-init`
-  leaves `PUBLIC` EXECUTE on the knowledge functions and `kb_load` refusing (ADR 0022 decision 10).
+  manifest (ADR 0022 condition 5 is separate). (5) ~~A restore that is not followed by `db-init`
+  leaves `PUBLIC` EXECUTE on the knowledge functions~~ (corrected 2026-11-11: `restore.sh` now
+  revokes it itself; a restore interrupted between the load and the revoke needs the manual
+  recovery) and `kb_load` refuses until `db-init` has run (ADR 0022 decision 10).
 
 ### A8. Documented gaps recorded by this amendment
 
@@ -1862,19 +1915,40 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     string without `connect_timeout` is now refused in every environment**, as A1 always said (the
     code accepted it before); `docs/knowledge-loader.md` and `docs/backup-and-restore.md`
     corrections.
-  - **Still needed before production use:** review of every change by `risk-reviewer` and
-    `security-reviewer` (including the golden-copy round); **the A7 hand run on a throwaway volume**
-    (backup and restore with knowledge rows, role-before-restore order, the "used database" check);
-    the owner gates (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable
-    code point table, per-source licence and `display_permitted` evidence); and
-    `DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env` before any compose command.
+  - **Still needed before production use** (updated 2026-11-11): ~~review of every change~~
+    (done); **the A7 hand run re-run** (run 1 on 2026-11-11 failed at `db-init` after the restore;
+    fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; see A7 "Hand run 1"); the owner gates
+    (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable code point
+    table, per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
+    owner's `docker/production.env`~~ (done 2026-11-11). The A6 branch rule is lifted (owner
+    decision 2026-11-11); the production load gate stands.
+  - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
+    - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
+      revoke; the restore's read-back is the only check. A new fact needs a manifest format change.
+    - The live restore test restores as `postgres`, not `divesafe_owner`; the A7 re-run is the
+      end-to-end check.
+    - The CI guards check only that a skip text is absent, not that the test passed (a rename,
+      a deselect or an xfail would pass them); `--junitxml` could fix that.
+    - A DSN with `hostaddr=`, or a dual-stack `localhost`, could point the live test at the wrong
+      server (it fails loudly; nothing is written).
+    - The offline selection-rule tests in that module skip without a test DSN.
+    - `test_a7_seed_knowledge.py` skips with "is not set", which the CI skip guard does not match.
+    - **The safety-marked production-gate test `tests/integration/test_kb_load_live.py`
+      (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`) skips in an
+      offline `pytest -m safety` run** because it needs a database; it runs in CI. That conflicts
+      with AGENTS.md section 4 ("`pytest -m safety` MUST always pass", with tests offline).
+      **Needs an owner decision:** move it out of the safety marker (keeping the offline pins in
+      `tests/safety/test_kb_load_production_gate.py`), or accept a safety test that skips offline.
+    - `docs/backup-and-restore.md` step 9 and the recovery paragraph now say what exits 10 and 12
+      of `kb_withdraw` mean when re-applying every logged withdrawal (done in this change).
 
 ## Not solved
 
 - **The knowledge loader (Amendment 1) is built; the build was reviewed once (`9f5b3ea`, no
   blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
   `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
-  (A8 "Build state"); the A7 hand run is not done. Production `load` and `approve` refuse in code
+  (A8 "Build state"); the A7 hand run was made once on 2026-11-11 and failed (A7 "Hand run 1";
+  fixed, reviewed, re-run needed). Production `load` and `approve` refuse in code
   until the A6 gates are closed (also from the secrets directory in any environment; not a
   control against an operator with Docker access, A8). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are

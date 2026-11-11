@@ -209,7 +209,8 @@ Then:
    not). The API must stay stopped.
 9. **Re-apply withdrawals by state, not by time:** every version in the withdrawal log that the
    report shows as not WITHDRAWN, with `kb_withdraw` (`docs/knowledge-loader.md`). A version that
-   is already WITHDRAWN gets its own message and nothing is written, so this can be repeated. The
+   is already WITHDRAWN gets its own message (exit 16) and nothing is written, so this can be
+   repeated. After a manual recovery (below) re-apply **every** logged withdrawal instead. The
    backup time is taken before the dump, so a withdrawal logged a little earlier may be in the
    archive or not: compare with the report, never with the clock. A v2 approved after the archive
    is simply absent and a superseded v1 governs again: re-load v2, or withdraw v1. **Nothing stops
@@ -327,6 +328,9 @@ that code into exit 16 "already withdrawn" with the existing `recorded_at`; the 
 rolled back, so nothing is written (`src/divesafe/services/kb_withdraw.py`, `_send_insert` and
 `_withdraw_on`; tested in `tests/integration/test_kb_withdraw_live.py`, where repeated withdrawals
 leave exactly one WITHDRAWN event). Exit 15 is the same refusal when the time could not be read.
+Two other exits are expected here: **exit 10** (version not found) for a version loaded after the
+archive was taken, which is simply absent, so there is nothing to withdraw (note it as a lost
+newer version, as above); **exit 12** (outcome unknown): re-run the same command, which is safe.
 
 The append-only guard is never switched off: the data is loaded first and the triggers are
 created after it, as part of a normal restore. **That also means a restore is the one way decided
@@ -451,8 +455,15 @@ through the insert triggers, which still check and stamp every row. It never run
   (`tests/integration/test_a7_seed_knowledge.py`); another runs the script's refusals against a
   fake `docker` (`tests/unit/test_a7_seed_script.py`).
 
-Steps (on a developer machine with its own `docker/secrets` and `docker/production.env`, never on
-the owner's production host). Every compose command goes through `$C`, which names the throwaway
+Steps (on a developer machine with its own `docker/secrets` and `docker/production.env`; **not on
+the owner's production host unless the owner decides otherwise**. The owner did so on 2026-11-11
+for run 1, because the `single_database` check refuses while two compose `db` containers run and
+no other machine was available. If so: stop production first, with test secrets and env in a
+separate worktree and the model at `127.0.0.1:9`, `throwaway-*` projects only, a test image tag,
+never `divesafe-api:local`; only stop and start the production containers, never touch the
+production volume; and if any step fails, stop and restart production at once, before
+investigating. Run 1 left production stopped for about 6h20m instead of 5-10 minutes because the
+restart waited for the investigation.) Every compose command goes through `$C`, which names the throwaway
 project with `-p` and adds a test-only override that sets a **test image tag**; nothing here builds,
 tags or runs `divesafe-api:local`, and nothing touches a `divesafe-prod` project. Never add
 `--build` to a `$C` command. The work directory is outside the repository and is **never** the
@@ -560,7 +571,11 @@ in the production backup directory, and delete them with it.
   restore of a database with knowledge rows, the role-before-restore order and the "used database"
   check. The rows come from the test-only seed above, never from `kb_load`. The fake `docker`
   cannot run SQL; the fact queries were run once against empty PostgreSQL 16 and 17 test
-  databases. **Required before the first production load.**
+  databases. **Run 1 (2026-11-11) failed** at `db-init` after the restore (the lost function
+  revoke, fixed above; everything before the restore matched this document). **A re-run is
+  required before the first production load.** The live restore test restores as `postgres`,
+  not `divesafe_owner`, so the re-run is the end-to-end check; the backup manifest has no fact
+  for function ACLs, so only the restore's read-back detects a lost revoke.
 - The read-only post-restore check (documents, versions, manifest hashes and latest status) is
   the restore's closing report; there is no separate command to run it again later (its SQL is
   given under the recovery above, to run by hand).
