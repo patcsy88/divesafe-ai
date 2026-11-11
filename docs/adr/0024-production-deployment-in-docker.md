@@ -1247,9 +1247,9 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   the wrong version; an operator in bad faith, or the loader credential used through `psql`, is
   caught only by process controls (ADR 0022 condition 4). (2) **The loader can approve its own
   load technically**: the credential can insert an APPROVED event. Approval is a process control by
-  the dive professional, recorded in the private approval record; **this ADR does not name a path
-  for that record** (the owner and the dive professional choose it, ADR 0022 "Still open"), so the
-  control is not yet defined. (3) The corpus mount is outside the repository by operator discipline
+  the dive professional, recorded in the private approval record; ~~this ADR does not name a path
+  for that record~~ (since 2026-11-12: `/Users/patcsy88/DiveSafe/records/approval-record.csv`, A7
+  R1), and the control is a file the dive professional writes, not something the code checks. (3) The corpus mount is outside the repository by operator discipline
   and the `.gitignore` entry, **plus a mandatory `.dockerignore` line for the corpus staging
   location, pinned by a test** (`up -d --build` would otherwise bake licensed text into the image
   if it were staged in the repository). (4) Anyone who can run `docker compose` or `docker run` on the host
@@ -1422,16 +1422,23 @@ condition; the mutation check is to break the compose file once and watch it fai
   (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`). Mutations: see A8
   "Build state".
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
-  (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
-  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume (**done, run 2 passed
+  (1) the **withdrawal log's location** is settled (**done 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv`, ADR 0022 "Still open"); (2) the owner's
+  **re-acknowledgement of ADR 0022 decision 11** (**done 2026-11-12**); (3) the **A7 hand run** on a throwaway volume (**done, run 2 passed
   2026-11-12**); (4) **ADR 0022 condition 10**
   (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
   remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
-  each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
+  each source (**waived for the MVP by the owner, 2026-11-12**: the manifest fields stay
+  required and the loader still refuses without them; no separate evidence is held; ADR 0022
+  Known gap 31); (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
   tested and reviewed (owner decision, 2026-10-23; **done 2026-11-12**, the Unicode 16.0.0
   `Default_Ignorable_Code_Point` set, `5bccb3f`..`7a5f849`, reviewed, no blockers). Until then
-  slice 2 used a `unicodedata`-based approximation, for development only. **Open on 2026-11-12:
-  (1), (2) and (5).** **Added by the slice 2
+  slice 2 used a `unicodedata`-based approximation, for development only. **On 2026-11-12 every
+  gate is closed or, (5), waived.** The private approval record is
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (owner decision 2026-11-12). **This does
+  not enable the production load:** `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is
+  unchanged; flipping it is a separate code change reviewed by both reviewers, and deploying the
+  new image is a separate step. **Added by the slice 2
   review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
   id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
@@ -1540,8 +1547,14 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     this stack is small, because every knowledge item is withheld (A4, "The API and knowledge").
     The report and the post-restore check also list approvals with `hash_checked = false`.
     Re-applying a version that is already WITHDRAWN gets its own fixed message and exit status and
-    writes nothing (A3), so the step can be repeated. The log has no home yet (gap 3), and **the
-    first production load stays gated on its location** (owner open item).
+    writes nothing (A3), so the step can be repeated. **The log's home (owner decision
+    2026-11-12):** `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (mode 600, folder 700;
+    outside the repository, the database and its backups), columns
+    `document_id,version,recorded_at_utc,reason,withdrawn_by`; after every `withdraw` append a
+    line with the printed `recorded_at`, take a backup, copy the file next to the newest archive.
+    The approval record sits beside it (`approval-record.csv`, columns
+    `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`, same handling after
+    every `approve`). Plain CSV on one Mac: gap 3.
   - **Grants after a restore.** `pg_dump` without `--create` carries no database ACLs, so `PUBLIC`
     has **EXECUTE on the knowledge functions** after the load (the restore uses `--no-acl`).
     ~~`db_init` revokes it on every run.~~ **Wrong, found by hand run 1 (2026-11-11):** `migrate()`
@@ -1637,8 +1650,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   a throwaway volume (run 1, 2026-11-11, FAILED at `db-init`; **run 2, 2026-11-12, PASSED**;
   above).
   (2) The digest detects damage, not tampering, as today (the manifest sits next to its archive).
-  (3) The withdrawal log has no defined home, so R1 depends on the operator keeping it, and
-  **nothing technically stops the API starting before the re-apply** (operator discipline). (4) The
+  (3) The withdrawal log and the approval record (homes decided 2026-11-12) are plain CSV files
+  on one Mac with no integrity protection; a copy exists only with the backups (a disk loss before
+  a backup loses entries) and the copy step is operator discipline, so R1 still depends on the
+  operator keeping them; and **nothing technically stops the API starting before the re-apply**
+  (operator discipline). (4) The
   count and digest cover what is in the tables; they do not show that a text matches its approved
   manifest (ADR 0022 condition 5 is separate). (5) ~~A restore that is not followed by `db-init`
   leaves `PUBLIC` EXECUTE on the knowledge functions~~ (corrected 2026-11-11: `restore.sh` now
@@ -1697,7 +1713,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The loader can approve its own load technically**; approval is a process control by the dive
   professional (A3).
 - **The manifest hash check is client-side** (A3).
-- **The private approval record** has no path in this ADR, and the withdrawal log (A7) depends on it.
+- **The private approval record** ~~has no path in this ADR~~ is
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (owner decision 2026-11-12; A7 R1);
+  the withdrawal log (A7) sits beside it.
 - **The loader role and password are not covered by the backup**, as the other roles are not
   (see the existing `docs/backup-and-restore.md` table): after a restore into a new volume the
   role script must be run again, before `restore.sh` (A7).
@@ -1824,9 +1842,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   issue, so the A7 report and post-restore check are the only way the operator sees the unchecked
   approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
-- **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
-  ADR 0022 decision 11 (A6). The first production load has further gates (A6,
-  "First-production-load gates"; the default-ignorable table is done, 2026-11-12).
+- ~~Two owner items gate shipping~~ **Both settled 2026-11-12:** the withdrawal log's location
+  and the re-acknowledgement of ADR 0022 decision 11 (A6). Every first-production-load gate is
+  closed or waived (licence evidence, MVP); the code switch `PRODUCTION_LOAD_GATES_CLOSED`
+  is still `False` and its flip is a separate reviewed change (A6).
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
   - The role script's check of an **existing** role ignores `rolconnlimit`, `rolvaliduntil`,
@@ -1933,11 +1952,13 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   - **Still needed before production use** (updated 2026-11-12): ~~review of every change~~
     (done); ~~the A7 hand run~~ (run 1 on 2026-11-11 failed at `db-init` after the restore;
     fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; **run 2 on 2026-11-12 passed**, see
-    A7 "Hand run 2"); the owner gates
-    (withdrawal-log location, decision 11 re-acknowledgement, ~~the default-ignorable code point
-    table~~ (built 2026-11-12), per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
-    owner's `docker/production.env`~~ (done 2026-11-11). The A6 branch rule is lifted (owner
-    decision 2026-11-11); the production load gate stands.
+    A7 "Hand run 2"); ~~the owner gates~~ (all settled 2026-11-12: withdrawal-log and
+    approval-record locations, decision 11 re-acknowledged, the default-ignorable table built,
+    per-source licence and `display_permitted` evidence waived for the MVP, Known gap 31).
+    ~~`DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env`~~ (done 2026-11-11). The A6
+    branch rule is lifted (owner decision 2026-11-11). **Still needed:** the owner's site
+    documents in the corpus directory (empty today; none are invented); the reviewed code change
+    that flips `PRODUCTION_LOAD_GATES_CLOSED` (both reviewers); deploying the new image.
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.

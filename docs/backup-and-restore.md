@@ -214,8 +214,12 @@ Then:
    backup time is taken before the dump, so a withdrawal logged a little earlier may be in the
    archive or not: compare with the report, never with the clock. A v2 approved after the archive
    is simply absent and a superseded v1 governs again: re-load v2, or withdraw v1. **Nothing stops
-   the API starting before this step** (operator discipline). The withdrawal log has no agreed
-   home yet; the first production load waits for one.
+   the API starting before this step** (operator discipline). The withdrawal log is
+   `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (owner decision 2026-11-12; columns
+   `document_id,version,recorded_at_utc,reason,withdrawn_by`), with a copy next to the newest
+   archive; the approval record `approval-record.csv` sits beside it. Both are plain CSV on one
+   Mac with no integrity protection; if the live file is lost, the copy by the archive is all
+   there is.
 10. Reconcile (below), then start the API: `... up -d --wait api`. `db-init` checks the schema
     again ("schema is up to date"), and the API starts only if its start-up checks pass.
 11. Take a backup.

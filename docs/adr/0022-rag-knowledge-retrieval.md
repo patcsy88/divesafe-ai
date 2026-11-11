@@ -1629,17 +1629,34 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 
 ### Still open
 
-- The licence or permission of each source and the `display_permitted` evidence for it (per
-  source, before any load).
+- ~~The licence or permission of each source and the `display_permitted` evidence for it~~
+  **Waived for the MVP (owner decision 2026-11-12).** The manifest still requires `licence`,
+  `licence_reference`, `display_permitted: true` and `display_permission_reference` and the loader
+  refuses otherwise (nothing in code changes); the owner fills them in without holding separate
+  evidence on file. The right to use each source stays the owner's responsibility. Waived, not
+  closed: Known gap 31; revisit before any use beyond the MVP. No source is invented: the owner
+  supplies the site documents into `DIVESAFE_CORPUS_DIR` (`/Users/patcsy88/DiveSafe/corpus`,
+  empty today).
 - ~~Whether production should refuse to start when the knowledge connector is not configured~~
   **Decided 2026-11-12:** production always refuses without it (`37a7537`; decision 14).
-- Where the private approval record lives (outside the system and outside the repository; the
-  owner and the dive professional choose and keep it).
-- **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
-- **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
-  lock, self-check after commit, exit-status precedence); it gates shipping. Still open after the
-  ADR 0024 A1 to A7 build (2026-11-09): the build implements the changed decision as written and
-  does not settle this.
+- ~~Where the private approval record lives~~ **Decided 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (mode 600, folder 700; outside the
+  repository, the database and its backups), columns
+  `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`. A line after every
+  `approve`, then a backup and a copy of the file next to the newest archive.
+- ~~Where the withdrawal log lives~~ **Decided 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (same folder and handling), columns
+  `document_id,version,recorded_at_utc,reason,withdrawn_by`. Per ADR 0024 A7 R1: after every
+  `withdraw`, append a line with the `recorded_at` that `withdraw` prints, take a backup, and copy
+  the file next to the newest archive. The restore runbook's re-apply step reads this file.
+  Both files: Known gap 32.
+- ~~The owner's re-acknowledgement of the changed decision 11~~ **Re-acknowledged by the owner on
+  2026-11-12** (`withdraw` exempt from the global lock, self-check after commit, exit-status
+  precedence).
+- **State on 2026-11-12:** every first-production-load gate in ADR 0024 A6 is closed or, for the
+  licence evidence, waived by the owner. **The production load is not enabled by this:** the code
+  switch `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is unchanged; flipping it is a
+  separate code change reviewed by both reviewers, and deploying the new image is a separate step.
 - ~~The decision 13 default-ignorable code point table~~ **Built 2026-11-12** (owner decision;
   decision 13): the Unicode 16.0.0 `Default_Ignorable_Code_Point` set replaces the
   approximation; this first-production-load gate is closed.
@@ -1703,7 +1720,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
   a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
 
-### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring, 26-30 after the 2026-11-12 owner decisions)
+### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring, 26-32 after the 2026-11-12 owner decisions)
 
 1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
    `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
@@ -1805,6 +1822,14 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     recorded in `tests/fixtures/README.md`). The in-test table mutants test the comparison; the
     hand mutations (5/5 caught) are the real evidence. The parser does not check each line's
     `[n]` count; the total covers it.
+31. **Licence and `display_permitted` evidence waived for the MVP (owner decision 2026-11-12).**
+    The manifest fields are still required and the loader still refuses without them, but no
+    separate evidence is held on file; the owner carries the responsibility for the right to use
+    each source. Waived, not closed: revisit before any use beyond the MVP.
+32. **The withdrawal log and the approval record are plain CSV files on one Mac**
+    (`/Users/patcsy88/DiveSafe/records/`): no integrity protection, and a copy exists only with
+    the backups, so a disk loss before a backup loses entries. The copy after every `approve` or
+    `withdraw` is operator discipline.
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the

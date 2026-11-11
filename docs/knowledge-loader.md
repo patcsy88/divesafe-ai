@@ -97,9 +97,18 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
 
 - Run `approve` only after the dive professional has recorded approval of that manifest hash in
   the private approval record, and copy the hash from that record. Do not compute it yourself.
-- `withdraw` prints the `recorded_at` of the WITHDRAWN event. Write it in the withdrawal log
-  (version, `recorded_at`, reason). **The log's location is not settled yet** (an owner gate).
-- Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1).
+- `withdraw` prints the `recorded_at` of the WITHDRAWN event. Append a line to the withdrawal
+  log, `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (owner decision 2026-11-12; columns
+  `document_id,version,recorded_at_utc,reason,withdrawn_by`; mode 600, folder 700, outside the
+  repository, the database and its backups). The approval record is `approval-record.csv` in the
+  same folder (columns `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`);
+  append a line after every `approve`.
+- Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1), and copy the file
+  you just appended to next to the newest archive. Plain CSV, no integrity protection: the copy
+  is the only other one.
+- Licence and `display_permitted` evidence: waived for the MVP (owner decision 2026-11-12). The
+  manifest fields are still required and the loader still refuses without them; the owner fills
+  them in and carries the responsibility for the right to use each source (ADR 0022 Known gap 31).
 - The hash is not a secret, but it is visible in shell history and in `docker ps` while the
   run container exists.
 - Backup and restore refuse while a `kb_load` or `kb_withdraw` container exists. Use `--rm`.
@@ -143,4 +152,5 @@ set back (ADR 0022 Known gaps). Fallback (a) fails the same way. Use (b), then a
 See [backup-and-restore.md](backup-and-restore.md). Archives contain the licensed corpus text.
 After a restore into a new volume the loader role must be created again (section 2) **before**
 `restore.sh`, and withdrawals made after the archive was taken must be re-applied from the
-withdrawal log before the API starts.
+withdrawal log (`/Users/patcsy88/DiveSafe/records/withdrawal-log.csv`, or its copy by the
+archive) before the API starts.
