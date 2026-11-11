@@ -1950,11 +1950,22 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       offline `pytest -m safety` run** because it needs a database; it runs in CI. That conflicts
       with AGENTS.md section 4 ("`pytest -m safety` MUST always pass", with tests offline).
       **Resolved by owner decision 2026-11-12 (`73afc1c`, AGENTS.md section 4):** `pytest -m
-      safety` never skips, with two documented exceptions off CI, this test without
-      `DIVESAFE_TEST_DATABASE_URL` and the case-only path check in
-      `tests/evaluation/test_capture_item6_offline.py` on a case-sensitive volume; CI runs the
-      safety suite with a database and fails on any other skip. The offline pins stay in
+      safety` never skips, with two documented exceptions: this test without
+      `DIVESAFE_TEST_DATABASE_URL` (never in CI, which has a database) and the case-only path
+      check in `tests/evaluation/test_capture_item6_offline.py` on a case-sensitive volume (always
+      on Linux CI, so it runs only on a case-insensitive developer volume). CI runs the safety
+      suite with `--color=no` and fails on any line containing `SKIPPED` except that anchored
+      one (`ce20494`; pinned and mutation-checked by `tests/safety/test_safety_suite_ci_guard.py`;
+      both reviewers, no blockers, no should-fix). The offline pins stay in
       `tests/safety/test_kb_load_production_gate.py`.
+    - **Gaps of that safety-skip guard (nits, not fixed):** a skip that prints no `SKIPPED` line
+      (an empty or cut-short log, `-rs` overridden, the terminal reporter turned off in config)
+      passes; requiring pytest's final summary line would close it. `if:` on the step and a
+      job-level `continue-on-error` are not pinned. The allow pattern covers any line of
+      `test_capture_item6_offline.py` with that reason, not one test. A passing test whose id
+      contains `SKIPPED` and that emits a warning would fail the guard (a loud false failure; rename
+      the test, never weaken the guard). Like the other guards it sees only skips: a non-strict
+      `xfail`, `xfail(run=False)` or a removed `safety` marker is caught only by review.
     - `docs/backup-and-restore.md` step 9 and the recovery paragraph now say what exits 10 and 12
       of `kb_withdraw` mean when re-applying every logged withdrawal (done in this change).
 
