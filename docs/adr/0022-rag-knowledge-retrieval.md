@@ -1521,8 +1521,8 @@ next stage and lands as one change, with **no feature-flagged half state** (owne
 9. **`withheld()` hides `model_host` from create-only keys** in the same commit as the egress
    wiring (decision 15; owner decision 2026-11-06).
 10. **Older stored records are checked before deploy** for now-refused forms (a KNOWLEDGE item
-    without a `kb:` id, or a `kb:` id on another kind); believed to be zero rows since no knowledge
-    connector was ever wired (Known gaps).
+    without a `kb:` id, or a `kb:` id on another kind). **Checked 2026-11-12: zero rows** (Known
+    gaps 24).
 
 **Status (2026-11-10): wired** in `orchestration.pipeline`; conditions 1-9 are met and tested in
 `tests/agent/test_retrieve_wiring.py` (safety marker, each with a mutation check); condition 10
@@ -1757,8 +1757,12 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     ("no site documents were available, or retrieving them failed") is cautious but imprecise.
 23. **`KnowledgeConnector.fetch` still exists**; only `gather_evidence` calls it, the pipeline
     never does (it calls `retrieve`). Dead on the live path.
-24. **Wiring condition 10 remains open (operations):** check stored records for now-refused forms
-    before deploy (also gap 5).
+24. **Wiring condition 10: checked on 2026-11-12 (closed).** A read-only query on the production
+    database (`BEGIN READ ONLY`, as the bootstrap role, over `evidence` and `withheld_evidence` of
+    every stored record) found 1 record, 15 evidence items, data kinds forecast, model and notice
+    only: 0 KNOWLEDGE items without a `kb:` id, 0 `kb:` ids on another kind, 0 items missing an id
+    or kind. Gap 5 does not apply to the records held on that date; a record stored by an older
+    image after this check is not covered.
 25. **The knowledge half of the citation guard (decision 8) is still not built**; a GO or CAUTION
     citing a knowledge item is not yet flagged (unreachable today: no signed limits).
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
