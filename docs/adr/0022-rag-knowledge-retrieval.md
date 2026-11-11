@@ -1658,7 +1658,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   switch `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is unchanged; flipping it is a
   separate code change reviewed by both reviewers, and deploying the new image is a separate step.
 - **Owner decision 2026-11-12, later the same day: the production load is on.** `b7ce432` flips
-  `PRODUCTION_LOAD_GATES_CLOSED` to `True` (built; review in progress). The check, exit 24 and
+  `PRODUCTION_LOAD_GATES_CLOSED` to `True` (reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`)). The check, exit 24 and
   its message stay, so a one-line reviewed change back to `False` shuts it again; the gate's
   safety tests now run the refusal with the literal patched to `False`, and the AST pin requires
   `True`. Deploying the new image to production is a separate step, not done; the corpus
@@ -1839,11 +1839,14 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     the backups, so a disk loss before a backup loses entries. The copy after every `approve` or
     `withdraw` is operator discipline.
 33. **Production-load switch review (`b7ce432`, 2026-11-12; no blockers).** (a) **Security S1,
-    fix in progress:** with a secrets-directory DSN, `-e DIVESAFE_ENVIRONMENT=development` still
-    allows `--development-no-manifest-hash` (APPROVED with `hash_checked = false`, treated as
-    unchecked by selection, so the site stays at INSUFFICIENT EVIDENCE: fails closed), skips the
-    DSN-shape checks and accepts a relative corpus target; being fixed by treating such a DSN as
-    production for those rules (closing commit to be recorded). (b) `display_permitted: true` is
+    closed by `91fa8fe` (re-reviewed, no blockers, no should-fix):** with a secrets-directory DSN,
+    `-e DIVESAFE_ENVIRONMENT=development` allowed `--development-no-manifest-hash` (APPROVED with
+    `hash_checked = false`, treated as unchecked by selection, so the site stayed at INSUFFICIENT
+    EVIDENCE: failed closed), skipped the DSN-shape checks and accepted a relative corpus target.
+    Now a secrets-directory DSN gets the production hash, DSN-shape and absolute-target rules in
+    every environment. The remaining path is the hand-built connection string already in ADR
+    0024 A8 (an operator who knows the loader password, unsets `DIVESAFE_SECRETS_DIR`, outside
+    production). (b) `display_permitted: true` is
     only the owner's own statement under the waiver (gap 31); a licensing risk, not a dive-safety
     one. (c) **What loaded knowledge can affect:** the model host is remote
     (`remote_external_opt_in`), so every `kb:` item is withheld from prompts; knowledge reaches

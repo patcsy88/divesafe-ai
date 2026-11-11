@@ -141,6 +141,15 @@ A load is holding that document's lock. (1) Stop the `kb_load` run container (th
 the load back) and retry. (2) Or, as the bootstrap superuser, find the loader backend in
 `pg_stat_activity` and run `pg_terminate_backend`. (3) Else use fallback (b) below.
 
+### When `withdraw` exits 3
+
+Since `91fa8fe` (2026-11-12) a loader string read from the secrets directory gets the production
+DSN-shape and absolute-target rules in every environment, and `withdraw` shares that settings
+loader: a relative `DIVESAFE_CORPUS_TARGET` makes it refuse with exit 3 although `withdraw` never
+reads the corpus. An exit-3 `withdraw` is a configuration problem: fix the setting and re-run;
+never skip the withdrawal. `make-secrets.sh` output already passes these rules, so a production
+`withdraw` is unaffected.
+
 ### When `withdraw` cannot run at all
 
 (The loader role is damaged or missing, a compose or image fault, or `DIVESAFE_CORPUS_DIR` is

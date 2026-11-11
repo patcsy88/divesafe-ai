@@ -32,7 +32,7 @@
   built from `3bb2811`, with production stopped for 32 seconds (A7 "Hand run 2"); **A7 is done.**
   The owner gates in A6 remain, and the production load gate (exit 24) still stands. **Update,
   2026-11-12: every A6 gate is closed or waived and the production load is on** (`b7ce432`,
-  `PRODUCTION_LOAD_GATES_CLOSED = True`, built, review in progress; the refusal stays in the code;
+  `PRODUCTION_LOAD_GATES_CLOSED = True`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); the refusal stays in the code;
   the new image is not deployed; the corpus is empty; A6 "Production load on"). Before that: **in production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
@@ -1443,7 +1443,7 @@ condition; the mutation check is to break the compose file once and watch it fai
   not enable the production load:** `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is
   unchanged; flipping it is a separate code change reviewed by both reviewers, and deploying the
   new image is a separate step. **Production load on (owner decision 2026-11-12, later the same
-  day):** `b7ce432` flips `PRODUCTION_LOAD_GATES_CLOSED` to `True` (built; review in progress).
+  day):** `b7ce432` flips `PRODUCTION_LOAD_GATES_CLOSED` to `True` (reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`)).
   The check, exit 24 and its message stay, so a one-line reviewed change back to `False` shuts
   it again; `tests/safety/test_kb_load_production_gate.py` now runs the refusal with the literal
   patched to `False`, and its AST pin requires `True`. **Switching off:** the one-line reviewed
@@ -1859,7 +1859,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   and the re-acknowledgement of ADR 0022 decision 11 (A6). Every first-production-load gate is
   closed or waived (licence evidence, MVP); the code switch `PRODUCTION_LOAD_GATES_CLOSED`
   is still `False` and its flip is a separate reviewed change (A6). Flipped to `True` later on
-  2026-11-12 (`b7ce432`, built, review in progress; A6 "Production load on"); the image is not
+  2026-11-12 (`b7ce432`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); A6 "Production load on"); the image is not
   deployed and the corpus is empty.
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
@@ -1934,7 +1934,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     set the literal to `True` for their own run, so they keep testing the hash rules that apply
     once the gate is lifted. **Lifted (`b7ce432`, owner decision 2026-11-12):** the literal is
     `True`; the gate tests patch it to `False` for the refusal cases and the AST pin requires
-    `True`; the hash-rule tests no longer need to set it. Built; review in progress.
+    `True`; the hash-rule tests no longer need to set it. Reviewed: (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`).
   - **Harder gate (`8eface8`; owner decision 2026-11-09, round 3):** `load` and `approve` also
     refuse when the loader string came from the secrets directory, in any environment
     (`LoaderSettings.dsn_from_secrets_dir`); the docs now say what the gate does not stop (A8).
@@ -1979,12 +1979,27 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     progress); deploying the new image (not done).
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
-    - **Security S1 (fix in progress):** with a secrets-directory DSN,
-      `-e DIVESAFE_ENVIRONMENT=development` still allows `--development-no-manifest-hash` (writes
-      APPROVED with `hash_checked = false`, which selection treats as unchecked, so the site stays
-      at INSUFFICIENT EVIDENCE: fails closed), skips the DSN-shape checks and accepts a relative
-      corpus target. Being fixed by treating a secrets-directory DSN as production for those
-      rules; the closing commit will be recorded here.
+    - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
+      blockers, no should-fix): with a secrets-directory DSN, `-e DIVESAFE_ENVIRONMENT=development`
+      allowed `--development-no-manifest-hash` (APPROVED with `hash_checked = false`, which
+      selection treats as unchecked, so the site stayed at INSUFFICIENT EVIDENCE: failed closed),
+      skipped the DSN-shape checks and accepted a relative corpus target. Now a secrets-directory
+      DSN gets the production hash, DSN-shape and absolute-target rules in every environment
+      (`withdraw` shares the settings loader, so it gets the shape and target rules too; see
+      `docs/knowledge-loader.md`). The remaining path is the hand-built connection string above
+      (an operator who knows the loader password and unsets `DIVESAFE_SECRETS_DIR`, outside
+      production). **Nits from the re-review (not fixed):** `loader_settings.py` line 57's
+      comment says the field only gates `load`/`approve`, but it now also turns on the production
+      rules; the refusal messages near lines 116, 132 and 183 say "production" but also fire for a
+      secrets-directory DSN in other environments (no values leak);
+      `test_mutation_the_literal_back_to_false_fails_the_on_tests` is caught by the dev-flag
+      assertion (exit 24, not 15) before the write check its docstring describes;
+      `gets_past_the_gate_in_production`'s production-plus-environment-DSN case is a `run()`-level
+      case that `load_loader_settings` never produces (label it); the new secrets-directory shape
+      and target settings tests do not `chdir(tmp_path)`, so a repository-root `.env` would make
+      them pass for the wrong reason (the paired mutants would go red; no `.env` exists today or in
+      CI); the shape mutant test stops at the first accepted bad URL, so each string is not pinned
+      separately.
     - **`display_permitted: true` is only the owner's own statement** under the MVP waiver (ADR
       0022 Known gap 31). A licensing risk, not a dive-safety risk.
     - **What loaded knowledge can affect in production:** the model host is remote
@@ -2041,7 +2056,7 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refused in code
   until the A6 gates were closed (also from the secrets directory in any environment; not a
   control against an operator with Docker access, A8); **since `b7ce432` (2026-11-12) the load
-  is on** (A6 "Production load on"; built, review in progress; image not deployed; corpus
+  is on** (A6 "Production load on"; reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); image not deployed; corpus
   empty). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
