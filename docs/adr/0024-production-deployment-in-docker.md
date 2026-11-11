@@ -1056,7 +1056,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
       13 also asks for a default-ignorable code point table; the code says it has not built it
       (`clean_text` is an approximation). **Owner decision, 2026-10-23: the table is a gate for
       the first production load** (see "Remaining questions", item 7); slice 2 uses a
-      `unicodedata`-based approximation until then.
+      `unicodedata`-based approximation until then. **Built 2026-11-12** (ADR 0022 decision 13;
+      the Unicode 16.0.0 `Default_Ignorable_Code_Point` set); the gate is closed.
     - **Hash computation.** `manifest_sha256` is the SHA-256 (lower-case hex) of the manifest
       file's raw bytes as read, before parsing (ADR 0022 decision 7). Each file hash covers the
       whole file's bytes; each chunk hash covers `data[start:end]`. The three mismatches are three
@@ -1093,6 +1094,7 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
          decision 11 re-acknowledgement, the A7 hand run, ADR 0022 condition 10, licence and
          `display_permitted` evidence per source). **Slice 2 uses a `unicodedata`-based
          approximation until the table exists**; the approximation is not accepted for production.
+         **Closed 2026-11-12:** the table is built (ADR 0022 decision 13).
       8. **A repeated `load` is left to the database refusal (exit 11);** no separate exit status.
          Approved.
     - Q10. The compose profile name (A3 says "for example `knowledge`"), and the process and
@@ -1426,8 +1428,10 @@ condition; the mutation check is to break the compose file once and watch it fai
   (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
   remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
   each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
-  tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
-  `unicodedata`-based approximation, which is for development only. **Added by the slice 2
+  tested and reviewed (owner decision, 2026-10-23; **done 2026-11-12**, the Unicode 16.0.0
+  `Default_Ignorable_Code_Point` set, `5bccb3f`..`7a5f849`, reviewed, no blockers). Until then
+  slice 2 used a `unicodedata`-based approximation, for development only. **Open on 2026-11-12:
+  (1), (2) and (5).** **Added by the slice 2
   review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
   id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
@@ -1821,8 +1825,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
 - **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
-  ADR 0022 decision 11 (A6). The first production load has further gates, including the
-  default-ignorable code point table (A6, "First-production-load gates").
+  ADR 0022 decision 11 (A6). The first production load has further gates (A6,
+  "First-production-load gates"; the default-ignorable table is done, 2026-11-12).
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
   - The role script's check of an **existing** role ignores `rolconnlimit`, `rolvaliduntil`,
@@ -1930,8 +1934,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     (done); ~~the A7 hand run~~ (run 1 on 2026-11-11 failed at `db-init` after the restore;
     fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; **run 2 on 2026-11-12 passed**, see
     A7 "Hand run 2"); the owner gates
-    (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable code point
-    table, per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
+    (withdrawal-log location, decision 11 re-acknowledgement, ~~the default-ignorable code point
+    table~~ (built 2026-11-12), per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
     owner's `docker/production.env`~~ (done 2026-11-11). The A6 branch rule is lifted (owner
     decision 2026-11-11); the production load gate stands.
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
