@@ -500,7 +500,7 @@ UNICODE_EXTRACT = (
 # sha256 of the extract file (header lines plus the unmodified Default_Ignorable_Code_Point section
 # of https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt, whose own sha256 is in the
 # header). Changing the file needs a Unicode review (ADR 0022 decision 13).
-UNICODE_EXTRACT_SHA256 = "54b1e6f3ee2eb15a5dd9220164b28a5327ac215ad211521dd8e66b20b9c4332e"
+UNICODE_EXTRACT_SHA256 = "ceb9c1f14f59aba02f67671c9270ee12c0fd98437041b3939c79392233cdb89d"
 OFFICIAL_SHA256 = "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd"
 IGNORABLE_RULE = "    if default_ignorable(ch):\n        return False\n"
 

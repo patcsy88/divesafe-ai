@@ -2,9 +2,9 @@
 # Date: 2024-05-31, 18:09:32 GMT
 # © 2024 Unicode®, Inc.
 # Extract: the Default_Ignorable_Code_Point section only, lines unmodified.
-# Source: https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt
+# Source: www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt
 # Source sha256: 39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd
-# Licence: Unicode License v3 (https://www.unicode.org/license.txt)
+# Licence: Unicode License v3 (www.unicode.org/license.txt)
 
 # Derived Property: Default_Ignorable_Code_Point
 #  Generated from
