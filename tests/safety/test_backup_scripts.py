@@ -317,6 +317,15 @@ case "$1" in
           *"REVOKE TEMPORARY ON DATABASE divesafe FROM PUBLIC"*)
             if [ "${FAKE_REVOKE_FAIL:-0}" = 1 ]; then exit 1; fi
             ;;
+          *"REVOKE EXECUTE ON FUNCTION public.kb_"*)
+            echo "fn-revoke" >>"$FAKE_LOG"
+            if [ "${FAKE_FN_REVOKE_FAIL:-0}" = 1 ]; then exit 1; fi
+            ;;
+          *"pg_catalog.aclexplode(p.proacl)"*)
+            echo "fn-acl" >>"$FAKE_LOG"
+            if [ "${FAKE_FN_ACL_FAIL:-0}" = 1 ]; then exit 1; fi
+            echo "${FAKE_FN_ACL-5 5}"
+            ;;
           *"BEGIN READ ONLY"*)
             if [ "${FAKE_REPORT_FAIL:-0}" = 1 ]; then exit 1; fi
             echo "latest assessment created (UTC): 2026-10-18T10:00:00Z"
@@ -901,3 +910,68 @@ def test_backup_and_restore_refuse_when_docker_cannot_list_the_loader_containers
     result = h.run("restore.sh", str(dump), FAKE_LOADER_PS_FAIL="1")
     assert result.returncode != 0 and "could not list 'kb_load' containers" in result.stderr
     assert "pg_restore" not in h.calls()
+
+
+KB_GUARD_FUNCTIONS = (
+    "kb_no_update_delete",
+    "kb_no_truncate",
+    "kb_documents_insert",
+    "kb_chunks_insert",
+    "kb_status_events_insert",
+)
+
+
+def test_the_restore_takes_execute_on_every_knowledge_guard_function_back_from_public() -> None:
+    """A7 hand run (2026-11-11): `pg_restore --no-acl` drops migration 4's REVOKE EXECUTE ... FROM
+    PUBLIC, a NULL proacl lets PUBLIC execute the SECURITY DEFINER guards, and db-init (which only
+    checks) then stops. Each of the five must be revoked after the load and before the comparison
+    and the report, and the read-back must name all five and accept only "5 5"."""
+    from divesafe.services.migrations import KNOWLEDGE_FUNCTIONS
+
+    assert set(KB_GUARD_FUNCTIONS) == set(KNOWLEDGE_FUNCTIONS.values())
+    code = _code("restore.sh")
+    load = code.index("in_db_owner pg_restore")
+    for fn in KB_GUARD_FUNCTIONS:
+        line = f'  "REVOKE EXECUTE ON FUNCTION public.{fn}() FROM PUBLIC;"'
+        assert code.count(line) == 1, fn
+        assert load < code.index(line) < code.index('guard_acl="$(') < code.index('report="$('), fn
+    check = code[code.index('guard_acl="$(') : code.index('got="$(read_live)"', load)]
+    assert "READ ONLY" in check and "p.proacl IS NOT NULL" in check
+    assert "aclexplode(p.proacl) x WHERE x.grantee <> p.proowner" in check
+    names = check[check.index("p.proname IN (") : check.index(");", check.index("p.proname IN ("))]
+    assert sorted(re.findall(r"'([a-z_]+)'", names)) == sorted(KB_GUARD_FUNCTIONS)
+    assert "nspname = 'public'" in check
+    assert '[ "$guard_acl" != "5 5" ]' in check and "Do not start the api" in check
+
+
+@pytest.mark.parametrize(
+    ("env", "case"),
+    [
+        ({"FAKE_FN_REVOKE_FAIL": "1"}, "revoke fails"),
+        ({"FAKE_FN_ACL_FAIL": "1"}, "read-back fails"),
+        ({"FAKE_FN_ACL": "4 5"}, "one still open to PUBLIC"),
+        ({"FAKE_FN_ACL": "4 4"}, "one missing"),
+        ({"FAKE_FN_ACL": "6 6"}, "one too many"),
+        ({"FAKE_FN_ACL": ""}, "nothing read"),
+    ],
+)
+def test_the_restore_stops_when_a_guard_function_stays_executable_by_others(
+    h: Harness, env: dict[str, str], case: str
+) -> None:
+    dump = _restore_inputs(h)
+    result = h.run("restore.sh", str(dump), **env)
+    assert result.returncode != 0, case
+    assert "Do not start the api" in result.stderr, case
+    assert "the grants are NOT yet applied" not in result.stderr, case
+    assert "restored and matched the manifest" not in result.stderr, case
+
+
+def test_the_restore_runs_the_function_revoke_and_its_check_on_the_happy_path(h: Harness) -> None:
+    dump = _restore_inputs(h)
+    ok = h.run("restore.sh", str(dump))
+    assert ok.returncode == 0, ok.stderr
+    assert "a knowledge guard function may be executed" not in ok.stderr
+    calls = h.calls().splitlines()
+    assert calls.count("fn-revoke") == 1 and calls.count("fn-acl") == 1
+    load = next(i for i, x in enumerate(calls) if x.startswith("exec pg_restore"))
+    assert load < calls.index("fn-revoke") < calls.index("fn-acl")

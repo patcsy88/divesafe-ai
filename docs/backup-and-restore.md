@@ -241,9 +241,22 @@ and for later ones commit `915285c` (the scripts are unchanged from `6840d2b` th
 Only then does it load the archive, as `divesafe_owner`, in one transaction
 (`--single-transaction --exit-on-error`, `--no-owner --no-acl`), so for an archive made by
 `backup.sh` a failure leaves the database empty. (An archive made by hand can contain statements
-that end the transaction early; that is one more reason to restore only your own archives.) Grants come only from `db-init` (a restored function gets PostgreSQL's default `EXECUTE`
-for everyone). Afterwards it reads the restored database and compares it with the manifest again,
-then revokes `TEMPORARY` on the database from `PUBLIC` (extra protection only:
+that end the transaction early; that is one more reason to restore only your own archives.) Table
+and sequence grants come only from `db-init`. `--no-acl` also drops every function ACL, and a
+function with no ACL gets PostgreSQL's default: everyone may `EXECUTE` it. For the five
+`SECURITY DEFINER` knowledge guard functions (`kb_no_update_delete`, `kb_no_truncate`,
+`kb_documents_insert`, `kb_chunks_insert`, `kb_status_events_insert`), migration 4 revokes that
+default. `db-init` only **checks** it and stops with "the knowledge guard is not intact after
+migrating: a role other than the owner may EXECUTE ..." (found by the A7 hand run, 2026-11-11). So
+right after the load `restore.sh` runs `REVOKE EXECUTE ... FROM PUBLIC` on each of the five, then
+reads them back read-only: each must exist once, with an ACL whose only grantee is its owner. If
+the revoke or the read-back fails, it stops and says not to start the API. (The three
+`assessments_*` guard functions are not `SECURITY DEFINER`, keep the default ACL in the source
+database too, and are not affected.) **The backup facts do not cover function ACLs:**
+`guard_defs` and `kb_guard_defs` hash `pg_get_functiondef`, which does not include the ACL, and the
+scratch server also loads with `--no-acl`. So the trial load and both manifest comparisons match
+whatever the ACLs are; this read-back is the check. Afterwards it reads the restored database and
+compares it with the manifest again, then revokes `TEMPORARY` on the database from `PUBLIC` (extra protection only:
 `10-create-app-role.sh` already revoked everything from `PUBLIC`, `db-init` does again, and the
 loader refuses while `PUBLIC` holds TEMP). On a mismatch the data stays committed: it tells you not to start the API, and in that case you
 remove **the restored** volume only (it names it) and start again.
@@ -439,7 +452,8 @@ docker/restore.sh "$W"/backups/divesafe-*.dump
 ```
 
 Expected from `restore.sh`: "restored and matched the manifest: assessments=0 decided=0
-kb_documents=3 kb_status_events=6" (all 19 facts equal); **no** line "TEMP could not be revoked";
+kb_documents=3 kb_status_events=6" (all 19 facts equal); **no** line "TEMP could not be revoked" and
+**no** line about the knowledge guard functions;
 then the report, whose knowledge part is exactly:
 
 ```text
@@ -454,6 +468,7 @@ and finally "the grants are NOT yet applied. next, ...". Then:
 
 ```sh
 owner "SELECT has_database_privilege('public', 'divesafe', 'TEMPORARY')"   # f (TEMP revoked)
+owner "SELECT count(*) FROM pg_proc WHERE proname LIKE 'kb\\_%' AND proacl IS NULL"  # 0
 $C up db-init                                                             # exits 0
 owner "SELECT max(event_order) FROM public.kb_status_events"              # note it: M
 $C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its
