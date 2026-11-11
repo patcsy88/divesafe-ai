@@ -843,11 +843,14 @@ def test_a_raw_writer_locking_documents_in_the_opposite_order_ends_in_a_fixed_re
 
 @pytest.mark.safety
 def test_production_refuses_load_and_approve_and_the_database_is_unchanged(
-    scratch: Scratch, tmp_path: Path
+    scratch: Scratch, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A DRAFT is loaded outside production first. In production, and with a string from the
-    secrets directory in `test`, both commands refuse with the gate's fixed outcome, and every
-    count and status event is as before. withdraw still works."""
+    """A DRAFT is loaded outside production first. With the gate shut (the literal patched back to
+    False: the production load is on since the owner decision of 2026-11-12, and shutting it again
+    is a one-line change), in production, and with a string from the secrets directory in `test`,
+    both commands refuse with the gate's fixed outcome, and every count and status event is as
+    before. withdraw still works."""
+    monkeypatch.setattr(kb_load, "PRODUCTION_LOAD_GATES_CLOSED", False)
     root, digest = _corpus(tmp_path)
     assert _go(_load_args(digest), scratch.loader_dsn, root).status == OK
     before = (scratch.counts(), scratch.events("site-guide"))

@@ -1,15 +1,16 @@
 # The knowledge loader on the production stack (ADR 0024 Amendment 1)
 
 This is a procedure to run by hand. It loads, approves and withdraws site-knowledge documents
-(ADR 0022) on the production compose stack. **No production load may happen yet**: the gates in
-ADR 0024 A6 ("First-production-load gates") are still open, and the code refuses it:
+(ADR 0022) on the production compose stack. **The production load is on**: every gate in
+ADR 0024 A6 ("First-production-load gates") is closed, or waived by the owner (licence evidence),
+and `PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py` is `True` (owner
+decision, 2026-11-12). The refusal stays in the code: while that literal is `False`,
 `kb_load load` and `kb_load approve` exit 24 ("refused: production load gates (ADR 0024 A6) are
 not closed; nothing written") before reading the corpus or connecting, **in production and
 whenever the loader string was read from the secrets directory**, whatever `DIVESAFE_ENVIRONMENT`
 says (so `-e DIVESAFE_ENVIRONMENT=development` on the compose loader does not lift it).
-`withdraw` is not affected. The only switch the code offers is a reviewed change of
-`PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py` (owner decisions,
-2026-11-09).
+`withdraw` is not affected. The only switch the code offers is a reviewed change of that literal
+(owner decisions, 2026-11-09); shutting the gate again is a one-line change back to `False`.
 
 **What the refusal is and is not.** It stops accidents and casual overrides. It does **not** stop
 a determined operator with Docker access: one who replaces the entrypoint (`--entrypoint`), runs
@@ -86,8 +87,8 @@ written).
 
 The loader services start only with the `knowledge` profile, never with `up`. **Never add
 `--build` to these commands and never run `build` with the knowledge profile:** build the image
-only from the deploy commit, with `up -d --build` of the main stack. (Until the gates are closed,
-`load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
+only from the deploy commit, with `up -d --build` of the main stack. (If the gate is ever shut
+again, `load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
 
 ```sh
 $C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>

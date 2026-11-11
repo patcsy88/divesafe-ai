@@ -46,13 +46,16 @@ from divesafe.services.kb_manifest import LoadedCorpus
 FLAG_HASH = "--approved-manifest-sha256"
 FLAG_DEV = "--development-no-manifest-hash"
 
-# Owner decisions (2026-11-09): `load` and `approve` refuse until every gate in ADR 0024 A6
-# ("First-production-load gates") is closed, in production AND whenever the connection string came
-# from DIVESAFE_SECRETS_DIR, whatever DIVESAFE_ENVIRONMENT says. The literal is the only switch
-# the code offers. This stops accidents and casual overrides (`-e DIVESAFE_ENVIRONMENT=...`), not
-# an operator with Docker access who replaces the entrypoint or the module, or hand-builds a
-# connection string outside the secrets directory (ADR 0024 A8). `withdraw` is not affected.
-PRODUCTION_LOAD_GATES_CLOSED = False
+# Owner decisions (2026-11-09): `load` and `approve` refuse (exit 24) while this literal is False,
+# in production AND whenever the connection string came from DIVESAFE_SECRETS_DIR, whatever
+# DIVESAFE_ENVIRONMENT says. The literal is the only switch the code offers. Owner decision
+# 2026-11-12: every ADR 0024 A6 ("First-production-load gates") gate is closed, or waived by the
+# owner (licence evidence), so the production load is on. The check in `run()` stays, so the gate
+# can be shut again with a one-line reviewed change back to False. The refusal stops accidents and
+# casual overrides (`-e DIVESAFE_ENVIRONMENT=...`), not an operator with Docker access who replaces
+# the entrypoint or the module, or hand-builds a connection string outside the secrets directory
+# (ADR 0024 A8). `withdraw` is not affected.
+PRODUCTION_LOAD_GATES_CLOSED = True
 
 
 @dataclass(frozen=True)
