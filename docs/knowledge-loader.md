@@ -10,7 +10,9 @@ not closed; nothing written") before reading the corpus or connecting, **in prod
 whenever the loader string was read from the secrets directory**, whatever `DIVESAFE_ENVIRONMENT`
 says (so `-e DIVESAFE_ENVIRONMENT=development` on the compose loader does not lift it).
 `withdraw` is not affected. The only switch the code offers is a reviewed change of that literal
-(owner decisions, 2026-11-09); shutting the gate again is a one-line change back to `False`.
+(owner decisions, 2026-11-09). **Switching the load off again:** a one-line reviewed change back
+to `False`, then **rebuild and redeploy the image** (`up -d --build` of the main stack from that
+commit); the running image keeps whatever the literal was when it was built.
 
 **What the refusal is and is not.** It stops accidents and casual overrides. It does **not** stop
 a determined operator with Docker access: one who replaces the entrypoint (`--entrypoint`), runs
@@ -113,6 +115,25 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
 - The hash is not a secret, but it is visible in shell history and in `docker ps` while the
   run container exists.
 - Backup and restore refuse while a `kb_load` or `kb_withdraw` container exists. Use `--rm`.
+
+### First production load
+
+The first real load is untested end to end (the A7 hand run 2 ran with the gate shut and used the
+test-only seed, never `kb_load`). Run it as a supervised run, one document, with the new image
+deployed first (a separate step) and the corpus directory holding that one document:
+
+1. `load` it; expect one DRAFT version.
+2. `approve` it with the hash from the approval record; append the approval-record line.
+3. Create one assessment and check its record shows the `kb:` item **withheld**
+   (`withheld_knowledge`, `egress_basis` not `declared_local`), nothing in a prompt.
+4. `withdraw` it once, to prove the path; append the withdrawal-log line with the printed
+   `recorded_at`.
+5. Take a backup; copy both CSVs next to the archive.
+6. Run the post-load check: the A7 closing-report SQL from `docs/backup-and-restore.md`
+   ("The closing report did not run"), read-only as `divesafe_owner`; the version must be listed
+   as WITHDRAWN and no approval with `hash_checked = false`.
+
+If any step refuses, stop and record it; do not retry with a changed environment.
 
 ### When `withdraw` says "lock busy"
 

@@ -1726,7 +1726,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
   a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
 
-### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring, 26-32 after the 2026-11-12 owner decisions)
+### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring, 26-33 after the 2026-11-12 owner decisions)
 
 1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
    `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
@@ -1742,6 +1742,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 5. **Older stored records holding now-refused forms** (a KNOWLEDGE item without a `kb:` id, or a
    `kb:` id on another kind) would fail to load with the fixed integrity error. Believed to be zero
    rows, since no knowledge connector was ever wired; check before deploy (wiring condition 10).
+   **Checked on production 2026-11-12 (`7920715`): zero such rows; see gap 24.** To be rechecked
+   after the deploy.
 6. **The 20-item cut can split the last family mid-document** (owner's choice, decision 12, B1).
    It raises the bound issue, which forces INSUFFICIENT EVIDENCE, but does not follow the
    connector's whole-family-or-nothing rule for a dropped chunk.
@@ -1836,6 +1838,22 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     (`/Users/patcsy88/DiveSafe/records/`): no integrity protection, and a copy exists only with
     the backups, so a disk loss before a backup loses entries. The copy after every `approve` or
     `withdraw` is operator discipline.
+33. **Production-load switch review (`b7ce432`, 2026-11-12; no blockers).** (a) **Security S1,
+    fix in progress:** with a secrets-directory DSN, `-e DIVESAFE_ENVIRONMENT=development` still
+    allows `--development-no-manifest-hash` (APPROVED with `hash_checked = false`, treated as
+    unchecked by selection, so the site stays at INSUFFICIENT EVIDENCE: fails closed), skips the
+    DSN-shape checks and accepts a relative corpus target; being fixed by treating such a DSN as
+    production for those rules (closing commit to be recorded). (b) `display_permitted: true` is
+    only the owner's own statement under the waiver (gap 31); a licensing risk, not a dive-safety
+    one. (c) **What loaded knowledge can affect:** the model host is remote
+    (`remote_external_opt_in`), so every `kb:` item is withheld from prompts; knowledge reaches
+    only the record and the human reader, and no rule reads KNOWLEDGE; the remaining risk is wrong
+    or stale site text a human trusts, and dive-professional approval is the only control on
+    content, a process control. (d) **New INSUFFICIENT EVIDENCE paths reachable in production**
+    once a corpus is loaded: a knowledge connector failure, the 20-item cut (gap 6) and a stalled
+    database read holding the shared thread pool (gap 8); fail-closed, costs availability. (e)
+    **The first real production load is untested end to end** (A7 run 2 ran with the gate shut);
+    it is a supervised run, `docs/knowledge-loader.md` "First production load".
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the

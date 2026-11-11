@@ -1446,9 +1446,12 @@ condition; the mutation check is to break the compose file once and watch it fai
   day):** `b7ce432` flips `PRODUCTION_LOAD_GATES_CLOSED` to `True` (built; review in progress).
   The check, exit 24 and its message stay, so a one-line reviewed change back to `False` shuts
   it again; `tests/safety/test_kb_load_production_gate.py` now runs the refusal with the literal
-  patched to `False`, and its AST pin requires `True`. Not done: deploying the new image to
+  patched to `False`, and its AST pin requires `True`. **Switching off:** the one-line reviewed
+  change back to `False`, then rebuild and redeploy the image (the running image keeps the
+  literal it was built with). Not done: deploying the new image to
   production (a separate step); the corpus directory is empty; licence evidence is waived, not
-  closed (ADR 0022 Known gap 31). **Added by the slice 2
+  closed (ADR 0022 Known gap 31). Review follow-ups on `b7ce432` (no blockers) are in A8, "Gaps
+  from the production-load switch review". **Added by the slice 2
   review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
   id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
@@ -1974,6 +1977,26 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
     that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
     progress); deploying the new image (not done).
+  - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
+    blockers):**
+    - **Security S1 (fix in progress):** with a secrets-directory DSN,
+      `-e DIVESAFE_ENVIRONMENT=development` still allows `--development-no-manifest-hash` (writes
+      APPROVED with `hash_checked = false`, which selection treats as unchecked, so the site stays
+      at INSUFFICIENT EVIDENCE: fails closed), skips the DSN-shape checks and accepts a relative
+      corpus target. Being fixed by treating a secrets-directory DSN as production for those
+      rules; the closing commit will be recorded here.
+    - **`display_permitted: true` is only the owner's own statement** under the MVP waiver (ADR
+      0022 Known gap 31). A licensing risk, not a dive-safety risk.
+    - **What loaded knowledge can affect in production:** the model host is remote
+      (`remote_external_opt_in`), so every `kb:` item is withheld from prompts; knowledge reaches
+      only the record and the human reader, and no rule reads KNOWLEDGE. The remaining risk is
+      wrong or stale site text that a human trusts; dive-professional approval is the only control
+      on content, and it is a process control.
+    - **New INSUFFICIENT EVIDENCE paths become reachable in production** once a corpus is loaded:
+      a knowledge connector failure, the 20-item cut (ADR 0022 Known gap 6) and a stalled database
+      read holding the shared thread pool (ADR 0022 Known gap 8). Fail-closed; costs availability.
+    - **The first real production load is untested end to end** (A7 run 2 ran with the gate shut,
+      on the seed). It is a supervised run: `docs/knowledge-loader.md` "First production load".
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.
