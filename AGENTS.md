@@ -59,7 +59,8 @@ The final decision always belongs to the diver, dive master or dive leader.
 - `pytest -m safety` MUST always pass and never skip. Two documented exceptions (owner,
   2026-11-12): a safety test that needs a test database skips without `DIVESAFE_TEST_DATABASE_URL`,
   and the case-only path check skips on a case-sensitive volume. CI runs the safety suite with a
-  database and fails on any other skip.
+  database and fails on any skip except the case-sensitive check (so that check never runs on
+  Linux CI; it runs on a case-insensitive developer volume).
 
 ## 5. Safety principles
 
