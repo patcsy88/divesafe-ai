@@ -438,11 +438,14 @@ compared.
 
 ## Knowledge rows for the A7 hand run
 
-The A7 hand run (ADR 0024 A7) needs a database with knowledge rows, but `kb_load load` and
-`approve` refuse on the production stack until the A6 gates are closed (exit 24, also with
-`DIVESAFE_ENVIRONMENT` changed, because the loader string comes from the secrets directory). **Do
-not lift that refusal for the hand run** (no `--entrypoint`, no edited module, no hand-made loader
-string). Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
+The A7 hand run (ADR 0024 A7) needs a database with knowledge rows. Since 2026-11-12 the
+production load is on (`PRODUCTION_LOAD_GATES_CLOSED = True`, ADR 0024 A6), but a hand run on a
+throwaway volume still does not use `kb_load`: a load needs the corpus (empty today), the
+approval record and a backup afterwards, none of which belong to a throwaway. (While the gate was
+shut, `load` and `approve` refused with exit 24 on the production stack, also with
+`DIVESAFE_ENVIRONMENT` changed; that refusal is still in the code and returns if the literal is
+set back to `False`. Never lift it by hand: no `--entrypoint`, no edited module, no hand-made
+loader string.) Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
 through the insert triggers, which still check and stamp every row. It never runs `kb_load`.
 
 - `tests/hand_run/a7_seed_knowledge.sh` runs `tests/hand_run/a7_seed_knowledge.sql` with `psql`

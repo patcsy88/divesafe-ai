@@ -30,7 +30,10 @@
   on the five knowledge guard functions. Fixed and reviewed (`83efde5`, `a7bab38`, `f3a103d`; no
   blockers, no should-fix after two rounds). **Hand run 2 (2026-11-12) PASSED** on a test image
   built from `3bb2811`, with production stopped for 32 seconds (A7 "Hand run 2"); **A7 is done.**
-  The owner gates in A6 remain, and the production load gate (exit 24) still stands. **In production, and whenever the loader string comes from the secrets directory,
+  The owner gates in A6 remain, and the production load gate (exit 24) still stands. **Update,
+  2026-11-12: every A6 gate is closed or waived and the production load is on** (`b7ce432`,
+  `PRODUCTION_LOAD_GATES_CLOSED = True`, built, review in progress; the refusal stays in the code;
+  the new image is not deployed; the corpus is empty; A6 "Production load on"). Before that: **in production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
   access, A8). Both reviewers accepted its second, third and fourth revisions as
@@ -1384,7 +1387,7 @@ condition; the mutation check is to break the compose file once and watch it fai
   **Owner decision 2026-11-11: this rule is lifted.** A1 to A7 are built and reviewed, so
   `deploy-a1-a7` (`8bbe455`) was merged into `rag-connector` (`8017020`), the branch the owner
   deploys from. The recovery text below stays for the record. The production load gate (exit 24,
-  below) is **not** lifted. **Recovery:**
+  below) is **not** lifted (it was, a day later: A6 "Production load on"). **Recovery:**
   restore the backup taken before the pull into a **new** volume, **using the OLD scripts** (a git
   worktree of the pre-pull commit: the new scripts refuse a format-1 archive) **and the old
   image**. If no backup was taken before the pull, use the latest daily backup; **decisions made
@@ -1406,7 +1409,8 @@ condition; the mutation check is to break the compose file once and watch it fai
   directory in every environment. Development and test with `DIVESAFE_LOADER_DATABASE_URL` and no
   secrets directory are unchanged. The only switch the code offers is a reviewed change of the
   module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in `src/divesafe/services/kb_load.py`,
-  made after every gate in the list below is closed and reviewed by both reviewers.
+  made after every gate in the list below is closed and reviewed by both reviewers. (Made on
+  2026-11-12, `b7ce432`: the literal is `True`; see "Production load on" below.)
   **What it stops:** accidents and casual overrides (a single environment value, a setting, a
   file).
   **What it does not stop:** a determined operator with Docker access (A8). Pinned by
@@ -1438,7 +1442,13 @@ condition; the mutation check is to break the compose file once and watch it fai
   `/Users/patcsy88/DiveSafe/records/approval-record.csv` (owner decision 2026-11-12). **This does
   not enable the production load:** `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is
   unchanged; flipping it is a separate code change reviewed by both reviewers, and deploying the
-  new image is a separate step. **Added by the slice 2
+  new image is a separate step. **Production load on (owner decision 2026-11-12, later the same
+  day):** `b7ce432` flips `PRODUCTION_LOAD_GATES_CLOSED` to `True` (built; review in progress).
+  The check, exit 24 and its message stay, so a one-line reviewed change back to `False` shuts
+  it again; `tests/safety/test_kb_load_production_gate.py` now runs the refusal with the literal
+  patched to `False`, and its AST pin requires `True`. Not done: deploying the new image to
+  production (a separate step); the corpus directory is empty; licence evidence is waived, not
+  closed (ADR 0022 Known gap 31). **Added by the slice 2
   review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
   id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
@@ -1845,7 +1855,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - ~~Two owner items gate shipping~~ **Both settled 2026-11-12:** the withdrawal log's location
   and the re-acknowledgement of ADR 0022 decision 11 (A6). Every first-production-load gate is
   closed or waived (licence evidence, MVP); the code switch `PRODUCTION_LOAD_GATES_CLOSED`
-  is still `False` and its flip is a separate reviewed change (A6).
+  is still `False` and its flip is a separate reviewed change (A6). Flipped to `True` later on
+  2026-11-12 (`b7ce432`, built, review in progress; A6 "Production load on"); the image is not
+  deployed and the corpus is empty.
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
   - The role script's check of an **existing** role ignores `rolconnlimit`, `rolvaliduntil`,
@@ -1917,7 +1929,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     in `kb_load.py`; `load` and `approve` exit 24 in production before any read, connection or
     write; `withdraw` unaffected. The two production hash-rule tests in `test_kb_load_flow.py` now
     set the literal to `True` for their own run, so they keep testing the hash rules that apply
-    once the gate is lifted.
+    once the gate is lifted. **Lifted (`b7ce432`, owner decision 2026-11-12):** the literal is
+    `True`; the gate tests patch it to `False` for the refusal cases and the AST pin requires
+    `True`; the hash-rule tests no longer need to set it. Built; review in progress.
   - **Harder gate (`8eface8`; owner decision 2026-11-09, round 3):** `load` and `approve` also
     refuse when the loader string came from the secrets directory, in any environment
     (`LoaderSettings.dsn_from_secrets_dir`); the docs now say what the gate does not stop (A8).
@@ -1957,8 +1971,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     per-source licence and `display_permitted` evidence waived for the MVP, Known gap 31).
     ~~`DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env`~~ (done 2026-11-11). The A6
     branch rule is lifted (owner decision 2026-11-11). **Still needed:** the owner's site
-    documents in the corpus directory (empty today; none are invented); the reviewed code change
-    that flips `PRODUCTION_LOAD_GATES_CLOSED` (both reviewers); deploying the new image.
+    documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
+    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
+    progress); deploying the new image (not done).
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.
@@ -2000,9 +2015,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
   `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
   (A8 "Build state"); the A7 hand run failed on 2026-11-11 (fixed and reviewed) and **passed on
-  2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refuse in code
-  until the A6 gates are closed (also from the secrets directory in any environment; not a
-  control against an operator with Docker access, A8). Both reviewers accepted its second,
+  2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refused in code
+  until the A6 gates were closed (also from the secrets directory in any environment; not a
+  control against an operator with Docker access, A8); **since `b7ce432` (2026-11-12) the load
+  is on** (A6 "Production load on"; built, review in progress; image not deployed; corpus
+  empty). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.

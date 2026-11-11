@@ -1657,6 +1657,12 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   licence evidence, waived by the owner. **The production load is not enabled by this:** the code
   switch `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is unchanged; flipping it is a
   separate code change reviewed by both reviewers, and deploying the new image is a separate step.
+- **Owner decision 2026-11-12, later the same day: the production load is on.** `b7ce432` flips
+  `PRODUCTION_LOAD_GATES_CLOSED` to `True` (built; review in progress). The check, exit 24 and
+  its message stay, so a one-line reviewed change back to `False` shuts it again; the gate's
+  safety tests now run the refusal with the literal patched to `False`, and the AST pin requires
+  `True`. Deploying the new image to production is a separate step, not done; the corpus
+  directory is still empty; the licence evidence is waived, not closed (ADR 0022 Known gap 31).
 - ~~The decision 13 default-ignorable code point table~~ **Built 2026-11-12** (owner decision;
   decision 13): the Unicode 16.0.0 `Default_Ignorable_Code_Point` set replaces the
   approximation; this first-production-load gate is closed.
