@@ -107,7 +107,8 @@ C --profile knowledge run --rm kb_withdraw <document_id> <version>
   `document_id,version,recorded_at_utc,reason,withdrawn_by`; mode 600, folder 700, outside the
   repository, the database and its backups). The approval record is `approval-record.csv` in the
   same folder (columns `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`);
-  append a line after every `approve`. **Format:** `approved_at_utc` is ISO 8601 UTC,
+  append a line after every `approve`; `notes` holds the `built_with_commit <hash>` line from
+  "Building the manifest". **Format:** `approved_at_utc` is ISO 8601 UTC,
   `YYYY-MM-DDTHH:MM:SSZ` (`date -u +%Y-%m-%dT%H:%M:%SZ`), the time the dive professional
   approved, not when `approve` ran; `recorded_at_utc` is copied exactly as `withdraw` prints it;
   a field that contains a comma is double-quoted. A field that starts with `=`, `+`, `-` or
@@ -156,27 +157,44 @@ Any other version is refused with status 3 ("refused: the builder needs the revi
 Unicode data") before a file is read. Homebrew's `python3.14` on this Mac is 3.14.10 with
 16.0.0 (checked 2026-11-12); a Python update can change it, and the refusal then says so.
 
-One-time setup, in the production checkout `/Users/patcsy88/DiveSafe/app` (not in a synced
-folder, never in the corpus; `.venv-tools/` is git-ignored). The runtime dependencies are needed:
-the `divesafe.services` package imports psycopg and pydantic-settings. The install is editable,
-so the venv follows the checked-out commit; re-run the `pip install` after a deploy that changes
-dependencies:
+Setup, in the production checkout `/Users/patcsy88/DiveSafe/app` (not in a synced folder, never
+in the corpus; `.venv-tools/` is git- and docker-ignored). It installs exactly the packages and
+versions the deployed image ships (`pip freeze` inside the image), as wheels only, without
+dependency resolution (`--no-deps`) and without building anything: the checkout's `src` is put
+on the path by a `.pth` file, so no build backend (hatchling) is fetched. The builder needs the
+runtime packages because the `divesafe.services` package imports psycopg and pydantic-settings;
+it never creates `Settings` or reads a `.env` file. Re-run this after every deploy (new image)
+and after a Homebrew Python upgrade (the venv is not rebuilt by one; it removes the old venv):
 
 ```sh
-cd /Users/patcsy88/DiveSafe/app && /opt/homebrew/bin/python3.14 -m venv .venv-tools \
-  && .venv-tools/bin/pip install -e .
+cd /Users/patcsy88/DiveSafe/app && rm -rf .venv-tools && c=$(mktemp) \
+  && docker run --rm --network none --entrypoint pip divesafe-api:local \
+  freeze --exclude divesafe > "$c" \
+  && /opt/homebrew/bin/python3.14 -m venv .venv-tools \
+  && .venv-tools/bin/pip install --only-binary :all: --no-deps -r "$c" \
+  && .venv-tools/bin/pip check \
+  && echo "$PWD/src" > "$(.venv-tools/bin/python -I -c \
+  'import sysconfig; print(sysconfig.get_path("purelib"))')/divesafe-src.pth"
+rm -f "${c:-}"
 ```
 
-Then run the block from `/Users/patcsy88/DiveSafe/app`. `DIVESAFE_CORPUS_DIR` is set in
-`docker/production.env`, not in your shell, so read it first; write it there unquoted
+Then run the block from `/Users/patcsy88/DiveSafe/app`. It stops if the checkout has uncommitted
+changes (the builder runs from `src` as checked out) and prints `built_with_commit` with the
+commit; write that line into the `notes` field of the approval record. `DIVESAFE_CORPUS_DIR` is
+set in `docker/production.env`, not in your shell, so read it first; write it there unquoted
 (`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps quotes, and a quoted value gives a bad path
 and a refusal). The manifest is written to a temporary file outside the repository and the corpus;
 only if the build succeeded does it replace `manifest.json`, get hashed and get checked:
 
 ```sh
+unset out
 DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
-: "${DIVESAFE_CORPUS_DIR:?}" && out=$(mktemp) \
-  && .venv-tools/bin/python -I -m divesafe.services.kb_manifest_build \
+: "${DIVESAFE_CORPUS_DIR:?}" \
+  && { test -z "$(git -C /Users/patcsy88/DiveSafe/app status --porcelain)" \
+  || { echo "refused: the checkout has uncommitted changes (git status)" >&2; false; }; } \
+  && echo "built_with_commit $(git -C /Users/patcsy88/DiveSafe/app rev-parse HEAD)" \
+  && out=$(mktemp) \
+  && .venv-tools/bin/python -I -B -m divesafe.services.kb_manifest_build \
   "$DIVESAFE_CORPUS_DIR/draft.json" > "$out" \
   && chmod 644 "$out" && mv "$out" "$DIVESAFE_CORPUS_DIR/manifest.json" \
   && shasum -a 256 "$DIVESAFE_CORPUS_DIR/manifest.json" \
@@ -190,7 +208,8 @@ Never redirect the output into the repository (it holds licence and permission r
 section titles; `manifest.json` and `draft.json` are git-ignored as a backstop) or straight onto
 the existing `manifest.json` (the shell empties it before a refused build). The tool never
 writes a file: the manifest goes to stdout and a fixed message to stderr. `-I` keeps the
-shell's `PYTHONPATH` and the current folder out of the import path. The `shasum` line is the
+shell's `PYTHONPATH` and the current folder out of the import path; `-B` writes no `.pyc` files
+into the checkout. The `shasum` line is the
 hash for the approval record, taken **after** the file is written. `--check` runs only after a
 successful build (a refusal leaves no new hash to compare): it runs the loader's `read_corpus`
 in the image and prints the manifest SHA-256, which must equal the `shasum` line, and each
@@ -222,7 +241,17 @@ Known gaps (2026-11-12 security reviews):
 - N8: the reviewed Unicode version is one constant (`kb_screen.REVIEWED_UNIDATA_VERSION`), read
   by the builder, the loader and CI's image step; the host venv's Python is not pinned (a
   Homebrew update can change it), and the builder then refuses with status 3 until a Python
-  with 16.0.0 is used. `tests/safety/test_kb_screen.py` pins "16.0.0" on purpose.
+  with 16.0.0 is used. A Homebrew Python minor update does not rebuild `.venv-tools`: re-create
+  it (the setup block) after a Python upgrade. `tests/safety/test_kb_screen.py` pins "16.0.0" on
+  purpose. The venv holds the image's packages at the image's versions (wheels from PyPI, not
+  hash-pinned) and is only as current as the last setup run: re-run it after each deploy. Audit
+  it with `pip-audit -r <the freeze file>` (pip-audit in its own venv; CI audits the open
+  ranges in `pyproject.toml`, not this list). It runs as the owner outside any sandbox, so it can
+  read whatever the owner can (`docker/secrets/` included); only the checkout's own code runs.
+- N9: the GitHub ruleset "selamat" (all branches) only blocks deletion and force-push
+  (checked 2026-11-12); there are no required status checks, so CI's `test` (safety) and
+  `image` (Unicode) jobs are not enforced by branch protection. The merge procedure waits for
+  green CI by hand; the owner may add both as required checks.
 
 Known gaps (2026-11-12 risk reviews of `tests/safety/test_kb_manifest_build_no_defaults.py`):
 - R1: the guard on the second verbatim draft checks that each listed value differs from the
