@@ -210,17 +210,18 @@ step stops the rest if it fails, so nothing runs out of order. A deploy whose co
 (the owner's decision: after it, rollback means a restore, below):
 
 ```
-unset old s i running
+unset old s i running GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 cd /Users/patcsy88/DiveSafe/app \
   && : "${new:?}" "${tag:?}" \
-  && test "${#new}" -eq 40 \
-  && case $new in *[!0-9a-f]*) false;; esac \
+  && { test "${#new}" -eq 40 || { echo "refused: new is not a full sha" >&2; false; }; } \
+  && case $new in *[!0-9a-f]*) echo "refused: new is not a full sha" >&2; false;; esac \
   && s=$(git status --porcelain --untracked-files=all) \
-  && i=$(git status --porcelain --ignored -- src) \
+  && i=$(git status --porcelain --untracked-files=all --ignored -- src) \
   && { test -z "$s$i" || { echo "refused: the checkout is not clean" >&2; false; }; } \
   && old=$(git rev-parse --verify HEAD) \
   && git fetch origin \
-  && git merge-base --is-ancestor "$new" origin/main \
+  && { git merge-base --is-ancestor "$new" origin/main \
+       || { echo "refused: new is not on origin/main" >&2; false; }; } \
   && { git diff --quiet "$old" "$new" -- src/divesafe/services/migrations.py \
        || test "${allow_migration:-}" = "$new" \
        || { echo "refused: this deploy changes migrations; see Rollback" >&2; false; }; } \
@@ -249,8 +250,8 @@ Rollback, with the literal tag from A8 (not a shell variable, which a new shell 
 (`--no-build` matters: without it a missing tag would make compose build the commit being rolled
 back from). This works **only if the deploy changed no migration**: `db-init` uses the same image
 tag, and old code refuses a database that is ahead of it, so `db-init` fails and the old API is
-not started (fails closed; whether compose leaves the new API running is unverified). After a deploy that migrated, rolling back means restoring the step-1 backup with
-the old image (`docs/backup-and-restore.md`); everything written since that backup is lost, so it
+not started (fails closed; whether compose leaves the new API running is unverified). After a
+deploy that migrated, rolling back means restoring the step-1 backup with the old image (`docs/backup-and-restore.md`); everything written since that backup is lost, so it
 is the owner's decision.
 
 **Rotating the database passwords** (done once, 2026-11-12, A8; generalises the loader-only
