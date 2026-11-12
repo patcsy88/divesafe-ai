@@ -201,7 +201,18 @@ Known gaps (2026-11-12 security reviews):
 - N7: Docker Desktop (macOS) file sharing can serve stale contents of a just-edited corpus file
   to a new container (2026-11-12, Docker Desktop 29.8.2). The build, `--check` and `load` all
   read through such a mount; if they all see the same stale bytes the hashes agree. The host
-  `shasum` comparison above is the only check against that, and it is manual.
+  `shasum` comparison above is the only check against that, and it is manual. Owner decision
+  pending: run the builder on the host instead, or have the loader print each file's hash.
+
+Known gaps (2026-11-12 risk reviews of `tests/safety/test_kb_manifest_build_no_defaults.py`):
+- R1: the guard on the second verbatim draft checks that each listed value differs from the
+  permissive draft, not that every multi-valued field is listed; a new field is caught first by
+  the key-set pin, which should prompt the update.
+- R2: the verbatim comparison does not compare types (`True == 1`); the loader's `StrictBool` and
+  `StrictInt` refuse such values today.
+- R3: `tests/safety/test_evidence_usability.py` still imports helpers from
+  `tests/unit/test_ruleset_loader.py`, outside safety review (older; same fix as
+  `tests/safety/kb_build_draft.py`).
 
 ### First production load
 
