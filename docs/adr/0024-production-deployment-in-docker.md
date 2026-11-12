@@ -201,6 +201,59 @@ Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`r
 should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
 from the deploy commit.
 
+**Deploying a new commit to a running stack** (from `/Users/patcsy88/DiveSafe/app`, with the `C`
+function above). First take a backup: `sh docker/backup.sh /Users/patcsy88/DiveSafe/backups`,
+then copy both record CSVs beside it. Then set `new` to the approved full 40-character commit
+sha and `tag` to an unused name such as `divesafe-api:rollback-YYYYMMDD`, and run the chain; each
+step stops the rest if it fails, so nothing runs out of order. A deploy whose commit changes
+`src/divesafe/services/migrations.py` is refused unless `allow_migration` is set to that same sha
+(the owner's decision: after it, rollback means a restore, below):
+
+```
+unset old s i running GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+cd /Users/patcsy88/DiveSafe/app \
+  && : "${new:?}" "${tag:?}" \
+  && { test "${#new}" -eq 40 || { echo "refused: new is not a full sha" >&2; false; }; } \
+  && case $new in *[!0-9a-f]*) echo "refused: new is not a full sha" >&2; false;; esac \
+  && s=$(git status --porcelain --untracked-files=all) \
+  && i=$(git status --porcelain --untracked-files=all --ignored -- src) \
+  && { test -z "$s$i" || { echo "refused: the checkout is not clean" >&2; false; }; } \
+  && old=$(git rev-parse --verify HEAD) \
+  && git fetch origin \
+  && { git merge-base --is-ancestor "$new" origin/main \
+       || { echo "refused: new is not on origin/main" >&2; false; }; } \
+  && { git diff --quiet "$old" "$new" -- src/divesafe/services/migrations.py \
+       || test "${allow_migration:-}" = "$new" \
+       || { echo "refused: this deploy changes migrations; see Rollback" >&2; false; }; } \
+  && git merge --ff-only "$new" \
+  && test "$(git rev-parse HEAD)" = "$new" \
+  && running=$(docker inspect -f '{{.Image}}' "$(C ps -q api)") \
+  && test -n "$running" \
+  && ! docker image inspect "$tag" >/dev/null 2>&1 \
+  && docker tag "$running" "$tag" \
+  && test "$(docker image inspect -f '{{.Id}}' "$tag")" = "$running" \
+  && echo "rollback image $tag = $running; deploying $new over $old" \
+  && C up -d --build --wait api
+```
+
+The rollback tag is taken from the image the running container uses, not from
+`divesafe-api:local`, and must exist **before** the build: the build moves `divesafe-api:local` to
+the new image, and Docker then deletes the old image if nothing else names it (this happened on
+2026-11-13, A8 "Deploy of 69c9fca"). An existing tag is never reused, so a second deploy on the
+same day needs a new name. The checkout must be clean (untracked files and ignored files under
+`src` included), because `--build` sends the working tree and the image copies all of `src`; and
+`new` must be on `origin/main`, so only a commit that passed the required checks is deployed.
+Record `old`, `new` and the literal rollback tag and image id in A8.
+
+Rollback, with the literal tag from A8 (not a shell variable, which a new shell will not have):
+`docker tag divesafe-api:rollback-YYYYMMDD divesafe-api:local && C up -d --no-build --wait api`
+(`--no-build` matters: without it a missing tag would make compose build the commit being rolled
+back from). This works **only if the deploy changed no migration**: `db-init` uses the same image
+tag, and old code refuses a database that is ahead of it, so `db-init` fails and the old API is
+not started (fails closed; whether compose leaves the new API running is unverified). After a
+deploy that migrated, rolling back means restoring the step-1 backup with the old image (`docs/backup-and-restore.md`); everything written since that backup is lost, so it
+is the owner's decision.
+
 **Rotating the database passwords** (done once, 2026-11-12, A8; generalises the loader-only
 note in `docs/knowledge-loader.md`). `make-secrets.sh` never overwrites, so rotation in place
 means a fresh directory: run it into a new directory, keep it mode 700 with the files mode 400,
@@ -2069,6 +2122,44 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
     says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
     the bootstrap user, not `divesafe_owner` (same read-only result).
+  - **Deploy of `69c9fca` (2026-11-12 16:28 UTC, 2026-11-13 local; owner approved).** PR #5
+    (host manifest builder, ADR 0027 accepted, docs); the only runtime-image change is the new
+    `divesafe.services.kb_manifest_build` module, which the API does not import. The production
+    checkout was already at `69c9fca` (a `git pull` at 16:25Z, by the owner). Backup
+    `divesafe-20261112T162818Z` (scratch restore equal: 6 assessments, 6 decided; both CSVs
+    copied). `C up -d --build --wait api`: new API image `8054a7177557`; health 200, an
+    unauthenticated read 401, 6 of 6 assessments decided, the image imports the builder with
+    Unicode 16.0.0. Start-up warnings: trusted proxies empty, agent stage ON, viewer key without
+    groups; the "connector HTTP socket not reachable" warning did not appear this time (not
+    investigated). **Rollback image lost:** the `docker tag ... rollback-20261113` ran at the same
+    time as the build and tagged the new image; the previous image `f4c8511e0163` lost its last
+    name and Docker deleted it. Replaced by `divesafe-api:rollback-20261113` (`b04aa8439758`),
+    rebuilt from `git archive a997101` (no builder, Unicode 16.0.0 checked by hand): the same
+    source, not the identical image. `FROM python:3.14-slim` is a floating tag and runtime
+    dependencies are version ranges (no lock file), so its base OS, Python patch release and
+    packages are the ones current on 2026-11-13; it never passed CI's image step or `pip-audit`
+    (unaudited). `src/divesafe/services/migrations.py` is unchanged between `a997101` and
+    `69c9fca`, so a retag rollback to it would work. The procedure above now tags the running
+    image first, refuses an existing tag and checks the result in one chain.
+    `divesafe-api:rollback-20261018` is kept.
+    **Also:** a second GitHub ruleset `main-ci-required` (owner decision, 2026-11-13; no bypass
+    actors, up-to-date branch not required) requires the CI checks `test (Python 3.14)` and
+    `docker image` from GitHub Actions on the default branch (`docs/knowledge-loader.md` N9).
+  - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
+    - The image carries no record of the commit it was built from (no
+      `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
+      be added later.
+    - The required check name `test (Python 3.14)` is tied to the CI matrix value: changing the
+      matrix (e.g. to 3.15) blocks every merge until the ruleset is updated (fails closed). A pull
+      request can edit `ci.yml` and still report the same check names; only review stops that.
+    - Rollback images are kept without a pruning rule (`rollback-20261018`, `rollback-20261113`).
+      They hold no secrets (mounted at run time) but go unpatched; keep the last two and remove
+      older ones after a successful deploy (owner's call, not automated).
+    - The backup is a separate step before the chain, so the chain cannot tell whether it ran or
+      is fresh. The migration check watches the file `migrations.py`: any edit to it refuses (errs
+      safe), but if migrations moved to another module the check would go silent (no test pins
+      `MIGRATIONS` to that file). Only the chain's refusal path has been run against production;
+      the successful path (tag, verify, build) is untested as one chain.
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
     - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
