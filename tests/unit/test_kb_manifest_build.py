@@ -336,6 +336,54 @@ def test_a_symlink_a_hard_link_and_the_draft_itself_are_refused(tmp_path: Path) 
         assert outcome(kb_manifest_build, root / "draft.json") == FAILED_FILE, name
 
 
+@pytest.mark.parametrize("name", ["manifest.json", "Manifest.JSON"])
+def test_manifest_json_is_refused_as_a_document_path(tmp_path: Path, name: str) -> None:
+    """K2: the file the operator is about to replace is never a document."""
+    root = tmp_path / "c"
+    corpus(root, {"guide.txt": GUIDE, name: GUIDE}, draft(document(name)))
+    assert outcome(kb_manifest_build, root / "draft.json") == FAILED_FILE
+    nested = tmp_path / "n"
+    (nested / "sub").mkdir(parents=True)
+    (nested / "sub" / "manifest.json").write_text(GUIDE)
+    corpus(nested, {}, draft(document("sub/manifest.json")))
+    assert outcome(kb_manifest_build, nested / "draft.json") == OK_BUILD  # only the root name
+
+
+@pytest.mark.parametrize("path", ["a\ud800b.txt", "\udc80", "a\x00b.txt"])
+def test_a_path_with_a_lone_surrogate_or_nul_is_a_fixed_refusal(tmp_path: Path, path: str) -> None:
+    """K1: through the path check, and with it bypassed (the read itself refuses, no traceback)."""
+    the_path = corpus(tmp_path, {"guide.txt": GUIDE}, json.dumps(draft(document(path))).encode())
+    assert outcome(kb_manifest_build, the_path) == FAILED_FILE
+    bypassed = mutated_module(
+        kb_manifest_build, ("            if not _valid_path(path):", "            if False:")
+    )
+    assert outcome(bypassed, the_path) == FAILED_FILE
+
+
+def test_mutation_without_value_error_a_surrogate_path_crashes(tmp_path: Path) -> None:
+    the_path = corpus(
+        tmp_path, {"guide.txt": GUIDE}, json.dumps(draft(document("a\ud800b"))).encode()
+    )
+    mutant = mutated_module(
+        kb_manifest_build,
+        ("            if not _valid_path(path):", "            if False:"),
+        (
+            "            except (OSError, ValueError, LoaderRefusal):  # ValueError",
+            "            except (OSError, LoaderRefusal):  # ValueError",
+        ),
+    )
+    assert outcome(mutant, the_path) == CRASHED
+
+
+def test_mutation_manifest_json_allowed_as_a_document_is_caught(tmp_path: Path) -> None:
+    corpus(tmp_path, {"guide.txt": GUIDE, "manifest.json": GUIDE}, draft(document("manifest.json")))
+    mutant = mutated_module(
+        kb_manifest_build,
+        ("    if path.casefold() == kb_manifest.MANIFEST_FILENAME:", "    if False:"),
+    )
+    assert outcome(mutant, tmp_path / "draft.json") == OK_BUILD
+
+
 def test_the_draft_cannot_be_named_manifest_json(tmp_path: Path) -> None:
     corpus(tmp_path, {"guide.txt": GUIDE})
     (tmp_path / "draft.json").rename(tmp_path / "manifest.json")

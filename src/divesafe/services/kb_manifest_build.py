@@ -191,6 +191,7 @@ def chunk_file(data: bytes, title: str) -> tuple[list[dict[str, Any]], list[dict
     chunks: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []
     section = title
+    before_first_heading = True  # the section is the title, not yet screened
     position = 0  # bytes
     current: tuple[int, str, str] | None = None  # (start byte, text, section)
 
@@ -221,6 +222,7 @@ def chunk_file(data: bytes, title: str) -> tuple[list[dict[str, Any]], list[dict
             flush()
             gaps.append({"start": position, "end": position + size, "reason": "heading"})
             section = unit.heading
+            before_first_heading = False
         else:
             if len(unit.text) > kb_common.MAX_CHUNK_CHARACTERS:
                 raise BuildRefused(FAILED_PARAGRAPH)
@@ -231,7 +233,7 @@ def chunk_file(data: bytes, title: str) -> tuple[list[dict[str, Any]], list[dict
                 current = (current[0], current[1] + unit.text, current[2])
             else:
                 flush()
-                if section is title and not _section_ok(title):  # before the first heading
+                if before_first_heading and not _section_ok(title):
                     raise BuildRefused(FAILED_HEADING)
                 current = (position, unit.text, section)
         position += size
@@ -242,6 +244,10 @@ def chunk_file(data: bytes, title: str) -> tuple[list[dict[str, Any]], list[dict
 
 
 def _valid_path(path: str) -> bool:
+    """The manifest's path rules, and never the manifest's own name (any case: some file systems
+    fold case), which the operator is about to replace."""
+    if path.casefold() == kb_manifest.MANIFEST_FILENAME:
+        return False
     try:
         kb_manifest.FileEntry.model_validate({"path": path, "sha256": "0" * 64, "chunks": ()})
     except ValidationError:
@@ -289,7 +295,7 @@ def build(draft_path: Path) -> bytes:
             raw_draft = kb_manifest.read_regular_file(
                 root_fd, draft_path.name, kb_common.MAX_MANIFEST_TOTAL_BYTES, seen
             )
-        except (OSError, LoaderRefusal):
+        except (OSError, ValueError, LoaderRefusal):
             raise BuildRefused(FAILED_DRAFT_READ) from None
         draft = parse_draft(raw_draft)
         budget = kb_common.MAX_MANIFEST_TOTAL_BYTES
@@ -303,7 +309,7 @@ def build(draft_path: Path) -> bytes:
                 data = kb_manifest.read_regular_file(root_fd, path, budget, seen)
             except kb_manifest.ManifestTooLarge:
                 raise BuildRefused(FAILED_LIMIT) from None
-            except (OSError, LoaderRefusal):
+            except (OSError, ValueError, LoaderRefusal):  # ValueError: a NUL or lone surrogate
                 raise BuildRefused(FAILED_FILE) from None
             budget -= len(data)
             chunks, gaps = chunk_file(data, doc["title"])

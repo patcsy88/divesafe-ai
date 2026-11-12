@@ -135,26 +135,53 @@ offsets, chunk numbers, heading gaps) from a draft you write. It is a convenienc
 `load` re-checks everything. Write the draft (for example `draft.json`) in the corpus directory
 with every human field, `null` included: top level `format`, `attests_no_generated_text`,
 `attests_no_personal_names`, `documents`; per document every manifest field except `file`, plus
-`path` (relative to the corpus directory). Nothing is defaulted; a missing, extra or repeated key
-is refused.
+`path` (relative to the corpus directory; never `manifest.json`). Nothing is defaulted; a
+missing, extra or repeated key is refused.
+
+**Whoever writes `attests_no_generated_text: true` and `attests_no_personal_names: true` in the
+draft is the one attesting**; the tool copies them and attests nothing. The dive professional
+reviews and approves the generated `manifest.json` itself (its sections, spans and hash), not
+just the draft.
 
 Chunking: a line starting with `## ` is a heading, stored as a `heading` gap; its text is the
 `section` of the chunks after it (before the first heading the section is the `title`).
 Paragraphs (separated by blank lines) are packed into chunks of at most 1500 characters; a
 longer paragraph is refused, never split. Exact rule: the module docstring.
 
+Run it from `/Users/patcsy88/DiveSafe/app` (the production checkout). `DIVESAFE_CORPUS_DIR` is
+set in `docker/production.env`, not in your shell, so read it first. The manifest is written to a
+temporary file outside the repository and the corpus, and only replaces `manifest.json` (and is
+hashed) if the build succeeded:
+
 ```sh
-docker run --rm --network none --read-only -v "$DIVESAFE_CORPUS_DIR":/corpus:ro \
+DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
+out=$(mktemp) && docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
   --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build \
-  /corpus/draft.json > manifest.json
-shasum -a 256 manifest.json
+  /corpus/draft.json > "$out" \
+  && chmod 644 "$out" && mv "$out" "${DIVESAFE_CORPUS_DIR:?}/manifest.json" \
+  && shasum -a 256 "$DIVESAFE_CORPUS_DIR/manifest.json" \
+  || { echo "refused or failed: manifest.json not replaced"; rm -f "$out"; }
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
+  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build --check /corpus
 ```
 
-It never writes a file: the manifest goes to stdout and a fixed message to stderr; on a refusal
-stdout is empty, so check the exit status before using the file. Move `manifest.json` into the
-corpus directory and take the hash with `shasum -a 256 manifest.json` **after** writing it (that
-is the hash for the approval record). `--check /corpus` instead runs the loader's `read_corpus`
-on the directory and prints the manifest SHA-256 and each document's id, version and chunk count.
+Never redirect the output into the repository (it holds licence and permission references and
+section titles; `manifest.json` and `draft.json` are git-ignored as a backstop) or straight onto
+the existing `manifest.json` (the shell empties it before a refused build). The tool never
+writes a file: the manifest goes to stdout and a fixed message to stderr. The `shasum` line is
+the hash for the approval record, taken **after** the file is written. `--check` runs the
+loader's `read_corpus` and prints the manifest SHA-256 (it must match) and each document's id,
+version and chunk count. The image must include the tool (built from a commit that has it).
+
+Known gaps (2026-11-12 security review):
+- K4: the build uses the loader's private `_split_chunks` and `_open_dir`, and its final check
+  re-implements the `read_corpus` loop; a new check added to the loader reaches `--check` and
+  `load` but not the build until the builder is updated. `--check` before approval covers it.
+- K5: the draft and the document files each get the 1 MiB budget, so up to 2 MiB can be read
+  before the shared limit is applied; `MAX_DOCUMENTS_PER_LOAD` is only applied in the final
+  check, after every file is read.
 
 ### First production load
 
