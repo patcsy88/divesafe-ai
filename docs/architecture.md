@@ -241,8 +241,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Observability: ADR 0027 accepted (2026-11-12), not built.** No request id, metrics or
   alerting yet; on 2026-11-12 every model call of one production assessment failed (model-host
   404) and only the record showed it. Decided: a request id, `/metrics` behind a new `metrics`
-  role using `prometheus_client`, Uptime Kuma for alerting; tracing stays proposed. See
-  [ADR 0027](adr/0027-observability.md).
+  role (isolated: never combined with other roles, groups or a shared actor) using
+  `prometheus_client`, Uptime Kuma for alerting over `host.docker.internal`; tracing stays
+  proposed. See [ADR 0027](adr/0027-observability.md).
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry
   `rtk git ...` variants, including a deny for `rtk git push`. Verified by running the reviewer:

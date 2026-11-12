@@ -60,10 +60,17 @@ plan fields leave the machine), and "no new dependency without an ADR".
    here.** What it brings and how it is used: pure Python, no network of its own. Use a
    dedicated `CollectorRegistry`, not the global default, so only the metrics named above are
    exposed; do **not** register the default process, platform and GC collectors unless that is
-   reviewed separately. Generate the text with `generate_latest(registry)` inside the
-   authenticated route; never `start_http_server` or the library's ASGI/WSGI app, which would be
-   an unauthenticated listener. Pinned like every other runtime dependency and subject to the
-   same `pip-audit` in CI (ADR 0024).
+   reviewed separately. The authenticated route returns `generate_latest(registry)` with
+   `CONTENT_TYPE_LATEST` and `Cache-Control: no-store`; no OpenMetrics content negotiation and no
+   exemplars unless reviewed. Never `start_http_server`, `make_asgi_app` or `make_wsgi_app`,
+   which would be an unauthenticated listener, and never the global `REGISTRY`; a safety test
+   (AST or grep pin) refuses those four names in `src`. `PROMETHEUS_MULTIPROC_DIR` stays unset
+   (no multiprocess mode). Label names are fixed at metric definition; label values come only
+   from code enums (`StageName`, the connector names, the outcome codes), never from
+   runtime-built strings or exception text. Dependency terms: a bounded range `>=X,<Y` in
+   `pyproject.toml` like the other runtime dependencies (the range chosen at build; a lock file
+   with hashes is still open, ADR 0024 supply chain) and the same `pip-audit` in CI. Licence:
+   Apache-2.0, to verify from the package metadata at build (not installed here).
    **Authentication, owner decision 2026-11-12: (a), a `metrics` role; AGENTS.md section 12
    stays as written, no loopback-port exception.** The options were: (a) a
    `metrics` role on an API key (ADR 0013; the scraper holds a key with that role only), or (b)
@@ -77,7 +84,27 @@ plan fields leave the machine), and "no new dependency without an ADR".
    metrics hold nothing sensitive, but they show activity and failure rates, so neither option
    exposes them to the network; only (a) keeps the rule as written, which is why it was chosen.
    The scraper holds its own API key carrying only the `metrics` role (ADR 0013); that role
-   grants nothing else.
+   grants nothing else. **The key file enforces "only":** roles do not imply each other, so a
+   `metrics`-only key already gets 403 elsewhere, but nothing would stop `metrics` being added
+   to a decider or admin key that then sits in the scraper, and `groups_of` unions groups across
+   keys that share an actor name (used for the read scope), so a metrics key reusing a person's
+   actor would widen that scope. Therefore key-hash loading **refuses** (a) `metrics` together
+   with any other role, (b) `metrics` with `groups`, and (c) a `metrics` key whose actor name is
+   also used by a non-metrics key (precedent: the viewer-without-groups start-up check in
+   `api/auth.py`). The `DevAuthenticator` grants every role including `metrics`; that is fine,
+   since it cannot run in production. **MUST, in `tests/safety/`:** a key without `metrics` gets
+   403 on `/metrics`; a `metrics`-only key gets 403 on every other route; a mixed key file is
+   refused at start-up.
+   **Network path and the limiter.** Uptime Kuma runs in the Mac host's Docker and reaches the
+   API at `http://host.docker.internal:8000` (the port published on the host's `127.0.0.1:8000`;
+   to verify on the owner's Docker Desktop at build time). It does not join the compose network
+   (a bearer token over the bridge, and the limiter would see its container address) and is not
+   exposed beyond loopback. The auth-failure limit is counted per source **before** the key is
+   checked; behind Docker publishing every local client shares the gateway address, so a client
+   with a bad key can block the scraper, and code cannot exempt a key it has not checked.
+   Uptime Kuma must therefore treat a 429 as its own alert ("auth blocked"), not as "down". The
+   rate-limit key: `LIMIT_KEYS` is a fixed set, so either add `metrics` with its own setting
+   (recommended) or reuse `read`; open, decision 7.
 3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
    Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
    runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;
@@ -86,12 +113,24 @@ plan fields leave the machine), and "no new dependency without an ADR".
    - `/health`: an HTTP status (or keyword) monitor.
    - Backups: a push monitor. The cron wrapper around `docker/backup.sh` calls the push URL only
      on exit 0; a missing push within the expected interval is the alert (the script already
-     exits non-zero on every refusal).
+     exits non-zero on every refusal). The push URL is a bearer secret (whoever holds it can
+     fake a successful backup): a mode-600 file outside the repository, read by `curl -K <file>`
+     (or stdin), never on the command line (`ps`, a committed cron wrapper), never logged; no
+     backup output in the `msg=` parameter.
    - Metrics: Uptime Kuma cannot evaluate PromQL rates, so the agent-failure and
      connector-failure alerts need either a keyword or JSON check on a small authenticated
      endpoint, or a Prometheus later. **Open point, not decided here**; nothing is invented for
-     it. Uptime Kuma holds its own API key with only the `metrics` role (above).
+     it. Uptime Kuma holds its own API key with only the `metrics` role (above), sent in an
+     `Authorization` header (monitor headers), never in a URL. A keyword or JSON monitor's
+     failure message can include part of the response body, so the checked endpoint must return
+     only names and values.
    - Alert messages carry metric names and values only, never record or decision text.
+     Notifications (email, Telegram or similar) are a new egress of that alert text.
+   - Uptime Kuma itself stores its secrets in plain text in its database: its data volume and
+     its backups get the same care as `docker/secrets/` (outside synced folders) and stay out of
+     DiveSafe's backups. Its web UI is published on loopback only, with its own admin password
+     and 2FA if available. It is a new external dependency: image pinned by digest, updated by
+     the owner.
 4. **Later and optional: tracing.** OpenTelemetry spans per stage and per model call with
    timings and the fixed codes only, **never prompt or reply text**, sent to a local collector or
    a self-hosted Langfuse on the same machine. Rules for any build of it:
@@ -121,12 +160,13 @@ plan fields leave the machine), and "no new dependency without an ADR".
 - New dependency: `prometheus_client` (decided 2026-11-12; pinned, `pip-audit`). The
   OpenTelemetry SDK and exporter, and Langfuse if chosen, would come with item 4 and are not
   added before the owner decides. The all-routes-authenticated safety test keeps `/metrics` on
-  the authenticated side; a new safety test should prove a key without `metrics` is refused
-  there and that a `metrics`-only key is refused everywhere else.
+  the authenticated side; the MUST tests in item 2 (role isolation, mixed key refused at
+  start-up) and the AST pin on the library's listeners and global registry are new safety tests.
 - Option (b) is rejected: it would have needed an owner amendment to AGENTS.md section 12 and a
   change to the all-routes-authenticated safety test.
 - Uptime Kuma is a separate self-hosted service with its own update and backup duties (operator
-  work, outside this repository); it stores an API key, so it must be treated as a secret store.
+  work, outside this repository); it stores the API key and the push URL in plain text, so it
+  is a secret store (item 3).
 - Item 1 is a contract with the operator's proxy: the proxy must strip or replace an inbound
   `X-Request-ID` it did not set.
 - Alerting is operator work and can fail silently itself; the first alert to set up is the
@@ -134,30 +174,29 @@ plan fields leave the machine), and "no new dependency without an ADR".
 
 ## Owner decisions
 
-Settled 2026-11-12:
+Settled 2026-11-12 (named by topic):
 
-1. ~~Build items 1 and 2 at all for the MVP, and in that order?~~ Yes, in that order (items 1
-   to 3 accepted).
-2. ~~Option A or B?~~ B, `prometheus_client`.
-3. ~~`metrics` role or loopback-only port?~~ The `metrics` role; section 12 unchanged.
-5. ~~Which alerting tool?~~ Uptime Kuma. The N for the agent-failure rule is still open (see 5
-   below).
-8. ~~Amend section 12 for (b)?~~ Not needed; (b) rejected.
+- **Scope:** build items 1 to 3 for the MVP, in that order.
+- **Metrics library:** B, `prometheus_client`.
+- **Metrics authentication:** the `metrics` role; section 12 unchanged; the loopback-port
+  exception is rejected.
+- **Alerting tool:** Uptime Kuma.
 
 Still open, with the recommended default:
 
-4. Store the request id on the record (new field) or keep it in logs only? **Default: logs only**
-   (no record field, no migration; a log search by id finds the run).
-5. The N for the agent-failure rule, and how the metric-based alerts reach Uptime Kuma (keyword
-   or JSON check on a small authenticated endpoint, or a later Prometheus). **Default: start with
-   the `/health` and backup monitors, which need no metrics; add the metric alerts once the
-   check mechanism is chosen.**
-6. Whether tracing (item 4) is wanted at all for the MVP. **Default: no**; item 4 stays
-   proposed.
-7. Whether `/metrics` requests count toward rate limiting and the auth-failure counter.
-   **Default: yes to both** (one scrape a minute is far below the limit, and a failed scrape
-   auth is a real auth failure); the scraper's key must then never be rate-limited out by
-   another client sharing its address.
+- **Request id storage:** on the record (new field) or logs only? **Default: logs only** (no
+  record field, no migration; a log search by id finds the run).
+- **Metric alerts and N:** how the metric-based alerts reach Uptime Kuma (keyword or JSON check
+  on a small authenticated endpoint, or a later Prometheus) and the N for the agent-failure rule.
+  **Default: start with the `/health` and backup monitors, which need no metrics; add the metric
+  alerts once the check mechanism is chosen.**
+- **Tracing (item 4) for the MVP:** **Default: no**; item 4 stays proposed.
+- **`/metrics` and the limiter (decision 7):** the auth-failure limit is counted per source
+  before the key is checked and all local clients share the Docker gateway address, so the
+  scraper **can** be blocked by another client's bad keys and code cannot exempt it; Uptime
+  Kuma treats 429 as "auth blocked", not "down". **Default: `/metrics` counts toward both**, with
+  its own `metrics` entry in `LIMIT_KEYS` and its own setting (recommended) rather than reusing
+  `read`.
 
 ## Known gaps
 
@@ -177,3 +216,8 @@ Still open, with the recommended default:
   two failure alerts that motivated this ADR are not wired; only `/health` and backup are.
 - A `metrics`-only key that leaks lets the holder read activity and failure rates; rotation is
   manual, as for every key (ADR 0013).
+- The scraper shares the Docker gateway address with every other local client, so one client's
+  bad keys can 429 the scraper (decision 7); the alert then says "auth blocked" and someone has
+  to look.
+- `host.docker.internal` from Uptime Kuma's container to the host-published port is unverified
+  until build time on the owner's Docker Desktop.
