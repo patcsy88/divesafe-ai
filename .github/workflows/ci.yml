@@ -79,8 +79,9 @@ jobs:
           docker run --rm --network none --entrypoint python divesafe-ci -c '
           import os, sys, unicodedata
           import divesafe.api.app
+          from divesafe.services.kb_screen import REVIEWED_UNIDATA_VERSION
           assert sys.version_info[:2] == (3, 14), sys.version
-          assert unicodedata.unidata_version == "16.0.0", unicodedata.unidata_version
+          assert unicodedata.unidata_version == REVIEWED_UNIDATA_VERSION, unicodedata.unidata_version
           assert os.getuid() == 10001, os.getuid()
           print(sys.version.split()[0], unicodedata.unidata_version, os.getuid())
           '

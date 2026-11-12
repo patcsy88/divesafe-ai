@@ -148,19 +148,37 @@ Chunking: a line starting with `## ` is a heading, stored as a `heading` gap; it
 Paragraphs (separated by blank lines) are packed into chunks of at most 1500 characters; a
 longer paragraph is refused, never split. Exact rule: the module docstring.
 
-Run it from `/Users/patcsy88/DiveSafe/app` (the production checkout). `DIVESAFE_CORPUS_DIR` is
-set in `docker/production.env`, not in your shell, so read it first; write it there unquoted
-(`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps quotes, and a quoted value gives a bad mount
+The builder runs **on the Mac host** (owner decision 2026-11-12, gap N7), so it hashes the
+files' real bytes; `--check` runs in the image, because that is what the loader sees. It needs
+Python 3.14 with Unicode data 16.0.0, the version the loader's character screen was reviewed
+against (`kb_screen.REVIEWED_UNIDATA_VERSION`; CI checks the image against the same constant).
+Any other version is refused with status 3 ("refused: the builder needs the reviewed Python
+Unicode data") before a file is read. Homebrew's `python3.14` on this Mac is 3.14.10 with
+16.0.0 (checked 2026-11-12); a Python update can change it, and the refusal then says so.
+
+One-time setup, in the production checkout `/Users/patcsy88/DiveSafe/app` (not in a synced
+folder, never in the corpus; `.venv-tools/` is git-ignored). The runtime dependencies are needed:
+the `divesafe.services` package imports psycopg and pydantic-settings. The install is editable,
+so the venv follows the checked-out commit; re-run the `pip install` after a deploy that changes
+dependencies:
+
+```sh
+cd /Users/patcsy88/DiveSafe/app && /opt/homebrew/bin/python3.14 -m venv .venv-tools \
+  && .venv-tools/bin/pip install -e .
+```
+
+Then run the block from `/Users/patcsy88/DiveSafe/app`. `DIVESAFE_CORPUS_DIR` is set in
+`docker/production.env`, not in your shell, so read it first; write it there unquoted
+(`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps quotes, and a quoted value gives a bad path
 and a refusal). The manifest is written to a temporary file outside the repository and the corpus;
 only if the build succeeded does it replace `manifest.json`, get hashed and get checked:
 
 ```sh
 DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
-: "${DIVESAFE_CORPUS_DIR:?}" && out=$(mktemp) && docker run --rm --network none --read-only \
-  --cap-drop ALL --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
-  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build \
-  /corpus/draft.json > "$out" \
-  && chmod 644 "$out" && mv "$out" "${DIVESAFE_CORPUS_DIR:?}/manifest.json" \
+: "${DIVESAFE_CORPUS_DIR:?}" && out=$(mktemp) \
+  && .venv-tools/bin/python -I -m divesafe.services.kb_manifest_build \
+  "$DIVESAFE_CORPUS_DIR/draft.json" > "$out" \
+  && chmod 644 "$out" && mv "$out" "$DIVESAFE_CORPUS_DIR/manifest.json" \
   && shasum -a 256 "$DIVESAFE_CORPUS_DIR/manifest.json" \
   && docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
@@ -171,19 +189,17 @@ DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
 Never redirect the output into the repository (it holds licence and permission references and
 section titles; `manifest.json` and `draft.json` are git-ignored as a backstop) or straight onto
 the existing `manifest.json` (the shell empties it before a refused build). The tool never
-writes a file: the manifest goes to stdout and a fixed message to stderr. The `shasum` line is
-the hash for the approval record, taken **after** the file is written. `--check` runs only after
-a successful build (a refusal leaves no new hash to compare): it runs the loader's `read_corpus`
-and prints the manifest SHA-256 (it must match the `shasum` line) and each document's id, version
-and chunk count. If the block stops after the `mv` (`shasum` or `--check` failing), the new
-`manifest.json` is already in place: do not approve it until `--check` succeeds.
-
-Before approval, also compare each document's `file.sha256` in `manifest.json` with
-`shasum -a 256 "$DIVESAFE_CORPUS_DIR/<path>"` on the host; they must be equal. Docker Desktop's
-file sharing can show a container stale contents of a file edited in place moments before (seen
-2026-11-12: a build read the new file cut to the old file's length, and the chained `--check`
-refused it). If they differ or `--check` refuses, wait a few seconds and run the block again.
-The image must include the tool (built from a commit that has it).
+writes a file: the manifest goes to stdout and a fixed message to stderr. `-I` keeps the
+shell's `PYTHONPATH` and the current folder out of the import path. The `shasum` line is the
+hash for the approval record, taken **after** the file is written. `--check` runs only after a
+successful build (a refusal leaves no new hash to compare): it runs the loader's `read_corpus`
+in the image and prints the manifest SHA-256, which must equal the `shasum` line, and each
+document's id, version and chunk count. If the block stops after the `mv` (`shasum` or
+`--check` failing), the new `manifest.json` is already in place: do not approve it until
+`--check` succeeds. A `--check` refusal right after a host build can be Docker Desktop showing
+the container a stale file (N7): wait a few seconds and run the `docker run ... --check` line
+again; if it still refuses, the corpus is not accepted. The image must include the tool (built
+from a commit that has it).
 
 Known gaps (2026-11-12 security reviews):
 - K4: the build uses the loader's private `_split_chunks` and `_open_dir`, and its final check
@@ -199,10 +215,14 @@ Known gaps (2026-11-12 security reviews):
 - N6: `.gitignore` covers only the names `draft.json` and `manifest.json`: a draft with another
   name is not ignored, and a future fixture with either name would be silently ignored.
 - N7: Docker Desktop (macOS) file sharing can serve stale contents of a just-edited corpus file
-  to a new container (2026-11-12, Docker Desktop 29.8.2). The build, `--check` and `load` all
-  read through such a mount; if they all see the same stale bytes the hashes agree. The host
-  `shasum` comparison above is the only check against that, and it is manual. Owner decision
-  pending: run the builder on the host instead, or have the loader print each file's hash.
+  to a new container (2026-11-12, Docker Desktop 29.8.2). Mitigated (owner decision 2026-11-12):
+  the builder runs on the host and hashes the real bytes, so a stale view in the `--check` or
+  `load` container now gives a hash mismatch and a refusal instead of agreeing. The operator
+  still compares the `--check` hash with the host `shasum` line, by hand.
+- N8: the reviewed Unicode version is one constant (`kb_screen.REVIEWED_UNIDATA_VERSION`), read
+  by the builder, the loader and CI's image step; the host venv's Python is not pinned (a
+  Homebrew update can change it), and the builder then refuses with status 3 until a Python
+  with 16.0.0 is used. `tests/safety/test_kb_screen.py` pins "16.0.0" on purpose.
 
 Known gaps (2026-11-12 risk reviews of `tests/safety/test_kb_manifest_build_no_defaults.py`):
 - R1: the guard on the second verbatim draft checks that each listed value differs from the

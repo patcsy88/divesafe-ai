@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from tests.safety.kb_build_draft import (
     outcome,
 )
 
-from divesafe.services import kb_common, kb_manifest, kb_manifest_build
+from divesafe.services import kb_common, kb_manifest, kb_manifest_build, kb_screen
 from divesafe.services.kb_manifest_build import (
     FAILED_ARGUMENTS,
     FAILED_CHECK,
@@ -37,6 +38,7 @@ from divesafe.services.kb_manifest_build import (
     FAILED_LOADER,
     FAILED_PARAGRAPH,
     FAILED_TEXT,
+    FAILED_UNICODE,
     FAILED_ZERO_CHUNKS,
     OK_BUILD,
     OK_CHECK,
@@ -429,6 +431,70 @@ def test_a_refusal_prints_nothing_on_stdout_and_echoes_nothing(
     messages = {o.message for o in vars(kb_manifest_build).values() if isinstance(o, Outcome)}
     assert err.decode().removesuffix("\n") in messages
     assert b"secret-dir-name" not in err and b"guide" not in err
+
+
+@pytest.mark.parametrize("version", ["15.0.0", "15.1.0", "16.0.1", "16.1.0", "17.0.0", ""])
+@pytest.mark.parametrize("mode", ["build", "check"])
+def test_another_unicode_version_is_refused_before_anything_is_read(
+    tmp_path: Path,
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+    mode: str,
+) -> None:
+    """Host builds (N7): a Python whose Unicode data is not the reviewed version (the one constant
+    kb_screen.REVIEWED_UNIDATA_VERSION) refuses with its own status and a fixed message, prints
+    nothing on stdout and opens no file."""
+    path = corpus(tmp_path, {"guide.txt": GUIDE})
+    (tmp_path / "manifest.json").write_bytes(kb_manifest_build.build(path))
+    argv = [str(path)] if mode == "build" else ["--check", str(tmp_path)]
+    assert kb_manifest_build.main(argv) == 0  # the same corpus is accepted with the reviewed data
+    capsysbinary.readouterr()
+    opened: list[object] = []
+    real_open = os.open
+
+    def recording_open(*args: Any, **kwargs: Any) -> int:
+        opened.append(args[0])
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(unicodedata, "unidata_version", version)
+    monkeypatch.setattr(os, "open", recording_open)
+    status = kb_manifest_build.main(argv)
+    out, err = capsysbinary.readouterr()
+    assert status == FAILED_UNICODE.status == 3
+    assert out == b""
+    assert err == (FAILED_UNICODE.message + "\n").encode()
+    assert opened == []
+
+
+def test_the_unicode_refusal_has_its_own_status() -> None:
+    outcomes = [o for o in vars(kb_manifest_build).values() if isinstance(o, Outcome)]
+    assert [o for o in outcomes if o.status == FAILED_UNICODE.status] == [FAILED_UNICODE]
+
+
+def test_the_builder_checks_the_one_reviewed_version_constant(
+    tmp_path: Path, capsysbinary: pytest.CaptureFixture[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No second literal: moving kb_screen's constant moves the builder's check with it."""
+    path = corpus(tmp_path, {"guide.txt": GUIDE})
+    monkeypatch.setattr(kb_screen, "REVIEWED_UNIDATA_VERSION", "0.0.0")
+    assert kb_manifest_build.main([str(path)]) == FAILED_UNICODE.status
+    monkeypatch.setattr(unicodedata, "unidata_version", "0.0.0")
+    assert kb_manifest_build.main([str(path)]) == 0
+    capsysbinary.readouterr()
+
+
+def test_mutation_without_the_unicode_check_is_caught(
+    tmp_path: Path, capsysbinary: pytest.CaptureFixture[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = corpus(tmp_path, {"guide.txt": GUIDE})
+    mutant = mutated_module(
+        kb_manifest_build, ("        kb_screen.require_reviewed_unicode()\n", "        pass\n")
+    )
+    monkeypatch.setattr(unicodedata, "unidata_version", "17.0.0")
+    assert mutant.main([str(path)]) == 0  # the mutant builds on unreviewed data
+    assert kb_manifest_build.main([str(path)]) == FAILED_UNICODE.status
+    capsysbinary.readouterr()
 
 
 @pytest.mark.parametrize("argv", [[], ["a", "b"], ["--check"], ["--other", "x"], ["-x"]])
