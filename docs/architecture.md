@@ -238,9 +238,11 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
   instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.
-- **Observability: ADR 0027 proposed (2026-11-12).** No request id, metrics or alerting; on
-  2026-11-12 every model call of one production assessment failed (model-host 404) and only the
-  record showed it. See [ADR 0027](adr/0027-observability.md).
+- **Observability: ADR 0027 accepted (2026-11-12), not built.** No request id, metrics or
+  alerting yet; on 2026-11-12 every model call of one production assessment failed (model-host
+  404) and only the record showed it. Decided: a request id, `/metrics` behind a new `metrics`
+  role using `prometheus_client`, Uptime Kuma for alerting; tracing stays proposed. See
+  [ADR 0027](adr/0027-observability.md).
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry
   `rtk git ...` variants, including a deny for `rtk git push`. Verified by running the reviewer:

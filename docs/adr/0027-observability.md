@@ -1,7 +1,9 @@
 # ADR 0027: Observability (request ids, metrics, alerting, later tracing)
 
-- Status: PROPOSED (2026-11-12). Not reviewed. Nothing here is built; the owner decisions at the
-  end come first.
+- Status: ACCEPTED for items 1 to 3 (owner decisions 2026-11-12: `/metrics` behind a `metrics`
+  role, `prometheus_client`, Uptime Kuma); item 4 (tracing) stays PROPOSED, later. **Nothing is
+  built yet.** The remaining owner decisions at the end are open with a recommended default.
+  This ADR is the record for the `prometheus_client` dependency.
 - Builds on ADR 0024 (production stack), ADR 0025 (the per-stage trace on the record), ADR 0023
   and ADR 0022 (what may leave the machine), ADR 0013 (roles).
 
@@ -47,14 +49,23 @@ plan fields leave the machine), and "no new dependency without an ADR".
    input, no prompt or model text, no site free text, and never an actor, `key_id`, client address,
    request id or assessment id**: site labels, if any, are the fixed site ids only. Counters are
    per process (as rate limiting is today). Whether a `/metrics` request counts toward rate
-   limiting and the auth-failure counter is an owner decision (below). Two options for the
-   implementation:
-   - **Option A (recommended): write the text format by hand.** A few counters and one histogram
-     are a page of code with no dependency; the exposition format is stable and simple.
+   limiting and the auth-failure counter is an owner decision (below). Two options were
+   considered:
+   - **Option A: write the text format by hand.** A few counters and one histogram are a page
+     of code with no dependency; the exposition format is stable and simple. Recommended at
+     proposal time; not chosen.
    - **Option B: `prometheus_client`.** Less code for histograms and multiprocess use, but a new
-     dependency, which is what this ADR would be justifying. Choose B only if the reviewers
-     prefer it.
-   **Authentication (owner decision):** section 12 forbids an open endpoint, so either (a) a
+     dependency, which is what this ADR would be justifying.
+   **Owner decision 2026-11-12: option B, `prometheus_client`, a new runtime dependency recorded
+   here.** What it brings and how it is used: pure Python, no network of its own. Use a
+   dedicated `CollectorRegistry`, not the global default, so only the metrics named above are
+   exposed; do **not** register the default process, platform and GC collectors unless that is
+   reviewed separately. Generate the text with `generate_latest(registry)` inside the
+   authenticated route; never `start_http_server` or the library's ASGI/WSGI app, which would be
+   an unauthenticated listener. Pinned like every other runtime dependency and subject to the
+   same `pip-audit` in CI (ADR 0024).
+   **Authentication, owner decision 2026-11-12: (a), a `metrics` role; AGENTS.md section 12
+   stays as written, no loopback-port exception.** The options were: (a) a
    `metrics` role on an API key (ADR 0013; the scraper holds a key with that role only), or (b)
    bind `/metrics` to a second, loopback-only port that the scraper reaches on the host, with the
    API's main port unchanged. (b) adds no key handling to the scraper; (a) needs no second
@@ -64,14 +75,23 @@ plan fields leave the machine), and "no new dependency without an ADR".
    (`test_api_roles_and_limits.py`, open paths). And behind Docker publishing, loopback-only
    means the host's `127.0.0.1`, which any local user or process on the host can read. The
    metrics hold nothing sensitive, but they show activity and failure rates, so neither option
-   exposes them to the network; only (a) keeps the rule as written.
-3. **Alerting stays outside the app.** The app exposes signals; the owner picks the tool
-   (Uptime Kuma, a cron job with a mail script, or similar; not chosen here). Minimal recommended
-   set: agent-stage failure rate above zero over the last N runs (the incident above); any
-   connector failure; `docker/backup.sh` exit status not 0 (it already exits non-zero on every
-   refusal, so a cron wrapper can mail on failure); `/health` not answering. Thresholds and N are
-   operator choices and are not safety thresholds. An alert message carries metric names and
-   values only, never record or decision text.
+   exposes them to the network; only (a) keeps the rule as written, which is why it was chosen.
+   The scraper holds its own API key carrying only the `metrics` role (ADR 0013); that role
+   grants nothing else.
+3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
+   Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
+   runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;
+   `/health` not answering. Thresholds and N are operator choices and are not safety thresholds.
+   How Uptime Kuma fits:
+   - `/health`: an HTTP status (or keyword) monitor.
+   - Backups: a push monitor. The cron wrapper around `docker/backup.sh` calls the push URL only
+     on exit 0; a missing push within the expected interval is the alert (the script already
+     exits non-zero on every refusal).
+   - Metrics: Uptime Kuma cannot evaluate PromQL rates, so the agent-failure and
+     connector-failure alerts need either a keyword or JSON check on a small authenticated
+     endpoint, or a Prometheus later. **Open point, not decided here**; nothing is invented for
+     it. Uptime Kuma holds its own API key with only the `metrics` role (above).
+   - Alert messages carry metric names and values only, never record or decision text.
 4. **Later and optional: tracing.** OpenTelemetry spans per stage and per model call with
    timings and the fixed codes only, **never prompt or reply text**, sent to a local collector or
    a self-hosted Langfuse on the same machine. Rules for any build of it:
@@ -93,31 +113,51 @@ plan fields leave the machine), and "no new dependency without an ADR".
 
 ## Consequences
 
-- Item 1 reuses `DIVESAFE_TRUSTED_PROXIES`; item 2 adds one setting for the metrics port or
-  role, through `Settings`. Item 4 would add an opt-in setting and a host allow-list for the
-  exporter.
+- Item 1 reuses `DIVESAFE_TRUSTED_PROXIES`; item 2 adds the `metrics` role to ADR 0013's role
+  set (a key with only that role can read `/metrics` and nothing else) and no new port. Item 4
+  would add an opt-in setting and a host allow-list for the exporter.
 - Item 2 touches `api` and `orchestration` (counters are incremented where the stage trace is
   written); it does not touch `domain`, `risk` or the record.
-- New dependencies: `prometheus_client` only under option B; the OpenTelemetry SDK and exporter,
-  and Langfuse if chosen, under item 4. All recorded here; none is added before the owner decides.
-- Item 2 option (b) would need an owner amendment to AGENTS.md section 12 and a change to the
-  all-routes-authenticated safety test; the architect cannot make that relaxation.
+- New dependency: `prometheus_client` (decided 2026-11-12; pinned, `pip-audit`). The
+  OpenTelemetry SDK and exporter, and Langfuse if chosen, would come with item 4 and are not
+  added before the owner decides. The all-routes-authenticated safety test keeps `/metrics` on
+  the authenticated side; a new safety test should prove a key without `metrics` is refused
+  there and that a `metrics`-only key is refused everywhere else.
+- Option (b) is rejected: it would have needed an owner amendment to AGENTS.md section 12 and a
+  change to the all-routes-authenticated safety test.
+- Uptime Kuma is a separate self-hosted service with its own update and backup duties (operator
+  work, outside this repository); it stores an API key, so it must be treated as a secret store.
 - Item 1 is a contract with the operator's proxy: the proxy must strip or replace an inbound
   `X-Request-ID` it did not set.
 - Alerting is operator work and can fail silently itself; the first alert to set up is the
   backup one, since it already has a hook.
 
-## Owner decisions needed
+## Owner decisions
 
-1. Build items 1 and 2 at all for the MVP, and in that order?
-2. Item 2 option A (hand-written) or B (`prometheus_client`)?
-3. Item 2 authentication: a `metrics` role on a key, or a loopback-only port?
-4. Store the request id on the record (new field) or keep it in logs only?
-5. Which alerting tool, and the N for the agent-failure rule.
-6. Whether tracing (item 4) is wanted at all for the MVP.
+Settled 2026-11-12:
+
+1. ~~Build items 1 and 2 at all for the MVP, and in that order?~~ Yes, in that order (items 1
+   to 3 accepted).
+2. ~~Option A or B?~~ B, `prometheus_client`.
+3. ~~`metrics` role or loopback-only port?~~ The `metrics` role; section 12 unchanged.
+5. ~~Which alerting tool?~~ Uptime Kuma. The N for the agent-failure rule is still open (see 5
+   below).
+8. ~~Amend section 12 for (b)?~~ Not needed; (b) rejected.
+
+Still open, with the recommended default:
+
+4. Store the request id on the record (new field) or keep it in logs only? **Default: logs only**
+   (no record field, no migration; a log search by id finds the run).
+5. The N for the agent-failure rule, and how the metric-based alerts reach Uptime Kuma (keyword
+   or JSON check on a small authenticated endpoint, or a later Prometheus). **Default: start with
+   the `/health` and backup monitors, which need no metrics; add the metric alerts once the
+   check mechanism is chosen.**
+6. Whether tracing (item 4) is wanted at all for the MVP. **Default: no**; item 4 stays
+   proposed.
 7. Whether `/metrics` requests count toward rate limiting and the auth-failure counter.
-8. If (b) in item 2: amend section 12 to allow a reach-restricted, unauthenticated metrics
-   listener, and accept that any local process on the host can read it.
+   **Default: yes to both** (one scrape a minute is far below the limit, and a failed scrape
+   auth is a real auth failure); the scraper's key must then never be rate-limited out by
+   another client sharing its address.
 
 ## Known gaps
 
@@ -130,5 +170,10 @@ plan fields leave the machine), and "no new dependency without an ADR".
   port every local process looks like the proxy (log correlation only; no authority attaches to
   the id).
 - No alert can be checked by a test in this repository; alerting is operator discipline.
-- A hand-written exposition (option A) needs its own test against the format, and will lack the
-  multiprocess mode of `prometheus_client`.
+- `prometheus_client`'s multiprocess mode is not used; with more than one worker each process
+  exposes its own counters and a scrape sees whichever answers (same as the per-process rate
+  limit). One worker is the production setting today (ADR 0024).
+- Uptime Kuma cannot evaluate metric rates, so until the open point in item 3 is settled the
+  two failure alerts that motivated this ADR are not wired; only `/health` and backup are.
+- A `metrics`-only key that leaks lets the holder read activity and failure rates; rotation is
+  manual, as for every key (ADR 0013).
