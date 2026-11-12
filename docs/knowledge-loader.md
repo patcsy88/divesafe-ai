@@ -110,7 +110,9 @@ C --profile knowledge run --rm kb_withdraw <document_id> <version>
   append a line after every `approve`. **Format:** `approved_at_utc` is ISO 8601 UTC,
   `YYYY-MM-DDTHH:MM:SSZ` (`date -u +%Y-%m-%dT%H:%M:%SZ`), the time the dive professional
   approved, not when `approve` ran; `recorded_at_utc` is copied exactly as `withdraw` prints it;
-  a field that contains a comma is double-quoted.
+  a field that contains a comma is double-quoted. A field that starts with `=`, `+`, `-` or
+  `@` is read as a formula by a spreadsheet: prefix it with `'`, or do not open the file in a
+  spreadsheet.
 - **Re-loading a changed text** needs a new version: `"version": 2`, `"supersedes": 1`, a new
   file name, and a new approval line. `load` of an existing version is refused by the database
   (exit 11, "a new version must be greater than every existing version"); the message gives no
@@ -125,6 +127,34 @@ C --profile knowledge run --rm kb_withdraw <document_id> <version>
 - The hash is not a secret, but it is visible in shell history and in `docker ps` while the
   run container exists.
 - Backup and restore refuse while a `kb_load` or `kb_withdraw` container exists. Use `--rm`.
+
+### Building the manifest
+
+`kb_manifest_build` writes the computed parts of `manifest.json` (file and chunk SHA-256s, byte
+offsets, chunk numbers, heading gaps) from a draft you write. It is a convenience, not a check:
+`load` re-checks everything. Write the draft (for example `draft.json`) in the corpus directory
+with every human field, `null` included: top level `format`, `attests_no_generated_text`,
+`attests_no_personal_names`, `documents`; per document every manifest field except `file`, plus
+`path` (relative to the corpus directory). Nothing is defaulted; a missing, extra or repeated key
+is refused.
+
+Chunking: a line starting with `## ` is a heading, stored as a `heading` gap; its text is the
+`section` of the chunks after it (before the first heading the section is the `title`).
+Paragraphs (separated by blank lines) are packed into chunks of at most 1500 characters; a
+longer paragraph is refused, never split. Exact rule: the module docstring.
+
+```sh
+docker run --rm --network none --read-only -v "$DIVESAFE_CORPUS_DIR":/corpus:ro \
+  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build \
+  /corpus/draft.json > manifest.json
+shasum -a 256 manifest.json
+```
+
+It never writes a file: the manifest goes to stdout and a fixed message to stderr; on a refusal
+stdout is empty, so check the exit status before using the file. Move `manifest.json` into the
+corpus directory and take the hash with `shasum -a 256 manifest.json` **after** writing it (that
+is the hash for the approval record). `--check /corpus` instead runs the loader's `read_corpus`
+on the directory and prints the manifest SHA-256 and each document's id, version and chunk count.
 
 ### First production load
 
@@ -187,7 +217,7 @@ COMMIT;
 SQL
 ```
 
-or (b) stop the API (`C stop api`, or `docker stop <api container>` if the variable is missing)
+or (b) stop the API (`C stop api`, or `docker stop <api container>` if the function is not defined)
 until `withdraw` works.
 
 If `withdraw` exits 11 and no load of that family is running, the ordering sequence may have been

@@ -180,6 +180,11 @@ results and the specialist findings** (the prompt layer's payload) to
 Started on a developer machine; one assessment went through on the owner's host (see condition 1
 and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-host.md`.
 
+Prerequisite: the checkout, and so `docker/secrets/` and `docker/production.env`, must not be
+in a folder synced to a cloud service (iCloud, Dropbox, OneDrive; on a Mac, Desktop and Documents
+are synced when the iCloud option is on), as `docs/backup-and-restore.md` already says for backups.
+Found violated on 2026-11-12 (A8 "Gaps from the deploy and first load").
+
 ```
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
 # add by hand: docker/secrets/divesafe_llm_api_key and docker/secrets/divesafe_api_key_hashes
@@ -1975,8 +1980,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     ~~`DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env`~~ (done 2026-11-11). The A6
     branch rule is lifted (owner decision 2026-11-11). **Still needed:** the owner's site
     documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
-    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
-    progress); deploying the new image (not done).
+    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; reviewed);
+    ~~deploying the new image~~ (done 2026-11-12, next entry).
   - **Deployed and first load done (2026-11-12, all times UTC).** Production runs main `a997101`
     (API image `f4c8511e0163`, started 13:00); the previous image is kept as
     `divesafe-api:rollback-20261018` (`c97d9d35fe49`). An intermediate deploy by the owner from
@@ -2007,10 +2012,26 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `patcsy88` (assessor, decider, viewer; label `93fa56f38ad5`) by the first-run document's
     method; the old hash file is kept as `docker/secrets/divesafe_api_key_hashes.old-20261112`
     (mode 400); older records keep `first-run` as decider, correctly. The `C="..."`/`$C` compose
-    prefix in the docs ran nothing in zsh; the docs now use a shell function.
-  - **Gaps from the deploy and first load (2026-11-12):** `.dockerignore` does not exclude
-    Finder/iCloud duplicates (`* 2.*`); a code change should add it. One API key holds all three
-    roles (assessor, decider, viewer), so the gate's two-person idea rests on one credential.
+    prefix in the docs ran nothing in zsh; the docs now use a shell function. **Security review
+    of this record (2026-11-12, S1):** the owner checked that macOS iCloud "Desktop & Documents"
+    sync is on and the production checkout is `~/Desktop/DiveSafe AI`, so `docker/secrets/` (the
+    database passwords, the loader and app connection strings, the model-host key, the API key
+    hashes) and `docker/production.env` have been synced to the owner's iCloud account. The 68
+    stray copies were source and test files only (none of the secrets, the env file or a dump;
+    checked 2026-11-12). Open gap, below.
+  - **Gaps from the deploy and first load (2026-11-12):** **OPEN (security S1): the production
+    checkout sits in an iCloud-synced folder**, so every file under `docker/secrets/` and
+    `docker/production.env` has been copied to the owner's iCloud account. Remedy, pending the
+    owner's decision: move the checkout out of the synced folder (for example
+    `/Users/patcsy88/DiveSafe/`, which is not synced and already holds the corpus, records and
+    backups), then rotate every secret as exposed to that cloud account (database passwords,
+    loader and app connection strings, model-host key, API key hashes). `.dockerignore` **and**
+    `.gitignore` do not exclude Finder/iCloud duplicates (`* 2.*`); a code change should add
+    the pattern to both (`.gitignore` matches `/docker/production.env` exactly, so a
+    `docker/production 2.env` copy would not be ignored). The old hash file
+    `docker/secrets/divesafe_api_key_hashes.old-20261112` should move out of `docker/secrets/`,
+    which rules out mounting it by mistake (security N6). One API key holds all three roles
+    (assessor, decider, viewer), so the gate's two-person idea rests on one credential.
     `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
     says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
     the bootstrap user, not `divesafe_owner` (same read-only result).

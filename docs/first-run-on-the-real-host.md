@@ -22,6 +22,10 @@ any secret into a chat, a ticket or a file inside the repository.
 - Docker with Compose, and the images built (`--build` below needs the network once).
 - Run everything from the repository root, in one terminal, so the shell variables below stay set.
 - `docker/secrets/` and `docker/production.env` are git-ignored. Check with `git status` at the end.
+- **Never put the checkout or `docker/secrets` in a folder synced to a cloud service** (iCloud,
+  Dropbox, OneDrive; on a Mac, Desktop and Documents are synced when the iCloud option is on),
+  as `docs/backup-and-restore.md` says for backups. Found violated on 2026-11-12: the checkout
+  was `~/Desktop/DiveSafe AI`, so the secrets were synced (ADR 0024 A8, open gap).
 
 ## 1. Settings and secrets
 
@@ -35,9 +39,10 @@ cp docker/production.env.example docker/production.env
 `down` (ADR 0024 A3). Set it to an absolute path of a directory outside the repository; it may be
 empty. No knowledge is loaded in this run (production refuses `load` and `approve` until the ADR
 0024 A6 gates are closed). **Since 2026-11-12 the gates are closed or waived and the load is on**
-(`b7ce432`, `PRODUCTION_LOAD_GATES_CLOSED = True`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); the new image is not
-deployed and the corpus is empty); the first load is a supervised run, `docs/knowledge-loader.md`
-"First production load", never part of this first run.
+(`b7ce432`, `PRODUCTION_LOAD_GATES_CLOSED = True`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); deployed later that day as
+main `a997101`, and the first supervised load done and withdrawn, ADR 0024 A8); the first load
+is a supervised run, `docs/knowledge-loader.md` "First production load", never part of this
+first run.
 
 `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` has no built-in default and no recorded reason yet (ADR 0024,
 condition 4). For this run pick a value and write down that it is a test value; do not copy it into
