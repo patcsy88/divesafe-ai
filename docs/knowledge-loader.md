@@ -161,38 +161,49 @@ Setup, in the production checkout `/Users/patcsy88/DiveSafe/app` (not in a synce
 in the corpus; `.venv-tools/` is git- and docker-ignored). It installs exactly the packages and
 versions the deployed image ships (`pip freeze` inside the image), as wheels only, without
 dependency resolution (`--no-deps`) and without building anything: the checkout's `src` is put
-on the path by a `.pth` file, so no build backend (hatchling) is fetched. The builder needs the
+on the path by a `.pth` file, so no build backend (hatchling) is fetched. `--isolated` and the
+explicit `--index-url` ignore `PIP_*` variables and pip configuration files. The builder needs the
 runtime packages because the `divesafe.services` package imports psycopg and pydantic-settings;
 it never creates `Settings` or reads a `.env` file. Re-run this after every deploy (new image)
 and after a Homebrew Python upgrade (the venv is not rebuilt by one; it removes the old venv):
 
 ```sh
+unset c
 cd /Users/patcsy88/DiveSafe/app && rm -rf .venv-tools && c=$(mktemp) \
-  && docker run --rm --network none --entrypoint pip divesafe-api:local \
+  && docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint pip divesafe-api:local \
   freeze --exclude divesafe > "$c" \
   && /opt/homebrew/bin/python3.14 -m venv .venv-tools \
-  && .venv-tools/bin/pip install --only-binary :all: --no-deps -r "$c" \
-  && .venv-tools/bin/pip check \
+  && .venv-tools/bin/pip install --isolated --index-url https://pypi.org/simple \
+  --only-binary :all: --no-deps -r "$c" \
+  && .venv-tools/bin/pip check --isolated \
   && echo "$PWD/src" > "$(.venv-tools/bin/python -I -c \
   'import sysconfig; print(sysconfig.get_path("purelib"))')/divesafe-src.pth"
 rm -f "${c:-}"
 ```
 
-Then run the block from `/Users/patcsy88/DiveSafe/app`. It stops if the checkout has uncommitted
-changes (the builder runs from `src` as checked out) and prints `built_with_commit` with the
-commit; write that line into the `notes` field of the approval record. `DIVESAFE_CORPUS_DIR` is
-set in `docker/production.env`, not in your shell, so read it first; write it there unquoted
-(`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps quotes, and a quoted value gives a bad path
-and a refusal). The manifest is written to a temporary file outside the repository and the corpus;
-only if the build succeeded does it replace `manifest.json`, get hashed and get checked:
+Then run the block (it changes to `/Users/patcsy88/DiveSafe/app` itself, so the checked tree and
+the venv are the same). It stops if `git` fails, if the checkout has any tracked or untracked
+change, or if `src` holds an ignored file (a stray `.pyc` or `__pycache__` could be imported; `-B`
+means a clean run never writes one), because the builder runs from `src` as checked out. It
+prints `built_with_commit` with the commit; write that line into the `notes` field of the
+approval record. `DIVESAFE_CORPUS_DIR` is set in `docker/production.env`, not in your shell, so
+the block reads it; write it there unquoted (`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps
+quotes, and a quoted value gives a bad path and a refusal). The manifest is written to a
+temporary file outside the repository and the corpus; only if the build succeeded does it
+replace `manifest.json`, get hashed and get checked:
 
 ```sh
-unset out
-DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
-: "${DIVESAFE_CORPUS_DIR:?}" \
-  && { test -z "$(git -C /Users/patcsy88/DiveSafe/app status --porcelain)" \
-  || { echo "refused: the checkout has uncommitted changes (git status)" >&2; false; }; } \
-  && echo "built_with_commit $(git -C /Users/patcsy88/DiveSafe/app rev-parse HEAD)" \
+unset out h s i DIVESAFE_CORPUS_DIR
+cd /Users/patcsy88/DiveSafe/app \
+  && DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env) \
+  && : "${DIVESAFE_CORPUS_DIR:?}" \
+  && h=$(git -C /Users/patcsy88/DiveSafe/app rev-parse --verify HEAD) \
+  && s=$(git -C /Users/patcsy88/DiveSafe/app status --porcelain) \
+  && i=$(git -C /Users/patcsy88/DiveSafe/app status --porcelain --ignored -- src) \
+  && { test -n "$h" && test -z "$s$i" \
+  || { echo "refused: a change in the checkout or an ignored file in src" >&2; false; }; } \
+  && echo "built_with_commit $h" \
   && out=$(mktemp) \
   && .venv-tools/bin/python -I -B -m divesafe.services.kb_manifest_build \
   "$DIVESAFE_CORPUS_DIR/draft.json" > "$out" \
@@ -248,6 +259,9 @@ Known gaps (2026-11-12 security reviews):
   it with `pip-audit -r <the freeze file>` (pip-audit in its own venv; CI audits the open
   ranges in `pyproject.toml`, not this list). It runs as the owner outside any sandbox, so it can
   read whatever the owner can (`docker/secrets/` included); only the checkout's own code runs.
+  `pip check` does not see the checkout's own requirements (`divesafe` is only on the path):
+  a newer checkout that adds a dependency gives an ImportError (fails closed); one that raises a
+  version floor runs on the image's older version, and `--check` in the image judges the result.
 - N9: the GitHub ruleset "selamat" (all branches) only blocks deletion and force-push
   (checked 2026-11-12); there are no required status checks, so CI's `test` (safety) and
   `image` (Unicode) jobs are not enforced by branch protection. The merge procedure waits for
