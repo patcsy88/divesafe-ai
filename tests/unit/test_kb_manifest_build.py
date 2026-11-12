@@ -174,7 +174,6 @@ def test_an_extra_repeated_or_malformed_draft_is_refused(tmp_path: Path, raw: by
 @pytest.mark.parametrize(
     ("top", "doc"),
     [
-        ({"attests_no_generated_text": None}, {}),
         ({"format": 2}, {}),
         ({}, {"licence": ""}),
         ({}, {"supersedes": 1}),

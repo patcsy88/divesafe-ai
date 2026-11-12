@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from tests.safety.kb_build_draft import (
+    CRASHED,
     GUIDE,
     corpus,
     document,
@@ -23,7 +24,7 @@ from tests.safety.kb_build_draft import (
     outcome,
 )
 
-from divesafe.services import kb_manifest_build
+from divesafe.services import kb_manifest, kb_manifest_build
 from divesafe.services.kb_manifest_build import (
     DOCUMENT_KEYS,
     FAILED_DRAFT,
@@ -94,10 +95,11 @@ def without(key: str) -> dict[str, Any]:
 
 
 def valid_value(key: str) -> Any:
-    """The value the valid draft carries: the permissive one for every attestation, permission
-    and site field (attests_* true, display_permitted true, licence_requires_personal_name
-    false, all_sites true with site_id null, supersedes null, origin and author_role
-    dive_professional)."""
+    """The value the valid draft carries. For the single-valued booleans (attests_* true,
+    display_permitted true, licence_requires_personal_name false) and the scope pair (all_sites
+    true with site_id null) it is the permissive one; for the rest (origin, author_role,
+    supersedes, the dates, the texts) it is just a value the loader accepts. A builder forcing
+    one of those is caught by the second verbatim case below, not by the default mutants."""
     return draft()[key] if key in EXPECTED_TOP_KEYS else document()[key]
 
 
@@ -113,19 +115,87 @@ def test_the_module_key_sets_are_the_pinned_ones() -> None:
 # --- a missing field is refused, never filled in --------------------------------------------------
 
 
-def test_human_fields_are_copied_verbatim_and_nothing_is_added(tmp_path: Path) -> None:
-    the_draft = draft(document(attribution="Synthetic attribution", supersedes=None))
-    raw = kb_manifest_build.build(corpus(tmp_path, {"guide.txt": GUIDE}, the_draft))
+# The valid draft holds the permissive or more trusted value of every multi-valued field, so a
+# builder FORCING that value would still match it. The second draft holds the other accepted
+# value of each, so such a builder is caught there.
+OTHER_VALUES: dict[str, Any] = {
+    "document_id": "other-guide",
+    "version": 2,
+    "title": "Another synthetic guide",
+    "origin": "published_document",
+    "author_role": "published_source",
+    "effective_date": "2026-03-15",
+    "review_by_date": "2027-03-01",
+    "licence": "Another synthetic licence",
+    "licence_reference": "synthetic-licence-ref-2",
+    "attribution": "Synthetic attribution",
+    "site_id": next(iter(kb_manifest.SITES)),
+    "all_sites": False,
+    "display_permission_reference": "synthetic-permission-ref-2",
+    "supersedes": 1,
+}
+VERBATIM = {"permissive": draft(), "other-values": draft(document(**OTHER_VALUES))}
+
+
+def differing(raw: bytes, the_draft: dict[str, Any]) -> list[str]:
+    """The human fields the built manifest does not carry verbatim, and any shape difference.
+    Empty means verbatim; the real module and every mutant are judged by this one function."""
     built = manifest_of(raw)
-    assert list(built) == list(EXPECTED_TOP_KEYS)
-    for key in EXPECTED_TOP_KEYS[:-1]:
-        assert built[key] == the_draft[key]
+    if list(built) != list(EXPECTED_TOP_KEYS) or len(built["documents"]) != 1:
+        return ["<shape>"]
+    out = [k for k in EXPECTED_TOP_KEYS[:-1] if built[k] != the_draft[k]]
     (entry,) = built["documents"]
-    assert list(entry) == [*EXPECTED_DOCUMENT_KEYS, "file"]
-    for key in EXPECTED_DOCUMENT_KEYS:
-        assert entry[key] == the_draft["documents"][0][key]
-    assert set(entry["file"]) == {"path", "sha256", "chunks", "gaps"}
-    assert entry["file"]["sha256"] == hashlib.sha256(GUIDE.encode()).hexdigest()
+    if list(entry) != [*EXPECTED_DOCUMENT_KEYS, "file"]:
+        return [*out, "<document shape>"]
+    source = the_draft["documents"][0]
+    out += [k for k in EXPECTED_DOCUMENT_KEYS if entry[k] != source[k]]
+    if set(entry["file"]) != {"path", "sha256", "chunks", "gaps"}:
+        out.append("<file shape>")
+    elif entry["file"]["sha256"] != hashlib.sha256(GUIDE.encode()).hexdigest():
+        out.append("<file hash>")
+    return out
+
+
+@pytest.mark.parametrize("case", VERBATIM)
+def test_human_fields_are_copied_verbatim_and_nothing_is_added(tmp_path: Path, case: str) -> None:
+    the_draft = VERBATIM[case]
+    raw = kb_manifest_build.build(corpus(tmp_path, {"guide.txt": GUIDE}, the_draft))
+    assert differing(raw, the_draft) == []
+
+
+def test_the_other_values_draft_differs_from_the_permissive_one_in_every_listed_field() -> None:
+    """Guards the second case itself: each listed value really is the other one."""
+    base = document()
+    assert all(base[k] != v for k, v in OTHER_VALUES.items())
+
+
+# Each mutant forces the permissive or more trusted value after parsing; the loader accepts it.
+FORCED_TRUST: dict[str, dict[str, Any]] = {
+    "origin": {"origin": "dive_professional"},
+    "author_role": {"author_role": "dive_professional"},
+    "supersedes": {"supersedes": None},
+    "scope-widened": {"all_sites": True, "site_id": None},
+    "attribution": {"attribution": None},
+    "review_by_date": {"review_by_date": "2027-03-15"},
+}
+
+
+@pytest.mark.parametrize("case", FORCED_TRUST)
+def test_mutation_a_forced_trusted_value_is_caught_by_the_verbatim_check(
+    tmp_path: Path, case: str
+) -> None:
+    fields = FORCED_TRUST[case]
+    the_draft = VERBATIM["other-values"]
+    path = corpus(tmp_path, {"guide.txt": GUIDE}, the_draft)
+    mutant = mutated_module(kb_manifest_build, _forced(**fields))
+    assert outcome(mutant, path) == OK_BUILD  # the loader accepts the forced value
+    assert set(differing(mutant.build(path), the_draft)) == set(fields), case
+    # Control: on the permissive draft the same mutant is invisible (review_by_date excepted: the
+    # forced date is out of range there), which is why the second case exists.
+    if case != "review_by_date":
+        permissive = VERBATIM["permissive"]
+        plain = corpus(tmp_path / "permissive", {"guide.txt": GUIDE}, permissive)
+        assert differing(mutant.build(plain), permissive) == []
 
 
 @pytest.mark.parametrize("key", EXPECTED_TOP_KEYS)
@@ -163,6 +233,12 @@ REFUSABLE = {
         False,
     ),
     "all_sites": ({}, {"site_id": None, "all_sites": False}, "all_sites", True),
+    "attests_no_generated_text-null": (
+        {"attests_no_generated_text": None},
+        {},
+        "attests_no_generated_text",
+        True,
+    ),
 }
 
 
@@ -172,13 +248,18 @@ def _refusable_path(tmp_path: Path, case: str) -> Path:
     return corpus(tmp_path, {"guide.txt": "## Start\nBody.\n"}, draft(document(**doc), **top))
 
 
-def _forced(key: str, value: Any) -> tuple[str, str]:
-    """A builder that overwrites `key` with `value` after parsing, whatever the draft says."""
-    if key in EXPECTED_TOP_KEYS:
-        line = f"        draft[{key!r}] = {value!r}\n"
-    else:
-        line = f"        for _doc in draft['documents']:\n            _doc[{key!r}] = {value!r}\n"
-    return (PARSED, PARSED + line)
+def _forced(**fields: Any) -> tuple[str, str]:
+    """A builder that overwrites each field with its value after parsing, whatever the draft
+    says."""
+    lines = ""
+    for key, value in fields.items():
+        if key in EXPECTED_TOP_KEYS:
+            lines += f"        draft[{key!r}] = {value!r}\n"
+        else:
+            lines += (
+                f"        for _doc in draft['documents']:\n            _doc[{key!r}] = {value!r}\n"
+            )
+    return (PARSED, PARSED + lines)
 
 
 @pytest.mark.parametrize("case", REFUSABLE)
@@ -193,7 +274,7 @@ def test_mutation_an_overwritten_value_is_caught(tmp_path: Path, case: str) -> N
     path = _refusable_path(tmp_path, case)
     _, _, key, value = REFUSABLE[case]
     assert_refused_by_the_loader(kb_manifest_build, path)
-    assert_builds(mutated_module(kb_manifest_build, _forced(key, value)), path)
+    assert_builds(mutated_module(kb_manifest_build, _forced(**{key: value})), path)
 
 
 # --- mutations: a default for a missing field (on COPIES) --------------------------------------
@@ -214,6 +295,8 @@ def _defaulted(key: str) -> tuple[str, str]:
 def test_mutation_a_defaulted_field_is_built_and_caught(tmp_path: Path, key: str) -> None:
     """Every human field, including attests_*, display_permitted, the licence fields, site_id and
     all_sites, review_by_date, origin and author_role, and supersedes."""
+    # `documents` defaulted to a list fabricates a whole document: that case tests the key-set
+    # check itself, not a default for a human field.
     path = corpus(tmp_path, {"guide.txt": GUIDE}, without(key))
     assert_refused_as_draft(kb_manifest_build, path)
     assert_builds(mutated_module(kb_manifest_build, _defaulted(key)), path)
@@ -243,4 +326,4 @@ def test_mutation_the_exact_key_set_is_load_bearing(
     refusal): the exact key-set comparison is what refuses it."""
     path = corpus(tmp_path, {"guide.txt": GUIDE}, without(missing))
     assert_refused_as_draft(kb_manifest_build, path)
-    assert outcome(mutated_module(kb_manifest_build, edit), path) != FAILED_DRAFT
+    assert outcome(mutated_module(kb_manifest_build, edit), path) == CRASHED
