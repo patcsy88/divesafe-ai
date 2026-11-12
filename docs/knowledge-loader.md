@@ -29,10 +29,12 @@ new `db_loader_password` and loader string, section 2). For the A7 hand run use 
 Knowledge is context only; it never supplies live conditions and never decides a dive. On this
 stack every knowledge item is withheld from the model (ADR 0022 decision 15).
 
-Run everything from the repository root. `C` below is short for the compose prefix:
+Run everything from the repository root. `C` below is a shell function for the compose prefix
+(a function, not a string: `C="docker compose ..."` with `$C` does not word-split in zsh, the Mac
+default shell, and ran nothing on the owner's Mac on 2026-11-12; the function works in bash and zsh):
 
 ```sh
-C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
+C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
 ```
 
 Every compose command on the production file needs `DIVESAFE_CORPUS_DIR` in
@@ -46,10 +48,10 @@ directory inside the repository would put licensed text where `git` and the buil
 2. Take a backup with the **old** scripts (before you pull).
 3. Pull.
 4. `sh docker/make-secrets.sh docker/secrets` (creates only the two missing loader files).
-5. `$C up -d --wait db` (recreates `db`: it now has the loader password secret and re-reads
+5. `C up -d --wait db` (recreates `db`: it now has the loader password secret and re-reads
    `pg_hba.conf`).
 6. Create the loader role (section 2).
-7. `$C up -d --build` (without `--build` the old image runs the old `db_init`).
+7. `C up -d --build` (without `--build` the old image runs the old `db_init`).
 8. Take a backup with the **new** scripts.
 
 ## 2. Create the loader role
@@ -93,9 +95,9 @@ only from the deploy commit, with `up -d --build` of the main stack. (If the gat
 again, `load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
 
 ```sh
-$C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
-$C --profile knowledge run --rm kb_load approve <document_id> <version> --approved-manifest-sha256 <hash>
-$C --profile knowledge run --rm kb_withdraw <document_id> <version>
+C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
+C --profile knowledge run --rm kb_load approve <document_id> <version> --approved-manifest-sha256 <hash>
+C --profile knowledge run --rm kb_withdraw <document_id> <version>
 ```
 
 - Run `approve` only after the dive professional has recorded approval of that manifest hash in
@@ -105,7 +107,15 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
   `document_id,version,recorded_at_utc,reason,withdrawn_by`; mode 600, folder 700, outside the
   repository, the database and its backups). The approval record is `approval-record.csv` in the
   same folder (columns `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`);
-  append a line after every `approve`.
+  append a line after every `approve`. **Format:** `approved_at_utc` is ISO 8601 UTC,
+  `YYYY-MM-DDTHH:MM:SSZ` (`date -u +%Y-%m-%dT%H:%M:%SZ`), the time the dive professional
+  approved, not when `approve` ran; `recorded_at_utc` is copied exactly as `withdraw` prints it;
+  a field that contains a comma is double-quoted.
+- **Re-loading a changed text** needs a new version: `"version": 2`, `"supersedes": 1`, a new
+  file name, and a new approval line. `load` of an existing version is refused by the database
+  (exit 11, "a new version must be greater than every existing version"); the message gives no
+  hint, so: **exit 11 after a successful load usually means the version already exists; bump
+  the version.**
 - Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1), and copy the file
   you just appended to next to the newest archive. Plain CSV, no integrity protection: the copy
   is the only other one.
@@ -134,6 +144,12 @@ deployed first (a separate step) and the corpus directory holding that one docum
    as WITHDRAWN and no approval with `hash_checked = false`.
 
 If any step refuses, stop and record it; do not retry with a changed environment.
+
+**Done 2026-11-12** (ADR 0024 A8 "Deployed and first load done"): `tioman-site-guide` v1 on
+image `f4c8511e0163`; load, approve (`hash_checked = true`), four assessments with the item
+withheld, withdraw, backup with both CSVs, closing report clean. Found on the way: a repeated
+`load` gives exit 11 (above); the first assessment's model calls all failed on a model-host 404
+with no alert (ADR 0027).
 
 ### When `withdraw` says "lock busy"
 
@@ -171,7 +187,7 @@ COMMIT;
 SQL
 ```
 
-or (b) stop the API (`$C stop api`, or `docker stop <api container>` if the variable is missing)
+or (b) stop the API (`C stop api`, or `docker stop <api container>` if the variable is missing)
 until `withdraw` works.
 
 If `withdraw` exits 11 and no load of that family is running, the ordering sequence may have been

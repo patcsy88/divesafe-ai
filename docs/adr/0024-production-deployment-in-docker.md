@@ -184,10 +184,10 @@ and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-h
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
 # add by hand: docker/secrets/divesafe_llm_api_key and docker/secrets/divesafe_api_key_hashes
 cp docker/production.env.example docker/production.env   # fill in the blanks, incl. DIVESAFE_CORPUS_DIR
-C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
-$C up -d --wait db              # 1. the database only
+C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
+C up -d --wait db               # 1. the database only (C is a function: a string with $C runs nothing in zsh)
 # 2. the loader role script, exactly as in docs/knowledge-loader.md section 2 (A1)
-$C up -d --build --wait api    # 3. db-init, then the API
+C up -d --build --wait api     # 3. db-init, then the API
 ```
 
 Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`risk-reviewer`
@@ -1977,6 +1977,43 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
     that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
     progress); deploying the new image (not done).
+  - **Deployed and first load done (2026-11-12, all times UTC).** Production runs main `a997101`
+    (API image `f4c8511e0163`, started 13:00); the previous image is kept as
+    `divesafe-api:rollback-20261018` (`c97d9d35fe49`). An intermediate deploy by the owner from
+    `030792e` (image `592fddfe764d`) migrated the database 3 to 5 and created the loader role and
+    loader secrets, with backups before (23:56Z, 11 Nov) and after. `PRODUCTION_LOAD_GATES_CLOSED`
+    reads `True` in the running container; the start-up refusals (ADR 0022 items 6 and 9) pass;
+    wiring condition 10 re-checked after the deploy: zero now-refused records. **First production
+    load, supervised** (the `docs/knowledge-loader.md` runbook): `tioman-site-guide` v1, one chunk
+    (1489 chars), site `my-pahang-pulau-tioman`, manifest sha256
+    `eb75cbb5a8fa8017f0f4a707ed64f7ed990d3ea13faf64fa73b05756935a8bc5`; DRAFT 13:23:36, APPROVED
+    13:24:35 with `hash_checked = true`, backup 13:24:46. A second `load` of the same version was
+    refused by the database trigger (exit 11, "a new version must be greater than every existing
+    version"): correct, nothing written. Assessment `da2d728f...` retrieved
+    `kb:tioman-site-guide:1:1`, listed it in `withheld_knowledge`, `egress_basis`
+    `remote_external_opt_in`, not in `sent_evidence_ids`; all 8 model calls failed because the
+    model-host tunnel returned 404 (misrouted on the host side; fixed by the owner; no DiveSafe
+    change) and **nothing alerted** (ADR 0027, proposed). Then `2ae9d14f...`, `348e8a2f...`,
+    `c777463a...`: every model call succeeded, Supervise passed, the guide withheld, final
+    INSUFFICIENT EVIDENCE (`assess.unevaluated_factors`; no validated thresholds). Withdrawn
+    13:59:09.949253Z (exit 0), withdrawal-log line appended, backup `divesafe-20261112T135913Z`
+    with both CSVs copied beside it. Post-load closing report (run as the bootstrap user in a
+    read-only transaction rather than `divesafe_owner`; same result): no version not WITHDRAWN, no
+    approval with `hash_checked = false`, no unknown runs. Tioman has no active knowledge now.
+    **Also on that day:** 68 Finder/iCloud duplicate files ("kb_load 2.py" and the like) in the
+    production checkout had been copied into the build context (7 under `src/`; inert, Python
+    cannot import names with spaces); moved to `/Users/patcsy88/DiveSafe/stray-copies-20261112/`.
+    The `first-run` API key (label `d52e7a087983`) was lost and replaced by a key for actor
+    `patcsy88` (assessor, decider, viewer; label `93fa56f38ad5`) by the first-run document's
+    method; the old hash file is kept as `docker/secrets/divesafe_api_key_hashes.old-20261112`
+    (mode 400); older records keep `first-run` as decider, correctly. The `C="..."`/`$C` compose
+    prefix in the docs ran nothing in zsh; the docs now use a shell function.
+  - **Gaps from the deploy and first load (2026-11-12):** `.dockerignore` does not exclude
+    Finder/iCloud duplicates (`* 2.*`); a code change should add it. One API key holds all three
+    roles (assessor, decider, viewer), so the gate's two-person idea rests on one credential.
+    `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
+    says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
+    the bootstrap user, not `divesafe_owner` (same read-only result).
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
     - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
@@ -2010,8 +2047,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     - **New INSUFFICIENT EVIDENCE paths become reachable in production** once a corpus is loaded:
       a knowledge connector failure, the 20-item cut (ADR 0022 Known gap 6) and a stalled database
       read holding the shared thread pool (ADR 0022 Known gap 8). Fail-closed; costs availability.
-    - **The first real production load is untested end to end** (A7 run 2 ran with the gate shut,
-      on the seed). It is a supervised run: `docs/knowledge-loader.md` "First production load".
+    - ~~The first real production load is untested end to end~~ **Done 2026-11-12** (A8 "Deployed
+      and first load done"): `tioman-site-guide` v1 loaded, approved, withheld in four
+      assessments, withdrawn, backed up, closing report clean.
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.

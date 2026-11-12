@@ -4,11 +4,12 @@
 #
 #   docker/make-secrets.sh docker/secrets                  # database secrets; see the ADR for the rest
 #   cp docker/production.env.example docker/production.env  # fill in the blanks, incl. DIVESAFE_CORPUS_DIR
-#   C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
-#   $C up -d --wait db                 # 1. the database only
+#   C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
+#   C up -d --wait db                  # 1. the database only   (a function: works in bash and zsh;
+#                                      #    a string C="..." with $C runs nothing in zsh)
 #   (2. the loader role script: the exact command is in docs/knowledge-loader.md, section 2;
 #       without it db-init refuses with LOADER_ROLE_MISSING)
-#   $C up -d --build --wait api        # 3. db-init, then the API
+#   C up -d --build --wait api         # 3. db-init, then the API
 #
 # Build only from the commit you deploy. Never use --build or `build` with --profile knowledge:
 # the loaders share the api image tag, so a build there would replace the running api's image.

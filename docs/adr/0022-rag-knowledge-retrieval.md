@@ -1663,6 +1663,12 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   safety tests now run the refusal with the literal patched to `False`, and the AST pin requires
   `True`. Deploying the new image to production is a separate step, not done; the corpus
   directory is still empty; the licence evidence is waived, not closed (ADR 0022 Known gap 31).
+- **Deployed and first real load done, 2026-11-12** (ADR 0024 A8 "Deployed and first load
+  done"): main `a997101` in production; `tioman-site-guide` v1 loaded, approved, retrieved by four
+  assessments and withheld from every prompt (`remote_external_opt_in`), withdrawn, backed up,
+  closing report clean; the corpus holds that one document, now withdrawn. The licence evidence
+  stays waived (Known gap 31). One assessment ran with every model call failing (model-host 404)
+  and nothing alerted: ADR 0027 (proposed).
 - ~~The decision 13 default-ignorable code point table~~ **Built 2026-11-12** (owner decision;
   decision 13): the Unicode 16.0.0 `Default_Ignorable_Code_Point` set replaces the
   approximation; this first-production-load gate is closed.
@@ -1855,8 +1861,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     content, a process control. (d) **New INSUFFICIENT EVIDENCE paths reachable in production**
     once a corpus is loaded: a knowledge connector failure, the 20-item cut (gap 6) and a stalled
     database read holding the shared thread pool (gap 8); fail-closed, costs availability. (e)
-    **The first real production load is untested end to end** (A7 run 2 ran with the gate shut);
-    it is a supervised run, `docs/knowledge-loader.md` "First production load".
+    ~~The first real production load is untested end to end~~ **closed 2026-11-12** by the
+    supervised first load (ADR 0024 A8 "Deployed and first load done").
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the

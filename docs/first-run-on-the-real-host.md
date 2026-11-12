@@ -195,6 +195,11 @@ git status --short        # expect nothing: secrets and production.env are ignor
 Keep the volume if this is your real deployment. If it was only a trial, `down -v` and
 `rm -rf docker/secrets` remove the data and the secrets.
 
+**Key rotation (done 2026-11-12):** the `first-run` key was lost; a new key for actor `patcsy88`
+(assessor, decider, viewer) was made by the method in section 1 and the old hash file kept as
+`docker/secrets/divesafe_api_key_hashes.old-20261112` (mode 400). Older records keep `first-run`
+as decider, correctly. One key holding all three roles is a recorded gap (ADR 0024 A8).
+
 Record in ADR 0024, condition 1, with the date: the host OS, whether the model host was reached,
 the final status, whether the agent stage ran or listed an issue (and how many calls stopped at
 the token limit or timed out), the token and time budgets in effect (the record does not show them), the 409 on the second decision,
