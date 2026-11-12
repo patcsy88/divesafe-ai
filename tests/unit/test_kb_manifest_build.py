@@ -1,6 +1,9 @@
 """The manifest builder (owner request 2026-11-12): a convenience tool, not a gate. What it prints
 must be accepted by the loader's own `read_corpus`; every refusal is a fixed outcome; it never
-writes a file. Every text here is synthetic. Mutations run on COPIES of the module."""
+writes a file. Every text here is synthetic. Mutations run on COPIES of the module.
+
+The no-default tests (a missing human field is refused, never filled in) are safety tests:
+`tests/safety/test_kb_manifest_build_no_defaults.py`, which imports the helpers below."""
 
 from __future__ import annotations
 
@@ -15,7 +18,6 @@ from tests.safety.kb_fakes import mutated_module
 
 from divesafe.services import kb_common, kb_manifest, kb_manifest_build
 from divesafe.services.kb_manifest_build import (
-    DOCUMENT_KEYS,
     FAILED_ARGUMENTS,
     FAILED_CHECK,
     FAILED_DRAFT,
@@ -28,7 +30,6 @@ from divesafe.services.kb_manifest_build import (
     FAILED_ZERO_CHUNKS,
     OK_BUILD,
     OK_CHECK,
-    TOP_KEYS,
     Outcome,
 )
 
@@ -129,21 +130,6 @@ def test_round_trip_the_loader_accepts_what_is_built(tmp_path: Path) -> None:
     ]
 
 
-def test_human_fields_are_copied_verbatim_and_nothing_is_added(tmp_path: Path) -> None:
-    the_draft = draft(document(attribution="Synthetic attribution", supersedes=None))
-    raw = kb_manifest_build.build(corpus(tmp_path, {"guide.txt": GUIDE}, the_draft))
-    built = manifest_of(raw)
-    assert list(built) == list(TOP_KEYS)
-    for key in TOP_KEYS[:-1]:
-        assert built[key] == the_draft[key]
-    (entry,) = built["documents"]
-    assert list(entry) == [*DOCUMENT_KEYS, "file"]
-    for key in DOCUMENT_KEYS:
-        assert entry[key] == the_draft["documents"][0][key]
-    assert set(entry["file"]) == {"path", "sha256", "chunks", "gaps"}
-    assert entry["file"]["sha256"] == hashlib.sha256(GUIDE.encode()).hexdigest()
-
-
 def test_heading_lines_and_their_blank_lines_are_heading_gaps(tmp_path: Path) -> None:
     raw = kb_manifest_build.build(corpus(tmp_path, {"guide.txt": GUIDE}))
     data = GUIDE.encode()
@@ -221,25 +207,6 @@ def test_an_oversize_paragraph_is_refused_never_split(tmp_path: Path) -> None:
 def test_an_oversize_paragraph_of_many_lines_is_refused(tmp_path: Path) -> None:
     text = paragraph(LIMIT // 2) + paragraph(LIMIT // 2) + paragraph(5)
     assert outcome(kb_manifest_build, corpus(tmp_path, {"guide.txt": text})) == FAILED_PARAGRAPH
-
-
-@pytest.mark.parametrize("key", [*TOP_KEYS])
-def test_a_missing_top_level_field_is_refused(tmp_path: Path, key: str) -> None:
-    the_draft = draft()
-    del the_draft[key]
-    assert outcome(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, the_draft)) == (
-        FAILED_DRAFT
-    )
-
-
-@pytest.mark.parametrize("key", [*DOCUMENT_KEYS, "path"])
-def test_a_missing_document_field_is_refused(tmp_path: Path, key: str) -> None:
-    """Never defaulted: `null` fields too (attribution, site_id, supersedes) must be written."""
-    doc = document()
-    del doc[key]
-    assert outcome(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, draft(doc))) == (
-        FAILED_DRAFT
-    )
 
 
 @pytest.mark.parametrize(
@@ -604,32 +571,6 @@ def test_mutation_each_builder_refusal_is_caught(
     path = corpus(tmp_path, {"guide.txt": text})
     assert outcome(kb_manifest_build, path) == expected
     assert outcome(mutated_module(kb_manifest_build, (old, new)), path) != expected, label
-
-
-@pytest.mark.parametrize(
-    ("label", "old", "new"),
-    [
-        (
-            "exact key set becomes subset",
-            "set(doc) != {*DOCUMENT_KEYS, PATH_KEY}",
-            "not set(doc) <= {*DOCUMENT_KEYS, PATH_KEY}",
-        ),
-        (
-            "a default for a missing field",
-            "        if not isinstance(doc, dict) or",
-            "        if isinstance(doc, dict):\n            doc.setdefault('attribution', None)\n"
-            "        if not isinstance(doc, dict) or",
-        ),
-    ],
-)
-def test_mutation_a_defaulted_field_is_caught(
-    tmp_path: Path, label: str, old: str, new: str
-) -> None:
-    doc = document()
-    del doc["attribution"]
-    path = corpus(tmp_path, {"guide.txt": GUIDE}, draft(doc))
-    assert outcome(kb_manifest_build, path) == FAILED_DRAFT
-    assert outcome(mutated_module(kb_manifest_build, (old, new)), path) != FAILED_DRAFT, label
 
 
 def test_mutation_duplicate_keys_allowed_is_caught(tmp_path: Path) -> None:
