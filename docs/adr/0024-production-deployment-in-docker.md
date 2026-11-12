@@ -180,19 +180,40 @@ results and the specialist findings** (the prompt layer's payload) to
 Started on a developer machine; one assessment went through on the owner's host (see condition 1
 and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-host.md`.
 
+Prerequisite: the checkout, and so `docker/secrets/` and `docker/production.env`, must not be
+in a folder synced to a cloud service (iCloud, Dropbox, OneDrive; on a Mac, Desktop and Documents
+are synced when the iCloud option is on), as `docs/backup-and-restore.md` already says for backups.
+Found violated on 2026-11-12 and fixed the same day (A8 "Gaps from the deploy and first load"):
+the production checkout is `/Users/patcsy88/DiveSafe/app`; a deploy is `git pull` there, then
+the build and `up` steps below. `~/Desktop/DiveSafe AI` is development only.
+
 ```
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
 # add by hand: docker/secrets/divesafe_llm_api_key and docker/secrets/divesafe_api_key_hashes
 cp docker/production.env.example docker/production.env   # fill in the blanks, incl. DIVESAFE_CORPUS_DIR
-C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
-$C up -d --wait db              # 1. the database only
+C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
+C up -d --wait db               # 1. the database only (C is a function: a string with $C runs nothing in zsh)
 # 2. the loader role script, exactly as in docs/knowledge-loader.md section 2 (A1)
-$C up -d --build --wait api    # 3. db-init, then the API
+C up -d --build --wait api     # 3. db-init, then the API
 ```
 
 Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`risk-reviewer`
 should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
 from the deploy commit.
+
+**Rotating the database passwords** (done once, 2026-11-12, A8; generalises the loader-only
+note in `docs/knowledge-loader.md`). `make-secrets.sh` never overwrites, so rotation in place
+means a fresh directory: run it into a new directory, keep it mode 700 with the files mode 400,
+and copy the non-database secrets (`divesafe_api_key_hashes`, `divesafe_llm_api_key`,
+`divesafe_met_api_token`) and `production.env` in. The DSN files it writes must match the new
+passwords, so never edit a password file by hand. Then: backup; `C stop api`; one transaction of
+`ALTER ROLE <role> PASSWORD '...'` for `divesafe_bootstrap`, `divesafe_owner`, `divesafe_app`
+and `divesafe_loader`, built from the new files and piped through stdin to `psql` in the db
+container, so that no password is on a command line, in shell history or on screen; check that
+each new password logs in and each old one is refused; `C down` and `C up -d --no-build` with
+the new secrets directory (same project, same volume); check health, the image id, the switch,
+the schema, an app and a loader login; backup again; delete the old secrets directory. The API
+is down from `stop` to `up`. The API key is rotated separately (`docs/first-run-on-the-real-host.md`).
 
 `docker/secrets/` and `docker/production.env` are git-ignored.
 
@@ -1975,8 +1996,79 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     ~~`DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env`~~ (done 2026-11-11). The A6
     branch rule is lifted (owner decision 2026-11-11). **Still needed:** the owner's site
     documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
-    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
-    progress); deploying the new image (not done).
+    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; reviewed);
+    ~~deploying the new image~~ (done 2026-11-12, next entry).
+  - **Deployed and first load done (2026-11-12, all times UTC).** Production runs main `a997101`
+    (API image `f4c8511e0163`, started 13:00); the previous image is kept as
+    `divesafe-api:rollback-20261018` (`c97d9d35fe49`). An intermediate deploy by the owner from
+    `030792e` (image `592fddfe764d`) migrated the database 3 to 5 and created the loader role and
+    loader secrets, with backups before (23:56Z, 11 Nov) and after. `PRODUCTION_LOAD_GATES_CLOSED`
+    reads `True` in the running container; the start-up refusals (ADR 0022 items 6 and 9) pass;
+    wiring condition 10 re-checked after the deploy: zero now-refused records. **First production
+    load, supervised** (the `docs/knowledge-loader.md` runbook): `tioman-site-guide` v1, one chunk
+    (1489 chars), site `my-pahang-pulau-tioman`, manifest sha256
+    `eb75cbb5a8fa8017f0f4a707ed64f7ed990d3ea13faf64fa73b05756935a8bc5`; DRAFT 13:23:36, APPROVED
+    13:24:35 with `hash_checked = true`, backup 13:24:46. A second `load` of the same version was
+    refused by the database trigger (exit 11, "a new version must be greater than every existing
+    version"): correct, nothing written. Assessment `da2d728f...` retrieved
+    `kb:tioman-site-guide:1:1`, listed it in `withheld_knowledge`, `egress_basis`
+    `remote_external_opt_in`, not in `sent_evidence_ids`; all 8 model calls failed because the
+    model-host tunnel returned 404 (misrouted on the host side; fixed by the owner; no DiveSafe
+    change) and **nothing alerted** (ADR 0027, proposed). Then `2ae9d14f...`, `348e8a2f...`,
+    `c777463a...`: every model call succeeded, Supervise passed, the guide withheld, final
+    INSUFFICIENT EVIDENCE (`assess.unevaluated_factors`; no validated thresholds). Withdrawn
+    13:59:09.949253Z (exit 0), withdrawal-log line appended, backup `divesafe-20261112T135913Z`
+    with both CSVs copied beside it. Post-load closing report (run as the bootstrap user in a
+    read-only transaction rather than `divesafe_owner`; same result): no version not WITHDRAWN, no
+    approval with `hash_checked = false`, no unknown runs. Tioman has no active knowledge now.
+    **Also on that day:** 68 Finder/iCloud duplicate files ("kb_load 2.py" and the like) in the
+    production checkout had been copied into the build context (7 under `src/`; inert, Python
+    cannot import names with spaces); moved to `/Users/patcsy88/DiveSafe/stray-copies-20261112/`.
+    The `first-run` API key (label `d52e7a087983`) was lost and replaced by a key for actor
+    `patcsy88` (assessor, decider, viewer; label `93fa56f38ad5`) by the first-run document's
+    method; the old hash file is kept as `docker/secrets/divesafe_api_key_hashes.old-20261112`
+    (mode 400); older records keep `first-run` as decider, correctly. The `C="..."`/`$C` compose
+    prefix in the docs ran nothing in zsh; the docs now use a shell function. **Security review
+    of this record (2026-11-12, S1):** the owner checked that macOS iCloud "Desktop & Documents"
+    sync is on and the production checkout is `~/Desktop/DiveSafe AI`, so `docker/secrets/` (the
+    database passwords, the loader and app connection strings, the model-host key, the API key
+    hashes) and `docker/production.env` have been synced to the owner's iCloud account. The 68
+    stray copies were source and test files only (none of the secrets, the env file or a dump;
+    checked 2026-11-12). Open gap, below.
+  - **Gaps from the deploy and first load (2026-11-12):** ~~OPEN (security S1): the production
+    checkout sits in an iCloud-synced folder~~, so every file under `docker/secrets/` and
+    `docker/production.env` had been copied to the owner's iCloud account. **Remedy carried out
+    2026-11-12 (owner approved; times UTC):** new production checkout
+    `/Users/patcsy88/DiveSafe/app` (not synced), cloned from the local repository at `a997101`
+    with origin set to the GitHub remote; fresh database secrets made there by
+    `docker/make-secrets.sh` (never printed); `divesafe_api_key_hashes`,
+    `divesafe_met_api_token` (empty), `divesafe_llm_api_key` and `production.env` copied over.
+    Then: backup `divesafe-20261112T143141Z` (CSVs copied); `stop api`; `ALTER ROLE ... PASSWORD`
+    for `divesafe_bootstrap`, `divesafe_owner`, `divesafe_app` and `divesafe_loader` in one
+    transaction, piped through stdin to `psql` in the db container (no password on a command
+    line or screen); new passwords log in, old refused; `down` from the Desktop checkout,
+    `up -d --no-build` from the new one (same compose project `divesafe-prod`, same `db-data`
+    volume, nothing lost); health 200, image `f4c8511e0163` unchanged, switch `True`, schema up
+    to date, the API reaches the database as `divesafe_app` (5 assessments) and the model host
+    (200, model offered), the loader logs in as `divesafe_loader`, only the three expected
+    start-up warnings; `docker/secrets/` and `docker/production.env` deleted from
+    `~/Desktop/DiveSafe AI`; backup `divesafe-20261112T143255Z` (CSVs copied). API downtime
+    about 2 minutes (14:31 to 14:33). **Not rotated:** the DiveSafe API key (only its hash was
+    synced; not reversible). **Still open for the owner:** rotate the model-host key in
+    CLIProxyAPI (it was synced), replace `docker/secrets/divesafe_llm_api_key` and restart `api`;
+    empty iCloud "Recently Deleted"; turning iCloud Desktop & Documents sync off is the owner's
+    choice. From now on production commands run from `/Users/patcsy88/DiveSafe/app`;
+    `~/Desktop/DiveSafe AI` is development only; a deploy is `git pull` there, then the usual
+    build and `up` ("How to run it"). `.dockerignore` **and**
+    `.gitignore` do not exclude Finder/iCloud duplicates (`* 2.*`); a code change should add
+    the pattern to both (`.gitignore` matches `/docker/production.env` exactly, so a
+    `docker/production 2.env` copy would not be ignored). The old hash file
+    `docker/secrets/divesafe_api_key_hashes.old-20261112` should move out of `docker/secrets/`,
+    which rules out mounting it by mistake (security N6). One API key holds all three roles
+    (assessor, decider, viewer), so the gate's two-person idea rests on one credential.
+    `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
+    says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
+    the bootstrap user, not `divesafe_owner` (same read-only result).
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
     - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
@@ -2010,8 +2102,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     - **New INSUFFICIENT EVIDENCE paths become reachable in production** once a corpus is loaded:
       a knowledge connector failure, the 20-item cut (ADR 0022 Known gap 6) and a stalled database
       read holding the shared thread pool (ADR 0022 Known gap 8). Fail-closed; costs availability.
-    - **The first real production load is untested end to end** (A7 run 2 ran with the gate shut,
-      on the seed). It is a supervised run: `docs/knowledge-loader.md` "First production load".
+    - ~~The first real production load is untested end to end~~ **Done 2026-11-12** (A8 "Deployed
+      and first load done"): `tioman-site-guide` v1 loaded, approved, withheld in four
+      assessments, withdrawn, backed up, closing report clean.
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.

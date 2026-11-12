@@ -29,10 +29,12 @@ new `db_loader_password` and loader string, section 2). For the A7 hand run use 
 Knowledge is context only; it never supplies live conditions and never decides a dive. On this
 stack every knowledge item is withheld from the model (ADR 0022 decision 15).
 
-Run everything from the repository root. `C` below is short for the compose prefix:
+Run everything from the repository root. `C` below is a shell function for the compose prefix
+(a function, not a string: `C="docker compose ..."` with `$C` does not word-split in zsh, the Mac
+default shell, and ran nothing on the owner's Mac on 2026-11-12; the function works in bash and zsh):
 
 ```sh
-C="docker compose -f docker/docker-compose.production.yml --env-file docker/production.env"
+C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
 ```
 
 Every compose command on the production file needs `DIVESAFE_CORPUS_DIR` in
@@ -46,10 +48,10 @@ directory inside the repository would put licensed text where `git` and the buil
 2. Take a backup with the **old** scripts (before you pull).
 3. Pull.
 4. `sh docker/make-secrets.sh docker/secrets` (creates only the two missing loader files).
-5. `$C up -d --wait db` (recreates `db`: it now has the loader password secret and re-reads
+5. `C up -d --wait db` (recreates `db`: it now has the loader password secret and re-reads
    `pg_hba.conf`).
 6. Create the loader role (section 2).
-7. `$C up -d --build` (without `--build` the old image runs the old `db_init`).
+7. `C up -d --build` (without `--build` the old image runs the old `db_init`).
 8. Take a backup with the **new** scripts.
 
 ## 2. Create the loader role
@@ -93,9 +95,9 @@ only from the deploy commit, with `up -d --build` of the main stack. (If the gat
 again, `load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
 
 ```sh
-$C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
-$C --profile knowledge run --rm kb_load approve <document_id> <version> --approved-manifest-sha256 <hash>
-$C --profile knowledge run --rm kb_withdraw <document_id> <version>
+C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
+C --profile knowledge run --rm kb_load approve <document_id> <version> --approved-manifest-sha256 <hash>
+C --profile knowledge run --rm kb_withdraw <document_id> <version>
 ```
 
 - Run `approve` only after the dive professional has recorded approval of that manifest hash in
@@ -105,7 +107,18 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
   `document_id,version,recorded_at_utc,reason,withdrawn_by`; mode 600, folder 700, outside the
   repository, the database and its backups). The approval record is `approval-record.csv` in the
   same folder (columns `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`);
-  append a line after every `approve`.
+  append a line after every `approve`; `notes` holds the `built_with_commit <hash>` line from
+  "Building the manifest". **Format:** `approved_at_utc` is ISO 8601 UTC,
+  `YYYY-MM-DDTHH:MM:SSZ` (`date -u +%Y-%m-%dT%H:%M:%SZ`), the time the dive professional
+  approved, not when `approve` ran; `recorded_at_utc` is copied exactly as `withdraw` prints it;
+  a field that contains a comma is double-quoted. A field that starts with `=`, `+`, `-` or
+  `@` is read as a formula by a spreadsheet: prefix it with `'`, or do not open the file in a
+  spreadsheet.
+- **Re-loading a changed text** needs a new version: `"version": 2`, `"supersedes": 1`, a new
+  file name, and a new approval line. `load` of an existing version is refused by the database
+  (exit 11, "a new version must be greater than every existing version"); the message gives no
+  hint, so: **exit 11 after a successful load usually means the version already exists; bump
+  the version.**
 - Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1), and copy the file
   you just appended to next to the newest archive. Plain CSV, no integrity protection: the copy
   is the only other one.
@@ -115,6 +128,164 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
 - The hash is not a secret, but it is visible in shell history and in `docker ps` while the
   run container exists.
 - Backup and restore refuse while a `kb_load` or `kb_withdraw` container exists. Use `--rm`.
+
+### Building the manifest
+
+`kb_manifest_build` writes the computed parts of `manifest.json` (file and chunk SHA-256s, byte
+offsets, chunk numbers, heading gaps) from a draft you write. It is a convenience, not a check:
+`load` re-checks everything. Write the draft (for example `draft.json`) in the corpus directory
+with every human field, `null` included: top level `format`, `attests_no_generated_text`,
+`attests_no_personal_names`, `documents`; per document every manifest field except `file`, plus
+`path` (relative to the corpus directory; never `manifest.json`). Nothing is defaulted; a
+missing, extra or repeated key is refused.
+
+**Whoever writes `attests_no_generated_text: true` and `attests_no_personal_names: true` in the
+draft is the one attesting**; the tool copies them and attests nothing. The dive professional
+reviews and approves the generated `manifest.json` itself (its sections, spans and hash), not
+just the draft.
+
+Chunking: a line starting with `## ` is a heading, stored as a `heading` gap; its text is the
+`section` of the chunks after it (before the first heading the section is the `title`).
+Paragraphs (separated by blank lines) are packed into chunks of at most 1500 characters; a
+longer paragraph is refused, never split. Exact rule: the module docstring.
+
+The builder runs **on the Mac host** (owner decision 2026-11-12, gap N7), so it hashes the
+files' real bytes; `--check` runs in the image, because that is what the loader sees. It needs
+Python 3.14 with Unicode data 16.0.0, the version the loader's character screen was reviewed
+against (`kb_screen.REVIEWED_UNIDATA_VERSION`; CI checks the image against the same constant).
+Any other version is refused with status 3 ("refused: the builder needs the reviewed Python
+Unicode data") before a file is read. Homebrew's `python3.14` on this Mac is 3.14.10 with
+16.0.0 (checked 2026-11-12); a Python update can change it, and the refusal then says so.
+
+Setup, in the production checkout `/Users/patcsy88/DiveSafe/app` (not in a synced folder, never
+in the corpus; `.venv-tools/` is git- and docker-ignored). It installs exactly the packages and
+versions the deployed image ships (`pip freeze` inside the image), as wheels only, without
+dependency resolution (`--no-deps`) and without building anything: the checkout's `src` is put
+on the path by a `.pth` file, so no build backend (hatchling) is fetched. `--isolated` and the
+explicit `--index-url` ignore `PIP_*` variables and pip configuration files. The builder needs the
+runtime packages because the `divesafe.services` package imports psycopg and pydantic-settings;
+it never creates `Settings` or reads a `.env` file. Re-run this after every deploy (new image)
+and after a Homebrew Python upgrade (the venv is not rebuilt by one; it removes the old venv):
+
+```sh
+unset c
+cd /Users/patcsy88/DiveSafe/app && rm -rf .venv-tools && c=$(mktemp) \
+  && docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint pip divesafe-api:local \
+  freeze --exclude divesafe > "$c" \
+  && /opt/homebrew/bin/python3.14 -m venv .venv-tools \
+  && .venv-tools/bin/pip install --isolated --index-url https://pypi.org/simple \
+  --only-binary :all: --no-deps -r "$c" \
+  && .venv-tools/bin/pip check --isolated \
+  && echo "$PWD/src" > "$(.venv-tools/bin/python -I -c \
+  'import sysconfig; print(sysconfig.get_path("purelib"))')/divesafe-src.pth"
+rm -f "${c:-}"
+```
+
+Then run the block (it changes to `/Users/patcsy88/DiveSafe/app` itself, so the checked tree and
+the venv are the same). It stops if `git` fails, if the checkout has any tracked or untracked
+change, or if `src` holds an ignored file (a stray `.pyc` or `__pycache__` could be imported; `-B`
+means a clean run never writes one), because the builder runs from `src` as checked out. It
+prints `built_with_commit` with the commit; write that line into the `notes` field of the
+approval record. `DIVESAFE_CORPUS_DIR` is set in `docker/production.env`, not in your shell, so
+the block reads it; write it there unquoted (`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps
+quotes, and a quoted value gives a bad path and a refusal). The manifest is written to a
+temporary file outside the repository and the corpus; only if the build succeeded does it
+replace `manifest.json`, get hashed and get checked:
+
+```sh
+unset out h s i DIVESAFE_CORPUS_DIR
+cd /Users/patcsy88/DiveSafe/app \
+  && DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env) \
+  && : "${DIVESAFE_CORPUS_DIR:?}" \
+  && h=$(git -C /Users/patcsy88/DiveSafe/app rev-parse --verify HEAD) \
+  && s=$(git -C /Users/patcsy88/DiveSafe/app status --porcelain) \
+  && i=$(git -C /Users/patcsy88/DiveSafe/app status --porcelain --ignored -- src) \
+  && { test -n "$h" && test -z "$s$i" \
+  || { echo "refused: a change in the checkout or an ignored file in src" >&2; false; }; } \
+  && echo "built_with_commit $h" \
+  && out=$(mktemp) \
+  && .venv-tools/bin/python -I -B -m divesafe.services.kb_manifest_build \
+  "$DIVESAFE_CORPUS_DIR/draft.json" > "$out" \
+  && chmod 644 "$out" && mv "$out" "$DIVESAFE_CORPUS_DIR/manifest.json" \
+  && shasum -a 256 "$DIVESAFE_CORPUS_DIR/manifest.json" \
+  && docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
+  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build --check /corpus \
+  || { echo "stopped: read the message above and check manifest.json"; rm -f "${out:-}"; }
+```
+
+Never redirect the output into the repository (it holds licence and permission references and
+section titles; `manifest.json` and `draft.json` are git-ignored as a backstop) or straight onto
+the existing `manifest.json` (the shell empties it before a refused build). The tool never
+writes a file: the manifest goes to stdout and a fixed message to stderr. `-I` keeps the
+shell's `PYTHONPATH` and the current folder out of the import path; `-B` writes no `.pyc` files
+into the checkout. The `shasum` line is the
+hash for the approval record, taken **after** the file is written. `--check` runs only after a
+successful build (a refusal leaves no new hash to compare): it runs the loader's `read_corpus`
+in the image and prints the manifest SHA-256, which must equal the `shasum` line, and each
+document's id, version and chunk count. If the block stops after the `mv` (`shasum` or
+`--check` failing), the new `manifest.json` is already in place: do not approve it until
+`--check` succeeds. A `--check` refusal right after a host build can be Docker Desktop showing
+the container a stale file (N7): wait a few seconds and run the `docker run ... --check` line
+again; if it still refuses, the corpus is not accepted. The image must include the tool (built
+from a commit that has it).
+
+Known gaps (2026-11-12 security reviews):
+- K4: the build uses the loader's private `_split_chunks` and `_open_dir`, and its final check
+  re-implements the `read_corpus` loop; a new check added to the loader reaches `--check` and
+  `load` but not the build until the builder is updated. `--check` before approval covers it.
+- K5: the draft and the document files each get the 1 MiB budget, so up to 2 MiB can be read
+  before the shared limit is applied; `MAX_DOCUMENTS_PER_LOAD` is only applied in the final
+  check, after every file is read.
+- N1: `read_corpus` catches only `OSError` around `read_regular_file`; a lone-surrogate path
+  would raise `UnicodeEncodeError`. Unreachable because `parse_manifest` (pydantic-core JSON)
+  refuses lone surrogate escapes (checked 2026-11-12 for `\ud800`, `\udc00`, `\udcff`); not
+  pinned by a test.
+- N6: `.gitignore` covers only the names `draft.json` and `manifest.json`: a draft with another
+  name is not ignored, and a future fixture with either name would be silently ignored.
+- N7: Docker Desktop (macOS) file sharing can serve stale contents of a just-edited corpus file
+  to a new container (2026-11-12, Docker Desktop 29.8.2). Mitigated (owner decision 2026-11-12):
+  the builder runs on the host and hashes the real bytes, so a stale view in the `--check` or
+  `load` container now gives a hash mismatch and a refusal instead of agreeing. The operator
+  still compares the `--check` hash with the host `shasum` line, by hand.
+- N8: the reviewed Unicode version is one constant (`kb_screen.REVIEWED_UNIDATA_VERSION`), read
+  by the builder, the loader and CI's image step; the host venv's Python is not pinned (a
+  Homebrew update can change it), and the builder then refuses with status 3 until a Python
+  with 16.0.0 is used. A Homebrew Python minor update does not rebuild `.venv-tools`: re-create
+  it (the setup block) after a Python upgrade. `tests/safety/test_kb_screen.py` pins "16.0.0" on
+  purpose. The venv holds the image's packages at the image's versions (wheels from PyPI, not
+  hash-pinned) and is only as current as the last setup run: re-run it after each deploy. Audit
+  it with `pip-audit -r <the freeze file>` (pip-audit in its own venv; CI audits the open
+  ranges in `pyproject.toml`, not this list). It runs as the owner outside any sandbox, so it can
+  read whatever the owner can (`docker/secrets/` included); only the checkout's own code runs.
+  `pip check` does not see the checkout's own requirements (`divesafe` is only on the path):
+  a newer checkout that adds a dependency gives an ImportError (fails closed); one that raises a
+  version floor runs on the image's older version, and `--check` in the image judges the result.
+- N9: the GitHub ruleset "selamat" (all branches) only blocks deletion and force-push
+  (checked 2026-11-12); there are no required status checks, so CI's `test` (safety) and
+  `image` (Unicode) jobs are not enforced by branch protection. The merge procedure waits for
+  green CI by hand; the owner may add both as required checks.
+- N10 (security re-review of 40bef3c): the clean-checkout check can be hidden on purpose by Git
+  settings or the environment: `status.showUntrackedFiles=no` (fix: `--untracked-files=all` on
+  both `status` calls); `--assume-unchanged` / `--skip-worktree` on a file under `src` (fix:
+  `git ls-files -v src | grep -E '^[a-zS]'` must print nothing); `GIT_WORK_TREE` or
+  `GIT_INDEX_FILE` set in the shell (fix: add them to the `unset` line). Each needs someone to set
+  it deliberately; `--check` and `load` in the image still judge the manifest.
+- N11: false refusals: Finder writes an ignored `.DS_Store` in any folder browsed, and the
+  pre-`-B` host build may have left `src/**/__pycache__`; either blocks the build. To see why,
+  run `git status --porcelain --ignored -- src`, then remove only those `__pycache__` folders and
+  `.DS_Store` files. The refusal message does not say which check failed.
+
+Known gaps (2026-11-12 risk reviews of `tests/safety/test_kb_manifest_build_no_defaults.py`):
+- R1: the guard on the second verbatim draft checks that each listed value differs from the
+  permissive draft, not that every multi-valued field is listed; a new field is caught first by
+  the key-set pin, which should prompt the update.
+- R2: the verbatim comparison does not compare types (`True == 1`); the loader's `StrictBool` and
+  `StrictInt` refuse such values today.
+- R3: `tests/safety/test_evidence_usability.py` still imports helpers from
+  `tests/unit/test_ruleset_loader.py`, outside safety review (older; same fix as
+  `tests/safety/kb_build_draft.py`).
 
 ### First production load
 
@@ -134,6 +305,12 @@ deployed first (a separate step) and the corpus directory holding that one docum
    as WITHDRAWN and no approval with `hash_checked = false`.
 
 If any step refuses, stop and record it; do not retry with a changed environment.
+
+**Done 2026-11-12** (ADR 0024 A8 "Deployed and first load done"): `tioman-site-guide` v1 on
+image `f4c8511e0163`; load, approve (`hash_checked = true`), four assessments with the item
+withheld, withdraw, backup with both CSVs, closing report clean. Found on the way: a repeated
+`load` gives exit 11 (above); the first assessment's model calls all failed on a model-host 404
+with no alert (ADR 0027).
 
 ### When `withdraw` says "lock busy"
 
@@ -171,7 +348,7 @@ COMMIT;
 SQL
 ```
 
-or (b) stop the API (`$C stop api`, or `docker stop <api container>` if the variable is missing)
+or (b) stop the API (`C stop api`, or `docker stop <api container>` if the function is not defined)
 until `withdraw` works.
 
 If `withdraw` exits 11 and no load of that family is running, the ordering sequence may have been

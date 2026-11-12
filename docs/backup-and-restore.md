@@ -470,12 +470,12 @@ separate worktree and the model at `127.0.0.1:9`, `throwaway-*` projects only, a
 never `divesafe-api:local`; only stop and start the production containers, never touch the
 production volume; and if any step fails, stop and restart production at once, before
 investigating. Run 1 left production stopped for about 6h20m instead of 5-10 minutes because the
-restart waited for the investigation.) Every compose command goes through `$C`, which names the throwaway
+restart waited for the investigation.) Every compose command goes through `C`, a shell function that names the throwaway
 project with `-p` and adds a test-only override that sets a **test image tag**; nothing here builds,
 tags or runs `divesafe-api:local`, and nothing touches a `divesafe-prod` project. Never add
-`--build` to a `$C` command. The work directory is outside the repository and is **never** the
-production backup directory. Run the blocks in one `bash` session (zsh does not split `$C` into
-words); `docker/production.env` needs `DIVESAFE_CORPUS_DIR` (an empty directory is enough).
+`--build` to a `C` command. The work directory is outside the repository and is **never** the
+production backup directory. Run the blocks in one shell session (bash or zsh; `C` is a function,
+because a string in `$C` does not word-split in zsh); `docker/production.env` needs `DIVESAFE_CORPUS_DIR` (an empty directory is enough).
 
 ```sh
 # 0. A private work directory (mode 0700, outside the repository), a test image and its override.
@@ -489,17 +489,17 @@ services:
   kb_load: { image: "$A7_IMAGE" }
   kb_withdraw: { image: "$A7_IMAGE" }
 YML
-use() {  # use <project>: sets the project for the scripts and for $C
+use() {  # use <project>: sets the project for the scripts and for C
   export DIVESAFE_COMPOSE_PROJECT="$1"
-  C="docker compose -p $1 -f docker/docker-compose.production.yml -f $W/a7.override.yml --env-file docker/production.env"
+  C() { docker compose -p "$DIVESAFE_COMPOSE_PROJECT" -f docker/docker-compose.production.yml -f "$W/a7.override.yml" --env-file docker/production.env "$@"; }
 }
 role() {  # the role script (docs/knowledge-loader.md, section 2) in THIS project's db
-  $C exec -T -u postgres db sh -c 'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \
+  C exec -T -u postgres db sh -c 'PGPASSWORD="$(cat /run/secrets/db_bootstrap_password)" \
     exec psql -X -v ON_ERROR_STOP=1 -U divesafe_bootstrap -d divesafe -f -' \
     < docker/db/20-create-loader-role.sql
 }
 owner() {  # one read-only query as divesafe_owner in THIS project's db
-  $C exec -T db sh -c 'PGPASSWORD="$(cat /run/secrets/db_owner_password)" PGSSLMODE=require \
+  C exec -T db sh -c 'PGPASSWORD="$(cat /run/secrets/db_owner_password)" PGSSLMODE=require \
     exec psql -X -At -v ON_ERROR_STOP=1 -h db -U divesafe_owner -d divesafe' <<SQL
 $1
 SQL
@@ -507,9 +507,9 @@ SQL
 
 # 1. The source project.
 use throwaway-a7
-$C up -d --wait db            # new volume throwaway-a7_db-data
+C up -d --wait db            # new volume throwaway-a7_db-data
 role                          # exit 0
-$C up db-init                 # exits 0
+C up db-init                 # exits 0
 tests/hand_run/a7_seed_knowledge.sh
                               # exit 0; last line: seeded documents=3 chunks=4 events=6
 docker/backup.sh "$W/backups" # prints "backup written: ..." and "scratch restore equals the
@@ -519,11 +519,11 @@ docker/backup.sh "$W/backups" # prints "backup written: ..." and "scratch restor
 
 # 2. Stop the source db: the scripts refuse while two compose `db` containers run
 #    (single_database).
-$C stop db
+C stop db
 
 # 3. Restore into a second throwaway project: db, role BEFORE restore, restore, db-init.
 use throwaway-a7-restore
-$C up -d --wait db
+C up -d --wait db
 role                          # the "used database" check must still see an empty database
 docker/restore.sh "$W"/backups/divesafe-*.dump
 ```
@@ -547,9 +547,9 @@ and finally "the grants are NOT yet applied. next, ...". Then:
 owner "SELECT has_database_privilege('public', 'divesafe', 'TEMPORARY')"   # f (TEMP revoked)
 owner "SELECT count(*) FILTER (WHERE p.proacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) x WHERE x.grantee <> p.proowner)) || ' ' || count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname IN ('kb_no_update_delete', 'kb_no_truncate', 'kb_documents_insert', 'kb_chunks_insert', 'kb_status_events_insert');"
                                                                           # 5 5
-$C up db-init                                                             # exits 0
+C up db-init                                                             # exits 0
 owner "SELECT max(event_order) FROM public.kb_status_events"              # note it: M
-$C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its
+C --profile knowledge run --rm kb_withdraw a7-approved 1                 # exit 0, prints its
                                                                           # recorded_at, "withdrawn"
 owner "SELECT event_order, status FROM public.kb_status_events
        WHERE document_id = 'a7-approved' ORDER BY event_order DESC LIMIT 1"
@@ -562,8 +562,8 @@ the restored sequence was set back (ADR 0022 Known gaps): record it as a finding
 Cleanup, always, whatever failed (the API is never started in either project):
 
 ```sh
-use throwaway-a7-restore; $C --profile knowledge down -v
-use throwaway-a7;         $C --profile knowledge down -v
+use throwaway-a7-restore; C --profile knowledge down -v
+use throwaway-a7;         C --profile knowledge down -v
 rm -rf "$W"                   # the hand-run archives, manifests and the override file
 docker image rm "$A7_IMAGE"
 docker volume ls -q | grep throwaway-a7 || echo "no volumes left"

@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-tools/
 venv/
 *.egg-info/
 dist/
@@ -45,3 +46,8 @@ divesafe-*.manifest
 
 # Knowledge corpus staging, if ever staged inside the repository (licensed text; ADR 0024 A3).
 **/corpus
+
+# Knowledge manifests and drafts (kb_manifest_build): licence and permission references and
+# section titles; they belong in the corpus directory outside the repository, never committed.
+manifest.json
+draft.json
