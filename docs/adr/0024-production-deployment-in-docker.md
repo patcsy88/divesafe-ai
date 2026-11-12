@@ -183,7 +183,9 @@ and "Run for real"). The step-by-step procedure is `docs/first-run-on-the-real-h
 Prerequisite: the checkout, and so `docker/secrets/` and `docker/production.env`, must not be
 in a folder synced to a cloud service (iCloud, Dropbox, OneDrive; on a Mac, Desktop and Documents
 are synced when the iCloud option is on), as `docs/backup-and-restore.md` already says for backups.
-Found violated on 2026-11-12 (A8 "Gaps from the deploy and first load").
+Found violated on 2026-11-12 and fixed the same day (A8 "Gaps from the deploy and first load"):
+the production checkout is `/Users/patcsy88/DiveSafe/app`; a deploy is `git pull` there, then
+the build and `up` steps below. `~/Desktop/DiveSafe AI` is development only.
 
 ```
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
@@ -198,6 +200,20 @@ C up -d --build --wait api     # 3. db-init, then the API
 Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`risk-reviewer`
 should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
 from the deploy commit.
+
+**Rotating the database passwords** (done once, 2026-11-12, A8; generalises the loader-only
+note in `docs/knowledge-loader.md`). `make-secrets.sh` never overwrites, so rotation in place
+means a fresh directory: run it into a new directory, keep it mode 700 with the files mode 400,
+and copy the non-database secrets (`divesafe_api_key_hashes`, `divesafe_llm_api_key`,
+`divesafe_met_api_token`) and `production.env` in. The DSN files it writes must match the new
+passwords, so never edit a password file by hand. Then: backup; `C stop api`; one transaction of
+`ALTER ROLE <role> PASSWORD '...'` for `divesafe_bootstrap`, `divesafe_owner`, `divesafe_app`
+and `divesafe_loader`, built from the new files and piped through stdin to `psql` in the db
+container, so that no password is on a command line, in shell history or on screen; check that
+each new password logs in and each old one is refused; `C down` and `C up -d --no-build` with
+the new secrets directory (same project, same volume); check health, the image id, the switch,
+the schema, an app and a loader login; backup again; delete the old secrets directory. The API
+is down from `stop` to `up`. The API key is rotated separately (`docs/first-run-on-the-real-host.md`).
 
 `docker/secrets/` and `docker/production.env` are git-ignored.
 
@@ -2019,13 +2035,31 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     hashes) and `docker/production.env` have been synced to the owner's iCloud account. The 68
     stray copies were source and test files only (none of the secrets, the env file or a dump;
     checked 2026-11-12). Open gap, below.
-  - **Gaps from the deploy and first load (2026-11-12):** **OPEN (security S1): the production
-    checkout sits in an iCloud-synced folder**, so every file under `docker/secrets/` and
-    `docker/production.env` has been copied to the owner's iCloud account. Remedy, pending the
-    owner's decision: move the checkout out of the synced folder (for example
-    `/Users/patcsy88/DiveSafe/`, which is not synced and already holds the corpus, records and
-    backups), then rotate every secret as exposed to that cloud account (database passwords,
-    loader and app connection strings, model-host key, API key hashes). `.dockerignore` **and**
+  - **Gaps from the deploy and first load (2026-11-12):** ~~OPEN (security S1): the production
+    checkout sits in an iCloud-synced folder~~, so every file under `docker/secrets/` and
+    `docker/production.env` had been copied to the owner's iCloud account. **Remedy carried out
+    2026-11-12 (owner approved; times UTC):** new production checkout
+    `/Users/patcsy88/DiveSafe/app` (not synced), cloned from the local repository at `a997101`
+    with origin set to the GitHub remote; fresh database secrets made there by
+    `docker/make-secrets.sh` (never printed); `divesafe_api_key_hashes`,
+    `divesafe_met_api_token` (empty), `divesafe_llm_api_key` and `production.env` copied over.
+    Then: backup `divesafe-20261112T143141Z` (CSVs copied); `stop api`; `ALTER ROLE ... PASSWORD`
+    for `divesafe_bootstrap`, `divesafe_owner`, `divesafe_app` and `divesafe_loader` in one
+    transaction, piped through stdin to `psql` in the db container (no password on a command
+    line or screen); new passwords log in, old refused; `down` from the Desktop checkout,
+    `up -d --no-build` from the new one (same compose project `divesafe-prod`, same `db-data`
+    volume, nothing lost); health 200, image `f4c8511e0163` unchanged, switch `True`, schema up
+    to date, the API reaches the database as `divesafe_app` (5 assessments) and the model host
+    (200, model offered), the loader logs in as `divesafe_loader`, only the three expected
+    start-up warnings; `docker/secrets/` and `docker/production.env` deleted from
+    `~/Desktop/DiveSafe AI`; backup `divesafe-20261112T143255Z` (CSVs copied). API downtime
+    about 2 minutes (14:31 to 14:33). **Not rotated:** the DiveSafe API key (only its hash was
+    synced; not reversible). **Still open for the owner:** rotate the model-host key in
+    CLIProxyAPI (it was synced), replace `docker/secrets/divesafe_llm_api_key` and restart `api`;
+    empty iCloud "Recently Deleted"; turning iCloud Desktop & Documents sync off is the owner's
+    choice. From now on production commands run from `/Users/patcsy88/DiveSafe/app`;
+    `~/Desktop/DiveSafe AI` is development only; a deploy is `git pull` there, then the usual
+    build and `up` ("How to run it"). `.dockerignore` **and**
     `.gitignore` do not exclude Finder/iCloud duplicates (`* 2.*`); a code change should add
     the pattern to both (`.gitignore` matches `/docker/production.env` exactly, so a
     `docker/production 2.env` copy would not be ignored). The old hash file

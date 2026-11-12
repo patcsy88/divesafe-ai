@@ -25,7 +25,9 @@ any secret into a chat, a ticket or a file inside the repository.
 - **Never put the checkout or `docker/secrets` in a folder synced to a cloud service** (iCloud,
   Dropbox, OneDrive; on a Mac, Desktop and Documents are synced when the iCloud option is on),
   as `docs/backup-and-restore.md` says for backups. Found violated on 2026-11-12: the checkout
-  was `~/Desktop/DiveSafe AI`, so the secrets were synced (ADR 0024 A8, open gap).
+  was `~/Desktop/DiveSafe AI`, so the secrets were synced; fixed the same day (production now runs
+  from `/Users/patcsy88/DiveSafe/app` with fresh database passwords; the model-host key rotation is
+  still open for the owner; ADR 0024 A8 and "How to run it", "Rotating the database passwords").
 
 ## 1. Settings and secrets
 
