@@ -265,7 +265,9 @@ Known gaps (2026-11-12 security reviews):
 - N9: the GitHub ruleset "selamat" (all branches) only blocks deletion and force-push
   (checked 2026-11-12); there are no required status checks, so CI's `test` (safety) and
   `image` (Unicode) jobs are not enforced by branch protection. The merge procedure waits for
-  green CI by hand; the owner may add both as required checks.
+  green CI by hand; the owner may add both as required checks. **Closed 2026-11-13** (owner
+  decision): ruleset `main-ci-required` requires `test (Python 3.14)` and `docker image` on the
+  default branch.
 - N10 (security re-review of 40bef3c): the clean-checkout check can be hidden on purpose by Git
   settings or the environment: `status.showUntrackedFiles=no` (fix: `--untracked-files=all` on
   both `status` calls); `--assume-unchanged` / `--skip-worktree` on a file under `src` (fix:

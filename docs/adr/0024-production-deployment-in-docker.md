@@ -201,6 +201,23 @@ Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`r
 should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
 from the deploy commit.
 
+**Deploying a new commit to a running stack** (from `/Users/patcsy88/DiveSafe/app`; one step at a
+time, never in parallel):
+
+```
+sh docker/backup.sh /Users/patcsy88/DiveSafe/backups   # then copy both record CSVs beside it
+git pull --ff-only
+docker tag divesafe-api:local divesafe-api:rollback-YYYYMMDD
+docker image inspect -f '{{.Id}}' divesafe-api:rollback-YYYYMMDD   # must equal the running image:
+docker inspect -f '{{.Image}}' divesafe-prod-api-1                 # stop here if they differ
+C up -d --build --wait api
+```
+
+The rollback tag must exist and match the running image **before** the build: the build moves
+`divesafe-api:local` to the new image, and Docker then deletes the old image if nothing else names
+it (this happened on 2026-11-13, A8 "Deploy of 69c9fca"). Rollback:
+`docker tag divesafe-api:rollback-YYYYMMDD divesafe-api:local && C up -d --no-build --wait api`.
+
 **Rotating the database passwords** (done once, 2026-11-12, A8; generalises the loader-only
 note in `docs/knowledge-loader.md`). `make-secrets.sh` never overwrites, so rotation in place
 means a fresh directory: run it into a new directory, keep it mode 700 with the files mode 400,
@@ -2069,6 +2086,24 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
     says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
     the bootstrap user, not `divesafe_owner` (same read-only result).
+  - **Deploy of `69c9fca` (2026-11-12 16:28 UTC, 2026-11-13 local; owner approved).** PR #5
+    (host manifest builder, ADR 0027 accepted, docs); the only runtime-image change is the new
+    `divesafe.services.kb_manifest_build` module, which the API does not import. The production
+    checkout was already at `69c9fca` (a `git pull` at 16:25Z, by the owner). Backup
+    `divesafe-20261112T162818Z` (scratch restore equal: 6 assessments, 6 decided; both CSVs
+    copied). `C up -d --build --wait api`: new API image `8054a7177557`; health 200, an
+    unauthenticated read 401, 6 of 6 assessments decided, the image imports the builder with
+    Unicode 16.0.0. Start-up warnings: trusted proxies empty, agent stage ON, viewer key without
+    groups; the "connector HTTP socket not reachable" warning did not appear this time (not
+    investigated). **Rollback image lost:** the `docker tag ... rollback-20261113` ran at the same
+    time as the build and tagged the new image; the previous image `f4c8511e0163` lost its last
+    name and Docker deleted it. Replaced by `divesafe-api:rollback-20261113` (`b04aa8439758`),
+    rebuilt from `git archive a997101` (no builder, Unicode 16.0.0): the same source, not the
+    identical image, because runtime dependencies are version ranges (no lock file). The procedure
+    above now tags and checks the rollback image first. `divesafe-api:rollback-20261018` is kept.
+    **Also:** a second GitHub ruleset `main-ci-required` (owner decision, 2026-11-13) requires the
+    CI checks `test (Python 3.14)` and `docker image` on the default branch
+    (`docs/knowledge-loader.md` N9).
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
     - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
