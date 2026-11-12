@@ -149,39 +149,59 @@ Paragraphs (separated by blank lines) are packed into chunks of at most 1500 cha
 longer paragraph is refused, never split. Exact rule: the module docstring.
 
 Run it from `/Users/patcsy88/DiveSafe/app` (the production checkout). `DIVESAFE_CORPUS_DIR` is
-set in `docker/production.env`, not in your shell, so read it first. The manifest is written to a
-temporary file outside the repository and the corpus, and only replaces `manifest.json` (and is
-hashed) if the build succeeded:
+set in `docker/production.env`, not in your shell, so read it first; write it there unquoted
+(`DIVESAFE_CORPUS_DIR=/path`: the `sed` read keeps quotes, and a quoted value gives a bad mount
+and a refusal). The manifest is written to a temporary file outside the repository and the corpus;
+only if the build succeeded does it replace `manifest.json`, get hashed and get checked:
 
 ```sh
 DIVESAFE_CORPUS_DIR=$(sed -n 's/^DIVESAFE_CORPUS_DIR=//p' docker/production.env)
-out=$(mktemp) && docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
+: "${DIVESAFE_CORPUS_DIR:?}" && out=$(mktemp) && docker run --rm --network none --read-only \
+  --cap-drop ALL --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
   --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build \
   /corpus/draft.json > "$out" \
   && chmod 644 "$out" && mv "$out" "${DIVESAFE_CORPUS_DIR:?}/manifest.json" \
   && shasum -a 256 "$DIVESAFE_CORPUS_DIR/manifest.json" \
-  || { echo "refused or failed: manifest.json not replaced"; rm -f "$out"; }
-docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-  -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
-  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build --check /corpus
+  && docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges -v "${DIVESAFE_CORPUS_DIR:?}":/corpus:ro \
+  --entrypoint python divesafe-api:local -m divesafe.services.kb_manifest_build --check /corpus \
+  || { echo "stopped: read the message above and check manifest.json"; rm -f "${out:-}"; }
 ```
 
 Never redirect the output into the repository (it holds licence and permission references and
 section titles; `manifest.json` and `draft.json` are git-ignored as a backstop) or straight onto
 the existing `manifest.json` (the shell empties it before a refused build). The tool never
 writes a file: the manifest goes to stdout and a fixed message to stderr. The `shasum` line is
-the hash for the approval record, taken **after** the file is written. `--check` runs the
-loader's `read_corpus` and prints the manifest SHA-256 (it must match) and each document's id,
-version and chunk count. The image must include the tool (built from a commit that has it).
+the hash for the approval record, taken **after** the file is written. `--check` runs only after
+a successful build (a refusal leaves no new hash to compare): it runs the loader's `read_corpus`
+and prints the manifest SHA-256 (it must match the `shasum` line) and each document's id, version
+and chunk count. If the block stops after the `mv` (`shasum` or `--check` failing), the new
+`manifest.json` is already in place: do not approve it until `--check` succeeds.
 
-Known gaps (2026-11-12 security review):
+Before approval, also compare each document's `file.sha256` in `manifest.json` with
+`shasum -a 256 "$DIVESAFE_CORPUS_DIR/<path>"` on the host; they must be equal. Docker Desktop's
+file sharing can show a container stale contents of a file edited in place moments before (seen
+2026-11-12: a build read the new file cut to the old file's length, and the chained `--check`
+refused it). If they differ or `--check` refuses, wait a few seconds and run the block again.
+The image must include the tool (built from a commit that has it).
+
+Known gaps (2026-11-12 security reviews):
 - K4: the build uses the loader's private `_split_chunks` and `_open_dir`, and its final check
   re-implements the `read_corpus` loop; a new check added to the loader reaches `--check` and
   `load` but not the build until the builder is updated. `--check` before approval covers it.
 - K5: the draft and the document files each get the 1 MiB budget, so up to 2 MiB can be read
   before the shared limit is applied; `MAX_DOCUMENTS_PER_LOAD` is only applied in the final
   check, after every file is read.
+- N1: `read_corpus` catches only `OSError` around `read_regular_file`; a lone-surrogate path
+  would raise `UnicodeEncodeError`. Unreachable because `parse_manifest` (pydantic-core JSON)
+  refuses lone surrogate escapes (checked 2026-11-12 for `\ud800`, `\udc00`, `\udcff`); not
+  pinned by a test.
+- N6: `.gitignore` covers only the names `draft.json` and `manifest.json`: a draft with another
+  name is not ignored, and a future fixture with either name would be silently ignored.
+- N7: Docker Desktop (macOS) file sharing can serve stale contents of a just-edited corpus file
+  to a new container (2026-11-12, Docker Desktop 29.8.2). The build, `--check` and `load` all
+  read through such a mount; if they all see the same stale bytes the hashes agree. The host
+  `shasum` comparison above is the only check against that, and it is manual.
 
 ### First production load
 
