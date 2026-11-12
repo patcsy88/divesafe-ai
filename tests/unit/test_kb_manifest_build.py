@@ -3,7 +3,8 @@ must be accepted by the loader's own `read_corpus`; every refusal is a fixed out
 writes a file. Every text here is synthetic. Mutations run on COPIES of the module.
 
 The no-default tests (a missing human field is refused, never filled in) are safety tests:
-`tests/safety/test_kb_manifest_build_no_defaults.py`, which imports the helpers below."""
+`tests/safety/test_kb_manifest_build_no_defaults.py`, with the shared helpers in
+`tests/safety/kb_build_draft.py` (under safety review)."""
 
 from __future__ import annotations
 
@@ -14,7 +15,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.safety.kb_fakes import mutated_module
+from tests.safety.kb_build_draft import (
+    CRASHED,
+    GUIDE,
+    corpus,
+    document,
+    draft,
+    manifest_of,
+    mutated_module,
+    outcome,
+)
 
 from divesafe.services import kb_common, kb_manifest, kb_manifest_build
 from divesafe.services.kb_manifest_build import (
@@ -34,74 +44,6 @@ from divesafe.services.kb_manifest_build import (
 )
 
 LIMIT = kb_common.MAX_CHUNK_CHARACTERS
-GUIDE = (
-    "Intro line.\n\n## Entry and exit\n\nEnter at the steps.\nSecond line.\n\n"
-    "Another paragraph.\n## Hazards\nBoat traffic.\n"
-)
-
-
-def document(path: str = "guide.txt", **over: Any) -> dict[str, Any]:
-    doc: dict[str, Any] = {
-        "document_id": "site-guide",
-        "version": 1,
-        "title": "Synthetic guide",
-        "origin": "dive_professional",
-        "author_role": "dive_professional",
-        "effective_date": "2026-01-31",
-        "review_by_date": "2026-12-31",
-        "licence": "Synthetic test licence",
-        "licence_reference": "synthetic-licence-ref",
-        "attribution": None,
-        "licence_requires_personal_name": False,
-        "site_id": None,
-        "all_sites": True,
-        "display_permitted": True,
-        "display_permission_reference": "synthetic-permission-ref",
-        "supersedes": None,
-        "path": path,
-    }
-    doc.update(over)
-    return doc
-
-
-def draft(*docs: dict[str, Any], **over: Any) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "format": 1,
-        "attests_no_generated_text": True,
-        "attests_no_personal_names": True,
-        "documents": list(docs) or [document()],
-    }
-    out.update(over)
-    return out
-
-
-def corpus(root: Path, files: dict[str, str | bytes], the_draft: Any = None) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    for name, content in files.items():
-        (root / name).write_bytes(content if isinstance(content, bytes) else content.encode())
-    path = root / "draft.json"
-    raw = the_draft if isinstance(the_draft, bytes) else json.dumps(the_draft or draft()).encode()
-    path.write_bytes(raw)
-    return path
-
-
-CRASHED = Outcome(-1, "crashed")
-
-
-def outcome(module: Any, path: Path) -> Outcome:
-    """As a REAL Outcome: a mutant COPY defines its own Outcome class, which never compares equal,
-    so a mutant's result is rebuilt from its status and message."""
-    try:
-        module.build(path)
-    except module.BuildRefused as refused:
-        return Outcome(refused.outcome.status, refused.outcome.message)
-    except Exception:  # noqa: BLE001 - a mutant may crash instead of refusing
-        return CRASHED
-    return OK_BUILD
-
-
-def manifest_of(raw: bytes) -> dict[str, Any]:
-    return json.loads(raw)  # type: ignore[no-any-return]
 
 
 def accepted_by_the_loader(root: Path, raw: bytes) -> kb_manifest.LoadedCorpus:
@@ -232,14 +174,9 @@ def test_an_extra_repeated_or_malformed_draft_is_refused(tmp_path: Path, raw: by
 @pytest.mark.parametrize(
     ("top", "doc"),
     [
-        ({"attests_no_generated_text": False}, {}),
-        ({"attests_no_personal_names": False}, {}),
         ({"attests_no_generated_text": None}, {}),
         ({"format": 2}, {}),
-        ({}, {"licence_requires_personal_name": True}),
-        ({}, {"display_permitted": False}),
         ({}, {"licence": ""}),
-        ({}, {"site_id": None, "all_sites": False}),
         ({}, {"supersedes": 1}),
         ({}, {"review_by_date": "2027-02-01"}),
         ({}, {"title": "Guide kb:x"}),
@@ -249,7 +186,8 @@ def test_an_extra_repeated_or_malformed_draft_is_refused(tmp_path: Path, raw: by
 def test_values_are_judged_by_the_loader_parser_never_corrected(
     tmp_path: Path, top: dict[str, Any], doc: dict[str, Any]
 ) -> None:
-    """The file starts with a heading, so the title is not used as a section here."""
+    """The file starts with a heading, so the title is not used as a section here. The attestation,
+    permission and site cases are safety tests: `test_kb_manifest_build_no_defaults.py`."""
     text = "## Start\nBody.\n"
     path = corpus(tmp_path, {"guide.txt": text}, draft(document(**doc), **top))
     assert outcome(kb_manifest_build, path) == FAILED_LOADER

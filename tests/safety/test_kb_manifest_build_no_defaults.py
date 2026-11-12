@@ -1,7 +1,9 @@
-"""The manifest builder never supplies a human field (security review, 2026-11-12). The loader
-re-checks every value in the built manifest, but it cannot tell whether `attests_*: true`,
+"""The manifest builder never supplies or changes a human field (security review, 2026-11-12). The
+loader re-checks every value in the built manifest, but it cannot tell whether `attests_*: true`,
 `display_permitted` or a licence field was written by a human or defaulted by the builder, so the
-builder itself must refuse a draft that lacks any of them and copy each one verbatim.
+builder itself must refuse a draft that lacks any of them, copy each one verbatim, and never
+overwrite a refusable value with a permissive one. The key sets are pinned here as literals and
+the helpers live in `tests/safety/kb_build_draft.py`, so both are under safety review.
 Every text here is synthetic. Mutations run on COPIES of the module."""
 
 from __future__ import annotations
@@ -11,111 +13,216 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.safety.kb_fakes import mutated_module
-from tests.unit.test_kb_manifest_build import GUIDE, corpus, document, draft, manifest_of, outcome
+from tests.safety.kb_build_draft import (
+    GUIDE,
+    corpus,
+    document,
+    draft,
+    manifest_of,
+    mutated_module,
+    outcome,
+)
 
 from divesafe.services import kb_manifest_build
-from divesafe.services.kb_manifest_build import DOCUMENT_KEYS, FAILED_DRAFT, OK_BUILD, TOP_KEYS
+from divesafe.services.kb_manifest_build import (
+    DOCUMENT_KEYS,
+    FAILED_DRAFT,
+    FAILED_LOADER,
+    OK_BUILD,
+    TOP_KEYS,
+)
 
 pytestmark = pytest.mark.safety
 
+# Pinned here, not read from the module: a field dropped from the module's lists would otherwise
+# silently drop out of every test below.
+EXPECTED_TOP_KEYS = (
+    "format",
+    "attests_no_generated_text",
+    "attests_no_personal_names",
+    "documents",
+)
+EXPECTED_DOCUMENT_KEYS = (
+    "document_id",
+    "version",
+    "title",
+    "origin",
+    "author_role",
+    "effective_date",
+    "review_by_date",
+    "licence",
+    "licence_reference",
+    "attribution",
+    "licence_requires_personal_name",
+    "site_id",
+    "all_sites",
+    "display_permitted",
+    "display_permission_reference",
+    "supersedes",
+)
+PATH_KEY = "path"
 TOP_CHECK = "    if not isinstance(draft, dict) or set(draft) != set(TOP_KEYS):\n"
 DOC_CHECK = "        if not isinstance(doc, dict) or set(doc) != {*DOCUMENT_KEYS, PATH_KEY}:\n"
+PARSED = "        draft = parse_draft(raw_draft)\n"
+
+
+# --- shared assertions: one place, so loosening one loosens every test that uses it visibly ----
+
+
+def assert_refused_as_draft(module: Any, path: Path) -> None:
+    assert outcome(module, path) == FAILED_DRAFT
+
+
+def assert_refused_by_the_loader(module: Any, path: Path) -> None:
+    assert outcome(module, path) == FAILED_LOADER
+
+
+def assert_builds(module: Any, path: Path) -> None:
+    """A mutant prints a manifest: exactly what the real module must not do for this draft."""
+    assert outcome(module, path) == OK_BUILD
+
+
+def without(key: str) -> dict[str, Any]:
+    """A valid draft with one top-level or document field removed."""
+    if key in EXPECTED_TOP_KEYS:
+        the_draft = draft()
+        del the_draft[key]
+        return the_draft
+    doc = document()
+    del doc[key]
+    return draft(doc)
+
+
+def valid_value(key: str) -> Any:
+    """The value the valid draft carries: the permissive one for every attestation, permission
+    and site field (attests_* true, display_permitted true, licence_requires_personal_name
+    false, all_sites true with site_id null, supersedes null, origin and author_role
+    dive_professional)."""
+    return draft()[key] if key in EXPECTED_TOP_KEYS else document()[key]
+
+
+# --- the pinned key sets ------------------------------------------------------------------------
+
+
+def test_the_module_key_sets_are_the_pinned_ones() -> None:
+    assert TOP_KEYS == EXPECTED_TOP_KEYS
+    assert DOCUMENT_KEYS == EXPECTED_DOCUMENT_KEYS
+    assert kb_manifest_build.PATH_KEY == PATH_KEY
+
+
+# --- a missing field is refused, never filled in --------------------------------------------------
 
 
 def test_human_fields_are_copied_verbatim_and_nothing_is_added(tmp_path: Path) -> None:
     the_draft = draft(document(attribution="Synthetic attribution", supersedes=None))
     raw = kb_manifest_build.build(corpus(tmp_path, {"guide.txt": GUIDE}, the_draft))
     built = manifest_of(raw)
-    assert list(built) == list(TOP_KEYS)
-    for key in TOP_KEYS[:-1]:
+    assert list(built) == list(EXPECTED_TOP_KEYS)
+    for key in EXPECTED_TOP_KEYS[:-1]:
         assert built[key] == the_draft[key]
     (entry,) = built["documents"]
-    assert list(entry) == [*DOCUMENT_KEYS, "file"]
-    for key in DOCUMENT_KEYS:
+    assert list(entry) == [*EXPECTED_DOCUMENT_KEYS, "file"]
+    for key in EXPECTED_DOCUMENT_KEYS:
         assert entry[key] == the_draft["documents"][0][key]
     assert set(entry["file"]) == {"path", "sha256", "chunks", "gaps"}
     assert entry["file"]["sha256"] == hashlib.sha256(GUIDE.encode()).hexdigest()
 
 
-@pytest.mark.parametrize("key", [*TOP_KEYS])
+@pytest.mark.parametrize("key", EXPECTED_TOP_KEYS)
 def test_a_missing_top_level_field_is_refused(tmp_path: Path, key: str) -> None:
-    the_draft = draft()
-    del the_draft[key]
-    assert outcome(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, the_draft)) == (
-        FAILED_DRAFT
-    )
+    assert_refused_as_draft(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, without(key)))
 
 
-@pytest.mark.parametrize("key", [*DOCUMENT_KEYS, "path"])
+@pytest.mark.parametrize("key", [*EXPECTED_DOCUMENT_KEYS, PATH_KEY])
 def test_a_missing_document_field_is_refused(tmp_path: Path, key: str) -> None:
     """Never defaulted: `null` fields too (attribution, site_id, supersedes) must be written."""
-    doc = document()
-    del doc[key]
-    assert outcome(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, draft(doc))) == (
-        FAILED_DRAFT
-    )
+    assert_refused_as_draft(kb_manifest_build, corpus(tmp_path, {"guide.txt": GUIDE}, without(key)))
 
 
-# --- mutations (on COPIES) -----------------------------------------------------------------------
+# --- a refusable value is passed to the loader's parser, never overwritten ------------------------
 
-
-def _top_default(key: str, value: Any) -> tuple[str, str]:
-    """A builder that fills in a missing top-level field before the key-set check."""
-    return (
-        TOP_CHECK,
-        f"    if isinstance(draft, dict):\n        draft.setdefault({key!r}, {value!r})\n"
-        + TOP_CHECK,
-    )
-
-
-def _doc_default(key: str, value: Any) -> tuple[str, str]:
-    """A builder that fills in a missing document field before the key-set check."""
-    return (
-        DOC_CHECK,
-        f"        if isinstance(doc, dict):\n            doc.setdefault({key!r}, {value!r})\n"
-        + DOC_CHECK,
-    )
-
-
-# Each default is the value a careless builder would choose: the permissive one.
-TOP_DEFAULTS = {"attests_no_generated_text": True, "attests_no_personal_names": True}
-DOC_DEFAULTS = {
-    "attribution": None,
-    "display_permitted": True,
-    "display_permission_reference": "synthetic-default-ref",
-    "licence": "Synthetic default licence",
-    "licence_reference": "synthetic-default-licence-ref",
-    "licence_requires_personal_name": False,
+# (top-level fields, document fields, the field a mutant forces, the value it forces)
+REFUSABLE = {
+    "attests_no_generated_text": (
+        {"attests_no_generated_text": False},
+        {},
+        "attests_no_generated_text",
+        True,
+    ),
+    "attests_no_personal_names": (
+        {"attests_no_personal_names": False},
+        {},
+        "attests_no_personal_names",
+        True,
+    ),
+    "display_permitted": ({}, {"display_permitted": False}, "display_permitted", True),
+    "licence_requires_personal_name": (
+        {},
+        {"licence_requires_personal_name": True},
+        "licence_requires_personal_name",
+        False,
+    ),
+    "all_sites": ({}, {"site_id": None, "all_sites": False}, "all_sites", True),
 }
 
 
-@pytest.mark.parametrize(("key", "value"), TOP_DEFAULTS.items(), ids=list(TOP_DEFAULTS))
-def test_mutation_a_defaulted_attestation_is_caught(tmp_path: Path, key: str, value: Any) -> None:
-    the_draft = draft()
-    del the_draft[key]
-    path = corpus(tmp_path, {"guide.txt": GUIDE}, the_draft)
-    assert outcome(kb_manifest_build, path) == FAILED_DRAFT
-    # The mutant prints a manifest the human never attested: exactly what this file prevents.
-    assert outcome(mutated_module(kb_manifest_build, _top_default(key, value)), path) == OK_BUILD
+def _refusable_path(tmp_path: Path, case: str) -> Path:
+    top, doc, _, _ = REFUSABLE[case]
+    # The file starts with a heading, so the title is not used as a section here.
+    return corpus(tmp_path, {"guide.txt": "## Start\nBody.\n"}, draft(document(**doc), **top))
 
 
-@pytest.mark.parametrize(("key", "value"), DOC_DEFAULTS.items(), ids=list(DOC_DEFAULTS))
-def test_mutation_a_defaulted_document_field_is_caught(
-    tmp_path: Path, key: str, value: Any
+def _forced(key: str, value: Any) -> tuple[str, str]:
+    """A builder that overwrites `key` with `value` after parsing, whatever the draft says."""
+    if key in EXPECTED_TOP_KEYS:
+        line = f"        draft[{key!r}] = {value!r}\n"
+    else:
+        line = f"        for _doc in draft['documents']:\n            _doc[{key!r}] = {value!r}\n"
+    return (PARSED, PARSED + line)
+
+
+@pytest.mark.parametrize("case", REFUSABLE)
+def test_a_refusable_value_is_judged_by_the_loader_never_corrected(
+    tmp_path: Path, case: str
 ) -> None:
-    doc = document()
-    del doc[key]
-    path = corpus(tmp_path, {"guide.txt": GUIDE}, draft(doc))
-    assert outcome(kb_manifest_build, path) == FAILED_DRAFT
-    assert outcome(mutated_module(kb_manifest_build, _doc_default(key, value)), path) == OK_BUILD
+    assert_refused_by_the_loader(kb_manifest_build, _refusable_path(tmp_path, case))
+
+
+@pytest.mark.parametrize("case", REFUSABLE)
+def test_mutation_an_overwritten_value_is_caught(tmp_path: Path, case: str) -> None:
+    path = _refusable_path(tmp_path, case)
+    _, _, key, value = REFUSABLE[case]
+    assert_refused_by_the_loader(kb_manifest_build, path)
+    assert_builds(mutated_module(kb_manifest_build, _forced(key, value)), path)
+
+
+# --- mutations: a default for a missing field (on COPIES) --------------------------------------
+
+
+def _defaulted(key: str) -> tuple[str, str]:
+    """A builder that fills in a missing field, with the valid draft's value, before the key-set
+    check."""
+    value = valid_value(key)
+    if key in EXPECTED_TOP_KEYS:
+        guard = f"    if isinstance(draft, dict):\n        draft.setdefault({key!r}, {value!r})\n"
+        return (TOP_CHECK, guard + TOP_CHECK)
+    guard = f"        if isinstance(doc, dict):\n            doc.setdefault({key!r}, {value!r})\n"
+    return (DOC_CHECK, guard + DOC_CHECK)
+
+
+@pytest.mark.parametrize("key", [*EXPECTED_TOP_KEYS, *EXPECTED_DOCUMENT_KEYS, PATH_KEY])
+def test_mutation_a_defaulted_field_is_built_and_caught(tmp_path: Path, key: str) -> None:
+    """Every human field, including attests_*, display_permitted, the licence fields, site_id and
+    all_sites, review_by_date, origin and author_role, and supersedes."""
+    path = corpus(tmp_path, {"guide.txt": GUIDE}, without(key))
+    assert_refused_as_draft(kb_manifest_build, path)
+    assert_builds(mutated_module(kb_manifest_build, _defaulted(key)), path)
 
 
 @pytest.mark.parametrize(
-    ("label", "edit", "missing"),
+    ("edit", "missing"),
     [
         (
-            "exact key set becomes subset",
             (
                 "set(doc) != {*DOCUMENT_KEYS, PATH_KEY}",
                 "not set(doc) <= {*DOCUMENT_KEYS, PATH_KEY}",
@@ -123,24 +230,17 @@ def test_mutation_a_defaulted_document_field_is_caught(
             "attribution",
         ),
         (
-            "top-level exact key set becomes subset",
             ("set(draft) != set(TOP_KEYS)", "not set(draft) <= set(TOP_KEYS)"),
             "attests_no_generated_text",
         ),
     ],
     ids=["document-subset", "top-level-subset"],
 )
-def test_mutation_a_defaulted_field_is_caught(
-    tmp_path: Path, label: str, edit: tuple[str, str], missing: str
+def test_mutation_the_exact_key_set_is_load_bearing(
+    tmp_path: Path, edit: tuple[str, str], missing: str
 ) -> None:
-    if missing in TOP_KEYS:
-        the_draft = draft()
-        del the_draft[missing]
-    else:
-        doc = document()
-        del doc[missing]
-        the_draft = draft(doc)
-    path = corpus(tmp_path, {"guide.txt": GUIDE}, the_draft)
-    assert outcome(kb_manifest_build, path) == FAILED_DRAFT
-    # A subset check lets the missing key through to a later `draft[key]`: no longer refused.
-    assert outcome(mutated_module(kb_manifest_build, edit), path) != FAILED_DRAFT, label
+    """A subset check lets the missing key through to a later `draft[key]` (a crash, not a
+    refusal): the exact key-set comparison is what refuses it."""
+    path = corpus(tmp_path, {"guide.txt": GUIDE}, without(missing))
+    assert_refused_as_draft(kb_manifest_build, path)
+    assert outcome(mutated_module(kb_manifest_build, edit), path) != FAILED_DRAFT
