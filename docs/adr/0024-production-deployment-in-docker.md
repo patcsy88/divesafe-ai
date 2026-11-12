@@ -203,18 +203,29 @@ from the deploy commit.
 
 **Deploying a new commit to a running stack** (from `/Users/patcsy88/DiveSafe/app`, with the `C`
 function above). First take a backup: `sh docker/backup.sh /Users/patcsy88/DiveSafe/backups`,
-then copy both record CSVs beside it. Then set `new` to the approved full commit sha and `tag` to
-an unused name such as `divesafe-api:rollback-YYYYMMDD`, and run the chain; each step stops the
-rest if it fails, so nothing runs out of order:
+then copy both record CSVs beside it. Then set `new` to the approved full 40-character commit
+sha and `tag` to an unused name such as `divesafe-api:rollback-YYYYMMDD`, and run the chain; each
+step stops the rest if it fails, so nothing runs out of order. A deploy whose commit changes
+`src/divesafe/services/migrations.py` is refused unless `allow_migration` is set to that same sha
+(the owner's decision: after it, rollback means a restore, below):
 
 ```
+unset old s i running
 cd /Users/patcsy88/DiveSafe/app \
+  && : "${new:?}" "${tag:?}" \
+  && test "${#new}" -eq 40 \
+  && case $new in *[!0-9a-f]*) false;; esac \
+  && s=$(git status --porcelain --untracked-files=all) \
+  && i=$(git status --porcelain --ignored -- src) \
+  && { test -z "$s$i" || { echo "refused: the checkout is not clean" >&2; false; }; } \
   && old=$(git rev-parse --verify HEAD) \
   && git fetch origin \
+  && git merge-base --is-ancestor "$new" origin/main \
+  && { git diff --quiet "$old" "$new" -- src/divesafe/services/migrations.py \
+       || test "${allow_migration:-}" = "$new" \
+       || { echo "refused: this deploy changes migrations; see Rollback" >&2; false; }; } \
   && git merge --ff-only "$new" \
   && test "$(git rev-parse HEAD)" = "$new" \
-  && { git diff --quiet "$old" "$new" -- src/divesafe/services/migrations.py \
-       || echo "NOTE: this deploy changes migrations; a retag rollback will not work"; } \
   && running=$(docker inspect -f '{{.Image}}' "$(C ps -q api)") \
   && test -n "$running" \
   && ! docker image inspect "$tag" >/dev/null 2>&1 \
@@ -228,13 +239,17 @@ The rollback tag is taken from the image the running container uses, not from
 `divesafe-api:local`, and must exist **before** the build: the build moves `divesafe-api:local` to
 the new image, and Docker then deletes the old image if nothing else names it (this happened on
 2026-11-13, A8 "Deploy of 69c9fca"). An existing tag is never reused, so a second deploy on the
-same day needs a new name. Record `old`, `new` and the rollback image id in A8.
+same day needs a new name. The checkout must be clean (untracked files and ignored files under
+`src` included), because `--build` sends the working tree and the image copies all of `src`; and
+`new` must be on `origin/main`, so only a commit that passed the required checks is deployed.
+Record `old`, `new` and the literal rollback tag and image id in A8.
 
-Rollback: `docker tag "$tag" divesafe-api:local && C up -d --no-build --wait api` (`--no-build`
-matters: without it a missing tag would make compose build the commit being rolled back from).
-This works **only if the deploy changed no migration**: `db-init` uses the same image tag, and old
-code refuses a database that is ahead of it, so `db-init` fails and the old API never starts
-(fails closed). After a deploy that migrated, rolling back means restoring the step-1 backup with
+Rollback, with the literal tag from A8 (not a shell variable, which a new shell will not have):
+`docker tag divesafe-api:rollback-YYYYMMDD divesafe-api:local && C up -d --no-build --wait api`
+(`--no-build` matters: without it a missing tag would make compose build the commit being rolled
+back from). This works **only if the deploy changed no migration**: `db-init` uses the same image
+tag, and old code refuses a database that is ahead of it, so `db-init` fails and the old API is
+not started (fails closed; whether compose leaves the new API running is unverified). After a deploy that migrated, rolling back means restoring the step-1 backup with
 the old image (`docs/backup-and-restore.md`); everything written since that backup is lost, so it
 is the owner's decision.
 
@@ -2139,6 +2154,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     - Rollback images are kept without a pruning rule (`rollback-20261018`, `rollback-20261113`).
       They hold no secrets (mounted at run time) but go unpatched; keep the last two and remove
       older ones after a successful deploy (owner's call, not automated).
+    - The backup is a separate step before the chain, so the chain cannot tell whether it ran or
+      is fresh. The migration check watches the file `migrations.py`: any edit to it refuses (errs
+      safe), but if migrations moved to another module the check would go silent (no test pins
+      `MIGRATIONS` to that file). Only the chain's refusal path has been run against production;
+      the successful path (tag, verify, build) is untested as one chain.
   - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
     blockers):**
     - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
