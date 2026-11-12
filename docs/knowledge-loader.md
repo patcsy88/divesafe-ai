@@ -266,6 +266,16 @@ Known gaps (2026-11-12 security reviews):
   (checked 2026-11-12); there are no required status checks, so CI's `test` (safety) and
   `image` (Unicode) jobs are not enforced by branch protection. The merge procedure waits for
   green CI by hand; the owner may add both as required checks.
+- N10 (security re-review of 40bef3c): the clean-checkout check can be hidden on purpose by Git
+  settings or the environment: `status.showUntrackedFiles=no` (fix: `--untracked-files=all` on
+  both `status` calls); `--assume-unchanged` / `--skip-worktree` on a file under `src` (fix:
+  `git ls-files -v src | grep -E '^[a-zS]'` must print nothing); `GIT_WORK_TREE` or
+  `GIT_INDEX_FILE` set in the shell (fix: add them to the `unset` line). Each needs someone to set
+  it deliberately; `--check` and `load` in the image still judge the manifest.
+- N11: false refusals: Finder writes an ignored `.DS_Store` in any folder browsed, and the
+  pre-`-B` host build may have left `src/**/__pycache__`; either blocks the build. To see why,
+  run `git status --porcelain --ignored -- src`, then remove only those `__pycache__` folders and
+  `.DS_Store` files. The refusal message does not say which check failed.
 
 Known gaps (2026-11-12 risk reviews of `tests/safety/test_kb_manifest_build_no_defaults.py`):
 - R1: the guard on the second verbatim draft checks that each listed value differs from the
