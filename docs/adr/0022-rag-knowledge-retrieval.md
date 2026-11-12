@@ -917,7 +917,18 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       refused (the text is precomposed NFC). A second
       check refuses every default-ignorable code point from the
       code's own table (Python's `unicodedata` lacks the property), which covers variation
-      selectors, the combining grapheme joiner and Hangul fillers. Control, bidi, zero-width,
+      selectors, the combining grapheme joiner and Hangul fillers. **Built (owner decision
+      2026-11-12; `5bccb3f`, `b192a1d`, `a3bb557`, `7a5f849`):** the table is the Unicode 16.0.0
+      `DerivedCoreProperties.txt` `Default_Ignorable_Code_Point` set, 4174 code points
+      (`kb_screen.DEFAULT_IGNORABLE_RANGES`, `default_ignorable()`); `allowed_text` refuses them
+      on their own, before the category and Latin-name rules, for the loader and the read-time
+      screen (`rag/items.py`). The official file's sha256 is
+      `39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd`; a labelled extract with
+      the Unicode License v3 text is in `tests/fixtures/unicode/`, and
+      `tests/safety/test_kb_screen.py` requires the table to equal it exactly. This replaces the
+      `unicodedata`-based approximation; every code point in the set was already refused, so
+      nothing new is blocked. A Unicode version change still needs a new table review (the loader
+      and the read path refuse any other `unidata_version`). Control, bidi, zero-width,
       private-use, tag, other format characters, unassigned code points and noncharacters are
       refused too. Widening the set needs an ADR. The allow-list and the second check apply to
       the manifest string fields as well, **including `display_permission_reference`, which gets
@@ -966,9 +977,14 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       table, issue rows first). Catch-all:
       zero items returned and no issue is always a note.
     - **Documented gap:** a connector that is *not configured* is only a note, while "all
-      expired" is an issue. This is recorded as an accepted gap, not resolved. Once a corpus
-      exists the owner may choose a production start-up refusal when the knowledge connector is
-      not configured (open owner decision).
+      expired" is an issue. **Closed for production (owner decision 2026-11-12; `37a7537`):**
+      production refuses to start without the knowledge connector, always, not only once a
+      corpus exists. The connector is `None` only without `DIVESAFE_DATABASE_URL`, and production
+      already refuses in-memory storage, so no valid production set-up loses anything; an empty
+      corpus still starts. The check is in `build_default_state`, before the repository is built,
+      so in production without a database the first refusal is now this one (its message names
+      `DIVESAFE_DATABASE_URL`), not `create_app`'s "non-durable" one. Tests:
+      `tests/safety/test_startup_refusals.py`. In development and test it remains a note.
     - Knowledge issue text is a fixed string with no titles and no withheld document ids. It reaches
       prompts through the issue rationale, so it carries nothing from the corpus. Notes never enter
       prompts.
@@ -1521,8 +1537,8 @@ next stage and lands as one change, with **no feature-flagged half state** (owne
 9. **`withheld()` hides `model_host` from create-only keys** in the same commit as the egress
    wiring (decision 15; owner decision 2026-11-06).
 10. **Older stored records are checked before deploy** for now-refused forms (a KNOWLEDGE item
-    without a `kb:` id, or a `kb:` id on another kind); believed to be zero rows since no knowledge
-    connector was ever wired (Known gaps).
+    without a `kb:` id, or a `kb:` id on another kind). **Checked 2026-11-12: zero rows** (Known
+    gaps 24).
 
 **Status (2026-11-10): wired** in `orchestration.pipeline`; conditions 1-9 are met and tested in
 `tests/agent/test_retrieve_wiring.py` (safety marker, each with a mutation check); condition 10
@@ -1613,19 +1629,46 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 
 ### Still open
 
-- The licence or permission of each source and the `display_permitted` evidence for it (per
-  source, before any load).
-- Whether production should refuse to start when the knowledge connector is not configured once a
-  corpus exists (decision 14: recorded as a gap meanwhile).
-- Where the private approval record lives (outside the system and outside the repository; the
-  owner and the dive professional choose and keep it).
-- **Where the withdrawal log lives** (ADR 0024 A7): the owner decides; it gates shipping.
-- **The owner's re-acknowledgement of the changed decision 11** (`withdraw` exempt from the global
-  lock, self-check after commit, exit-status precedence); it gates shipping. Still open after the
-  ADR 0024 A1 to A7 build (2026-11-09): the build implements the changed decision as written and
-  does not settle this.
-- **The decision 13 default-ignorable code point table** (owner decision, 2026-10-23): a gate for
-  the first production load. Slice 2 uses a `unicodedata`-based approximation until it is built.
+- ~~The licence or permission of each source and the `display_permitted` evidence for it~~
+  **Waived for the MVP (owner decision 2026-11-12).** The manifest still requires `licence`,
+  `licence_reference`, `display_permitted: true` and `display_permission_reference` and the loader
+  refuses otherwise (nothing in code changes); the owner fills them in without holding separate
+  evidence on file. The right to use each source stays the owner's responsibility. Waived, not
+  closed: Known gap 31; revisit before any use beyond the MVP. No source is invented: the owner
+  supplies the site documents into `DIVESAFE_CORPUS_DIR` (`/Users/patcsy88/DiveSafe/corpus`,
+  empty today).
+- ~~Whether production should refuse to start when the knowledge connector is not configured~~
+  **Decided 2026-11-12:** production always refuses without it (`37a7537`; decision 14).
+- ~~Where the private approval record lives~~ **Decided 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (mode 600, folder 700; outside the
+  repository, the database and its backups), columns
+  `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`. A line after every
+  `approve`, then a backup and a copy of the file next to the newest archive.
+- ~~Where the withdrawal log lives~~ **Decided 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (same folder and handling), columns
+  `document_id,version,recorded_at_utc,reason,withdrawn_by`. Per ADR 0024 A7 R1: after every
+  `withdraw`, append a line with the `recorded_at` that `withdraw` prints, take a backup, and copy
+  the file next to the newest archive. The restore runbook's re-apply step reads this file.
+  Both files: Known gap 32.
+- ~~The owner's re-acknowledgement of the changed decision 11~~ **Re-acknowledged by the owner on
+  2026-11-12** (`withdraw` exempt from the global lock, self-check after commit, exit-status
+  precedence).
+- **State on 2026-11-12:** every first-production-load gate in ADR 0024 A6 is closed or, for the
+  licence evidence, waived by the owner. **The production load is not enabled by this:** the code
+  switch `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is unchanged; flipping it is a
+  separate code change reviewed by both reviewers, and deploying the new image is a separate step.
+- **Owner decision 2026-11-12, later the same day: the production load is on.** `b7ce432` flips
+  `PRODUCTION_LOAD_GATES_CLOSED` to `True` (reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`)). The check, exit 24 and
+  its message stay, so a one-line reviewed change back to `False` shuts it again; the gate's
+  safety tests now run the refusal with the literal patched to `False`, and the AST pin requires
+  `True`. Deploying the new image to production is a separate step, not done; the corpus
+  directory is still empty; the licence evidence is waived, not closed (ADR 0022 Known gap 31).
+- ~~The decision 13 default-ignorable code point table~~ **Built 2026-11-12** (owner decision;
+  decision 13): the Unicode 16.0.0 `Default_Ignorable_Code_Point` set replaces the
+  approximation; this first-production-load gate is closed.
+- **Decided 2026-11-12, also:** the prompt cap stays as is (Known gap 11, owner-accepted); a real
+  provider with no model host is refused at start-up (`37a7537`; Known gap 12 closed). Both
+  reviewers: no blockers, no should-fix beyond this doc update; their nits are Known gaps 26-30.
 - **Gates for the first production load from the slice 2 review (2026-10-23; ADR 0024 A6 (7) to
   (9))**: (a) the decision 9 id screen was bypassable by lookalike characters (U+2236, U+A789,
   U+0589 as colons; U+2010, U+2212; Latin small capitals such as U+1D0B, U+0299), because the
@@ -1683,7 +1726,7 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
   host is exposed today. The owner decided (2026-11-06) to hide it from create-only keys; that is
   a condition on the wiring stage (decision 15). `withheld()` hides it (built with the wiring).
 
-### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring)
+### Known gaps (recorded 2026-11-10; items 1-10 after the domain and connector stages, 11-25 after the prompt path, egress filter and Retrieve wiring, 26-33 after the 2026-11-12 owner decisions)
 
 1. **Security: the identity filter trusts validated items.** `screen_knowledge` tests
    `item.data_kind is DataKind.KNOWLEDGE`; an item built with `model_construct` whose kind is a
@@ -1699,6 +1742,8 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
 5. **Older stored records holding now-refused forms** (a KNOWLEDGE item without a `kb:` id, or a
    `kb:` id on another kind) would fail to load with the fixed integrity error. Believed to be zero
    rows, since no knowledge connector was ever wired; check before deploy (wiring condition 10).
+   **Checked on production 2026-11-12 (`7920715`): zero such rows; see gap 24.** To be rechecked
+   after the deploy.
 6. **The 20-item cut can split the last family mid-document** (owner's choice, decision 12, B1).
    It raises the bound issue, which forces INSUFFICIENT EVIDENCE, but does not follow the
    connector's whole-family-or-nothing rule for a dropped chunk.
@@ -1721,12 +1766,16 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     closed, recorded as an agent issue). A corpus heavy in non-English text would silently lose
     the risk agent and ToT; `site_intelligence` and cross-examination read the same categories
     and are not tested against the cap. The only sign today is the agent issue. (Decision 12
-    asked for this test; the 20-chunk bound does not fit the cap for such text.)
+    asked for this test; the 20-chunk bound does not fit the cap for such text.) **Accepted by
+    the owner as is, 2026-11-12.**
 12. **A missing host on a real provider records `egress_basis: none`**, which understates that
     live evidence went to a model server (the ADR reserves `none` for the fake provider). Not
     reachable today, since the only adapter requires `llm_base_url`; it becomes reachable with a
-    hosted adapter that has no base URL. Remedy: refuse at start-up in `build_default_state` and
-    keep the run-time fallback. Now partly visible through `egress.host_missing`.
+    hosted adapter that has no base URL. ~~Remedy: refuse at start-up in `build_default_state` and
+    keep the run-time fallback.~~ **Closed 2026-11-12 (`37a7537`):** start-up refuses a real
+    provider with no model host in every environment, with a fixed message naming
+    `DIVESAFE_LLM_BASE_URL` and no URL echoed; the run-time fallback in `pipeline.record_egress`
+    (`none` plus `egress.host_missing`) stays as a second line. See gap 26.
 13. **Hiding `model_host` relies on FastAPI not re-validating the returned view**
     (`revalidate_instances='never'`). The HTTP-level test in `tests/agent/test_knowledge_egress.py`
     guards it and must stay at the HTTP layer.
@@ -1757,10 +1806,57 @@ answer is folded in. None of them accepts the ADR or lets code start (see the st
     ("no site documents were available, or retrieving them failed") is cautious but imprecise.
 23. **`KnowledgeConnector.fetch` still exists**; only `gather_evidence` calls it, the pipeline
     never does (it calls `retrieve`). Dead on the live path.
-24. **Wiring condition 10 remains open (operations):** check stored records for now-refused forms
-    before deploy (also gap 5).
+24. **Wiring condition 10: checked on 2026-11-12 (closed).** A read-only query on the production
+    database (`BEGIN READ ONLY`, as the bootstrap role, over `evidence` and `withheld_evidence` of
+    every stored record) found 1 record, 15 evidence items, data kinds forecast, model and notice
+    only: 0 KNOWLEDGE items without a `kb:` id, 0 `kb:` ids on another kind, 0 items missing an id
+    or kind. Gap 5 does not apply to the records held on that date; a record stored by an older
+    image after this check is not covered.
 25. **The knowledge half of the citation guard (decision 8) is still not built**; a GO or CAUTION
     citing a knowledge item is not yet flagged (unreachable today: no signed limits).
+26. **The model host comes from settings, not from the provider** (gap 12's fix). A future vendor
+    adapter with a fixed endpoint would need an unused base URL and would record the wrong host;
+    fix in that adapter's ADR (for example a `provider.host`).
+27. **The production knowledge-connector refusal proves only that a DSN is set**, not that the
+    `kb_*` tables are readable; `verify()` checks the tables at start-up, and a run-time read
+    failure is an evidence issue.
+28. **`build_provider` logs "agent stage is ON" with `model_host: None`** just before the start-up
+    refusal of gap 12.
+29. **The start-up refusal tests read the real environment:** a developer shell with
+    `DIVESAFE_LLM_BASE_URL` or the admin or loader DSNs set makes them fail, loudly.
+30. **The default-ignorable table cannot be proved offline to match the official file.** The
+    tests require the table to equal the labelled extract; that the extract matches
+    `DerivedCoreProperties.txt` was checked by hand (download, sha256, diff of the section;
+    recorded in `tests/fixtures/README.md`). The in-test table mutants test the comparison; the
+    hand mutations (5/5 caught) are the real evidence. The parser does not check each line's
+    `[n]` count; the total covers it.
+31. **Licence and `display_permitted` evidence waived for the MVP (owner decision 2026-11-12).**
+    The manifest fields are still required and the loader still refuses without them, but no
+    separate evidence is held on file; the owner carries the responsibility for the right to use
+    each source. Waived, not closed: revisit before any use beyond the MVP.
+32. **The withdrawal log and the approval record are plain CSV files on one Mac**
+    (`/Users/patcsy88/DiveSafe/records/`): no integrity protection, and a copy exists only with
+    the backups, so a disk loss before a backup loses entries. The copy after every `approve` or
+    `withdraw` is operator discipline.
+33. **Production-load switch review (`b7ce432`, 2026-11-12; no blockers).** (a) **Security S1,
+    closed by `91fa8fe` (re-reviewed, no blockers, no should-fix):** with a secrets-directory DSN,
+    `-e DIVESAFE_ENVIRONMENT=development` allowed `--development-no-manifest-hash` (APPROVED with
+    `hash_checked = false`, treated as unchecked by selection, so the site stayed at INSUFFICIENT
+    EVIDENCE: failed closed), skipped the DSN-shape checks and accepted a relative corpus target.
+    Now a secrets-directory DSN gets the production hash, DSN-shape and absolute-target rules in
+    every environment. The remaining path is the hand-built connection string already in ADR
+    0024 A8 (an operator who knows the loader password, unsets `DIVESAFE_SECRETS_DIR`, outside
+    production). (b) `display_permitted: true` is
+    only the owner's own statement under the waiver (gap 31); a licensing risk, not a dive-safety
+    one. (c) **What loaded knowledge can affect:** the model host is remote
+    (`remote_external_opt_in`), so every `kb:` item is withheld from prompts; knowledge reaches
+    only the record and the human reader, and no rule reads KNOWLEDGE; the remaining risk is wrong
+    or stale site text a human trusts, and dive-professional approval is the only control on
+    content, a process control. (d) **New INSUFFICIENT EVIDENCE paths reachable in production**
+    once a corpus is loaded: a knowledge connector failure, the 20-item cut (gap 6) and a stalled
+    database read holding the shared thread pool (gap 8); fail-closed, costs availability. (e)
+    **The first real production load is untested end to end** (A7 run 2 ran with the gate shut);
+    it is a supervised run, `docs/knowledge-loader.md` "First production load".
 - Retrieval quality is unmeasured: there is no corpus and no labelled question set, and the
   assistant will not invent either. A recall and precision set needs the dive professional.
 - A reassuring or misleading passage can still steer a human or a model's explanation text; the

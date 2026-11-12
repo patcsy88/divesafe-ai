@@ -1,3 +1,4 @@
 *.sh text eol=lf
 docker/Dockerfile text eol=lf
 docker/db/pg_hba.conf text eol=lf
+tests/fixtures/unicode/*.txt text eol=lf

@@ -114,7 +114,10 @@ def test_the_default_application_state_goes_through_the_gate(
     _with_stub(monkeypatch, external=False)
     with pytest.raises(RuntimeError, match="loopback"):
         build_default_state(_settings(llm_provider="openai"))
-    assert build_default_state(_settings(llm_provider="openai", llm_server_is_local=True))
+    # A model host is required since the owner decision of 2026-11-12 (ADR 0022 Known gap 12).
+    assert build_default_state(
+        _settings(llm_provider="openai", llm_server_is_local=True, llm_base_url=LOOPBACK_URL)
+    )
 
 
 def test_the_basis_says_why_a_provider_was_let_through(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -332,6 +332,23 @@ def build_default_state(settings: Settings) -> AppState:
             "Behind a proxy or the web server, every person shares one bucket until it is set"
         )
     provider, basis = build_provider(settings)
+    host = None if provider is None else model_host(settings)
+    # Owner decision 2026-11-12 (ADR 0022 Known gap 12): a real provider without a model host is
+    # refused here, in every environment; `pipeline.record_egress` keeps its run-time fallback.
+    if provider is not None and host is None:
+        raise RuntimeError(
+            "refusing to start: the LLM provider has no model host (DIVESAFE_LLM_BASE_URL), so "
+            "its egress cannot be recorded (ADR 0022 Known gap 12)"
+        )
+    knowledge_connector = build_knowledge_connector(settings)
+    # Owner decision 2026-11-12 (ADR 0022 "Still open" item 6): production always requires the
+    # knowledge connector, whatever else refuses a missing database.
+    if settings.environment == "production" and knowledge_connector is None:
+        raise RuntimeError(
+            "refusing to start in production without the knowledge connector, which needs "
+            "DIVESAFE_DATABASE_URL "
+            "(ADR 0022, owner decision 2026-11-12)"
+        )
     return AppState(
         repository=build_repository(settings),
         connectors=connectors,
@@ -346,8 +363,8 @@ def build_default_state(settings: Settings) -> AppState:
         ),
         provider=provider,
         egress_basis=basis,
-        model_host=None if provider is None else model_host(settings),
-        knowledge_connector=build_knowledge_connector(settings),
+        model_host=host,
+        knowledge_connector=knowledge_connector,
         limiter=RateLimiter(
             default_limits(
                 settings.rate_limit_create_per_minute,

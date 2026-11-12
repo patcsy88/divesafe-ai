@@ -9,6 +9,7 @@ import hashlib
 import string
 import sys
 import unicodedata
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -490,46 +491,109 @@ def test_mutation_without_the_allow_list_the_lookalikes_get_through_both_screens
     assert survived  # at least one weaker allow-list lets the look-alike in
 
 
-def _default_ignorable(ch: str) -> bool:
-    """The Unicode DerivedCoreProperties Default_Ignorable_Code_Point set, as listed in the
-    standard (stable ranges). Used only to prove the gap; not the screen."""
-    code = ord(ch)
-    ranges = (
-        (0x00AD, 0x00AD),
-        (0x034F, 0x034F),
-        (0x061C, 0x061C),
-        (0x115F, 0x1160),
-        (0x17B4, 0x17B5),
-        (0x180B, 0x180F),
-        (0x200B, 0x200F),
-        (0x202A, 0x202E),
-        (0x2060, 0x206F),
-        (0x3164, 0x3164),
-        (0xFE00, 0xFE0F),
-        (0xFEFF, 0xFEFF),
-        (0xFFA0, 0xFFA0),
-        (0xFFF0, 0xFFF8),
-        (0x1BCA0, 0x1BCA3),
-        (0x1D173, 0x1D17A),
-        (0xE0000, 0xE0FFF),
-    )
-    return any(low <= code <= high for low, high in ranges)
+UNICODE_EXTRACT = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "unicode"
+    / "DerivedCoreProperties-16.0.0-Default_Ignorable_Code_Point.txt"
+)
+# sha256 of the extract file (header lines plus the unmodified Default_Ignorable_Code_Point section
+# of https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt, whose own sha256 is in the
+# header). Changing the file needs a Unicode review (ADR 0022 decision 13).
+UNICODE_EXTRACT_SHA256 = "ceb9c1f14f59aba02f67671c9270ee12c0fd98437041b3939c79392233cdb89d"
+OFFICIAL_SHA256 = "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd"
+IGNORABLE_RULE = "    if default_ignorable(ch):\n        return False\n"
 
 
-def test_the_stable_default_ignorable_ranges_are_all_refused_today() -> None:
-    """GATE for the first production load (open): the screen uses general categories and the
-    Latin-letter rule, NOT a generated Default_Ignorable_Code_Point table. Checked here: every
-    code point of the stable ranges listed above is refused today. The range list is written from
-    the standard by hand, so this is a regression guard, not a proof of completeness; no leaking
-    code point was found, so there is no failing test to mark as a known gap."""
-    import sys
+def _official_ignorable_code_points() -> tuple[set[int], int]:
+    text = UNICODE_EXTRACT.read_text(encoding="utf-8")
+    codes: set[int] = set()
+    total = -1
+    for line in text.splitlines():
+        if line.startswith("# Total code points:"):
+            total = int(line.split(":")[1])
+        data = line.split("#", 1)[0].strip()
+        if not data:
+            continue
+        field, prop = (part.strip() for part in data.split(";"))
+        assert prop == "Default_Ignorable_Code_Point"
+        low, _, high = field.partition("..")
+        codes.update(range(int(low, 16), int(high or low, 16) + 1))
+    return codes, total
 
+
+def _table_code_points(module: Any) -> set[int]:
+    return {code for low, high in module.DEFAULT_IGNORABLE_RANGES for code in range(low, high + 1)}
+
+
+def test_the_unicode_extract_is_the_pinned_official_one() -> None:
+    raw = UNICODE_EXTRACT.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == UNICODE_EXTRACT_SHA256
+    text = raw.decode("utf-8")
+    assert text.startswith("# DerivedCoreProperties-16.0.0.txt\n")
+    assert f"# Source sha256: {OFFICIAL_SHA256}" in text
+    assert kb_screen.REVIEWED_UNIDATA_VERSION == "16.0.0"
+
+
+def test_the_default_ignorable_table_is_exactly_unicode_16_0_0() -> None:
+    """GATE for the first production load, closed 2026-11-12 (owner decision 7): the screen's table
+    is the official Unicode 16.0.0 Default_Ignorable_Code_Point set, no more and no less."""
+    official, total = _official_ignorable_code_points()
+    assert total == 4174 == len(official)
+    assert _table_code_points(kb_screen) == official
+
+
+def test_every_default_ignorable_code_point_is_refused() -> None:
+    official, _ = _official_ignorable_code_points()
     leaked = [
         code
-        for code in range(sys.maxunicode + 1)
-        if _default_ignorable(chr(code)) and kb_screen.allowed_text(chr(code), newlines=True)
+        for code in sorted(official)
+        if kb_screen.allowed_text(chr(code), newlines=True)
+        or kb_screen.allowed_text(chr(code), newlines=False)
+        or kb_screen.allowed_text(f"a{chr(code)}b", newlines=True)
     ]
     assert leaked == []
+    assert all(kb_screen.default_ignorable(chr(code)) for code in official)
+    assert not any(kb_screen.default_ignorable(ch) for ch in "aZ09 .\n\u00e9")
+
+
+def test_mutation_without_the_table_check_the_hangul_fillers_get_through() -> None:
+    """The table is a check of its own: with the category rule loosened to letters (Hangul fillers
+    are Lo) and the Latin-name rule removed, only the table refuses U+115F, U+3164 and U+FFA0."""
+    loosened = mutated_module(kb_screen, (NAME_RULE, "    return True"))
+    no_table = mutated_module(kb_screen, (NAME_RULE, "    return True"), (IGNORABLE_RULE, ""))
+    fillers = ("\u115f", "\u1160", "\u3164", "\uffa0")
+    assert not any(loosened.allowed_text(ch, newlines=True) for ch in fillers)
+    assert all(no_table.allowed_text(ch, newlines=True) for ch in fillers)
+
+
+def test_mutation_without_the_table_check_format_and_mark_ignorables_get_through() -> None:
+    """The same for Cf, Mn and Cn members: with the category rule and the Latin-name rule both
+    loosened, only the table refuses them."""
+    open_rules = (
+        (NON_ASCII_CATEGORY, "    if False:"),
+        (NAME_RULE, "    return True"),
+    )
+    loosened = mutated_module(kb_screen, *open_rules)
+    no_table = mutated_module(kb_screen, *open_rules, (IGNORABLE_RULE, ""))
+    samples = ("\u00ad", "\u034f", "\u200b", "\u202e", "\u2065", "\ufe0f", "\U000e0041")
+    assert not any(loosened.allowed_text(ch, newlines=True) for ch in samples)
+    assert all(no_table.allowed_text(ch, newlines=True) for ch in samples)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("    (0xE0000, 0xE0FFF),\n", "    (0xE0000, 0xE0FFE),\n"),
+        ("    (0x00AD, 0x00AD),\n", ""),
+        ("    (0x2060, 0x206F),\n", "    (0x2060, 0x2064),\n    (0x2066, 0x206F),\n"),
+        ("    (0x180B, 0x180F),\n", "    (0x180B, 0x1810),\n"),
+    ],
+)
+def test_mutation_a_changed_table_is_caught(old: str, new: str) -> None:
+    official, _ = _official_ignorable_code_points()
+    mutant = mutated_module(kb_screen, (old, new))
+    assert _table_code_points(mutant) != official
 
 
 # --- document_id_reads_as_instruction ------------------------------------------------------------

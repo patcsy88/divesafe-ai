@@ -1,15 +1,18 @@
 # The knowledge loader on the production stack (ADR 0024 Amendment 1)
 
 This is a procedure to run by hand. It loads, approves and withdraws site-knowledge documents
-(ADR 0022) on the production compose stack. **No production load may happen yet**: the gates in
-ADR 0024 A6 ("First-production-load gates") are still open, and the code refuses it:
+(ADR 0022) on the production compose stack. **The production load is on**: every gate in
+ADR 0024 A6 ("First-production-load gates") is closed, or waived by the owner (licence evidence),
+and `PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py` is `True` (owner
+decision, 2026-11-12). The refusal stays in the code: while that literal is `False`,
 `kb_load load` and `kb_load approve` exit 24 ("refused: production load gates (ADR 0024 A6) are
 not closed; nothing written") before reading the corpus or connecting, **in production and
 whenever the loader string was read from the secrets directory**, whatever `DIVESAFE_ENVIRONMENT`
 says (so `-e DIVESAFE_ENVIRONMENT=development` on the compose loader does not lift it).
-`withdraw` is not affected. The only switch the code offers is a reviewed change of
-`PRODUCTION_LOAD_GATES_CLOSED` in `src/divesafe/services/kb_load.py` (owner decisions,
-2026-11-09).
+`withdraw` is not affected. The only switch the code offers is a reviewed change of that literal
+(owner decisions, 2026-11-09). **Switching the load off again:** a one-line reviewed change back
+to `False`, then **rebuild and redeploy the image** (`up -d --build` of the main stack from that
+commit); the running image keeps whatever the literal was when it was built.
 
 **What the refusal is and is not.** It stops accidents and casual overrides. It does **not** stop
 a determined operator with Docker access: one who replaces the entrypoint (`--entrypoint`), runs
@@ -86,8 +89,8 @@ written).
 
 The loader services start only with the `knowledge` profile, never with `up`. **Never add
 `--build` to these commands and never run `build` with the knowledge profile:** build the image
-only from the deploy commit, with `up -d --build` of the main stack. (Until the gates are closed,
-`load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
+only from the deploy commit, with `up -d --build` of the main stack. (If the gate is ever shut
+again, `load` and `approve` refuse with exit 24 on this stack; see the top of this page.)
 
 ```sh
 $C --profile knowledge run --rm kb_load load --approved-manifest-sha256 <hash from the approval record>
@@ -97,18 +100,55 @@ $C --profile knowledge run --rm kb_withdraw <document_id> <version>
 
 - Run `approve` only after the dive professional has recorded approval of that manifest hash in
   the private approval record, and copy the hash from that record. Do not compute it yourself.
-- `withdraw` prints the `recorded_at` of the WITHDRAWN event. Write it in the withdrawal log
-  (version, `recorded_at`, reason). **The log's location is not settled yet** (an owner gate).
-- Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1).
+- `withdraw` prints the `recorded_at` of the WITHDRAWN event. Append a line to the withdrawal
+  log, `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (owner decision 2026-11-12; columns
+  `document_id,version,recorded_at_utc,reason,withdrawn_by`; mode 600, folder 700, outside the
+  repository, the database and its backups). The approval record is `approval-record.csv` in the
+  same folder (columns `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`);
+  append a line after every `approve`.
+- Take a backup right after every `approve` and `withdraw` (ADR 0024 A7, R1), and copy the file
+  you just appended to next to the newest archive. Plain CSV, no integrity protection: the copy
+  is the only other one.
+- Licence and `display_permitted` evidence: waived for the MVP (owner decision 2026-11-12). The
+  manifest fields are still required and the loader still refuses without them; the owner fills
+  them in and carries the responsibility for the right to use each source (ADR 0022 Known gap 31).
 - The hash is not a secret, but it is visible in shell history and in `docker ps` while the
   run container exists.
 - Backup and restore refuse while a `kb_load` or `kb_withdraw` container exists. Use `--rm`.
+
+### First production load
+
+The first real load is untested end to end (the A7 hand run 2 ran with the gate shut and used the
+test-only seed, never `kb_load`). Run it as a supervised run, one document, with the new image
+deployed first (a separate step) and the corpus directory holding that one document:
+
+1. `load` it; expect one DRAFT version.
+2. `approve` it with the hash from the approval record; append the approval-record line.
+3. Create one assessment and check its record shows the `kb:` item **withheld**
+   (`withheld_knowledge`, `egress_basis` not `declared_local`), nothing in a prompt.
+4. `withdraw` it once, to prove the path; append the withdrawal-log line with the printed
+   `recorded_at`.
+5. Take a backup; copy both CSVs next to the archive.
+6. Run the post-load check: the A7 closing-report SQL from `docs/backup-and-restore.md`
+   ("The closing report did not run"), read-only as `divesafe_owner`; the version must be listed
+   as WITHDRAWN and no approval with `hash_checked = false`.
+
+If any step refuses, stop and record it; do not retry with a changed environment.
 
 ### When `withdraw` says "lock busy"
 
 A load is holding that document's lock. (1) Stop the `kb_load` run container (the server rolls
 the load back) and retry. (2) Or, as the bootstrap superuser, find the loader backend in
 `pg_stat_activity` and run `pg_terminate_backend`. (3) Else use fallback (b) below.
+
+### When `withdraw` exits 3
+
+Since `91fa8fe` (2026-11-12) a loader string read from the secrets directory gets the production
+DSN-shape and absolute-target rules in every environment, and `withdraw` shares that settings
+loader: a relative `DIVESAFE_CORPUS_TARGET` makes it refuse with exit 3 although `withdraw` never
+reads the corpus. An exit-3 `withdraw` is a configuration problem: fix the setting and re-run;
+never skip the withdrawal. `make-secrets.sh` output already passes these rules, so a production
+`withdraw` is unaffected.
 
 ### When `withdraw` cannot run at all
 
@@ -143,4 +183,5 @@ set back (ADR 0022 Known gaps). Fallback (a) fails the same way. Use (b), then a
 See [backup-and-restore.md](backup-and-restore.md). Archives contain the licensed corpus text.
 After a restore into a new volume the loader role must be created again (section 2) **before**
 `restore.sh`, and withdrawals made after the archive was taken must be re-applied from the
-withdrawal log before the API starts.
+withdrawal log (`/Users/patcsy88/DiveSafe/records/withdrawal-log.csv`, or its copy by the
+archive) before the API starts.

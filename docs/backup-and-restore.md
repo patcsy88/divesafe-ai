@@ -214,8 +214,12 @@ Then:
    backup time is taken before the dump, so a withdrawal logged a little earlier may be in the
    archive or not: compare with the report, never with the clock. A v2 approved after the archive
    is simply absent and a superseded v1 governs again: re-load v2, or withdraw v1. **Nothing stops
-   the API starting before this step** (operator discipline). The withdrawal log has no agreed
-   home yet; the first production load waits for one.
+   the API starting before this step** (operator discipline). The withdrawal log is
+   `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (owner decision 2026-11-12; columns
+   `document_id,version,recorded_at_utc,reason,withdrawn_by`), with a copy next to the newest
+   archive; the approval record `approval-record.csv` sits beside it. Both are plain CSV on one
+   Mac with no integrity protection; if the live file is lost, the copy by the archive is all
+   there is.
 10. Reconcile (below), then start the API: `... up -d --wait api`. `db-init` checks the schema
     again ("schema is up to date"), and the API starts only if its start-up checks pass.
 11. Take a backup.
@@ -434,11 +438,14 @@ compared.
 
 ## Knowledge rows for the A7 hand run
 
-The A7 hand run (ADR 0024 A7) needs a database with knowledge rows, but `kb_load load` and
-`approve` refuse on the production stack until the A6 gates are closed (exit 24, also with
-`DIVESAFE_ENVIRONMENT` changed, because the loader string comes from the secrets directory). **Do
-not lift that refusal for the hand run** (no `--entrypoint`, no edited module, no hand-made loader
-string). Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
+The A7 hand run (ADR 0024 A7) needs a database with knowledge rows. Since 2026-11-12 the
+production load is on (`PRODUCTION_LOAD_GATES_CLOSED = True`, ADR 0024 A6), but a hand run on a
+throwaway volume still does not use `kb_load`: a load needs the corpus (empty today), the
+approval record and a backup afterwards, none of which belong to a throwaway. (While the gate was
+shut, `load` and `approve` refused with exit 24 on the production stack, also with
+`DIVESAFE_ENVIRONMENT` changed; that refusal is still in the code and returns if the literal is
+set back to `False`. Never lift it by hand: no `--entrypoint`, no edited module, no hand-made
+loader string.) Use the test-only seed instead. It writes synthetic rows directly, as `divesafe_owner`,
 through the insert triggers, which still check and stamp every row. It never runs `kb_load`.
 
 - `tests/hand_run/a7_seed_knowledge.sh` runs `tests/hand_run/a7_seed_knowledge.sql` with `psql`

@@ -34,7 +34,10 @@ cp docker/production.env.example docker/production.env
 `DIVESAFE_CORPUS_DIR` is needed by **every** compose command on the production file, even `up` and
 `down` (ADR 0024 A3). Set it to an absolute path of a directory outside the repository; it may be
 empty. No knowledge is loaded in this run (production refuses `load` and `approve` until the ADR
-0024 A6 gates are closed).
+0024 A6 gates are closed). **Since 2026-11-12 the gates are closed or waived and the load is on**
+(`b7ce432`, `PRODUCTION_LOAD_GATES_CLOSED = True`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); the new image is not
+deployed and the corpus is empty); the first load is a supervised run, `docs/knowledge-loader.md`
+"First production load", never part of this first run.
 
 `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` has no built-in default and no recorded reason yet (ADR 0024,
 condition 4). For this run pick a value and write down that it is a test value; do not copy it into

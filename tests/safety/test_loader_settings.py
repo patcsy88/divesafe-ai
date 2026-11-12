@@ -323,7 +323,7 @@ def test_a_relative_corpus_target_is_allowed_outside_production(tmp_path: Path) 
 
 def test_mutation_a_relative_target_allowed_in_production_is_caught(tmp_path: Path) -> None:
     source = inspect.getsource(loader_settings.load_loader_settings)
-    old = '    if name == "production" and target and not Path(target).is_absolute():\n'
+    old = "    if production_rules and target and not Path(target).is_absolute():\n"
     assert old in source
     namespace: dict[str, object] = {}
     exec(source.replace(old, "    if False:\n"), vars(loader_settings), namespace)  # noqa: S102
@@ -336,7 +336,7 @@ def test_mutation_a_relative_target_allowed_in_production_is_caught(tmp_path: Pa
 
 def test_mutation_the_absolute_rule_applied_outside_production_is_caught(tmp_path: Path) -> None:
     source = inspect.getsource(loader_settings.load_loader_settings)
-    old = '    if name == "production" and target and not Path(target).is_absolute():\n'
+    old = "    if production_rules and target and not Path(target).is_absolute():\n"
     namespace: dict[str, object] = {}
     mutated_source = source.replace(old, "    if target and not Path(target).is_absolute():\n")
     exec(mutated_source, vars(loader_settings), namespace)  # noqa: S102

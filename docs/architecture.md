@@ -211,7 +211,8 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   condition 10), the identity filter trusts validated items, `EvidencePolicy` does not refuse a
   required knowledge category, the knowledge half of the citation guard, the 20-item cut,
   `local_guidance` meaning scope, the prompt cap for non-ASCII corpora, the shared thread pool
-  for `retrieve`, and the `_retrieve` crash contract; see ADR 0022 Known gaps 1-25.
+  for `retrieve`, and the `_retrieve` crash contract; see ADR 0022 Known gaps 1-30 (production
+  refuses to start without the knowledge connector since 2026-11-12).
 - **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
   interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
   see [risk-model.md](risk-model.md) Known gaps.

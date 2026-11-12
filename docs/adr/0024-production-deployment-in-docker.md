@@ -30,7 +30,10 @@
   on the five knowledge guard functions. Fixed and reviewed (`83efde5`, `a7bab38`, `f3a103d`; no
   blockers, no should-fix after two rounds). **Hand run 2 (2026-11-12) PASSED** on a test image
   built from `3bb2811`, with production stopped for 32 seconds (A7 "Hand run 2"); **A7 is done.**
-  The owner gates in A6 remain, and the production load gate (exit 24) still stands. **In production, and whenever the loader string comes from the secrets directory,
+  The owner gates in A6 remain, and the production load gate (exit 24) still stands. **Update,
+  2026-11-12: every A6 gate is closed or waived and the production load is on** (`b7ce432`,
+  `PRODUCTION_LOAD_GATES_CLOSED = True`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); the refusal stays in the code;
+  the new image is not deployed; the corpus is empty; A6 "Production load on"). Before that: **in production, and whenever the loader string comes from the secrets directory,
   `kb_load load` and `approve` refuse in code (exit 24) until the A6 gates are closed** (owner
   decisions, 2026-11-09; it stops accidents and casual overrides, not an operator with Docker
   access, A8). Both reviewers accepted its second, third and fourth revisions as
@@ -1056,7 +1059,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
       13 also asks for a default-ignorable code point table; the code says it has not built it
       (`clean_text` is an approximation). **Owner decision, 2026-10-23: the table is a gate for
       the first production load** (see "Remaining questions", item 7); slice 2 uses a
-      `unicodedata`-based approximation until then.
+      `unicodedata`-based approximation until then. **Built 2026-11-12** (ADR 0022 decision 13;
+      the Unicode 16.0.0 `Default_Ignorable_Code_Point` set); the gate is closed.
     - **Hash computation.** `manifest_sha256` is the SHA-256 (lower-case hex) of the manifest
       file's raw bytes as read, before parsing (ADR 0022 decision 7). Each file hash covers the
       whole file's bytes; each chunk hash covers `data[start:end]`. The three mismatches are three
@@ -1093,6 +1097,7 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
          decision 11 re-acknowledgement, the A7 hand run, ADR 0022 condition 10, licence and
          `display_permitted` evidence per source). **Slice 2 uses a `unicodedata`-based
          approximation until the table exists**; the approximation is not accepted for production.
+         **Closed 2026-11-12:** the table is built (ADR 0022 decision 13).
       8. **A repeated `load` is left to the database refusal (exit 11);** no separate exit status.
          Approved.
     - Q10. The compose profile name (A3 says "for example `knowledge`"), and the process and
@@ -1245,9 +1250,9 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   the wrong version; an operator in bad faith, or the loader credential used through `psql`, is
   caught only by process controls (ADR 0022 condition 4). (2) **The loader can approve its own
   load technically**: the credential can insert an APPROVED event. Approval is a process control by
-  the dive professional, recorded in the private approval record; **this ADR does not name a path
-  for that record** (the owner and the dive professional choose it, ADR 0022 "Still open"), so the
-  control is not yet defined. (3) The corpus mount is outside the repository by operator discipline
+  the dive professional, recorded in the private approval record; ~~this ADR does not name a path
+  for that record~~ (since 2026-11-12: `/Users/patcsy88/DiveSafe/records/approval-record.csv`, A7
+  R1), and the control is a file the dive professional writes, not something the code checks. (3) The corpus mount is outside the repository by operator discipline
   and the `.gitignore` entry, **plus a mandatory `.dockerignore` line for the corpus staging
   location, pinned by a test** (`up -d --build` would otherwise bake licensed text into the image
   if it were staged in the repository). (4) Anyone who can run `docker compose` or `docker run` on the host
@@ -1382,7 +1387,7 @@ condition; the mutation check is to break the compose file once and watch it fai
   **Owner decision 2026-11-11: this rule is lifted.** A1 to A7 are built and reviewed, so
   `deploy-a1-a7` (`8bbe455`) was merged into `rag-connector` (`8017020`), the branch the owner
   deploys from. The recovery text below stays for the record. The production load gate (exit 24,
-  below) is **not** lifted. **Recovery:**
+  below) is **not** lifted (it was, a day later: A6 "Production load on"). **Recovery:**
   restore the backup taken before the pull into a **new** volume, **using the OLD scripts** (a git
   worktree of the pre-pull commit: the new scripts refuse a format-1 archive) **and the old
   image**. If no backup was taken before the pull, use the latest daily backup; **decisions made
@@ -1404,7 +1409,8 @@ condition; the mutation check is to break the compose file once and watch it fai
   directory in every environment. Development and test with `DIVESAFE_LOADER_DATABASE_URL` and no
   secrets directory are unchanged. The only switch the code offers is a reviewed change of the
   module literal `PRODUCTION_LOAD_GATES_CLOSED = False` in `src/divesafe/services/kb_load.py`,
-  made after every gate in the list below is closed and reviewed by both reviewers.
+  made after every gate in the list below is closed and reviewed by both reviewers. (Made on
+  2026-11-12, `b7ce432`: the literal is `True`; see "Production load on" below.)
   **What it stops:** accidents and casual overrides (a single environment value, a setting, a
   file).
   **What it does not stop:** a determined operator with Docker access (A8). Pinned by
@@ -1420,14 +1426,32 @@ condition; the mutation check is to break the compose file once and watch it fai
   (`test_production_refuses_load_and_approve_and_the_database_is_unchanged`). Mutations: see A8
   "Build state".
 - **First-production-load gates (list, updated 2026-10-23).** No production load until all of:
-  (1) the **withdrawal log's location** is settled; (2) the owner's **re-acknowledgement of ADR
-  0022 decision 11**; (3) the **A7 hand run** on a throwaway volume (**done, run 2 passed
+  (1) the **withdrawal log's location** is settled (**done 2026-11-12:**
+  `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv`, ADR 0022 "Still open"); (2) the owner's
+  **re-acknowledgement of ADR 0022 decision 11** (**done 2026-11-12**); (3) the **A7 hand run** on a throwaway volume (**done, run 2 passed
   2026-11-12**); (4) **ADR 0022 condition 10**
   (loader attribute checks) has landed (implemented in slice 1, committed `b1d636f`, live-tested; the
   remaining gap is in A8); (5) the **licence and `display_permitted` evidence** for
-  each source; (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
-  tested and reviewed (owner decision, 2026-10-23). Until (6), slice 2 uses a
-  `unicodedata`-based approximation, which is for development only. **Added by the slice 2
+  each source (**waived for the MVP by the owner, 2026-11-12**: the manifest fields stay
+  required and the loader still refuses without them; no separate evidence is held; ADR 0022
+  Known gap 31); (6) **the ADR 0022 decision 13 default-ignorable code point table** is built,
+  tested and reviewed (owner decision, 2026-10-23; **done 2026-11-12**, the Unicode 16.0.0
+  `Default_Ignorable_Code_Point` set, `5bccb3f`..`7a5f849`, reviewed, no blockers). Until then
+  slice 2 used a `unicodedata`-based approximation, for development only. **On 2026-11-12 every
+  gate is closed or, (5), waived.** The private approval record is
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (owner decision 2026-11-12). **This does
+  not enable the production load:** `PRODUCTION_LOAD_GATES_CLOSED = False` in `kb_load.py` is
+  unchanged; flipping it is a separate code change reviewed by both reviewers, and deploying the
+  new image is a separate step. **Production load on (owner decision 2026-11-12, later the same
+  day):** `b7ce432` flips `PRODUCTION_LOAD_GATES_CLOSED` to `True` (reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`)).
+  The check, exit 24 and its message stay, so a one-line reviewed change back to `False` shuts
+  it again; `tests/safety/test_kb_load_production_gate.py` now runs the refusal with the literal
+  patched to `False`, and its AST pin requires `True`. **Switching off:** the one-line reviewed
+  change back to `False`, then rebuild and redeploy the image (the running image keeps the
+  literal it was built with). Not done: deploying the new image to
+  production (a separate step); the corpus directory is empty; licence evidence is waived, not
+  closed (ADR 0022 Known gap 31). Review follow-ups on `b7ce432` (no blockers) are in A8, "Gaps
+  from the production-load switch review". **Added by the slice 2
   review (2026-10-23; (8) and (9) are not owner-approved as designs yet):** (7) **the decision 9
   id screen was bypassable by lookalike characters.** Colons written as
   U+2236 (ratio), U+A789 or U+0589, a hyphen as U+2010 and a minus as U+2212, and Latin small
@@ -1536,8 +1560,14 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     this stack is small, because every knowledge item is withheld (A4, "The API and knowledge").
     The report and the post-restore check also list approvals with `hash_checked = false`.
     Re-applying a version that is already WITHDRAWN gets its own fixed message and exit status and
-    writes nothing (A3), so the step can be repeated. The log has no home yet (gap 3), and **the
-    first production load stays gated on its location** (owner open item).
+    writes nothing (A3), so the step can be repeated. **The log's home (owner decision
+    2026-11-12):** `/Users/patcsy88/DiveSafe/records/withdrawal-log.csv` (mode 600, folder 700;
+    outside the repository, the database and its backups), columns
+    `document_id,version,recorded_at_utc,reason,withdrawn_by`; after every `withdraw` append a
+    line with the printed `recorded_at`, take a backup, copy the file next to the newest archive.
+    The approval record sits beside it (`approval-record.csv`, columns
+    `document_id,version,manifest_sha256,approved_by,approved_at_utc,notes`, same handling after
+    every `approve`). Plain CSV on one Mac: gap 3.
   - **Grants after a restore.** `pg_dump` without `--create` carries no database ACLs, so `PUBLIC`
     has **EXECUTE on the knowledge functions** after the load (the restore uses `--no-acl`).
     ~~`db_init` revokes it on every run.~~ **Wrong, found by hand run 1 (2026-11-11):** `migrate()`
@@ -1633,8 +1663,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   a throwaway volume (run 1, 2026-11-11, FAILED at `db-init`; **run 2, 2026-11-12, PASSED**;
   above).
   (2) The digest detects damage, not tampering, as today (the manifest sits next to its archive).
-  (3) The withdrawal log has no defined home, so R1 depends on the operator keeping it, and
-  **nothing technically stops the API starting before the re-apply** (operator discipline). (4) The
+  (3) The withdrawal log and the approval record (homes decided 2026-11-12) are plain CSV files
+  on one Mac with no integrity protection; a copy exists only with the backups (a disk loss before
+  a backup loses entries) and the copy step is operator discipline, so R1 still depends on the
+  operator keeping them; and **nothing technically stops the API starting before the re-apply**
+  (operator discipline). (4) The
   count and digest cover what is in the tables; they do not show that a text matches its approved
   manifest (ADR 0022 condition 5 is separate). (5) ~~A restore that is not followed by `db-init`
   leaves `PUBLIC` EXECUTE on the knowledge functions~~ (corrected 2026-11-11: `restore.sh` now
@@ -1693,7 +1726,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 - **The loader can approve its own load technically**; approval is a process control by the dive
   professional (A3).
 - **The manifest hash check is client-side** (A3).
-- **The private approval record** has no path in this ADR, and the withdrawal log (A7) depends on it.
+- **The private approval record** ~~has no path in this ADR~~ is
+  `/Users/patcsy88/DiveSafe/records/approval-record.csv` (owner decision 2026-11-12; A7 R1);
+  the withdrawal log (A7) sits beside it.
 - **The loader role and password are not covered by the backup**, as the other roles are not
   (see the existing `docs/backup-and-restore.md` table): after a restore into a new volume the
   role script must be run again, before `restore.sh` (A7).
@@ -1820,9 +1855,12 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   issue, so the A7 report and post-restore check are the only way the operator sees the unchecked
   approval.
 - **The API refusal does not see `.env`** when no secrets directory is set (A4).
-- **Two owner items gate shipping:** the withdrawal log's location and the re-acknowledgement of
-  ADR 0022 decision 11 (A6). The first production load has further gates, including the
-  default-ignorable code point table (A6, "First-production-load gates").
+- ~~Two owner items gate shipping~~ **Both settled 2026-11-12:** the withdrawal log's location
+  and the re-acknowledgement of ADR 0022 decision 11 (A6). Every first-production-load gate is
+  closed or waived (licence evidence, MVP); the code switch `PRODUCTION_LOAD_GATES_CLOSED`
+  is still `False` and its flip is a separate reviewed change (A6). Flipped to `True` later on
+  2026-11-12 (`b7ce432`, reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); A6 "Production load on"); the image is not
+  deployed and the corpus is empty.
 - **Restoring an older archive can bring withdrawn text back** (A7, R1).
 - **Known gaps from the review of `9f5b3ea` (2026-11-09; recorded, no code):**
   - The role script's check of an **existing** role ignores `rolconnlimit`, `rolvaliduntil`,
@@ -1894,7 +1932,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     in `kb_load.py`; `load` and `approve` exit 24 in production before any read, connection or
     write; `withdraw` unaffected. The two production hash-rule tests in `test_kb_load_flow.py` now
     set the literal to `True` for their own run, so they keep testing the hash rules that apply
-    once the gate is lifted.
+    once the gate is lifted. **Lifted (`b7ce432`, owner decision 2026-11-12):** the literal is
+    `True`; the gate tests patch it to `False` for the refusal cases and the AST pin requires
+    `True`; the hash-rule tests no longer need to set it. Reviewed: (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`).
   - **Harder gate (`8eface8`; owner decision 2026-11-09, round 3):** `load` and `approve` also
     refuse when the loader string came from the secrets directory, in any environment
     (`LoaderSettings.dsn_from_secrets_dir`); the docs now say what the gate does not stop (A8).
@@ -1929,11 +1969,49 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   - **Still needed before production use** (updated 2026-11-12): ~~review of every change~~
     (done); ~~the A7 hand run~~ (run 1 on 2026-11-11 failed at `db-init` after the restore;
     fixed in `83efde5`, `a7bab38`, `f3a103d` and reviewed; **run 2 on 2026-11-12 passed**, see
-    A7 "Hand run 2"); the owner gates
-    (withdrawal-log location, decision 11 re-acknowledgement, the default-ignorable code point
-    table, per-source licence and `display_permitted` evidence). ~~`DIVESAFE_CORPUS_DIR` in the
-    owner's `docker/production.env`~~ (done 2026-11-11). The A6 branch rule is lifted (owner
-    decision 2026-11-11); the production load gate stands.
+    A7 "Hand run 2"); ~~the owner gates~~ (all settled 2026-11-12: withdrawal-log and
+    approval-record locations, decision 11 re-acknowledged, the default-ignorable table built,
+    per-source licence and `display_permitted` evidence waived for the MVP, Known gap 31).
+    ~~`DIVESAFE_CORPUS_DIR` in the owner's `docker/production.env`~~ (done 2026-11-11). The A6
+    branch rule is lifted (owner decision 2026-11-11). **Still needed:** the owner's site
+    documents in the corpus directory (empty today; none are invented); ~~the reviewed code change
+    that flips `PRODUCTION_LOAD_GATES_CLOSED`~~ (flipped, `b7ce432`, 2026-11-12; built, review in
+    progress); deploying the new image (not done).
+  - **Gaps from the production-load switch review (`b7ce432`, 2026-11-12; both reviewers, no
+    blockers):**
+    - **Security S1, closed by `91fa8fe`** (re-reviewed by both reviewers 2026-11-12, no
+      blockers, no should-fix): with a secrets-directory DSN, `-e DIVESAFE_ENVIRONMENT=development`
+      allowed `--development-no-manifest-hash` (APPROVED with `hash_checked = false`, which
+      selection treats as unchecked, so the site stayed at INSUFFICIENT EVIDENCE: failed closed),
+      skipped the DSN-shape checks and accepted a relative corpus target. Now a secrets-directory
+      DSN gets the production hash, DSN-shape and absolute-target rules in every environment
+      (`withdraw` shares the settings loader, so it gets the shape and target rules too; see
+      `docs/knowledge-loader.md`). The remaining path is the hand-built connection string above
+      (an operator who knows the loader password and unsets `DIVESAFE_SECRETS_DIR`, outside
+      production). **Nits from the re-review (not fixed):** `loader_settings.py` line 57's
+      comment says the field only gates `load`/`approve`, but it now also turns on the production
+      rules; the refusal messages near lines 116, 132 and 183 say "production" but also fire for a
+      secrets-directory DSN in other environments (no values leak);
+      `test_mutation_the_literal_back_to_false_fails_the_on_tests` is caught by the dev-flag
+      assertion (exit 24, not 15) before the write check its docstring describes;
+      `gets_past_the_gate_in_production`'s production-plus-environment-DSN case is a `run()`-level
+      case that `load_loader_settings` never produces (label it); the new secrets-directory shape
+      and target settings tests do not `chdir(tmp_path)`, so a repository-root `.env` would make
+      them pass for the wrong reason (the paired mutants would go red; no `.env` exists today or in
+      CI); the shape mutant test stops at the first accepted bad URL, so each string is not pinned
+      separately.
+    - **`display_permitted: true` is only the owner's own statement** under the MVP waiver (ADR
+      0022 Known gap 31). A licensing risk, not a dive-safety risk.
+    - **What loaded knowledge can affect in production:** the model host is remote
+      (`remote_external_opt_in`), so every `kb:` item is withheld from prompts; knowledge reaches
+      only the record and the human reader, and no rule reads KNOWLEDGE. The remaining risk is
+      wrong or stale site text that a human trusts; dive-professional approval is the only control
+      on content, and it is a process control.
+    - **New INSUFFICIENT EVIDENCE paths become reachable in production** once a corpus is loaded:
+      a knowledge connector failure, the 20-item cut (ADR 0022 Known gap 6) and a stalled database
+      read holding the shared thread pool (ADR 0022 Known gap 8). Fail-closed; costs availability.
+    - **The first real production load is untested end to end** (A7 run 2 ran with the gate shut,
+      on the seed). It is a supervised run: `docs/knowledge-loader.md` "First production load".
   - **Gaps from the restore fix reviews (2026-11-11; nits, not fixed):**
     - The backup manifest has no fact for function ACLs, so the backup itself cannot detect a lost
       revoke; the restore's read-back is the only check. A new fact needs a manifest format change.
@@ -1975,9 +2053,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   blockers) and the fixes after it were reviewed by both reviewers on 2026-11-09 (final round
   `8eface8`..`99ace68`, no blockers, no should-fix); it is not run on the owner's host**
   (A8 "Build state"); the A7 hand run failed on 2026-11-11 (fixed and reviewed) and **passed on
-  2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refuse in code
-  until the A6 gates are closed (also from the secrets directory in any environment; not a
-  control against an operator with Docker access, A8). Both reviewers accepted its second,
+  2026-11-12** (A7 "Hand run 2"). Production `load` and `approve` refused in code
+  until the A6 gates were closed (also from the secrets directory in any environment; not a
+  control against an operator with Docker access, A8); **since `b7ce432` (2026-11-12) the load
+  is on** (A6 "Production load on"; reviewed (`risk-reviewer` and `security-reviewer`, 2026-11-12; S1 fixed in `91fa8fe`); image not deployed; corpus
+  empty). Both reviewers accepted its second,
   third, fourth, fifth and sixth revisions as recorded designs (no blockers); the wording pass after the sixth was not re-reviewed. Its gaps are
   listed in A8; the feature does not ship until it is made, reviewed and the two owner items in A6
   are settled.
