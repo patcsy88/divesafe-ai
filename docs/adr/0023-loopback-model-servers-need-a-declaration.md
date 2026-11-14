@@ -198,7 +198,8 @@ plan and evidence data left the machine. The address cannot show where the promp
     conservative (it can only withhold more), and it will matter for ADR 0022's rule (decision 15) that
     corpus text reaches a model only when the basis is exactly `declared_local`, so a self-hosted
     model on another machine gets no knowledge items. Whether a "trusted host"
-    declaration should exist is an open owner decision; it is not built.
+    declaration should exist is an open owner decision; it is not built. ADR 0028 (proposed)
+    proposes one, for knowledge only, by exact host name.
   - The host must be listed in `DIVESAFE_LLM_ALLOWED_HOSTS` (`wall-e.ch30ng.org`).
   - It is https, which the OpenAI-compatible adapter requires for a non-loopback host. The
     adapter verifies the certificate and host name with `ssl.create_default_context()`, so the
