@@ -1023,6 +1023,7 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       The rule is the same for every document; there is no per-document override (decision 7).
       Withholding costs the agent stage context it could use to add caution; the final result still
       cannot fall below the rules.
+    - Relaxed for one named remote host by ADR 0028 (proposed): basis `remote_knowledge_opt_in`.
     - **Caveats carried from ADR 0023.** `declared_local` is not tied to the peer check:
       `check_egress` returns it for any provider whose `external` is false, and only a handler test
       screens that each real adapter does the loopback peer check. The declaration
@@ -1123,7 +1124,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
       them (older records keep them absent). **Safety invariant, checkable from
       the record alone:** any record whose prompt held knowledge items has `egress_basis` equal to
       `declared_local`; a record with knowledge evidence and `egress_basis` of `no_agent_stage`
-      (or any other value) holds only withheld items.
+      (or any other value) holds only withheld items. ADR 0028 (proposed) widens this to
+      `declared_local`, or `remote_knowledge_opt_in` with a non-loopback, non-IP `model_host`.
 16. **What the record and the user see.** The stored item has two forms. The run form carries the
     text. The record form carries **document id, version, chunk and `content_sha256`** (nothing
     else from the manifest: no title, attribution, role labels or names), where the hash is the
