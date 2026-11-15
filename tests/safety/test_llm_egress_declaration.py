@@ -7,10 +7,14 @@ the operator's declaration (or the external opt-in) before any plan or evidence 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from tests.safety.kb_fakes import mutated_module
+from tests.safety.log_fields import scanned_text
 
+from divesafe.api import state as state_module
 from divesafe.api.state import build_provider
 from divesafe.config import Settings
 from divesafe.models import FakeProvider
@@ -149,20 +153,58 @@ def test_the_start_up_log_records_the_basis(
     assert record.address_is_remote is True  # type: ignore[attr-defined]
 
 
+_URL_PARTS = ("pw-in-url-31", "secret-path", "token=q-9", "8443")
+
+
+def _start_up_log_leaks(
+    module: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> list[str]:
+    """Runs `module.build_provider` with a URL holding a password, port, path and query, checks
+    the logged host, and returns the URL parts found in the start-up log record."""
+    _with_stub(monkeypatch, external=True)
+    url = "https://user:pw-in-url-31@wall-e.ch30ng.org:8443/v1/secret-path?token=q-9"
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        module.build_provider(
+            _settings(llm_provider="openai", allow_external_llm=True, llm_base_url=url)
+        )
+    record = next(r for r in caplog.records if r.getMessage() == "agent stage is ON")
+    assert record.model_host == "wall-e.ch30ng.org"
+    logged = scanned_text(record)
+    return [text for text in _URL_PARTS if text in logged]
+
+
 def test_the_start_up_log_names_the_model_host_and_nothing_else_of_the_url(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The host tells two servers apart in the logs. The path, port, credentials and query of the
     URL are not logged."""
-    _with_stub(monkeypatch, external=True)
-    url = "https://user:pw-in-url-31@wall-e.ch30ng.org:8443/v1/secret-path?token=q-9"
-    with caplog.at_level("WARNING"):
-        build_provider(_settings(llm_provider="openai", allow_external_llm=True, llm_base_url=url))
-    record = next(r for r in caplog.records if r.getMessage() == "agent stage is ON")
-    assert record.model_host == "wall-e.ch30ng.org"  # type: ignore[attr-defined]
-    logged = repr(vars(record))
-    for text in ("pw-in-url-31", "secret-path", "token=q-9", "8443"):
-        assert text not in logged
+    assert _start_up_log_leaks(state_module, monkeypatch, caplog) == []
+
+
+_HOST_EXTRA = '            "model_host": model_host(settings),\n            "address_is_remote"'
+
+
+@pytest.mark.parametrize(
+    ("added", "found"),
+    [
+        ('"port": urlsplit(str(settings.llm_base_url)).port,', ["8443"]),
+        ('"base_url": str(settings.llm_base_url),', list(_URL_PARTS)),
+    ],
+)
+def test_the_start_up_log_scan_catches_a_logged_port_or_url(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    added: str,
+    found: list[str],
+) -> None:
+    """Mutation check: a copy of the code that also logs the port, or the whole URL, as an extra
+    field is caught by the same scan (the real module is not changed)."""
+    mutant = mutated_module(
+        state_module,
+        (_HOST_EXTRA, _HOST_EXTRA.replace('"model_host"', f'{added}\n            "model_host"')),
+    )
+    assert _start_up_log_leaks(mutant, monkeypatch, caplog) == found
 
 
 @pytest.mark.parametrize(
