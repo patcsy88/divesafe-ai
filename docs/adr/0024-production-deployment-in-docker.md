@@ -2208,8 +2208,18 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       `tests/safety/test_llm_egress_declaration.py::test_the_start_up_log_names_the_model_host_and_nothing_else_of_the_url`
       looks for `"8443"` anywhere in `repr(vars(record))`, including the log record's
       `relativeCreated` timer. It failed once in CI on PR #9 (`relativeCreated` 84435.19…) and
-      passed on re-run. The proposed fix checks only the fields the code adds, plus the message,
-      and is equally strict for a leak. Not changed: it is a safety test, so the owner decides.
+      passed on re-run. **Fixed (owner approved, 2026-11-15):** both log scans, this one and
+      `test_knowledge_host_egress.py::test_build_provider_gives_the_knowledge_basis_and_logs_the_host_only`,
+      now use `tests/safety/log_fields.py`. It drops exactly `created`, `msecs`,
+      `relativeCreated`, `thread` and `process` (logging sets these, and `extra` cannot overwrite
+      them) and adds the rendered message, so the scan is otherwise unchanged. Each test has an
+      in-test mutation check (port and full URL logged), and `tests/safety/test_log_fields.py`
+      is a deterministic regression test. Risk review: no blockers, no should-fix. Nits left:
+      - no case needs the rendered message alone;
+      - `threadName` and `taskName` carry global counters and could flake a future test that
+        logs from a worker thread or task;
+      - no case shows that `extra` cannot set a dropped field;
+      - redundant local imports in `test_llm_egress_declaration.py`.
     - **Model output cut at the token limit:** `56b674fd…` had 2 agent issues, "output stopped at
       the token limit" (`specialist:weather`, `scenario:marginal`), with
       `DIVESAFE_LLM_MAX_OUTPUT_TOKENS` at its compose default of 3000 and `claude-sonnet-5-5`.

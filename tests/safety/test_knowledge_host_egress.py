@@ -18,6 +18,7 @@ import psycopg
 import pytest
 from pydantic import ValidationError
 from tests.safety.kb_fakes import mutated_module
+from tests.safety.log_fields import scanned_records
 
 from divesafe.api import state as state_module
 from divesafe.api.state import (
@@ -914,23 +915,61 @@ def test_mutation_build_default_state_skipping_the_check_is_caught(
 # ---------------------------------------------------------------- build_provider and its log
 
 
-def test_build_provider_gives_the_knowledge_basis_and_logs_the_host_only(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+_URL_LEAKS = ("secret-path-29", "8443", "https://")
+
+
+def _knowledge_log_leaks(module: Any, caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Runs `module.build_provider` with a URL holding a port and a path, checks the basis and the
+    logged host, and returns the URL parts found in any captured log record."""
     url = "https://llm.example.org:8443/v1/secret-path-29"
+    caplog.clear()
     with caplog.at_level("WARNING"):
-        provider, basis = build_provider(_settings(llm_base_url=url))
+        provider, basis = module.build_provider(_settings(llm_base_url=url))
     assert provider is not None
-    provider.close()  # type: ignore[attr-defined]
+    provider.close()
     assert basis == "remote_knowledge_opt_in"
     record = next(
         r for r in caplog.records if r.getMessage() == "knowledge is sent to the model host"
     )
-    assert record.model_host == HOST  # type: ignore[attr-defined]
-    assert record.egress_basis == "remote_knowledge_opt_in"  # type: ignore[attr-defined]
-    logged = repr([vars(r) for r in caplog.records])
-    for leak in ("secret-path-29", "8443", "https://"):
-        assert leak not in logged
+    assert record.model_host == HOST
+    assert record.egress_basis == "remote_knowledge_opt_in"
+    logged = scanned_records(caplog.records)
+    return [leak for leak in _URL_LEAKS if leak in logged]
+
+
+def test_build_provider_gives_the_knowledge_basis_and_logs_the_host_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert _knowledge_log_leaks(state_module, caplog) == []
+
+
+_KNOWLEDGE_EXTRA = 'extra={"model_host": model_host(settings), "egress_basis": basis},'
+
+
+@pytest.mark.parametrize(
+    ("logged_host", "found"),
+    [
+        ('model_host(settings) + ":8443"', ["8443"]),
+        ("str(settings.llm_base_url)", list(_URL_LEAKS)),
+    ],
+)
+def test_the_knowledge_log_scan_catches_a_logged_port_or_url(
+    caplog: pytest.LogCaptureFixture, logged_host: str, found: list[str]
+) -> None:
+    """Mutation check: a copy of the code that logs `host:8443`, or the whole URL, as the
+    knowledge log's `model_host` is caught by the same scan (the real module is not changed).
+    The positive `model_host == HOST` check is skipped here, as the mutant changes it."""
+    mutant = mutated_module(
+        state_module,
+        (_KNOWLEDGE_EXTRA, _KNOWLEDGE_EXTRA.replace("model_host(settings)", logged_host)),
+    )
+    url = "https://llm.example.org:8443/v1/secret-path-29"
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        provider, _ = mutant.build_provider(_settings(llm_base_url=url))
+    provider.close()
+    logged = scanned_records(caplog.records)
+    assert [leak for leak in _URL_LEAKS if leak in logged] == found
 
 
 def test_build_provider_without_the_host_does_not_log_knowledge_egress(
