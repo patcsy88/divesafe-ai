@@ -20,6 +20,7 @@ from divesafe.agents.prompts import SYSTEM_PROMPT
 from divesafe.domain import MAX_EVIDENCE_ITEMS as _MAX_EVIDENCE_ITEMS
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
 from divesafe.models.llm import TokenLimitError, plain_count
+from divesafe.observability import record_model_call
 
 logger = logging.getLogger(__name__)
 
@@ -161,21 +162,26 @@ def _log_call(
     output_chars: int | None,
     output_used: int | None,
     started: float,
+    started_ns: int,
 ) -> None:
     """One INFO line per model call, with counts only. `output_limit` and `output_used` are
-    counts of tokens, `output_chars` of characters. Never raises: a logging failure is dropped."""
+    counts of tokens, `output_chars` of characters. The same fields go to the run's trace
+    collector, if any (ADR 0027 amendment). Never raises: a logging or tracing failure is
+    dropped."""
+    fields: dict[str, object] | None = None
     with contextlib.suppress(Exception):  # logging must never change the call's result
-        logger.info(
-            "model call finished",
-            extra={
-                "task": task,
-                "outcome": outcome,
-                "output_limit": plain_count(output_limit),
-                "output_chars": plain_count(output_chars),
-                "output_used": plain_count(output_used),
-                "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
-            },
-        )
+        fields = {
+            "task": task,
+            "outcome": outcome,
+            "output_limit": plain_count(output_limit),
+            "output_chars": plain_count(output_chars),
+            "output_used": plain_count(output_used),
+            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+        }
+        logger.info("model call finished", extra=fields)
+    if fields is not None:
+        with contextlib.suppress(Exception):  # tracing must never change the call's result
+            record_model_call(fields, started_ns)
 
 
 async def call_structured(
@@ -205,6 +211,7 @@ async def call_structured(
     used: int | None = None
     error: AgentError | None = None
     started = time.monotonic()
+    started_ns = time.time_ns()  # the span's wall-clock start only; never on the record
     try:
         try:
             parsed, chars, used = await _call(provider, request, task, output, allowed_ids, timeout)
@@ -219,7 +226,7 @@ async def call_structured(
             outcome = "error"
             raise
     finally:
-        _log_call(task, outcome, request.max_output_tokens, chars, used, started)
+        _log_call(task, outcome, request.max_output_tokens, chars, used, started, started_ns)
     # Raised outside the `except`, so `__context__` never holds the reply (as before).
     if error is not None:
         raise error from None

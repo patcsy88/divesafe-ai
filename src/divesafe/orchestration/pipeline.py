@@ -10,6 +10,7 @@ getting nothing. `STAGES` decides which stage follows which; this module only su
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import Counter
@@ -55,6 +56,7 @@ from divesafe.domain import (
     unnamed_qualifier,
 )
 from divesafe.models import LLMProvider
+from divesafe.observability import record_stage
 from divesafe.orchestration.conflict_variants import (
     UNBOUNDED_RULE,
     VARIANT_RULE,
@@ -645,18 +647,19 @@ def _record_trace(
     if cut:
         codes.append(issue_code(name, OVERFLOW))
     issues = bound_issues(codes, name)
-    run.traces.append(
-        StageTrace(
-            name=name,
-            outcome=outcome,
-            next_stage=following,
-            started_at=started,
-            finished_at=finished,
-            evidence_ids=evidence_ids,
-            issues=issues,
-            duration_ms=duration_ms,
-        )
+    trace = StageTrace(
+        name=name,
+        outcome=outcome,
+        next_stage=following,
+        started_at=started,
+        finished_at=finished,
+        evidence_ids=evidence_ids,
+        issues=issues,
+        duration_ms=duration_ms,
     )
+    run.traces.append(trace)
+    with contextlib.suppress(Exception):  # tracing must never change the run (ADR 0027)
+        record_stage(trace)
     logger.info(
         "stage finished",
         extra={

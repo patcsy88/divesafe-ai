@@ -20,6 +20,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Lifecycle: `Observe -> Retrieve -> Diagnose/Reason -> Assess Risk -> Propose -> Human Gate -> Validate -> Learn`.
 - Dependency direction: `api -> orchestration -> agents / rag / data / risk / services -> domain`.
   `domain` and `risk` are pure: no I/O, no LLM, no imports from `agents`, `rag`, `models`, `api`.
+  `observability` is a leaf beside `domain`: `agents`, `orchestration` and `api` may import it.
 - Live conditions come from structured connectors. RAG supplies context only (section 8).
 - Keep it simple. No new dependency or framework without an ADR in `docs/adr/`.
 
@@ -35,6 +36,7 @@ The final decision always belongs to the diver, dive master or dive leader.
 | `services` | Evidence/provenance, repository contract. |
 | `api` | FastAPI, authentication, human decision interface. |
 | `config` | `Settings` from `DIVESAFE_*` environment variables; secret-safe logging. |
+| `observability` | Per-run trace collection and the trace drop counter; imports only domain and the standard library (ADR 0027 amendment). |
 
 ## 3. Coding standards
 

@@ -183,20 +183,20 @@ def test_the_markers_reach_the_call_so_the_scan_is_meaningful() -> None:
 # Each target appears exactly once in `runner` (`mutated_module` asserts that).
 _COUNTS = "    counts = _response_counts(response)\n"
 _LOGGER = "logger = logging.getLogger(__name__)\n"
-_DURATION = '                "duration_ms": max(0, int((time.monotonic() - started) * 1000)),\n'
+_DURATION = '            "duration_ms": max(0, int((time.monotonic() - started) * 1000)),\n'
 _STARTED = "    started = time.monotonic()\n"
 
 # 1. Keep the reply text where the outcome is decided (`_call`), then log it.
 REPLY_EDITS = (
     (_LOGGER, _LOGGER + "_LEAKED: list[str] = []\n"),
     (_COUNTS, _COUNTS + "    _LEAKED.append(response.text)\n"),
-    (_DURATION, _DURATION + '                "reply_text": list(_LEAKED),\n'),
+    (_DURATION, _DURATION + '            "reply_text": list(_LEAKED),\n'),
 )
 # 2. Keep the prompt (`user_message`) in `call_structured`, then log it.
 PROMPT_EDITS = (
     (_LOGGER, _LOGGER + "_LEAKED: list[str] = []\n"),
     (_STARTED, _STARTED + "    _LEAKED.append(user_message)\n"),
-    (_DURATION, _DURATION + '                "prompt_text": list(_LEAKED),\n'),
+    (_DURATION, _DURATION + '            "prompt_text": list(_LEAKED),\n'),
 )
 
 

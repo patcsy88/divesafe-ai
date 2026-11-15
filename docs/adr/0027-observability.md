@@ -234,7 +234,9 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
   - **Collected during the run.** One collector per run holds plain values only: the "model
     call finished" fields (the same dict the log line uses), a wall-clock start per model call
     (`time.time_ns()`, for the span only; the record's times still come from the run's clock),
-    and the `StageTrace` values the pipeline already builds.
+    and, from each `StageTrace` the pipeline already builds, only its name, outcome, start,
+    finish and duration (never its evidence ids or issue codes), so nothing a stage span may not
+    carry ever reaches a sink. It lives in `divesafe.observability.collector`.
     - **Where it lives:** a `ContextVar` set inside `RunManager._wrapped`, in the run's own
       task, never in the request handler and never module-level state. Its default is `None`,
       so `assess_dive` called directly (tests, the evaluation harness) or with tracing off
@@ -270,8 +272,8 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     (`timeout`, `connection`, `http_status`, `queue_full`), dropped collector entries count as
     `collector_full`, and each of the five reasons is logged once as a code. Tracing is built
     before item 2 (owner, 2026-11-15). Until item 2 exists, the count is a plain in-process
-    counter in the tracing module: a fixed mapping from the five reasons to an `int`,
-    incremented under a `threading.Lock` because the export thread writes it; the lock guards
+    counter in `divesafe.observability.collector`: a fixed mapping from the five reasons to an
+    `int`, incremented under a `threading.Lock` because the export thread writes it; the lock guards
     only the increment, never I/O or logging, so the event loop never waits on an export. It has
     no endpoint, and tracing imports no `prometheus_client`. A unit test (not a safety test: the
     counter cannot change an outcome) checks that a full collector increments `collector_full`
@@ -591,7 +593,12 @@ verify from package metadata at build.
 - "No scores, annotations, comments or annotation queues on `divesafe-prod`" is operator
   discipline; the Langfuse UI does not prevent it unless project roles can (verify at build).
 - If `_mark_failed` itself fails, `run_outcome` shows the intended code while the store keeps
-  `RUNNING` until cleanup marks it; the record and the store win.
+  `RUNNING` until cleanup marks it (later `timeout`); if the run's task is cancelled again while
+  `_mark_failed` is awaited, no trace is emitted. The record and the store win.
+- For step 3: span attributes are built from a fixed field list, never by serialising a whole
+  `fields` mapping or collector entry; the export scan plants an evidence id through the
+  model-call fields. Step 3's AST pin on `domain` and `risk` also forbids importing
+  `divesafe.observability`.
 - The collector's module is imported by `agents`, `orchestration` and `api`, so it imports
   nothing from `api` or `orchestration` (AGENTS.md section 2).
 - AGENTS.md section 12's "only destination of run data" covers destinations the app pushes to;

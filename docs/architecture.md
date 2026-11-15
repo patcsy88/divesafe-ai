@@ -161,6 +161,11 @@ One sibling import is recorded (2026-11-10): `rag -> services` (`rag.items` reus
 character screen `services.kb_screen`; `services` does not import `rag`, so there is no cycle).
 Alternative, not chosen yet: move the pure screen functions to a neutral module.
 
+`observability` is a leaf beside `domain` (ADR 0027 amendment, 2026-11-15): `agents`,
+`orchestration` and `api` may import it; it imports only `domain` and the standard library
+(pinned in `tests/unit/test_trace_collector.py`), and `domain` and `risk` never import it (pinned
+from step 3; until then by review only).
+
 ## Decisions
 
 See [docs/adr/](adr/).
