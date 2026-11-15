@@ -131,8 +131,20 @@ def test_a_rejected_reply_leaves_no_reply_text_in_the_exception_context() -> Non
         assert secret not in str(caught.value)
 
 
-@pytest.mark.parametrize("failure", ["error", "timeout", "token_limit"])
-def test_a_provider_error_leaves_no_provider_text_in_the_exception_context(failure: str) -> None:
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("error", "t: provider error (RuntimeError)"),
+        ("timeout", "t: provider timed out"),
+        # The constructor takes keyword-only counts (it carries no text). The expected message
+        # pins this case to the token-limit path: a `TypeError` from a wrong constructor call
+        # would land on the provider-error path and fail here (reviewed 2026-11-15).
+        ("token_limit", "t: output stopped at the token limit"),
+    ],
+)
+def test_a_provider_error_leaves_no_provider_text_in_the_exception_context(
+    failure: str, expected: str
+) -> None:
     from divesafe.models import TokenLimitError
 
     class _Boom:
@@ -142,7 +154,7 @@ def test_a_provider_error_leaves_no_provider_text_in_the_exception_context(failu
             if failure == "timeout":
                 raise TimeoutError("SECRET-PROVIDER-TEXT")
             if failure == "token_limit":
-                raise TokenLimitError("SECRET-PROVIDER-TEXT")
+                raise TokenLimitError(output_chars=1, output_tokens=2)
             raise RuntimeError("SECRET-PROVIDER-TEXT")
 
     with pytest.raises(AgentError) as caught:
@@ -151,5 +163,7 @@ def test_a_provider_error_leaves_no_provider_text_in_the_exception_context(failu
                 _Boom(), task="t", user_message="m", output=Finding, allowed_ids=frozenset()
             )
         )
+    assert str(caught.value) == expected
     assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
     assert "SECRET" not in str(caught.value)
