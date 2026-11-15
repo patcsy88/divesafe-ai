@@ -23,6 +23,9 @@ SECRET_FILES: dict[str, bool] = {
     "llm_api_key": False,
     "met_api_token": False,
     "api_key_hashes": True,
+    # The Langfuse production project's keys (ADR 0027 amendment).
+    "trace_public_key": False,
+    "trace_secret_key": False,
     # Read only by the knowledge loader's narrow settings model (ADR 0024 A4); the API refuses it.
     "loader_database_url": False,
 }

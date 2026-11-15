@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -99,6 +100,14 @@ class Settings(BaseSettings):
     # `remote_knowledge_opt_in`). Unset or empty: every knowledge item is withheld from a hosted
     # model, as before. Must equal the base URL's host and be in DIVESAFE_LLM_ALLOWED_HOSTS.
     llm_knowledge_host: str | None = None
+
+    # ADR 0027 amendment: metadata-only spans to the local, self-hosted Langfuse. Off by default;
+    # the flag and the endpoint are set together or not at all. The keys are the production
+    # project's, read from secret files, and sent only in the exporter's Authorization header.
+    tracing_enabled: bool = False
+    trace_endpoint: str | None = None
+    trace_public_key: SecretStr | None = None
+    trace_secret_key: SecretStr | None = None
 
     @field_validator("loader_db_role")
     @classmethod
@@ -216,6 +225,7 @@ class Settings(BaseSettings):
             )
         self.llm_allowed_host_set()
         self._check_knowledge_host()
+        self._check_tracing()
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
@@ -257,6 +267,77 @@ class Settings(BaseSettings):
             raise ValueError(f"{name} must be one of DIVESAFE_LLM_ALLOWED_HOSTS")
         if host != base_url_host(str(self.llm_base_url)):
             raise ValueError(f"{name} must be the host of DIVESAFE_LLM_BASE_URL")
+
+    def _check_tracing(self) -> None:
+        """ADR 0027 amendment, in every environment. Fixed messages; the value is never echoed.
+        `api.tracing.check_tracing_startup` repeats these checks, because `model_copy` and
+        `model_construct` skip validators."""
+        refusal = tracing_settings_refusal(self)
+        if refusal is not None:
+            raise ValueError(refusal)
+
+
+TRACE_PAIR_REFUSAL = "DIVESAFE_TRACING_ENABLED and DIVESAFE_TRACE_ENDPOINT must be set together"
+TRACE_ENDPOINT_REFUSAL = (
+    "DIVESAFE_TRACE_ENDPOINT must be exactly "
+    "http://<private IPv4 address>:<port>/api/public/otel/v1/traces"
+)
+TRACE_KEYS_REFUSAL = (
+    "tracing needs both Langfuse production project keys (secret files divesafe_trace_public_key "
+    "and divesafe_trace_secret_key)"
+)
+TRACE_KEY_SHAPE_REFUSAL = "a Langfuse project key has an unexpected shape"
+_TRACE_KEY = re.compile(r"[A-Za-z0-9._-]{1,256}")
+TRACE_PATH = "/api/public/otel/v1/traces"
+_TRACE_ENDPOINT = re.compile(r"http://([0-9.]{7,15}):([1-9][0-9]{0,4})" + re.escape(TRACE_PATH))
+_TRACE_RANGES = tuple(
+    ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+
+
+def trace_endpoint_address(value: str | None) -> tuple[ipaddress.IPv4Address, int] | None:
+    """The endpoint's address and port when the value is exactly the fixed form, else None. The
+    address is a dotted-quad IPv4 literal (no leading zeros) in 10/8, 172.16/12 or 192.168/16,
+    and not the network, gateway (.1) or broadcast address of its /24. A host name never matches,
+    so no DNS lookup is made."""
+    if value is None:
+        return None
+    match = _TRACE_ENDPOINT.fullmatch(value)
+    if match is None:
+        return None
+    text, port_text = match.groups()
+    try:
+        address = ipaddress.IPv4Address(text)
+    except ValueError:
+        return None
+    port = int(port_text)
+    if port > 65535:
+        return None
+    if not any(address in network for network in _TRACE_RANGES):
+        return None
+    if address.packed[-1] in (0, 1, 255):
+        return None
+    return address, port
+
+
+def tracing_settings_refusal(settings: Settings) -> str | None:
+    """The fixed refusal for the tracing settings, or None when they are acceptable. With tracing
+    off the only refusal is an endpoint set without the flag; the keys are checked (present, and
+    of the key shape, which keeps CR, LF and `:` out of the header) only when tracing is on."""
+    endpoint = settings.trace_endpoint
+    has_endpoint = endpoint is not None and endpoint != ""
+    if settings.tracing_enabled != has_endpoint:
+        return TRACE_PAIR_REFUSAL
+    if not settings.tracing_enabled:
+        return None
+    if trace_endpoint_address(endpoint) is None:
+        return TRACE_ENDPOINT_REFUSAL
+    if settings.trace_public_key is None or settings.trace_secret_key is None:
+        return TRACE_KEYS_REFUSAL
+    for key in (settings.trace_public_key, settings.trace_secret_key):
+        if not isinstance(key, SecretStr) or _TRACE_KEY.fullmatch(key.get_secret_value()) is None:
+            return TRACE_KEY_SHAPE_REFUSAL
+    return None
 
 
 def is_single_knowledge_host(value: str) -> bool:
