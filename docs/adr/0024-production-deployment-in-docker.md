@@ -2224,10 +2224,61 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       the token limit" (`specialist:weather`, `scenario:marginal`), with
       `DIVESAFE_LLM_MAX_OUTPUT_TOKENS` at its compose default of 3000 and `claude-sonnet-5-5`.
       Those parts were dropped and the deterministic result stood (fails closed); `a74f7510…` had
-      none. Not investigated.
+      none. **Measured and changed (owner approved, 2026-11-15):** see "Per-call model logging
+      and the output-token limit" below.
     - The check one-liner the assistant gave the owner read `sent_evidence_ids` and `status` from
       the record view; neither is there, so it printed `[]` and `None`. Read the Reason stage's
       `evidence_ids` instead (`docs/architecture.md` corrected in this change).
+  - **Per-call model logging and the output-token limit (2026-11-15 UTC; owner approved each).**
+    - **Deploy of `dfbbdb3`** (PR #11, flaky port test fix; PR #12, one "model call finished"
+      log line per call, ADR 0018 amendment 2026-11-15). Backup `divesafe-20261115T072657Z`
+      (scratch restore equal: 10 assessments, 8 decided; both CSVs copied). The chain ran from
+      `old` `a4cf0153001ef46f15cce32303a4c0d01c6f6533` to `new`
+      `dfbbdb39f3c6cedc780652d798fbf48b0f55d66f`; no migration change, so `allow_migration` was
+      not set. Rollback image `divesafe-api:rollback-20261115b` = `85648e026e2b` (the `a4cf015`
+      image). New API image `36a5db426e19`, started 07:28:25Z; `db-init` exit 0; health 200,
+      an unauthenticated read 401; start-up warnings as before, including `egress_basis`
+      `remote_knowledge_opt_in` and "knowledge is sent to the model host". The container lists
+      the nine call outcomes. **Rollback, no restore needed:**
+      `docker tag divesafe-api:rollback-20261115b divesafe-api:local && C up -d --no-build --wait api`.
+    - **First measurement, limit 3000.** The owner's check created two assessments two minutes
+      apart, `443e3c51…` (07:40:17Z, 0 agent issues) and `8d49d91f…` (07:40:59Z; 3 agent issues,
+      "output stopped at the token limit" for `specialist:weather`, `scenario:favourable` and
+      `scenario:marginal`; `kb:tioman-site-guide:3:1` in the Reason stage's `evidence_ids`).
+      Both INSUFFICIENT EVIDENCE.
+      - **Log lines:** 18, one per call; exactly the six fields, and no text, ids, hosts, model
+        names or URLs in any of them.
+      - **Usage:** the server sends usage without `stream_options`, so `output_used` is filled in.
+      - **Output tokens of the calls that finished:** tide_current 533 and 536; ocean_conditions
+        776 and 774; site_intelligence 1171 and 707; risk_assessment 1477 and 1987; weather 1944;
+        prediction 2059 and 1938; the scenarios 2125 to 2514.
+      - **The three cut-off calls** used 3000 with 2658, 2197 and 952 visible characters. Most of
+        the output is the model's hidden reasoning, so visible length does not predict a cut-off.
+      - **Longest call:** 34.6 s, against a call timeout of 120 s and a stage timeout of 300 s
+        (compose defaults).
+    - **Limit raised to 6000.** About twice the highest successful use (2514) and within the
+      settings maximum of 8000. The previous `docker/production.env` was kept as
+      `records/production.env.before-output-tokens-20261115`. A comment line and
+      `DIVESAFE_LLM_MAX_OUTPUT_TOKENS=6000` were added; the first 19 lines are unchanged.
+      `C up -d --no-build --wait api` at 07:44:46Z, same image; the container has 6000; health
+      200; start-up log as before. **Rollback:** remove the two lines (or copy the saved file
+      back) and run `C up -d --no-build --wait api`.
+    - **Check at 6000: `c4eceee6211aa84bbb69795750a153f8`** (07:48:35Z), the only assessment
+      since the restart.
+      - **Calls:** 9 log lines, all `ok`, 0 agent issues; no text in any line.
+      - **Output tokens:** tide_current 556, site_intelligence 631, ocean_conditions 702,
+        risk_assessment 1380, scenario:favourable 2008, prediction 2143, scenario:deteriorating
+        2178, scenario:marginal 2202, weather 2275.
+      - **Longest call:** 23.4 s.
+      - **Knowledge:** `egress_basis` `remote_knowledge_opt_in`, nothing withheld, and the guide
+        extract in the Reason stage's `evidence_ids`.
+      - **Result:** deterministic and final recommendation INSUFFICIENT EVIDENCE; no human
+        decision yet.
+    - **Still open:**
+      - 3 assessments are a small sample. Re-read the "model call finished" lines after more use,
+        watching for `token_limit`, `timed_out` and `cancelled`, and for durations approaching
+        120 s.
+      - A higher cap allows longer, slower and costlier calls when the model reasons more.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
