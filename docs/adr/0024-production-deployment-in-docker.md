@@ -2151,6 +2151,33 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     **Also:** a second GitHub ruleset `main-ci-required` (owner decision, 2026-11-13; no bypass
     actors, up-to-date branch not required) requires the CI checks `test (Python 3.14)` and
     `docker image` from GitHub Actions on the default branch (`docs/knowledge-loader.md` N9).
+  - **Tioman v2 load (2026-11-12 UTC, 2026-11-13 local; recorded 2026-11-15 from the database,
+    the backups and the records folder, read-only).** Production ran `69c9fca` (image
+    `8054a7177557`).
+    - **What v2 is:** the v1 text unchanged (`tioman-site-guide-v2.txt` byte-identical to v1, one
+      chunk of 1489 characters, the same `content_sha256` `50c4cdca…`). The section name changed
+      from "Site guide" to "Pulau Tioman site guide". `supersedes: 1`, effective 2026-11-13,
+      review by 2027-05-13, manifest format 1, so `attests_model_host_egress` is false. Manifest
+      sha256 `7cb1040b2ba0b894a59c5968985fffb4bd5649cf64aa364b136e8d8bea039958`; it equals the
+      copy kept as `records/manifest-v2-20261112.json`, and the draft is kept as
+      `records/draft-v2-20261112.json`.
+    - **Approval and load:** the approval-record line (`approved_by` `patcsy88`,
+      `approved_at_utc` 2026-11-12T23:03:49Z, notes `built_with_commit 69c9fca…`) comes before
+      the load. DRAFT at 23:03:54.901548, then APPROVED at 23:04:02.288332 with
+      `hash_checked = true` (status events 4 and 5). v1 was already WITHDRAWN (13:59:09Z), so v2
+      superseded nothing active.
+    - **Backups:** `divesafe-20261112T230406Z`, 4 s after the approval (6 assessments, 6 decided,
+      2 documents, 2 chunks), and `divesafe-20261112T231049Z`, after the two check assessments
+      (8 and 8). Both have both CSVs beside them. The last backup before the load was
+      `divesafe-20261112T162818Z` (the `69c9fca` deploy).
+    - **Check assessments:** `723f9236…` (23:08:24Z) and `db810862…` (23:08:34Z). Retrieve fetched
+      `kb:tioman-site-guide:2:1`, and both have `egress_basis` `remote_external_opt_in`, the
+      guide in `withheld_knowledge` (not sent), 0 agent issues, and final INSUFFICIENT EVIDENCE.
+      Both were decided INSUFFICIENT EVIDENCE.
+    - **Afterwards:** v2 stayed APPROVED until it was replaced by v3 (same text, attested) and
+      WITHDRAWN at 2026-11-15T01:18:17.846762Z (ADR 0028 deploy step 2, below).
+    - **Not recorded at the time:** who ran the commands and the exact `kb_load` invocation. This
+      entry is reconstructed, not a log of the session; nothing contradicts the runbook.
   - **ADR 0028 deploy, steps 1 and 2 (2026-11-15 UTC; owner approved each).**
     - **Step 1, deploy of `a4cf015`** (PR #8, ADR 0028 implementation, migration 6). Backup
       `divesafe-20261115T010014Z` (scratch restore equal: 8 assessments, 8 decided; both CSVs
