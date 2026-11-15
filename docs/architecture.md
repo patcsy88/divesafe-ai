@@ -240,12 +240,16 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
   instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.
-- **Observability: ADR 0027 accepted (2026-11-12), not built.** No request id, metrics or
-  alerting yet; on 2026-11-12 every model call of one production assessment failed (model-host
-  404) and only the record showed it. Decided: a request id, `/metrics` behind a new `metrics`
-  role (isolated: never combined with other roles, groups or a shared actor) using
-  `prometheus_client`, Uptime Kuma for alerting over `host.docker.internal`; tracing stays
-  proposed. See [ADR 0027](adr/0027-observability.md).
+- **Observability: ADR 0027 accepted (2026-11-12; tracing amended 2026-11-15), not built.** No
+  request id, metrics or alerting yet; on 2026-11-12 every model call of one production
+  assessment failed (model-host 404) and only the record showed it. Decided: a request id,
+  `/metrics` behind a new `metrics` role (isolated: never combined with other roles, groups or a
+  shared actor) using `prometheus_client`, Uptime Kuma for alerting over
+  `host.docker.internal`. Tracing (amended 2026-11-15, owner): self-hosted Langfuse for
+  metadata-only production spans over an internal Docker network, development evaluation of the
+  synthetic sets, a read-only prompt mirror and cost reporting; built after the request id,
+  metrics and alerting. `src` never imports `langfuse`, and tracing never changes a result. See
+  [ADR 0027](adr/0027-observability.md).
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry
   `rtk git ...` variants, including a deny for `rtk git push`. Verified by running the reviewer:

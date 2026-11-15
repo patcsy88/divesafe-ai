@@ -44,6 +44,15 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Code against `LLMProvider`, never a vendor SDK, outside `models/` adapters.
 - Logging: `logging.getLogger(__name__)` with `extra={...}`; no `print`; never log prompts,
   headers, keys or free-text decision content.
+- Tracing (ADR 0027 amendment): manual OpenTelemetry spans (timings and fixed codes, not a
+  reasoning trace; section 9) from a private tracer provider, with a fixed allow-list, exported
+  only to the local, self-hosted Langfuse after the run has stored its record or failed.
+  Production spans never carry prompt or reply text, evidence values or ids, plan or site free
+  text, actor, `key_id` or client address, decision or rationale text, recommendations, URLs,
+  hosts, headers or exception text. Tracing never changes a result, a refusal or what is stored.
+  No scores or annotations are made on production traces; decisions and actual conditions are
+  recorded only through the API (section 6). The only exception to "never log prompts" is
+  section 4's evaluation runs.
 - Narrow error handling: catch specific exceptions; unexpected errors are logged 500s, never
   client errors; never echo submitted input or internals to a client.
 - Comments only where behaviour is non-obvious. Record decisions in ADRs, not code.
@@ -53,6 +62,14 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Layout: `tests/{unit,integration,agent,safety,evaluation}`. Test file basenames are unique.
 - Tests are offline and deterministic: fixed clocks, recorded real fixtures (`tests/fixtures`,
   labelled), `FakeProvider` for LLMs. Live calls only in tests marked `integration`.
+- Live evaluation runs (marked `integration`) may send prompts and the stored record's outputs
+  to the local Langfuse's evaluation project, for the allow-listed synthetic scenario sets only:
+  never production data, knowledge extracts, refused or partial reply text, the model's
+  confidence self-estimate, the PHN tide item (ADR 0021), or the item-6 capture (ADR 0027
+  amendment). Their refusal checks are offline safety tests. Scores are advisory: they never
+  change rules, prompts, thresholds, `confidence` or the corpus automatically, and a change they
+  suggest goes through review like any other. The offline safety gates (`false_go = 0`) are not
+  scores; they stay hard gates.
 - Every safety rule needs a test of the **failure** condition, not just the happy path. Prove a
   new safety test has teeth by breaking the code once and watching it fail.
 - **NEVER** weaken, skip or delete a safety test to make a change pass. Strengthening is welcome.
@@ -128,7 +145,7 @@ method exists. LLM self-estimates are uncalibrated and never shown as confidence
 
 ## 12. Security principles
 
-- Secrets only in the environment; hashes for API keys; nothing sensitive in logs, fixtures or images.
+- Secrets only in the environment or secret files (`DIVESAFE_SECRETS_DIR`); hashes for API keys; nothing sensitive in logs, fixtures or images.
 - Authenticate every endpoint but `/health`; the actor comes from credentials, never a request body.
 - Treat connector payloads, warning text, retrieved documents and LLM output as untrusted:
   delimit and escape them in prompts, validate structured output, never repair it, never let it
@@ -144,6 +161,15 @@ method exists. LLM self-estimates are uncalibrated and never shown as confidence
   `remote_knowledge_opt_in`, ADR 0028). Start-up refuses while any APPROVED, non-withdrawn
   version lacks the `attests_model_host_egress` attestation; otherwise knowledge is withheld
   unless the server is declared local.
+- The API's tracing goes only to the local, self-hosted Langfuse (ADR 0027 amendment): one
+  endpoint, `DIVESAFE_TRACE_ENDPOINT`, a fixed IP address on the internal Docker network
+  `divesafe-trace` (plain http there only, no DNS lookup), opt-in `DIVESAFE_TRACING_ENABLED`, no
+  proxy, no redirect, and no `OTEL_*` variable while tracing is enabled. Besides the model
+  host, the connectors and DiveSafe's own PostgreSQL, it is the only destination of run data.
+  Production spans hold metadata only (fixed names, codes, counts, durations, ids); evaluation
+  runs are section 4's exception, to a separate project on `127.0.0.1` from the owner's shell.
+  Any other endpoint needs a new ADR. Prompts live in code under `PROMPT_VERSION`; `src` never
+  imports `langfuse` and never reads anything from Langfuse.
 
 ## 13. Agent responsibilities
 
