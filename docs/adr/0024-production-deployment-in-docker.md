@@ -2151,6 +2151,31 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     **Also:** a second GitHub ruleset `main-ci-required` (owner decision, 2026-11-13; no bypass
     actors, up-to-date branch not required) requires the CI checks `test (Python 3.14)` and
     `docker image` from GitHub Actions on the default branch (`docs/knowledge-loader.md` N9).
+  - **ADR 0028 deploy, steps 1 and 2 (2026-11-15 UTC; owner approved each).**
+    - **Step 1, deploy of `a4cf015`** (PR #8, ADR 0028 implementation, migration 6). Backup
+      `divesafe-20261115T010014Z` (scratch restore equal: 8 assessments, 8 decided; both CSVs
+      copied). The chain ran from `old` `69c9fca7ff059a874d957ae0a11b007ce95f7313` to `new`
+      `a4cf0153001ef46f15cce32303a4c0d01c6f6533` with `allow_migration` set to `new` (the chain's
+      tag-then-build success path ran end to end for the first time); rollback image
+      `divesafe-api:rollback-20261115` = `8054a7177557` (the `69c9fca` image). New API image
+      `85648e026e2b`; `db-init` exit 0, schema version 6; health 200; start-up warnings as before
+      (trusted proxies empty, agent stage ON with `egress_basis` `remote_external_opt_in`, viewer
+      key without groups). `DIVESAFE_LLM_KNOWLEDGE_HOST` absent, so knowledge stays withheld.
+      Existing versions read `attests_model_host_egress = false`. **Rollback past this step is a
+      restore** of that backup with the rollback image (ADR 0028 owner answer 7).
+    - **Step 2, Tioman v3.** `.venv-tools` rebuilt from the new image. v3 is the v2 text unchanged
+      (`tioman-site-guide-v3.txt` byte-identical to v2), manifest format 2 with
+      `attests_model_host_egress: true`, `supersedes: 2`, effective 2026-11-15, review by
+      2027-05-13; host build and in-image `--check` agree: manifest sha256
+      `c29b89d3c1e33ce0d4294905fd24b198df3959a663720d553cef1a86959ade28`, built with `a4cf015`.
+      The v2 manifest and draft are kept in the records folder. Owner approval recorded
+      01:17:52Z; DRAFT, then APPROVED 01:18:05 (`hash_checked = true`); backup
+      `divesafe-20261115T011811Z`; v2 WITHDRAWN 01:18:17.846762 (withdrawal-log line appended);
+      backup `divesafe-20261115T011823Z` (both with both CSVs, scratch restores equal). Post-check
+      (read-only, bootstrap user): v1 and v2 WITHDRAWN, v3 APPROVED and attested, and the start-up
+      attestation query (`services/kb_attestation.py`) returns 0. Section name "Pulau Tioman site
+      guide"; review by 2027-05-13.
+    - **Step 3** (set `DIVESAFE_LLM_KNOWLEDGE_HOST=wall-e.ch30ng.org`, restart): not yet run.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
