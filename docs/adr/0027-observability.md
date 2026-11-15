@@ -1,9 +1,13 @@
 # ADR 0027: Observability (request ids, metrics, alerting, later tracing)
 
 - Status: ACCEPTED for items 1 to 3 (owner decisions 2026-11-12: `/metrics` behind a `metrics`
-  role, `prometheus_client`, Uptime Kuma); item 4 (tracing) stays PROPOSED, later. **Nothing is
-  built yet.** The remaining owner decisions at the end are open with a recommended default.
-  This ADR is the record for the `prometheus_client` dependency.
+  role, `prometheus_client`, Uptime Kuma). Item 4 is ACCEPTED as amended on 2026-11-15:
+  self-hosted Langfuse for tracing, evaluation, a read-only prompt mirror and cost reporting
+  (see "Amendment 2026-11-15"). **Nothing is built yet.** The remaining owner decisions were
+  settled on 2026-11-15, each as its recommended default (see "Owner decisions"); the
+  metric-alert mechanism is deferred, not chosen. This ADR is the record for the
+  `prometheus_client` and OpenTelemetry runtime dependencies and the `langfuse` development
+  dependency (`[eval]` extra only).
 - Builds on ADR 0024 (production stack), ADR 0025 (the per-stage trace on the record), ADR 0023
   and ADR 0022 (what may leave the machine), ADR 0013 (roles).
 
@@ -31,26 +35,26 @@ plan fields leave the machine), and "no new dependency without an ADR".
 
 1. **A request id per HTTP request.** The API accepts an inbound `X-Request-ID` matching
    `[A-Za-z0-9-]{1,64}` only when the request comes from a trusted proxy, judged by the existing
-   `DIVESAFE_TRUSTED_PROXIES` setting (`settings.py`, used by `auth.client_source`; no new
-   setting); otherwise it generates a UUID4. An invalid or untrusted inbound id is replaced and
-   never echoed or logged. The id goes on every log line of that request and is passed
-   explicitly into the background run it starts (ADR 0019; the run does not inherit the request
-   context), and is returned in the response header. It never goes into a prompt or a metrics
-   label. It is **not stored in the record** unless the owner decides so (it would be a new
-   record field, ADR 0012 old-row rule applies). Caveat: with the port published on `127.0.0.1`
-   every host client arrives from the Docker gateway address, so the proxy cannot be told apart
-   from another local process (the same weakness rate limiting has); the impact is low, since
-   the id is for log correlation only.
+   `DIVESAFE_TRUSTED_PROXIES` setting (`settings.py`, used by `auth.client_source`; no new setting);
+   otherwise it generates a UUID4. An invalid or untrusted inbound id is replaced and never echoed
+   or logged. The id goes on every log line of that request and is passed explicitly into the
+   background run it starts (ADR 0019; the run does not inherit the request context), and is
+   returned in the response header. It never goes into a prompt or a metrics label. It is **not
+   stored in the record** (owner decision 2026-11-15: logs only; a record field would be new, and
+   the ADR 0012 old-row rule would apply). Caveat: with the port published on `127.0.0.1` every host
+   client arrives from the Docker gateway address, so the proxy cannot be told apart from another
+   local process (the same weakness rate limiting has); the impact is low, since the id is for log
+   correlation only.
 2. **A `/metrics` endpoint in the Prometheus text format** with a small fixed set: assessments
    created and finished, by final recommendation; runs in flight; connector failures by connector
-   name; model call outcomes by a fixed code (`ok`, `provider_error`, `timeout`,
-   `invalid_output`); a per-stage duration histogram with fixed buckets; knowledge retrieval
-   outcome by fixed code; authentication failures as one unlabelled counter. **No label from user
-   input, no prompt or model text, no site free text, and never an actor, `key_id`, client address,
-   request id or assessment id**: site labels, if any, are the fixed site ids only. Counters are
-   per process (as rate limiting is today). Whether a `/metrics` request counts toward rate
-   limiting and the auth-failure counter is an owner decision (below). Two options were
-   considered:
+   name; model call outcomes by the nine `CALL_OUTCOMES` labels (`agents/runner.py`), the same set
+   as the "model call finished" line and the spans; a per-stage duration histogram with fixed
+   buckets; knowledge retrieval outcome by fixed code; authentication failures as one unlabelled
+   counter. **No label from user input, no prompt or model text, no site free text, and never an
+   actor, `key_id`, client address, request id or assessment id**: site labels, if any, are the
+   fixed site ids only. Counters are per process (as rate limiting is today). A `/metrics` request
+   counts toward rate limiting and the auth-failure counter (owner decision 2026-11-15, decision 7
+   below). Two options were considered:
    - **Option A: write the text format by hand.** A few counters and one histogram are a page
      of code with no dependency; the exposition format is stable and simple. Recommended at
      proposal time; not chosen.
@@ -103,8 +107,8 @@ plan fields leave the machine), and "no new dependency without an ADR".
    checked; behind Docker publishing every local client shares the gateway address, so a client
    with a bad key can block the scraper, and code cannot exempt a key it has not checked.
    Uptime Kuma must therefore treat a 429 as its own alert ("auth blocked"), not as "down". The
-   rate-limit key: `LIMIT_KEYS` is a fixed set, so either add `metrics` with its own setting
-   (recommended) or reuse `read`; open, decision 7.
+   rate-limit key: `LIMIT_KEYS` is a fixed set; **owner decision 2026-11-15 (decision 7):** add a
+   `metrics` entry with its own setting, rather than reusing `read`.
 3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
    Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
    runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;
@@ -117,13 +121,13 @@ plan fields leave the machine), and "no new dependency without an ADR".
      fake a successful backup): a mode-600 file outside the repository, read by `curl -K <file>`
      (or stdin), never on the command line (`ps`, a committed cron wrapper), never logged; no
      backup output in the `msg=` parameter.
-   - Metrics: Uptime Kuma cannot evaluate PromQL rates, so the agent-failure and
-     connector-failure alerts need either a keyword or JSON check on a small authenticated
-     endpoint, or a Prometheus later. **Open point, not decided here**; nothing is invented for
-     it. Uptime Kuma holds its own API key with only the `metrics` role (above), sent in an
-     `Authorization` header (monitor headers), never in a URL. A keyword or JSON monitor's
-     failure message can include part of the response body, so the checked endpoint must return
-     only names and values.
+   - Metrics: Uptime Kuma cannot evaluate PromQL rates, so the agent-failure and connector-failure
+     alerts need either a keyword or JSON check on a small authenticated endpoint, or a Prometheus
+     later. **Deferred (owner decision 2026-11-15):** the `/health` and backup monitors come first;
+     the mechanism and N are chosen once `/metrics` is built. Nothing is invented for it. Uptime
+     Kuma holds its own API key with only the `metrics` role (above), sent in an `Authorization`
+     header (monitor headers), never in a URL. A keyword or JSON monitor's failure message can
+     include part of the response body, so the checked endpoint must return only names and values.
    - Alert messages carry metric names and values only, never record or decision text.
      Notifications (email, Telegram or similar) are a new egress of that alert text.
    - Uptime Kuma itself stores its secrets in plain text in its database: its data volume and
@@ -132,8 +136,10 @@ plan fields leave the machine), and "no new dependency without an ADR".
      and 2FA if available. It is a new external dependency: image pinned by digest, updated by
      the owner.
 4. **Later and optional: tracing.** OpenTelemetry spans per stage and per model call with
-   timings and the fixed codes only, **never prompt or reply text**, sent to a local collector or
-   a self-hosted Langfuse on the same machine. Rules for any build of it:
+   timings and the fixed codes only, **never prompt or reply text**, sent to a self-hosted
+   Langfuse on the same machine (Amendment 2026-11-15, which tightens these rules and states
+   their exceptions: plain http on an internal Docker network, and plain http on loopback for
+   development evaluation). Rules for any build of it:
    - A trace exporter is a **new egress destination**. ADR 0022 decision 15 and ADR 0023 allow
      only the declared model host to receive anything, so they do not cover it: it needs its own
      opt-in setting and its own https host allow-list, and a `security-reviewer` review. Span
@@ -150,18 +156,428 @@ plan fields leave the machine), and "no new dependency without an ADR".
    the machine), and with ADR 0022 decision 15 and ADR 0023 (only the declared model host may
    receive anything). Tracing is not needed for the incident above; item 2 covers it.
 
+## Amendment 2026-11-15: Langfuse for tracing, evaluation, prompts and cost
+
+Owner decision: use self-hosted Langfuse (MIT core; no `ee/` feature, no licence key) for
+tracing, evaluation, a read-only prompt mirror and cost reporting. It runs on the production Mac
+in its own Docker Compose project, never in Langfuse's cloud. LangSmith was considered and not
+chosen: closed source, self-hosting only on an Enterprise contract with Kubernetes, and its
+value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
+
+### Rules for every use
+
+- **One destination, a fixed address, enforced at connect time.** The API sends spans to one
+  endpoint, `DIVESAFE_TRACE_ENDPOINT`, only when `DIVESAFE_TRACING_ENABLED=true`; either without
+  the other refuses start-up.
+  - **The network.** The endpoint is Langfuse's web service at a fixed IP address on a dedicated
+    Docker network, `divesafe-trace`: `internal: true`, a fixed `/24` `ipam` subnet, a fixed
+    `ipv4_address` for the web container, joined only by the API container and Langfuse's web
+    container. DiveSafe's compose project creates the network (`name: divesafe-trace`); Langfuse's
+    compose refers to it as `external: true`. After every compose change the operator checks that
+    `docker network inspect divesafe-trace` shows `"Internal": true` and that `Containers` lists
+    exactly the API container and Langfuse's web container (the latter at the fixed address). The
+    subnet is chosen so it does not overlap the LAN, a VPN or Docker Desktop's own ranges, and the
+    `ipam` config sets an `ip_range` that excludes the web container's fixed address, so no other
+    container is ever given it.
+  - **The value.** `DIVESAFE_TRACE_ENDPOINT` must be exactly
+    `http://<that address>:<web port>/api/public/otel/v1/traces`, where the address is an IPv4
+    literal in a private range. Start-up refuses any other value, including a host name (so no
+    DNS lookup is ever made), credentials, a query or a fragment, and never echoes the value.
+  - **The subnet check.** At start-up, and only when `DIVESAFE_TRACING_ENABLED=true` and the
+    endpoint has passed the value check, the API checks that it has its own interface in the `/24`
+    that holds that address: it connects a UDP socket to the address (no packet is sent) and
+    compares `getsockname()`. Otherwise start-up refuses, so a container that is not on
+    `divesafe-trace` never sends spans through its default route. An `OSError` from `connect`
+    is a refusal with the same fixed message.
+  - **Tracing off.** With tracing off, no socket is created, no tracer provider or exporter is
+    built, and the only tracing-related refusal is an endpoint set without the flag. `OTEL_*`
+    variables are refused only when tracing is enabled: with tracing off no OpenTelemetry SDK
+    object exists, so they have no effect, and an unused feature never stops the service.
+  - **Plain http** is allowed to that address only, because it is on a Docker network with no
+    gateway, so the traffic cannot leave Docker. This is the first of two exceptions to item 4's
+    https rule and to AGENTS.md section 12's "https for outbound calls" (the second is
+    development evaluation on loopback, section 2 below).
+  - **The HTTP session.** The exporter gets a `requests.Session` with `trust_env=False` and
+    `max_redirects=0`, passed as its `session=` (verify at build), like the model adapter
+    (`ProxyHandler({})`, `_NoRedirect`). Endpoint, headers, timeout and processor limits are passed
+    explicitly from `Settings`; when tracing is enabled, start-up refuses while any `OTEL_*`
+    variable is set, so the environment cannot change where spans go, what they hold or the queue
+    limits.
+  - **A private provider.** The API builds its own `TracerProvider` instance and takes tracers
+    only from it. It never calls `trace.set_tracer_provider` or `trace.get_tracer_provider`, so
+    no other library's spans (an instrumented library, or the `langfuse` SDK, which puts prompts
+    in attributes) can reach the exporter.
+  - For the API, `host.docker.internal`, a host port or a remote Langfuse needs a new ADR
+    (evaluation from the owner's shell uses `127.0.0.1`, section 2).
+  - **New destination.** Besides the model host, the connectors and DiveSafe's own PostgreSQL,
+    Langfuse is the API's only destination of run data. This amends ADR 0022 decision 15 and
+    ADR 0023 (which allowed only the model host) for span metadata only, never a prompt.
+  - **Keys.** The production project's public and secret key are secret files under
+    `DIVESAFE_SECRETS_DIR` (ADR 0024), read into `SecretStr` settings, sent only in the
+    exporter's `Authorization` header, never logged.
+- **Two Langfuse projects.** `divesafe-prod` holds production spans only; its keys exist only in
+  the API container. `divesafe-eval` holds evaluation runs and the prompt mirror; its keys exist
+  only as files in the directory named by `DIVESAFE_EVAL_SECRETS_DIR` on the owner's
+  development machine. Langfuse keys are project-wide, so a production key never reaches
+  evaluation content.
+- **Not part of the result.** Tracing never changes an outcome, a refusal, a stage deadline or
+  what is stored:
+  - **Collected during the run.** One collector per run holds plain values only: the "model
+    call finished" fields (the same dict the log line uses), a wall-clock start per model call
+    (`time.time_ns()`, for the span only; the record's times still come from the run's clock),
+    and the `StageTrace` values the pipeline already builds.
+    - **Where it lives:** a `ContextVar` set inside `RunManager._wrapped`, in the run's own
+      task, never in the request handler and never module-level state. Its default is `None`,
+      so `assess_dive` called directly (tests, the evaluation harness) or with tracing off
+      collects nothing.
+    - **Child tasks:** `gather` tasks and the Retrieve task copy the context and share the one
+      collector. Appends happen only on the event-loop thread.
+    - **Bound:** at most `MAX_TRACE_ENTRIES` entries, a fixed constant at least as large as one
+      run's model calls plus its stages. Extra entries are dropped and counted.
+    - **Suppression:** each append runs under `contextlib.suppress(Exception)`: in
+      `call_structured` inside `_log_call`'s existing suppression; in the pipeline a new
+      suppression beside `_record_trace`'s append to `run.traces`.
+    - Nothing in `domain` or `risk` touches the collector. No span is open during a stage, and
+      no span context manager wraps an `await`.
+  - **Emitted in one place, last.** Spans are built, with explicit start and end times, and
+    handed off in `RunManager._wrapped`'s `finally`, after `complete` has returned or
+    `_mark_failed` has run.
+    - The emission is synchronous (no `await`) and runs under `contextlib.suppress(Exception)`.
+      `CancelledError` and other `BaseException`s pass through unchanged, and the stored result
+      or failure code is already final.
+    - The run span carries `run_outcome`: `stored`, or the fixed `FailureCode` value. A trace of
+      a run that stored nothing is then never read as a finished assessment.
+  - **Off the event loop.** Only `BatchSpanProcessor` is used (never `SimpleSpanProcessor`), so
+    export runs on its own thread. An export failure, timeout or full queue is dropped, never
+    raised into the run. Fixed at build and tested: exporter timeout, retry cap, queue size and
+    shutdown wait.
+  - **Shutdown order.** The tracer provider is built with `shutdown_on_exit=False` (no `atexit`
+    hook). It is shut down only after `RunManager.shutdown` has returned (every run marked), in
+    a daemon thread joined with a fixed timeout, so a hung export delays process exit by at most
+    that bound. It never delays
+    storing a record.
+  - **Counted, not logged as text.** A wrapper counts failures by a fixed reason (`timeout`,
+    `connection`, `http_status`, `queue_full`) into the item 2 metrics and logs each reason once
+    as a code. The `opentelemetry` and `urllib3` loggers each get `propagate=False` and a
+    `logging.NullHandler()` (without a handler Python's last-resort handler would print to
+    stderr),
+    because they can print the endpoint, the server's reply text and connection errors with host
+    and port.
+  - **Never read back.** Nothing read from Langfuse reaches a prompt, a rule, a record or the
+    corpus. Langfuse is not the audit record: where a trace and a record disagree, the record
+    wins.
+  - **Not a decision or outcome store.** No scores, annotations, comments or annotation queues
+    are used on `divesafe-prod` traces. Human decisions, override rationales and later actual
+    conditions are recorded only through the API (AGENTS.md section 6); a Langfuse note is never
+    one of them. Spans carry no recommendation (deterministic, proposed or final), so a trace
+    cannot be read as the result of an assessment that is still `PENDING_HUMAN`.
+- **Langfuse service hardening** (operator work, its own compose files outside the repository
+  and outside synced folders, like `docker/secrets/`):
+  - `TELEMETRY_ENABLED=false` and `NEXT_TELEMETRY_DISABLED=1` (the second to verify against
+    the pinned version); `AUTH_DISABLE_SIGNUP=true`; `LANGFUSE_DISABLE_SIGNUP_ONBOARDING=true`.
+  - Every default password and secret in the reference compose is replaced (`NEXTAUTH_SECRET`,
+    `SALT`, `ENCRYPTION_KEY`, the PostgreSQL, ClickHouse, Redis and object-storage passwords).
+    Langfuse reads these as env values in its own compose files; that is outside DiveSafe's
+    secret-file rule and gets the same care.
+  - No LLM connections, playground, LLM-as-a-judge evaluators, Halo, SMTP, SSO, Slack, webhooks,
+    or blob-storage exports: each is new egress and needs a new ADR.
+  - Only the web service publishes a port, on `127.0.0.1` only, with its own admin password. Its
+    worker, PostgreSQL, ClickHouse, Redis and object storage are on an `internal: true` network
+    with no published port.
+  - Langfuse's address on `divesafe-trace` is never in `DIVESAFE_TRUSTED_PROXIES`.
+  - Images pulled from Docker Hub (`langfuse/...`, not `docker.langfuse.com`) and pinned by
+    digest; updated by the owner.
+  - Its data stays outside DiveSafe's backups. It is a secret store and a store of run metadata.
+
+### 1. Tracing (production)
+
+The OpenTelemetry SDK with the OTLP/HTTP exporter to Langfuse's OpenTelemetry endpoint
+(vendor-neutral; the `langfuse` SDK is not in the runtime image). Manual spans only: one per run,
+per stage and per model call. These are timings and fixed codes, not a reasoning trace (AGENTS.md
+section 9).
+
+- **The allow-list covers the whole export.**
+  - Span names are fixed: `run`, the `StageName` values and the task names.
+  - Run span attributes: `run_outcome` (`stored` or a `FailureCode` value), `prompt_version`
+    (`PROMPT_VERSION`), the request id (once item 1 is built) and the assessment id.
+  - Stage span attributes: the stage name, outcome and duration from its `StageTrace`, never its
+    evidence ids or issue codes' free parts.
+  - Model-call span attributes, exactly these and pinned by a test:
+    - `CALL_LOG_FIELDS` (`task`, `outcome` as one of the nine `CALL_OUTCOMES` labels,
+      `output_limit`, `output_chars`, `output_used`, `duration_ms`), taken from the same dict
+      the "model call finished" line uses;
+    - `input_used` (the server's `usage.prompt_tokens` through `plain_count`) and `model`
+      (`provider.model`, needed for Langfuse prices), both span-only: they stay off the log line;
+      `CALL_LOG_FIELDS` and its log-leak test are unchanged. The prompt version is a run-span
+      attribute only.
+  - The resource is built explicitly with `service.name` and the SDK's `telemetry.sdk.*` only:
+    never `Resource.create()`, no resource detectors.
+  - No events, links or baggage. No trace context is read from a request or sent to the model
+    host or a connector (no `traceparent` in or out).
+- **Never exported:** prompt or reply text, evidence values or ids, plan or site free text,
+  actor, `key_id` or client address, decision or rationale text, a recommendation
+  (deterministic, proposed or final), URLs, hosts, headers or exception text
+  (`record_exception=False`, no status descriptions). No auto-instrumentation.
+
+### 2. Evaluation (development only, the allow-listed harness sets only)
+
+A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to the
+`divesafe-eval` project as a Langfuse dataset run with the harness's scores.
+
+- **What is sent:**
+  - **Prompts:** the full prompts, captured by the harness's sink from `LLMRequest.messages`.
+  - **Outputs:** only what the stored record holds (findings, scenarios, the proposal and the
+    explanation), read from the record after the run, never from `LLMResponse`.
+  - **Never kept, so never sent:** the sink never keeps `LLMResponse.text`. That excludes a
+    refused reply, a reply parsed and then refused (such as a second-round reply carrying risk
+    factors), partial text before a token-limit stop, raw stream events and any reasoning field
+    (AGENTS.md section 9; evaluation-strategy.md "no raw text is kept for a refused reply").
+  - **Self-estimate:** the model's `confidence` self-estimate is removed before sending and is
+    never a Langfuse score (section 11).
+  - **Route:** the harness sends through `LLMProvider` and its own sink, never through a
+    Langfuse model-SDK wrapper.
+- **The cases are synthetic** (synthetic engines and plans over recorded public fixtures), not
+  production data.
+- **Before any network call it refuses unless all of these hold:**
+  - the cases are exactly the sets named in an allow-list in the harness (today `SCENARIOS` and
+    the adversarial set), checked by identity, never by a `synthetic` flag, and the fixture
+    payloads they use match pinned SHA-256 values;
+  - the tide check is not included while PHN's terms are not on file (ADR 0021);
+  - the sending script never imports `api.state` or `capture_item6` (an AST test), so it
+    cannot use the item-6 capture, its replays or `build_default_state`;
+  - no knowledge connector is built, and `DIVESAFE_EVAL_KNOWLEDGE_HOST`, `DIVESAFE_DATABASE_URL`
+    and `DIVESAFE_ADMIN_DATABASE_URL` are unset;
+  - the Langfuse URL is passed as `base_url=` and is exactly `http://127.0.0.1:<port>`, the fixed
+    port Langfuse's web service publishes (never `localhost`, `::1` or another port). This is
+    plain http on loopback: the second, development-only exception to section 12's https rule;
+  - no `LANGFUSE_*`, `OTEL_*` or proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+    `NO_PROXY`, in any case) is set, `DIVESAFE_TRACING_ENABLED` is unset, and
+    `urllib.request.getproxies()` is empty (which includes the macOS system proxy). The SDK gets
+    an `httpx_client` with `trust_env=False` and no redirects; how its own OTLP session is built
+    is verified at build;
+  - the keys are read from files in `DIVESAFE_EVAL_SECRETS_DIR` (outside the repository and
+    synced folders) and passed as `public_key=` and `secret_key=`;
+  - an authenticated read with those keys shows the project `divesafe-eval` and only it. Another
+    listener on that port then sees the development keys, never a prompt.
+- The prompts still go to the evaluation's model host under `egress_gate`; Langfuse only adds a
+  local copy. Production assessments, records, knowledge extracts and human decisions are never
+  sent.
+- **Testing.** The live run is marked `integration`. The refusal checks live in a module that
+  does not import `langfuse`; the SDK is imported only after every check has passed, so their
+  offline tests run under `.[dev]` in CI. Each refusal test has a mutation check, uses an
+  in-memory sink, makes no network call, is marked `safety` and never skips. An AST test pins
+  that the checks' module has no top-level `langfuse` import. An offline test with a scripted
+  refused reply carrying a marker shows the marker never reaches what the sink would send.
+- **Scores are advisory.**
+  - The offline safety gates are not scores. `false_go = 0` and `ran + refused = cases`
+    (`tests/safety/test_adversarial_false_go.py`) stay hard CI gates, computed in the test and
+    never read from Langfuse. A Langfuse run never replaces or waives them.
+  - Scores never change a rule, a prompt, a threshold, a ruleset, `confidence` or the corpus
+    automatically. A change they suggest is a reviewed Git change (for a prompt, a
+    `PROMPT_VERSION` bump and the pinned digest), as for any other finding (architecture.md,
+    Learn; evaluation-strategy.md, "Human-in-the-loop and learning").
+  - A score on synthetic, unreviewed cases is never the source of a safety threshold (AGENTS.md
+    section 7) and is never shown as confidence (section 11).
+  - Dataset expected outputs are written by a person, never copied from a model reply.
+  - Nothing from Langfuse is ingested into the corpus or history (section 8).
+
+### 3. Prompt mirror (read-only)
+
+Prompts stay in code, reviewed in Git: `agents/prompts.py` (system prompt and trusted notes) and
+each agent's task instructions (`specialists.py`, `tot.py`, `risk_agent.py`,
+`cross_examination.py`). `PROMPT_VERSION` and the pinned digest in `test_prompt_limits.py` cover
+the system prompt and trusted notes; per-task instruction text is not pinned (ADR 0007 known gap).
+
+- A development script pushes the system prompt, the trusted notes and each fixed task's
+  instruction text rendered with code constants only (task names, `SPECIALISTS` fields), never
+  with a plan, evidence or knowledge, to `divesafe-eval`. Each is labelled with
+  `PROMPT_VERSION`, the commit and its SHA-256. It refuses to push a text under an existing
+  version label with a different digest.
+- The script has the same guards as section 2 (exact loopback `base_url`, no proxy, `LANGFUSE_*`
+  or `OTEL_*` variable, keys from `DIVESAFE_EVAL_SECRETS_DIR`, the project check).
+- It never uses Langfuse's `production` or `latest` labels.
+- The mirror is not authoritative: an edit there changes nothing. `PROMPT_VERSION` in code, the
+  record's `model_version` and the Supervise `prompt_version_pinned` check stay the only
+  authority.
+
+### 4. Cost reporting
+
+Model-call spans carry the model name and the server's input and output token counts when the
+server sends them. The adapter will also read `usage.prompt_tokens`, capped by `plain_count` like
+the output count (a change to ADR 0018's amendment), under the same rule and tests. A missing,
+malformed, negative or over-cap `prompt_tokens` gives None and never changes what is accepted or
+refused: the `BAD_USAGE`, ceiling and "usage never changes a refusal" cases are extended to it. A
+new `LLMResponse` count field maps any value `plain_count` rejects (wrong type, bool, negative, over
+the cap) to None, so building an `LLMResponse` never fails on it. The request body stays
+byte-for-byte the golden body (no `stream_options`). Production's server sends `completion_tokens`
+unasked (measured 2026-11-15, 27 of 27 calls); whether it sends `prompt_tokens` is not yet measured.
+A server that sends no usage leaves the counts empty.
+
+- Prices are Langfuse model-price entries kept by the owner. Costs are estimates, not invoices.
+- Cost is reporting only: no money value goes into a prompt, a rule or a record.
+- No budget stops a run. A budget would need its own decision, and any budget stop could only
+  drop the agent stage to "no proposal", never block assessment creation, the deterministic
+  result or the human gate.
+
+### Safety tests (MUST, `tests/safety/`, never skipped)
+
+- **Export scan:** the whole-export allow-list pin, and a scan of the serialised OTLP request
+  body for the markers of `test_model_call_log_leaks.py`, with mutation checks (reply text,
+  prompt, exception text, evidence id, recommendation). The model-name marker may appear only
+  as the value of the `model` attribute of model-call spans (asserted separately: it appears
+  nowhere else in the body). The body scan runs the real
+  OTLP/HTTP exporter with a stub session that keeps the request body (no socket).
+- **Silent export logs:** after start-up, a WARNING record carrying a marker on
+  `opentelemetry.sdk.trace.export`, `opentelemetry.exporter.otlp.proto.http.trace_exporter` and
+  `urllib3.connectionpool` reaches neither the JSON handler nor stderr (`capsys`); removing the
+  `NullHandler` fails it, and removing `propagate=False` fails it (the record reaches the JSON
+  handler).
+- **Record unchanged.** Through `RunManager`, with an in-memory run store and a fixed clock,
+  each traced setup is compared against tracing off:
+  - **Setups:** a tracer whose every method raises; a collector whose append raises; a full
+    collector; an exporter that blocks until the test releases it at teardown (so no test can
+    hang the suite); an exporter whose session raises a connection
+    error (no socket).
+  - **Must be equal:** the stored record, field by field except `stages[*].duration_ms`; the
+    run's status and failure code; and how the `_wrapped` task ends (it returns `None`, or
+    raises the same exception type as with tracing off), with no extra error log record.
+  - **Paths:** ok; call timeout; stage deadline (`STAGE_TIMED_OUT_ISSUE`); run deadline;
+    cancellation (`CancelledError` still leaves `_wrapped`, code `shutdown`); Supervise
+    invariant breach; a crash in Reason (nothing stored, code `internal`).
+  - These use the SDK's in-memory exporter except where the setup names another.
+- **Ordering:** no span reaches the exporter before `complete` has returned or `_mark_failed`
+  has run; the test exporter records the store's state when it receives each span.
+- **Shutdown bound:** with the blocking exporter (released at teardown) and the provider built
+  with `shutdown_on_exit=False`, `RunManager.shutdown` and the tracer shutdown finish within
+  the fixed bound.
+- **Mutations:**
+  - Removing the suppression around the append fails the record test.
+  - Removing it around the emission fails the "task ends the same way" check on every path.
+  - Widening the emission's suppression to `suppress(BaseException)` fails a dedicated case. The
+    tracer raises a test-private `BaseException` subclass (never `KeyboardInterrupt` or
+    `SystemExit`, which asyncio re-raises out of the event loop and would stop the pytest session)
+    after the record is stored. Run through `RunManager.start`, the test takes the run's task by its
+    name `run-<id>` from `asyncio.all_tasks()` before it finishes, and asserts that the record is
+    stored and that the task ends with that exception (`task.exception()`). (The cancellation case
+    cannot catch this mutation: a `suppress` inside a `finally` never sees an in-flight
+    `CancelledError`.)
+  - Moving emission before `complete` fails the ordering test.
+- **AST pins:** no `opentelemetry` import in `domain` or `risk`; no `langfuse` import anywhere
+  in `src`, and `langfuse` is not a runtime dependency in `pyproject.toml` (the image build
+  checks it is not installed); no `trace.set_tracer_provider` or `trace.get_tracer_provider` in
+  `src`; the process-wide provider is still the default after start-up; the OpenTelemetry SDK
+  is imported only inside the tracing set-up, which runs only when tracing is enabled (no
+  module-level `opentelemetry` import in `src`). The image build checks that `langfuse`,
+  `opentelemetry-distro`, `opentelemetry-instrumentation` and the `opentelemetry-instrument`
+  launcher are absent.
+- **Start-up refusals:** tracing enabled without an endpoint or the reverse; an endpoint that is
+  not exactly the fixed address form (a host name, another scheme, port or path, credentials, a
+  query or a fragment, an address outside the private ranges); a failed subnet check or an
+  `OSError` from its `connect`; any `OTEL_*` variable while tracing is enabled; never echoing
+  the value. With tracing off and no endpoint, start-up succeeds even when the subnet check
+  would fail and an `OTEL_*` variable is set, and no socket is created (mutations: running the
+  subnet check, or the `OTEL_*` refusal, unconditionally fails it; the test patches
+  `socket.socket` to prove no socket is created).
+
+Also: in `tests/unit` (not safety), with two concurrent runs, each trace holds only its own model
+calls. The evaluation refusal tests (section 2) live in `tests/evaluation`, are marked `safety`,
+are offline and need no `[eval]` extra.
+
+They never import `langfuse` and never `importorskip`; `opentelemetry-sdk` is a runtime
+dependency, so `.[dev]` in CI has it. Section 4's two skip exceptions stay the only ones.
+
+Build note: `mutated_module` in `test_model_call_log_leaks.py` requires each edit target (such as
+the `"duration_ms"` line) to occur exactly once in `runner.py`. If the collector copies that
+line, update the target; never loosen the check.
+
+### Dependencies
+
+`opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (runtime, bounded ranges,
+`pip-audit`); `langfuse` in a new `[eval]` extra only, never in the runtime image. Licences to
+verify from package metadata at build.
+
+### Owner decisions (2026-11-15, each as the recommended default)
+
+- **Assessment id on spans: yes** (links a trace to its record), while Langfuse stays local.
+- **Production prompt and reply text in traces: no.** Allowing it would amend AGENTS.md
+  sections 3 and 9, put knowledge extracts and plan fields in a second store, and turn the
+  remaining "local rests on compose files" gap into a blocker.
+- **Langfuse's update check: accepted.** To publish its UI port, the web container sits on a
+  network with internet access, so it can reach any host, not only `langfuse.com`; the other
+  outbound features are off by configuration, not blocked by the network. Langfuse documents no
+  switch for the update check, which sends the version number when a signed-in user loads the
+  UI. Alternatives not chosen: keep the web container on internal networks only and publish
+  `127.0.0.1:<port>` through a small reverse-proxy container (the update check then fails,
+  which Langfuse documents as graceful), or a host firewall rule.
+- **Order of build: after items 1 to 3**, then tracing, cost, evaluation and the prompt mirror.
+
+### Known gaps (amendment)
+
+- Langfuse is a second store of run metadata with its own retention; nothing deletes it in step
+  with DiveSafe.
+- A run that stores nothing (a Supervise invariant breach or a crash in Reason) still leaves a
+  trace, marked by `run_outcome`, with no matching record.
+- Trace export is best effort; dropped spans are counted, not recovered.
+- Token counts exist only when the server sends usage unasked; prices apply to the requested
+  model name, not necessarily the model that answered (routing, evaluation-strategy.md).
+- Langfuse's web container has internet access, and it holds every evaluation prompt and output.
+  Its documented outbound call is the update check to `langfuse.com`. The UI loads assets from
+  `img.shields.io` and `static.langfuse.com` in the owner's browser.
+- Like ADR 0023, "local" rests on the operator's compose files: the code checks that the
+  endpoint is the fixed address, and the network provides the isolation. Compose does not check
+  the `internal` flag of a network created elsewhere (hence the operator's inspect check).
+- Langfuse's web container can reach the API's port on `divesafe-trace`. Every endpoint but
+  `/health` still needs a key.
+- Loopback is a port, not a proof (ADR 0023). The evaluation project check stops a listener
+  started by mistake, not a hostile local process.
+- OpenTelemetry, `requests`, `httpx` and Langfuse SDK behaviour (proxies, redirects, logging,
+  `OTEL_*`, the SDK's OTLP session) and Docker Desktop's DNS and network flags are to verify
+  against the pinned versions at build.
+- With tracing off, `OTEL_*` variables have no effect only while no auto-configuration is
+  installed and the SDK is not imported (both checked above); verify at build that importing
+  the pinned SDK reads no `OTEL_*` variable that matters.
+- The evaluation script's AST import check sees direct imports only, not transitive or
+  `importlib` ones; requiring `DIVESAFE_DATABASE_URL` to be unset is what stops
+  `build_default_state` in practice.
+- `urllib.request.getproxies()` does not report PAC or auto-discovery proxies. The
+  `httpx_client` with `trust_env=False` does not use them; the SDK's own OTLP session is to
+  verify at build.
+- The subnet check runs at start-up only. A `docker network disconnect` while the API is
+  running is not detected, and spans would then follow the default route until restart.
+  Compose recreates the container on any network change, so this needs a manual command; the
+  operator's inspect check is the only control after start-up.
+- `prompt_tokens` on a token-limit stop: `TokenLimitError` carries only `output_chars` and
+  `output_tokens` (`models/llm.py`, including its pickle state). The build either extends it
+  under `plain_count` with the same pickle test, or `input_used` is None on `token_limit`
+  calls. Both counts come from the same `usage` object, by the `completion_tokens` rule
+  (`join_sse_counted`, the last event carrying `usage`).
+- "No scores, annotations, comments or annotation queues on `divesafe-prod`" is operator
+  discipline; the Langfuse UI does not prevent it unless project roles can (verify at build).
+- If `_mark_failed` itself fails, `run_outcome` shows the intended code while the store keeps
+  `RUNNING` until cleanup marks it; the record and the store win.
+- The collector's module is imported by `agents`, `orchestration` and `api`, so it imports
+  nothing from `api` or `orchestration` (AGENTS.md section 2).
+- AGENTS.md section 12's "only destination of run data" covers destinations the app pushes to;
+  logs on stdout and the `/metrics` scrape are outside that wording.
+- AGENTS.md section 12's first bullet names `DIVESAFE_SECRETS_DIR` only; the development-only
+  `DIVESAFE_EVAL_SECRETS_DIR` is described here, not in AGENTS.md.
+- Outside this amendment: the Supervise pin is a substring check (`prompts=2026-11-10.1` also
+  matches `prompts=2026-11-10.12`); worth an exact-token match when the prompt mirror is built.
+
 ## Consequences
 
 - Item 1 reuses `DIVESAFE_TRUSTED_PROXIES`; item 2 adds the `metrics` role to ADR 0013's role
   set (a key with only that role can read `/metrics` and nothing else) and no new port. Item 4
-  would add an opt-in setting and a host allow-list for the exporter.
+  adds `DIVESAFE_TRACING_ENABLED`, `DIVESAFE_TRACE_ENDPOINT` (a fixed address, Amendment
+  2026-11-15) and the `divesafe-trace` network.
 - Item 2 touches `api` and `orchestration` (counters are incremented where the stage trace is
   written); it does not touch `domain`, `risk` or the record.
-- New dependency: `prometheus_client` (decided 2026-11-12; pinned, `pip-audit`). The
-  OpenTelemetry SDK and exporter, and Langfuse if chosen, would come with item 4 and are not
-  added before the owner decides. The all-routes-authenticated safety test keeps `/metrics` on
-  the authenticated side; the MUST tests in item 2 (role isolation, mixed key refused at
-  start-up) and the AST pin on the library's listeners and global registry are new safety tests.
+- New dependencies: `prometheus_client` (decided 2026-11-12; pinned, `pip-audit`);
+  `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (runtime, item 4); `langfuse` in
+  an `[eval]` extra only, never in the runtime image (Amendment 2026-11-15). The
+  all-routes-authenticated safety test keeps `/metrics` on the authenticated side; the MUST tests in
+  item 2 (role isolation, mixed key refused at start-up) and the AST pin on the library's listeners
+  and global registry are new safety tests.
 - Option (b) is rejected: it would have needed an owner amendment to AGENTS.md section 12 and a
   change to the all-routes-authenticated safety test.
 - Uptime Kuma is a separate self-hosted service with its own update and backup duties (operator
@@ -171,6 +587,9 @@ plan fields leave the machine), and "no new dependency without an ADR".
   `X-Request-ID` it did not set.
 - Alerting is operator work and can fail silently itself; the first alert to set up is the
   backup one, since it already has a hook.
+- Langfuse is a separate self-hosted stack (web, worker, PostgreSQL, ClickHouse, Redis, object
+  storage) with its own update, backup and secret duties (operator work), and DiveSafe's compose
+  file gains the `divesafe-trace` network.
 
 ## Owner decisions
 
@@ -182,21 +601,23 @@ Settled 2026-11-12 (named by topic):
   exception is rejected.
 - **Alerting tool:** Uptime Kuma.
 
-Still open, with the recommended default:
+Settled 2026-11-15, each as the recommended default:
 
-- **Request id storage:** on the record (new field) or logs only? **Default: logs only** (no
-  record field, no migration; a log search by id finds the run).
-- **Metric alerts and N:** how the metric-based alerts reach Uptime Kuma (keyword or JSON check
-  on a small authenticated endpoint, or a later Prometheus) and the N for the agent-failure rule.
-  **Default: start with the `/health` and backup monitors, which need no metrics; add the metric
-  alerts once the check mechanism is chosen.**
-- **Tracing (item 4) for the MVP:** **Default: no**; item 4 stays proposed.
-- **`/metrics` and the limiter (decision 7):** the auth-failure limit is counted per source
-  before the key is checked and all local clients share the Docker gateway address, so the
-  scraper **can** be blocked by another client's bad keys and code cannot exempt it; Uptime
-  Kuma treats 429 as "auth blocked", not "down". **Default: `/metrics` counts toward both**, with
-  its own `metrics` entry in `LIMIT_KEYS` and its own setting (recommended) rather than reusing
-  `read`.
+- **Request id storage: logs only.** No record field and no migration; a log search by id finds
+  the run.
+- **Metric alerts and N: deferred.** Start with the `/health` and backup monitors, which need no
+  metrics. The way metric alerts reach Uptime Kuma (a keyword or JSON check on a small
+  authenticated endpoint, or a later Prometheus) and the N for the agent-failure rule are chosen
+  once `/metrics` is built. This is still an open point, not a choice.
+- **Tracing (item 4): yes, through self-hosted Langfuse** (owner, 2026-11-15; replaces the
+  "no" given earlier the same day). See "Amendment 2026-11-15", which also records the four
+  Langfuse decisions of that day.
+- **`/metrics` and the limiter (decision 7): `/metrics` counts toward both** the rate limit and
+  the auth-failure counter, with its own `metrics` entry in `LIMIT_KEYS` and its own setting,
+  not reusing `read`. The auth-failure limit is counted per source before the key is checked,
+  and all local clients share the Docker gateway address, so another client's bad keys **can**
+  block the scraper and code cannot exempt it; Uptime Kuma treats a 429 as "auth blocked", not
+  "down".
 
 ## Known gaps
 
@@ -212,8 +633,9 @@ Still open, with the recommended default:
 - `prometheus_client`'s multiprocess mode is not used; with more than one worker each process
   exposes its own counters and a scrape sees whichever answers (same as the per-process rate
   limit). One worker is the production setting today (ADR 0024).
-- Uptime Kuma cannot evaluate metric rates, so until the open point in item 3 is settled the
-  two failure alerts that motivated this ADR are not wired; only `/health` and backup are.
+- Uptime Kuma cannot evaluate metric rates. The owner deferred the alert mechanism
+  (2026-11-15), so the two failure alerts that motivated this ADR are not wired; only `/health`
+  and backup are planned.
 - A `metrics`-only key that leaks lets the holder read activity and failure rates; rotation is
   manual, as for every key (ADR 0013).
 - The scraper shares the Docker gateway address with every other local client, so one client's
