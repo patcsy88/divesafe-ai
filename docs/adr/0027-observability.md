@@ -1,4 +1,4 @@
-# ADR 0027: Observability (request ids, metrics, alerting, later tracing)
+# ADR 0027: Observability (request ids, metrics, alerting, tracing)
 
 - Status: ACCEPTED for items 1 to 3 (owner decisions 2026-11-12: `/metrics` behind a `metrics`
   role, `prometheus_client`, Uptime Kuma). Item 4 is ACCEPTED as amended on 2026-11-15:
@@ -39,7 +39,8 @@ plan fields leave the machine), and "no new dependency without an ADR".
    otherwise it generates a UUID4. An invalid or untrusted inbound id is replaced and never echoed
    or logged. The id goes on every log line of that request and is passed explicitly into the
    background run it starts (ADR 0019; the run does not inherit the request context), and is
-   returned in the response header. It never goes into a prompt or a metrics label. It is **not
+   returned in the response header. It never goes into a prompt or a metrics label. It goes on
+   the run span only (Amendment 2026-11-15), never on a stage or model-call span. It is **not
    stored in the record** (owner decision 2026-11-15: logs only; a record field would be new, and
    the ADR 0012 old-row rule would apply). Caveat: with the port published on `127.0.0.1` every host
    client arrives from the Docker gateway address, so the proxy cannot be told apart from another
@@ -49,12 +50,15 @@ plan fields leave the machine), and "no new dependency without an ADR".
    created and finished, by final recommendation; runs in flight; connector failures by connector
    name; model call outcomes by the nine `CALL_OUTCOMES` labels (`agents/runner.py`), the same set
    as the "model call finished" line and the spans; a per-stage duration histogram with fixed
-   buckets; knowledge retrieval outcome by fixed code; authentication failures as one unlabelled
-   counter. **No label from user input, no prompt or model text, no site free text, and never an
-   actor, `key_id`, client address, request id or assessment id**: site labels, if any, are the
-   fixed site ids only. Counters are per process (as rate limiting is today). A `/metrics` request
-   counts toward rate limiting and the auth-failure counter (owner decision 2026-11-15, decision 7
-   below). Two options were considered:
+   buckets; knowledge retrieval outcome by fixed code; trace export failures and dropped
+   collector entries by their fixed reasons (`timeout`, `connection`, `http_status`,
+   `queue_full`, `collector_full`; Amendment 2026-11-15); authentication failures as one
+   unlabelled counter. **No label from user input,
+   no prompt or model text, no site free text, and never an actor, `key_id`, client address,
+   request id or assessment id**: site labels, if any, are the fixed site ids only. Counters are
+   per process (as rate limiting is today). A `/metrics` request counts toward rate limiting and
+   the auth-failure counter (owner decision 2026-11-15, decision 7 below). Two options were
+   considered:
    - **Option A: write the text format by hand.** A few counters and one histogram are a page
      of code with no dependency; the exposition format is stable and simple. Recommended at
      proposal time; not chosen.
@@ -233,7 +237,8 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     - **Child tasks:** `gather` tasks and the Retrieve task copy the context and share the one
       collector. Appends happen only on the event-loop thread.
     - **Bound:** at most `MAX_TRACE_ENTRIES` entries, a fixed constant at least as large as one
-      run's model calls plus its stages. Extra entries are dropped and counted.
+      run's model calls plus its stages. Extra entries are dropped and counted in the same
+      in-process counter as export failures.
     - **Suppression:** each append runs under `contextlib.suppress(Exception)`: in
       `call_structured` inside `_log_call`'s existing suppression; in the pipeline a new
       suppression beside `_record_trace`'s append to `run.traces`.
@@ -256,11 +261,21 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     a daemon thread joined with a fixed timeout, so a hung export delays process exit by at most
     that bound. It never delays
     storing a record.
-  - **Counted, not logged as text.** A wrapper counts failures by a fixed reason (`timeout`,
-    `connection`, `http_status`, `queue_full`) into the item 2 metrics and logs each reason once
-    as a code. The `opentelemetry` and `urllib3` loggers each get `propagate=False` and a
-    `logging.NullHandler()` (without a handler Python's last-resort handler would print to
-    stderr),
+  - **Counted, not logged as text.** A wrapper counts export failures by a fixed reason
+    (`timeout`, `connection`, `http_status`, `queue_full`), dropped collector entries count as
+    `collector_full`, and each of the five reasons is logged once as a code. Tracing is built
+    before item 2 (owner, 2026-11-15). Until item 2 exists, the count is a plain in-process
+    counter in the tracing module: a fixed mapping from the five reasons to an `int`,
+    incremented under a `threading.Lock` because the export thread writes it; the lock guards
+    only the increment, never I/O or logging, so the event loop never waits on an export. It has
+    no endpoint, and tracing imports no `prometheus_client`. A unit test (not a safety test: the
+    counter cannot change an outcome) checks that a full collector increments `collector_full`
+    and each stub-session failure increments its own reason. Item 2 moves the count into its
+    dedicated `CollectorRegistry` in the same change that adds its AST pin on
+    `start_http_server`, `make_asgi_app`, `make_wsgi_app` and the global `REGISTRY`. The
+    `opentelemetry` and
+    `urllib3` loggers each get `propagate=False` and a `logging.NullHandler()` (without a
+    handler Python's last-resort handler would print to stderr),
     because they can print the endpoint, the server's reply text and connection errors with host
     and port.
   - **Never read back.** Nothing read from Langfuse reaches a prompt, a rule, a record or the
@@ -299,7 +314,9 @@ section 9).
 - **The allow-list covers the whole export.**
   - Span names are fixed: `run`, the `StageName` values and the task names.
   - Run span attributes: `run_outcome` (`stored` or a `FailureCode` value), `prompt_version`
-    (`PROMPT_VERSION`), the request id (once item 1 is built) and the assessment id.
+    (`PROMPT_VERSION`), the request id (once item 1 is built; when it is added, the whole-export
+    allow-list pin is updated in the same change, as a `tests/safety` change reviewed by
+    `risk-reviewer`) and the assessment id.
   - Stage span attributes: the stage name, outcome and duration from its `StageTrace`, never its
     evidence ids or issue codes' free parts.
   - Model-call span attributes, exactly these and pinned by a test:
@@ -509,10 +526,15 @@ verify from package metadata at build.
   UI. Alternatives not chosen: keep the web container on internal networks only and publish
   `127.0.0.1:<port>` through a small reverse-proxy container (the update check then fails,
   which Langfuse documents as graceful), or a host firewall rule.
-- **Order of build: after items 1 to 3**, then tracing, cost, evaluation and the prompt mirror.
+- **Order of build: Langfuse first** (owner, 2026-11-15, replacing "after items 1 to 3",
+  given earlier the same day): tracing, cost, evaluation and the prompt mirror, then items 1
+  to 3 in their own order.
 
 ### Known gaps (amendment)
 
+- Because tracing is built before items 1 to 3, it has no metrics or alerts on export failures
+  or dropped collector entries until item 2 is built: they show only as the once-per-reason log
+  codes and as missing or partial traces. Spans carry no request id until item 1 is built.
 - Langfuse is a second store of run metadata with its own retention; nothing deletes it in step
   with DiveSafe.
 - A run that stores nothing (a Supervise invariant breach or a crash in Reason) still leaves a
@@ -595,7 +617,8 @@ verify from package metadata at build.
 
 Settled 2026-11-12 (named by topic):
 
-- **Scope:** build items 1 to 3 for the MVP, in that order.
+- **Scope:** build items 1 to 3 for the MVP, in that order. (Amended 2026-11-15: the Langfuse
+  amendment is built first, then items 1 to 3; see "Amendment 2026-11-15", Owner decisions.)
 - **Metrics library:** B, `prometheus_client`.
 - **Metrics authentication:** the `metrics` role; section 12 unchanged; the loopback-port
   exception is rejected.
@@ -621,8 +644,10 @@ Settled 2026-11-15, each as the recommended default:
 
 ## Known gaps
 
-- Until item 2 is built, the only way to see a failed agent stage is the record (as on
-  2026-11-12) or the logs.
+- Until items 2 and 3 are built (now after the Langfuse amendment, owner 2026-11-15), the
+  2026-11-12 failure mode raises no alert. A failed agent stage shows in the record, in the logs
+  and, for exported traces, in Langfuse's model-call spans. Langfuse is best effort and not a
+  monitor: nobody is notified.
 - Per-process counters reset on restart and do not sum across workers (same as rate limiting).
 - Metrics show failure counts, not causes; the cause stays in the logs and the record.
 - Item 1 trusts the proxy addresses in `DIVESAFE_TRUSTED_PROXIES`; a misconfigured proxy that
