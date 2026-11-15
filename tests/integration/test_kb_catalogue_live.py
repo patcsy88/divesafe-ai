@@ -936,8 +936,8 @@ def test_a_wrong_pin_leaves_the_schema_version_unchanged_and_a_retry_with_the_re
     monkeypatch.undo()
     applied = migrate(bare.admin_dsn)
     after = [int(r[0]) for r in bare.rows("SELECT version FROM public.schema_migrations")]
-    assert applied == [4, 5]
-    assert sorted(after) == [1, 2, 3, 4, 5]
+    assert applied == [4, 5, 6]
+    assert sorted(after) == [1, 2, 3, 4, 5, 6]
 
 
 def test_a_missing_pin_for_the_running_major_makes_migrate_refuse_and_roll_back(
@@ -963,3 +963,116 @@ def test_a_pin_for_only_another_major_makes_migrate_refuse(
         migrate(bare.admin_dsn)
     message = str(caught.value)
     assert fake.no_pin("kb_no_truncate") in message
+
+
+# --- ADR 0028: migration 6, the attestation column ---------------------------------------------
+
+
+def _doc_row(did: str, version: int) -> dict[str, Any]:
+    from tests.integration.test_knowledge_store import _doc
+
+    return _doc(did, version)
+
+
+def test_migration_6_adds_the_column_false_for_existing_rows(
+    bare: Scratch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A version loaded under migration 5 reads `false` once 6 is applied: it never attests by
+    default, so start-up refuses it until it is withdrawn or replaced. The pins describe the
+    migrated (17-column) shape, so the post-check is switched off for the step to 5 only."""
+    from tests.integration.test_knowledge_store import _insert
+
+    monkeypatch.setattr(migrations_module, "knowledge_problems", lambda *a, **k: [])
+    assert migrate(bare.admin_dsn, MIGRATIONS[:5]) == [1, 2, 3, 4, 5]
+    monkeypatch.undo()
+    _insert(bare.admin_dsn, "kb_documents", _doc_row("pre-six", 1))
+    assert migrate(bare.admin_dsn) == [6]
+    rows = bare.rows(
+        "SELECT attests_model_host_egress FROM public.kb_documents WHERE document_id = 'pre-six'"
+    )
+    assert rows == [(False,)]
+    column = bare.rows(
+        "SELECT data_type, is_nullable, column_default FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'kb_documents' "
+        "AND column_name = 'attests_model_host_egress'"
+    )
+    assert column == [("boolean", "NO", "false")]
+
+
+def test_verify_passes_on_a_database_migrated_to_6(scratch: Scratch) -> None:
+    versions = sorted(
+        int(r[0]) for r in scratch.rows("SELECT version FROM public.schema_migrations")
+    )
+    assert versions == [1, 2, 3, 4, 5, 6]
+    assert scratch.owner_problems() == []
+    assert scratch.verify_as_app() == []
+
+
+def test_an_older_image_refuses_a_database_migrated_to_6(scratch: Scratch) -> None:
+    with pytest.raises(MigrationError, match="ahead of this code"):
+        migrate(scratch.admin_dsn, MIGRATIONS[:5])
+    from divesafe.services.migrations import schema_problems
+
+    with psycopg.connect(scratch.admin_dsn) as conn:
+        assert schema_problems(conn, MIGRATIONS[:5]) == [
+            "the database is ahead of this code; deploy a newer version"
+        ]
+
+
+def test_the_start_up_check_counts_approved_unattested_versions_whatever_their_dates(
+    scratch: Scratch,
+) -> None:
+    """ADR 0028 decision 7, live: an APPROVED, non-withdrawn, unattested version refuses start-up
+    even when it is future-dated or expired; a withdrawn one and an attested one do not."""
+    from tests.integration.test_knowledge_store import _add_doc, _drive
+
+    from divesafe.services import kb_attestation
+
+    dsn = scratch.admin_dsn
+
+    def count() -> int:
+        return kb_attestation.unattested_count(
+            [tuple(r) for r in scratch.rows(kb_attestation.UNATTESTED_SQL)]
+        )
+
+    kb_attestation.check_attestations(dsn)
+    assert count() == 0
+    from datetime import date, timedelta
+
+    today = date.today()
+    _add_doc(dsn, "attested", 1, attests_model_host_egress=True)
+    _drive(dsn, "attested", ("DRAFT", "APPROVED"))
+    _add_doc(dsn, "gone", 1)
+    _drive(dsn, "gone", ("DRAFT", "APPROVED", "WITHDRAWN"))
+    _add_doc(dsn, "draft-only", 1)
+    _drive(dsn, "draft-only", ("DRAFT",))
+    assert count() == 0
+    kb_attestation.check_attestations(dsn)
+    _add_doc(
+        dsn,
+        "future",
+        1,
+        effective_date=today + timedelta(days=30),
+        review_by_date=today + timedelta(days=120),
+    )
+    _drive(dsn, "future", ("DRAFT", "APPROVED"))
+    assert count() == 1
+    with pytest.raises(kb_attestation.AttestationRefused) as caught:
+        kb_attestation.check_attestations(dsn)
+    assert str(caught.value) == (
+        "refusing to start: DIVESAFE_LLM_KNOWLEDGE_HOST is set and an approved knowledge version "
+        "does not attest that it may be sent to the model host; withdraw or replace it (ADR 0028)"
+    )
+    # Withdrawing it lets start-up pass again.
+    _drive(dsn, "future", ("WITHDRAWN",))
+    assert count() == 0
+    kb_attestation.check_attestations(dsn)
+
+
+def test_the_start_up_check_refuses_when_the_store_cannot_be_read(bare: Scratch) -> None:
+    """An empty database has no knowledge tables: unreadable, never a pass."""
+    from divesafe.services import kb_attestation
+
+    with pytest.raises(kb_attestation.AttestationRefused) as caught:
+        kb_attestation.check_attestations(bare.admin_dsn)
+    assert "cannot be read" in str(caught.value)

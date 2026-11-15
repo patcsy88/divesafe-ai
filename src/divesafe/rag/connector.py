@@ -7,6 +7,10 @@ raises a fixed issue (fails closed). Length and count are re-checked; malformed 
 the bound are dropped, each with a fixed issue. Failures become issues through `ConnectorError`,
 never an abort. Nothing from the corpus is logged.
 
+ADR 0028 decision 7: every call carries the run's recorded egress basis; under
+`remote_knowledge_opt_in` a family whose governing version lacks the model-host attestation
+returns nothing, in SQL and in code alike, with a fixed issue.
+
 Typed notes (decision 14) come back from `retrieve` beside the `FetchResult`; they never enter a
 prompt and never force an outcome. Recording them is the Retrieve stage's job.
 """
@@ -14,6 +18,7 @@ prompt and never force an outcome. Recording them is the Retrieve stage's job.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -32,6 +37,7 @@ from divesafe.domain import (
 )
 from divesafe.rag.items import run_item, screened
 from divesafe.rag.selection import (
+    REMOTE_KNOWLEDGE_OPT_IN,
     FamilyClass,
     VersionRow,
     classify,
@@ -91,11 +97,18 @@ def check(
     available: int,
     now: datetime,
     window_end: datetime,
+    *,
+    egress_basis: object,
 ) -> KnowledgeResult:
     """The code layer: classify, cross-check SQL, re-check every bound, build the items.
     Versions for another site are ignored (the site filter, again in code)."""
     issues: list[str] = []
-    results = classify((v for v in versions if v.applies_to(site.id)), now, window_end)
+    results = classify(
+        (v for v in versions if v.applies_to(site.id)),
+        now,
+        window_end,
+        egress_basis=egress_basis,
+    )
     issues.extend(family_issues(results))
     notes = list(family_notes(results))
 
@@ -172,14 +185,31 @@ class KnowledgeConnector:
         self._store = store
 
     async def retrieve(
-        self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
+        self,
+        site: DiveSite,
+        window_start: datetime,
+        window_end: datetime,
+        now: datetime,
+        *,
+        egress_basis: object,
     ) -> KnowledgeResult:
         """Raises `ConnectorError` (fixed text) when the store cannot answer. Selection reads
-        only the window END (decision 3: in force by it, usable to it)."""
+        only the window END (decision 3: in force by it, usable to it). `egress_basis` is the
+        run's recorded basis, passed on every call (ADR 0028 decision 7), never a setting."""
         require_aware(now, window_end)
-        selection = await asyncio.to_thread(self._store.select, site.id, now, window_end)
+        selection = await asyncio.to_thread(
+            functools.partial(
+                self._store.select, site.id, now, window_end, egress_basis=egress_basis
+            )
+        )
         result = check(
-            site, selection.versions, selection.chunks, selection.available, now, window_end
+            site,
+            selection.versions,
+            selection.chunks,
+            selection.available,
+            now,
+            window_end,
+            egress_basis=egress_basis,
         )
         logger.info(
             "knowledge retrieved",
@@ -194,4 +224,10 @@ class KnowledgeConnector:
     async def fetch(
         self, site: DiveSite, window_start: datetime, window_end: datetime, now: datetime
     ) -> FetchResult:
-        return (await self.retrieve(site, window_start, window_end, now)).fetch
+        """The `Connector` contract, which carries no basis. It always excludes unattested
+        versions (ADR 0028 review nit: the strictest choice). The pipeline never uses its items:
+        the knowledge connector is screened out of Observe and Retrieve calls `retrieve`."""
+        result = await self.retrieve(
+            site, window_start, window_end, now, egress_basis=REMOTE_KNOWLEDGE_OPT_IN
+        )
+        return result.fetch

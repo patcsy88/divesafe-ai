@@ -100,7 +100,15 @@ def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
     def make() -> OpenAICompatibleProvider:
         return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
 
-    basis = egress_gate(make(), allow_external=ALLOW_EXTERNAL, server_is_local=SERVER_IS_LOCAL)
+    basis = egress_gate(
+        make(),
+        allow_external=ALLOW_EXTERNAL,
+        server_is_local=SERVER_IS_LOCAL,
+        base_url=base,
+        allowed_hosts=env("DIVESAFE_EVAL_ALLOWED_HOSTS"),
+        # ADR 0028: the evaluation's own knowledge host; unset keeps knowledge withheld.
+        knowledge_host=env("DIVESAFE_EVAL_KNOWLEDGE_HOST"),
+    )
     return budgets, make, basis
 
 

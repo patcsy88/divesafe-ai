@@ -199,15 +199,27 @@ class DocumentEntry(_Strict):
             raise ValueError("dates")
 
 
+# ADR 0028 decision 8: format 2 adds the model-host attestation. Format 1 is refused.
+MANIFEST_FORMAT = 2
+FORMAT_1_REFUSED = (
+    "manifest format 1 is no longer accepted: rebuild the draft as format 2, which attests "
+    "that the documents may be sent to the configured model host"
+)
+
+
 class Manifest(_Strict):
-    format: StrictInt = Field(ge=1, le=1)
+    format: StrictInt = Field(ge=MANIFEST_FORMAT, le=MANIFEST_FORMAT)
     attests_no_generated_text: StrictBool
     attests_no_personal_names: StrictBool
+    # Approval now also means "may be sent to the configured model host and its vendor".
+    attests_model_host_egress: StrictBool
     documents: tuple[DocumentEntry, ...] = Field(
         min_length=1, max_length=kb_common.MAX_DOCUMENTS_PER_LOAD
     )
 
-    @field_validator("attests_no_generated_text", "attests_no_personal_names")
+    @field_validator(
+        "attests_no_generated_text", "attests_no_personal_names", "attests_model_host_egress"
+    )
     @classmethod
     def _attested(cls, v: bool) -> bool:
         if v is not True:
@@ -239,7 +251,10 @@ def parse_manifest(raw: bytes) -> tuple[Manifest, str]:
     try:
         # Duplicate keys: the strict validator keeps the last one silently, so detect them in a
         # first parse of the same bytes (the hash is of these bytes too), then validate below.
-        json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
+        parsed = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
+        # An exact int 1 only (not true): its own fixed reason, so an old draft is not a mystery.
+        if type(parsed) is dict and type(parsed.get("format")) is int and parsed["format"] == 1:
+            raise ManifestInvalid(FORMAT_1_REFUSED)
         # JSON mode, strict: arrays become tuples and ISO date strings become dates, but nothing
         # else is coerced (python-mode strict would refuse arrays and date strings).
         manifest = Manifest.model_validate_json(raw)

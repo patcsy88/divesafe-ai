@@ -51,13 +51,29 @@ def output_path(directory: Path, name: str) -> Path:
 
 
 def egress_gate(
-    provider: LLMProvider, *, allow_external: bool | str, server_is_local: bool | str
+    provider: LLMProvider,
+    *,
+    allow_external: bool | str,
+    server_is_local: bool | str,
+    base_url: str | None = None,
+    allowed_hosts: str | None = None,
+    knowledge_host: str | None = None,
 ) -> EgressBasis:
     """Skip the run unless the operator has said where the prompt goes. Both flags together are
     a configuration error and fail the run rather than skip it. Text is read by `Settings`, so
-    `1`, `TRUE` and `true` mean the same here as at start-up and an unreadable value fails."""
+    `1`, `TRUE` and `true` mean the same here as at start-up and an unreadable value fails.
+
+    ADR 0028 decision 9: the `Settings` are built like the API's (the openai_compatible provider,
+    the evaluation base URL, its allow-list and the knowledge host; never `model_construct`), so
+    every `Settings` and `check_egress` refusal applies, including the `provider.host`
+    comparison. A `ValidationError` (for example a knowledge host that is not the base URL's) is
+    NOT caught: it fails the run. Only a `RuntimeError` from `check_egress` skips."""
     settings = Settings(
         _env_file=None,
+        llm_provider="openai_compatible",
+        llm_base_url=base_url,  # type: ignore[arg-type]
+        llm_allowed_hosts=allowed_hosts,
+        llm_knowledge_host=knowledge_host,
         allow_external_llm=allow_external,  # type: ignore[arg-type]
         llm_server_is_local=server_is_local,  # type: ignore[arg-type]
     )

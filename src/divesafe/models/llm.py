@@ -91,6 +91,8 @@ class FakeProvider:
 
     name = "fake"
     external = False
+    # No server (ADR 0028 decision 3): never equal to a knowledge host.
+    host: str | None = None
 
     def __init__(
         self, reply: str | Callable[[LLMRequest], str] = "", model: str = "fake-model"

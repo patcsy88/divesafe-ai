@@ -130,6 +130,9 @@ services:
       DIVESAFE_LLM_BASE_URL: ${DIVESAFE_LLM_BASE_URL:?set DIVESAFE_LLM_BASE_URL in docker/production.env}
       DIVESAFE_LLM_ALLOWED_HOSTS: ${DIVESAFE_LLM_ALLOWED_HOSTS:?set DIVESAFE_LLM_ALLOWED_HOSTS in docker/production.env}
       DIVESAFE_LLM_MODEL: ${DIVESAFE_LLM_MODEL:?set DIVESAFE_LLM_MODEL in docker/production.env}
+      # ADR 0028: empty keeps every knowledge item withheld from the model host. Set it to that
+      # host only after every APPROVED knowledge version attests model-host egress.
+      DIVESAFE_LLM_KNOWLEDGE_HOST: ${DIVESAFE_LLM_KNOWLEDGE_HOST:-}
       # The first real run at the 1500 default lost four agent calls to the token limit (ADR 0024).
       # Evaluation runs 2 and 3 used these three values together (docs/evaluation-strategy.md).
       DIVESAFE_LLM_MAX_OUTPUT_TOKENS: ${DIVESAFE_LLM_MAX_OUTPUT_TOKENS:-3000}

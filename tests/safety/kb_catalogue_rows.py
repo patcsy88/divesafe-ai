@@ -2,7 +2,7 @@
 """RECORDED catalogue rows (test fixture, not invented): the answers of
 `migrations._SHAPE_QUERIES` on a fresh PostgreSQL 16 database after every migration,
 recorded 2026-11-06 by a one-off script that applies MIGRATIONS and runs each query (PG17
-gave identical rows). The offline fake serves them; a test proves they hash to the pins."""
+gave identical rows); the one column migration 6 adds was appended on 2026-11-14 (ADR 0028). The offline fake serves them; a test proves they hash to the pins."""
 
 from __future__ import annotations
 
@@ -24,6 +24,9 @@ SHAPE_ROWS: dict[str, list[tuple[Any, ...]]] = {
         ("kb_documents", 14, "display_permitted", "boolean", True, "", "", None, None),
         ("kb_documents", 15, "supersedes", "integer", False, "", "", None, None),
         ("kb_documents", 16, "manifest_sha256", "text", True, "", "", "default", None),
+        # Migration 6 (ADR 0028). Added 2026-11-14 to match the regenerated `kb_documents.columns`
+        # pin (made by `kb_pins` on fresh PG16/PG17 databases); confirmed by the live pin test.
+        ("kb_documents", 17, "attests_model_host_egress", "boolean", True, "", "", None, "false"),
         ("kb_documents", 2, "version", "integer", True, "", "", None, None),
         ("kb_documents", 3, "title", "text", True, "", "", "default", None),
         ("kb_documents", 4, "origin", "text", True, "", "", "default", None),

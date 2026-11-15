@@ -73,7 +73,10 @@ machine was the synthetic scenarios plus recorded fixtures, including the record
 which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, accepted but permission wording not on file). Which
 model answered rests on the proxy's routing; no digest was recorded. Today the evaluation runs
 the same gate as start-up and skips a loopback server unless `DIVESAFE_LLM_SERVER_IS_LOCAL=true`
-or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Each
+or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Since
+ADR 0028, `DIVESAFE_EVAL_KNOWLEDGE_HOST` names the evaluation's knowledge host (basis
+`remote_knowledge_opt_in`); it must equal the evaluation URL's and the provider's host. A
+mismatch fails the run and is not skipped, and the tide check's PHN rule does not change. Each
 output file now records the `egress_basis` and the host name. The tide check also skips
 (writing a record that says so) unless the basis is `declared_local` or the operator sets
 `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true`, because the PHN item would otherwise leave the machine

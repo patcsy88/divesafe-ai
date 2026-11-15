@@ -98,17 +98,33 @@ class EgressSplit:
     any_withheld: bool
 
 
-def _declared_local(basis: object) -> bool:
-    """Only the exact string `declared_local` allows knowledge out; `None`, any other value and
-    any non-string withhold it."""
-    return isinstance(basis, str) and basis == RecordEgressBasis.DECLARED_LOCAL.value
+# The exact bases under which knowledge may reach a prompt (ADR 0022 decision 15, ADR 0028
+# decision 5). Plain strings, compared exactly: no case folding.
+_KNOWLEDGE_BASES: frozenset[str] = frozenset(
+    {
+        RecordEgressBasis.DECLARED_LOCAL.value,
+        RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN.value,
+    }
+)
+
+
+def _knowledge_allowed(basis: object) -> bool:
+    """Only a value whose type is exactly `str` or `RecordEgressBasis` and that is one of the two
+    knowledge bases lets knowledge out. `None`, any other value, any other type (a `str`
+    subclass included) and an unhashable value withhold it without raising."""
+    if type(basis) is RecordEgressBasis:
+        basis = basis.value
+    if type(basis) is not str:
+        return False
+    return basis in _KNOWLEDGE_BASES
 
 
 def split_for_egress(evidence: Sequence[EvidenceItem], egress_basis: object) -> EgressSplit:
     """Decide what reaches a prompt. Knowledge is a `kb:` id by `domain.knowledge_ref` (the
-    record validator's definition); a KNOWLEDGE item without one, and a malformed `kb:` id, are
-    also never sent unless the basis is `declared_local` (a malformed `kb:` id never is)."""
-    local = _declared_local(egress_basis)
+    record validator's definition); a KNOWLEDGE item without one is also never sent unless the
+    basis is `declared_local` or `remote_knowledge_opt_in` (ADR 0028); a malformed `kb:` id never
+    is."""
+    local = _knowledge_allowed(egress_basis)
     sent: list[EvidenceItem] = []
     withheld: list[KnowledgeRef] = []
     any_withheld = False

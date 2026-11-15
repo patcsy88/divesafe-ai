@@ -134,13 +134,19 @@ C --profile knowledge run --rm kb_withdraw <document_id> <version>
 `kb_manifest_build` writes the computed parts of `manifest.json` (file and chunk SHA-256s, byte
 offsets, chunk numbers, heading gaps) from a draft you write. It is a convenience, not a check:
 `load` re-checks everything. Write the draft (for example `draft.json`) in the corpus directory
-with every human field, `null` included: top level `format`, `attests_no_generated_text`,
-`attests_no_personal_names`, `documents`; per document every manifest field except `file`, plus
-`path` (relative to the corpus directory; never `manifest.json`). Nothing is defaulted; a
-missing, extra or repeated key is refused.
+with every human field, `null` included: top level `format` (`2`; a format-1 draft or manifest
+is refused with its own message, ADR 0028), `attests_no_generated_text`,
+`attests_no_personal_names`, `attests_model_host_egress`, `documents`; per document every
+manifest field except `file`, plus `path` (relative to the corpus directory; never
+`manifest.json`). Nothing is defaulted; a missing, extra or repeated key is refused.
 
-**Whoever writes `attests_no_generated_text: true` and `attests_no_personal_names: true` in the
-draft is the one attesting**; the tool copies them and attests nothing. The dive professional
+**Whoever writes `attests_no_generated_text: true`, `attests_no_personal_names: true` and
+`attests_model_host_egress: true` in the draft is the one attesting**; the tool copies them and
+attests nothing. Approving a version means it **may be shown to every key holder and may be sent
+to the configured model host and its vendor** (ADR 0028 decision 8); the loader stores
+`attests_model_host_egress = true` on every version it loads. Versions loaded before migration 6
+read `false`: with `DIVESAFE_LLM_KNOWLEDGE_HOST` set, the API refuses to start until each such
+APPROVED version is withdrawn or replaced by an attested one. The dive professional
 reviews and approves the generated `manifest.json` itself (its sections, spans and hash), not
 just the draft.
 

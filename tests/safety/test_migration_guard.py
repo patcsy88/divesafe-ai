@@ -33,8 +33,56 @@ def test_no_shipped_later_migration_touches_the_guard_except_the_pinned_reviewed
 
     guarded(MIGRATIONS)
     unreviewed = [m for m in MIGRATIONS[1:] if m.version not in REVIEWED_GUARD_MIGRATIONS]
-    assert [m.version for m in unreviewed] == [2]
+    # Owner decision 2026-11-14, option A: migration 6 (ADR 0028) is an unreviewed later migration,
+    # so the word scan covers it; it is pinned to its exact SQL below instead of a review checksum.
+    assert [m.version for m in unreviewed] == [2, 6]
     guarded((MIGRATIONS[0], *unreviewed))
+    assert _normalised(MIGRATIONS[5].sql) == MIGRATION_SIX_SQL
+
+
+# ADR 0028 decision 7: migration 6 is exactly this one statement. Any edit to it fails here.
+MIGRATION_SIX_SQL = (
+    "ALTER TABLE public.kb_documents ADD COLUMN attests_model_host_egress boolean NOT NULL "
+    "DEFAULT false"
+)
+
+
+def _normalised(sql: str) -> str:
+    """Whitespace collapsed and one trailing semicolon dropped; nothing else is forgiven."""
+    text = " ".join(sql.split())
+    return text.removesuffix(";").rstrip()
+
+
+def test_migration_six_is_version_six_and_the_last_shipped_migration() -> None:
+    assert [m.version for m in MIGRATIONS] == [1, 2, 3, 4, 5, 6]
+    assert MIGRATIONS[5].version == 6
+    assert ";" not in _normalised(MIGRATIONS[5].sql)  # one statement only
+
+
+@pytest.mark.parametrize(
+    "edited",
+    [
+        MIGRATION_SIX_SQL.replace("DEFAULT false", "DEFAULT true"),
+        MIGRATION_SIX_SQL.replace(" NOT NULL", ""),
+        MIGRATION_SIX_SQL + "; GRANT UPDATE ON public.kb_documents TO PUBLIC",
+        MIGRATION_SIX_SQL.lower(),
+    ],
+    ids=["default-true", "nullable", "second-statement", "case-changed"],
+)
+def test_mutation_an_edited_migration_six_fails_the_exact_sql_pin(edited: str) -> None:
+    """The pin's own teeth: whitespace is the only thing normalised away."""
+    assert _normalised(edited) != MIGRATION_SIX_SQL
+    assert _normalised("\n  " + MIGRATION_SIX_SQL.replace(" ", "\n    ") + ";\n") == (
+        MIGRATION_SIX_SQL
+    )
+
+
+@pytest.mark.parametrize("word", FORBIDDEN_IN_LATER_MIGRATIONS)
+def test_migration_six_gets_no_exception_from_the_word_scan(word: str) -> None:
+    six = MIGRATIONS[5]
+    evil = Migration(6, six.name, f"{six.sql}\nSELECT 1; {word.upper()} x;")
+    with pytest.raises(MigrationError, match="touches the audit guard"):
+        guarded((*MIGRATIONS[:5], evil))
 
 
 @pytest.mark.parametrize("word", FORBIDDEN_IN_LATER_MIGRATIONS)

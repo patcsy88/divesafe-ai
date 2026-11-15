@@ -267,10 +267,13 @@ def test_mutation_checking_only_the_total_is_caught(tmp_path: Path) -> None:
         lambda d: d["documents"][0].update(unknown="x"),
         lambda d: d["documents"][0]["file"].update(unknown="x"),
         lambda d: d["documents"][0]["file"]["chunks"][0].update(unknown="x"),
-        lambda d: d.update(format=2),
+        lambda d: d.update(format=3),
+        lambda d: d.update(format=1),
         lambda d: d.update(attests_no_generated_text=False),
         lambda d: d.update(attests_no_personal_names=False),
+        lambda d: d.update(attests_model_host_egress=False),
         lambda d: d.pop("attests_no_generated_text"),
+        lambda d: d.pop("attests_model_host_egress"),
         lambda d: d.update(documents=[]),
         lambda d: d["documents"][0].update(licence_requires_personal_name=True),
         lambda d: d["documents"][0].update(display_permitted=False),
@@ -612,9 +615,10 @@ def test_a_symlinked_directory_in_a_path_is_refused(tmp_path: Path) -> None:
     (real / "nested-guide-v1.txt").write_bytes(spec["data"])
     os.symlink(real, root / "sub")
     manifest = {
-        "format": 1,
+        "format": 2,
         "attests_no_generated_text": True,
         "attests_no_personal_names": True,
+        "attests_model_host_egress": True,
         "documents": [spec["entry"]],
     }
     (root / "manifest.json").write_text(json.dumps(manifest))
@@ -716,13 +720,18 @@ CROSS_TYPE: list[tuple[str, Any, int, bool]] = [
     ("version-true", _set("version", True), 1, True),
     ("version-string", _set("version", "1"), 1, True),
     ("version-float", _set("version", 1.0), 1, True),
-    ("format-true", _set("format", True, top=True), 1, True),
-    ("format-string", _set("format", "1", top=True), 1, True),
-    ("format-two", _set("format", 2, top=True), 1, False),
+    # True is 1 in lax mode, which format 2 refuses anyway, so lax typing is no help there.
+    ("format-true", _set("format", True, top=True), 1, False),
+    ("format-string", _set("format", "2", top=True), 1, True),
+    ("format-float", _set("format", 2.0, top=True), 1, True),
+    ("format-three", _set("format", 3, top=True), 1, False),
     ("attests-generated-int", _set("attests_no_generated_text", 1, top=True), 1, True),
     ("attests-generated-false", _set("attests_no_generated_text", False, top=True), 1, False),
     ("attests-names-int", _set("attests_no_personal_names", 1, top=True), 1, True),
     ("attests-names-false", _set("attests_no_personal_names", False, top=True), 1, False),
+    ("attests-host-int", _set("attests_model_host_egress", 1, top=True), 1, True),
+    ("attests-host-string", _set("attests_model_host_egress", "true", top=True), 1, True),
+    ("attests-host-false", _set("attests_model_host_egress", False, top=True), 1, False),
     ("display-int", _set("display_permitted", 1), 1, True),
     ("display-false", _set("display_permitted", False), 1, False),
     ("personal-name-zero", _set("licence_requires_personal_name", 0), 1, True),
@@ -824,7 +833,7 @@ def _with_duplicate(root: Path, old: str, new: str) -> None:
 
 
 DUPLICATES = [
-    pytest.param('"format": 1,', '"format": 1, "format": 1,', id="top-level-same-value"),
+    pytest.param('"format": 2,', '"format": 2, "format": 2,', id="top-level-same-value"),
     pytest.param(
         '"attests_no_generated_text": true,',
         '"attests_no_generated_text": false, "attests_no_generated_text": true,',

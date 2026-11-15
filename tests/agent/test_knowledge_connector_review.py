@@ -50,7 +50,7 @@ SEARCH_PATH = ("SET search_path = pg_catalog, pg_temp", None)
 def test_the_session_pins_search_path_before_any_query(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _Conn()
     monkeypatch.setattr(store_module.psycopg, "connect", lambda *a, **k: conn)
-    PostgresKnowledgeStore(DSN).select(SITE.id, NOW, END)
+    PostgresKnowledgeStore(DSN).select(SITE.id, NOW, END, egress_basis="remote_external_opt_in")
     assert conn.log.index(SEARCH_PATH) < conn.log.index("COMMIT")
     first_query = next(i for i, e in enumerate(conn.log) if isinstance(e, tuple) and e[1])
     assert conn.log.index(SEARCH_PATH) < first_query
@@ -66,7 +66,9 @@ def test_mutation_search_path_dropped_is_caught(monkeypatch: pytest.MonkeyPatch)
     )
     conn = _Conn()
     monkeypatch.setattr(mutant.psycopg, "connect", lambda *a, **k: conn)
-    mutant.PostgresKnowledgeStore(DSN).select(SITE.id, NOW, END)
+    mutant.PostgresKnowledgeStore(DSN).select(
+        SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+    )
     assert SEARCH_PATH not in conn.log
 
 
@@ -79,11 +81,15 @@ NAIVE = datetime(2026, 6, 15, 10, 0)
 def test_a_naive_clock_is_a_fixed_connector_error(which: str) -> None:
     now, end = (NAIVE, END) if which == "now" else (NOW, NAIVE)
     with pytest.raises(KnowledgeStoreError) as raised:
-        store_module.parameters(SITE.id, now, end)
+        store_module.parameters(SITE.id, now, end, egress_basis="remote_external_opt_in")
     assert str(raised.value) == STORE_NAIVE_CLOCK
     store = FakeStore(Selection((), (), 0))
     with pytest.raises(ConnectorError) as caught:
-        asyncio.run(KnowledgeConnector(store).retrieve(SITE, START, end, now))
+        asyncio.run(
+            KnowledgeConnector(store).retrieve(
+                SITE, START, end, now, egress_basis="remote_external_opt_in"
+            )
+        )
     assert str(caught.value) == STORE_NAIVE_CLOCK
     assert not isinstance(caught.value, ValueError)
     assert store.calls == []
@@ -97,14 +103,21 @@ def test_mutation_naive_check_in_parameters_is_caught() -> None:
             "    if False:\n",
         ),
     )
-    assert mutant.parameters(SITE.id, NAIVE, END)["now"] is NAIVE
+    assert (
+        mutant.parameters(SITE.id, NAIVE, END, egress_basis="remote_external_opt_in")["now"]
+        is NAIVE
+    )
 
 
 def test_mutation_naive_check_in_retrieve_is_caught() -> None:
     mutant = mutated_module(connector_module, ("        require_aware(now, window_end)\n", ""))
     store = FakeStore(Selection((), (), 0))
     # The fake store does not check; without the guard a naive clock reaches it.
-    asyncio.run(mutant.KnowledgeConnector(store).retrieve(SITE, START, END, NAIVE))
+    asyncio.run(
+        mutant.KnowledgeConnector(store).retrieve(
+            SITE, START, END, NAIVE, egress_basis="remote_external_opt_in"
+        )
+    )
     assert store.calls == [(SITE.id, NAIVE, END)]
 
 
@@ -134,7 +147,9 @@ def _rows(case: str) -> list[ChunkRow]:
 
 
 def _check(module: Any, rows: list[ChunkRow]) -> Any:
-    return module.check(SITE, [ver("x", chunks=2)], rows, 2, NOW, END)
+    return module.check(
+        SITE, [ver("x", chunks=2)], rows, 2, NOW, END, egress_basis="remote_external_opt_in"
+    )
 
 
 @pytest.mark.parametrize("case", sorted(SCREEN_CASES))
@@ -146,14 +161,18 @@ def test_a_chunk_failing_the_screen_drops_its_family(case: str) -> None:
 
 def test_screened_text_is_kept_exactly() -> None:
     ok = _with(chunk("x"), text="Caf\u00e9 entry.\nSecond line: (20%) - see [map].")
-    (item,) = check(SITE, [ver("x")], [ok], 1, NOW, END).fetch.items
+    (item,) = check(
+        SITE, [ver("x")], [ok], 1, NOW, END, egress_basis="remote_external_opt_in"
+    ).fetch.items
     assert item.value["text"] == ok.text
     assert item.value["section"] == ok.section
 
 
 def test_unreviewed_unicode_data_refuses_every_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(kb_screen, "REVIEWED_UNIDATA_VERSION", "0.0.0")
-    result = check(SITE, [ver("x")], [chunk("x")], 1, NOW, END)
+    result = check(
+        SITE, [ver("x")], [chunk("x")], 1, NOW, END, egress_basis="remote_external_opt_in"
+    )
     assert result.fetch.items == ()
     assert result.fetch.issues == (SCREEN_ISSUE,)
 

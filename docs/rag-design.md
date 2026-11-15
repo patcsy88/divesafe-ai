@@ -43,6 +43,14 @@ No document without provenance is ingested.
 3. Retrieval that finds nothing relevant is reported as such; the agent must not fill in.
 4. Retrieval cannot lower severity. A "site is usually fine" passage never overrides rules.
 5. Contradictions between documents are surfaced, not resolved silently.
+6. Retrieved knowledge reaches a model prompt only under egress basis `declared_local`, or
+   `remote_knowledge_opt_in` (the one named host in `DIVESAFE_LLM_KNOWLEDGE_HOST`, ADR 0028);
+   under any other basis every `kb:` item is withheld and listed in `withheld_knowledge`
+   (`agents.stage.split_for_egress`, ADR 0022 decision 15). Under `remote_knowledge_opt_in` the
+   run's recorded basis is passed to every `retrieve` call, and a family whose governing version
+   lacks the `attests_model_host_egress` attestation returns nothing, with no fall-back to an
+   older version, and the fixed issue `knowledge store: a document version is not approved for
+   the model host`. This is applied in both SQL and code, so the disagreement check stays quiet.
 
 ## Evaluation
 

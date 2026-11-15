@@ -124,7 +124,11 @@ def _clock(day: date) -> tuple[datetime, datetime]:
 
 
 def _selected(db: dict[str, Any], sql: str, now: datetime, end: datetime) -> set[tuple[str, int]]:
-    rows = _run(db["dsn"], sql, store_module.parameters(db["site"].id, now, end))
+    rows = _run(
+        db["dsn"],
+        sql,
+        store_module.parameters(db["site"].id, now, end, egress_basis="remote_external_opt_in"),
+    )
     return {(r[0], r[1]) for r in rows}
 
 
@@ -158,7 +162,9 @@ def test_the_connector_agrees_with_sql(db: dict[str, Any]) -> None:
     ], "this live test assumes the test database holds no all-sites documents"
     now, end = _clock(db["today"])
     connector = KnowledgeConnector(PostgresKnowledgeStore(db["dsn"]))
-    result = asyncio.run(connector.retrieve(db["site"], now, end, now))
+    result = asyncio.run(
+        connector.retrieve(db["site"], now, end, now, egress_basis="remote_external_opt_in")
+    )
     assert [i.id for i in result.fetch.items] == sorted(f"kb:{d}:{v}:1" for d, v in _expected(db))
     assert result.fetch.issues == (UNCHECKED_ISSUE,)
     assert set(result.notes) == {
@@ -169,7 +175,11 @@ def test_the_connector_agrees_with_sql(db: dict[str, Any]) -> None:
     for item in result.fetch.items:
         assert "Synthetic test document" not in item.model_dump_json()
     late_now, late_end = _clock(db["today"] - DAY)
-    late = asyncio.run(connector.retrieve(db["site"], late_now, late_end, late_now))
+    late = asyncio.run(
+        connector.retrieve(
+            db["site"], late_now, late_end, late_now, egress_basis="remote_external_opt_in"
+        )
+    )
     assert late.fetch.items == ()
     assert CLOCK_ISSUE in late.fetch.issues
 
@@ -231,3 +241,76 @@ def test_mutation_numeric_zone_is_caught(db: dict[str, Any]) -> None:
     now, end = _clock(db["today"])
     assert _selected(db, sql, now, end) == _expected(db)
     assert _selected(db, mutant, now, end) != _expected(db)
+
+
+# --- ADR 0028 decision 7: the attestation, in SQL ---------------------------------------------
+
+KNOWLEDGE = "remote_knowledge_opt_in"
+REMOTE = "remote_external_opt_in"
+NOT_ATTESTED = "knowledge store: a document version is not approved for the model host"
+
+
+@pytest.fixture(scope="module")
+def attest_db() -> dict[str, Any]:
+    """A fresh site: `fam` has v3 attested and v4 approved since without the attestation (v4
+    governs); `ok` has one attested version."""
+    assert DSN is not None
+    install_schema(DSN)
+    tag = uuid.uuid4().hex[:8]
+    site = DiveSite(
+        id=f"t-site-{tag}", name="Synthetic", latitude=0, longitude=0, coordinate_source="test"
+    )
+    today = _kl_today(DSN)
+    ids = {"fam": f"t{tag}a0", "ok": f"t{tag}a1"}
+    common: dict[str, Any] = {
+        "effective_date": today - 10 * DAY,
+        "review_by_date": today + 90 * DAY,
+        "site_id": site.id,
+        "all_sites": False,
+    }
+    _add_doc(DSN, ids["fam"], 3, attests_model_host_egress=True, **common)
+    _drive(DSN, ids["fam"], ("DRAFT", "APPROVED"), 3)
+    _add_doc(DSN, ids["fam"], 4, attests_model_host_egress=False, **common)
+    _drive(DSN, ids["fam"], ("DRAFT", "APPROVED"), 4)
+    _add_doc(DSN, ids["ok"], 1, attests_model_host_egress=True, **common)
+    _drive(DSN, ids["ok"], ("DRAFT", "APPROVED"), 1)
+    return {"dsn": DSN, "site": site, "ids": ids, "today": today}
+
+
+def _selected_for(db: dict[str, Any], basis: str, sql: str | None = None) -> set[tuple[str, int]]:
+    now, end = _clock(db["today"])
+    params = store_module.parameters(db["site"].id, now, end, egress_basis=basis)
+    rows = _run(db["dsn"], sql or store_module.SELECTION_SQL, params)
+    return {(r[0], r[1]) for r in rows}
+
+
+def test_the_sql_excludes_an_unattested_governing_version_without_falling_back(
+    attest_db: dict[str, Any],
+) -> None:
+    ids = attest_db["ids"]
+    assert _selected_for(attest_db, KNOWLEDGE) == {(ids["ok"], 1)}
+    assert _selected_for(attest_db, REMOTE) == {(ids["fam"], 4), (ids["ok"], 1)}
+
+
+def test_the_connector_agrees_with_the_sql_under_both_bases(attest_db: dict[str, Any]) -> None:
+    ids = attest_db["ids"]
+    now, end = _clock(attest_db["today"])
+    connector = KnowledgeConnector(PostgresKnowledgeStore(attest_db["dsn"]))
+    site = attest_db["site"]
+    knowledge = asyncio.run(connector.retrieve(site, now, end, now, egress_basis=KNOWLEDGE))
+    assert [i.id for i in knowledge.fetch.items] == [f"kb:{ids['ok']}:1:1"]
+    assert knowledge.fetch.issues == (NOT_ATTESTED,)
+    remote = asyncio.run(connector.retrieve(site, now, end, now, egress_basis=REMOTE))
+    assert sorted(i.id for i in remote.fetch.items) == sorted(
+        [f"kb:{ids['fam']}:4:1", f"kb:{ids['ok']}:1:1"]
+    )
+    assert remote.fetch.issues == ()
+
+
+def test_mutation_the_sql_attestation_predicate_is_needed(attest_db: dict[str, Any]) -> None:
+    old = "      AND (NOT %(exclude_unattested)s::boolean OR g.attests_model_host_egress IS TRUE)\n"
+    sql = store_module.SELECTION_SQL
+    assert sql.count(old) == 1, "edit target not unique"
+    assert _selected_for(attest_db, KNOWLEDGE, sql.replace(old, "")) != _selected_for(
+        attest_db, KNOWLEDGE
+    )

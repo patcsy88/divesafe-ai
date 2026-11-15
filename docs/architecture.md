@@ -137,7 +137,8 @@ sent to a model, by document id, version and chunk; `sent_evidence_ids`, the ids
 actually held; all absent on older records; a host-needing basis without a host is recorded as
 `none` with everything withheld and a fixed `egress.host_missing` or `egress.basis_unrecognised`
 first in `agent_issues`, which therefore holds more than failed agent calls; the record refuses
-`kb:` evidence that is not withheld unless the basis is `declared_local`, and, since 2026-11-10, a
+`kb:` evidence that is not withheld unless the basis is `declared_local` or (ADR 0028) `remote_knowledge_opt_in` with a
+non-loopback DNS `model_host` (never an IP literal), and, since 2026-11-10, a
 KNOWLEDGE item without a `kb:` id or a `kb:` id on any other kind), the knowledge notes (ADR 0022
 decision 14: `notes`, typed codes and counts, and `superseded_knowledge`, versions by id; empty on
 older records; shown in fixed wording, never prompted), human

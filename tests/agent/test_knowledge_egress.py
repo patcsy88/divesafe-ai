@@ -1,8 +1,11 @@
-"""ADR 0022 decision 15: the egress filter. Knowledge reaches a prompt only under the exact basis
-`declared_local`; anything else (another basis, `no_agent_stage`, None, an unknown value, a
-non-string) withholds every knowledge item, lists it in `withheld_knowledge` and keeps its id out of
+"""ADR 0022 decision 15 and ADR 0028 decision 5: the egress filter. Knowledge reaches a prompt only
+under the exact basis `declared_local` or `remote_knowledge_opt_in` (a plain `str` or the enum
+member, compared exactly); anything else (another basis, `no_agent_stage`, None, an unknown value,
+a near miss in case or spacing, a `str` subclass, a non-string, an unhashable value) withholds
+every knowledge item without raising, lists it in `withheld_knowledge` and keeps its id out of
 `ALLOWED_EVIDENCE_IDS`. Supervise checks citations against the ids actually sent. `build_provider`
-returns `(provider, basis)`; a create-only key is not shown `model_host`. Mutation-checked."""
+returns `(provider, basis)`; a create-only key is not shown `model_host`. Bases are literals here,
+never read from the code's sets. Mutation-checked."""
 
 from __future__ import annotations
 
@@ -56,7 +59,33 @@ REFS = (
     KnowledgeRef(document_id="site-doc", version=1, chunk=1),
 )
 UNLISTED = "manual:1"  # KNOWLEDGE kind without a `kb:` id: never reaches a record (screened out)
+
+
+class _StrSubclass(str):
+    """Equal to an allowed basis, but not exactly `str`: the filter must withhold it."""
+
+
+SENDING: list[Any] = [
+    "declared_local",
+    "remote_knowledge_opt_in",
+    RecordEgressBasis.DECLARED_LOCAL,
+    RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN,
+]
 WITHHOLDING: list[Any] = [
+    # ADR 0028 near misses of the new basis (strengthening).
+    "Remote_Knowledge_Opt_In",
+    "REMOTE_KNOWLEDGE_OPT_IN",
+    "remote_knowledge_opt_in ",
+    " remote_knowledge_opt_in",
+    "RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN",
+    "remote-knowledge-opt-in",
+    b"remote_knowledge_opt_in",
+    _StrSubclass("remote_knowledge_opt_in"),
+    _StrSubclass("declared_local"),
+    [],
+    {},
+    ["remote_knowledge_opt_in"],
+    {"remote_knowledge_opt_in": True},
     "loopback_external_opt_in",
     "remote_external_opt_in",
     "none",
@@ -86,14 +115,18 @@ def _unlisted() -> EvidenceItem:
 REVIEW_BY = date(2027, 1, 1)
 
 
-def knowledge(*, extra_version: Any = None) -> KnowledgeConnector:
+def knowledge(*, extra_version: Any = None, attests: bool = True) -> KnowledgeConnector:
     """The real connector over a fake store holding `site-doc` (this site) and `guide` (all
-    sites): the pipeline's knowledge goes through Retrieve, never through Observe."""
+    sites): the pipeline's knowledge goes through Retrieve, never through Observe. Attested by
+    default, so `remote_knowledge_opt_in` runs get the items (ADR 0028 decision 7)."""
     rows = [
         chunk("site-doc", site=SITE.id, rev=REVIEW_BY),
         chunk("guide", rev=REVIEW_BY),
     ]
-    versions = [ver("site-doc", site=SITE.id, rev=REVIEW_BY), ver("guide", rev=REVIEW_BY)]
+    versions = [
+        ver("site-doc", site=SITE.id, rev=REVIEW_BY, attests=attests),
+        ver("guide", rev=REVIEW_BY, attests=attests),
+    ]
     if extra_version is not None:
         versions.append(extra_version)
     return KnowledgeConnector(FakeStore(Selection(tuple(versions), tuple(rows), len(rows))))
@@ -144,10 +177,21 @@ def _allowed(provider: FakeProvider) -> set[str]:
 # --- the split -----------------------------------------------------------------------------------
 
 
-def test_declared_local_sends_every_knowledge_item() -> None:
-    split = split_for_egress(_kb_items(), "declared_local")
+@pytest.mark.parametrize("basis", SENDING, ids=repr)
+def test_a_knowledge_basis_sends_every_knowledge_item(basis: Any) -> None:
+    split = split_for_egress(_kb_items(), basis)
     assert [e.id for e in split.sent] == [SITE_DOC, GUIDE]
     assert (split.withheld, split.any_withheld) == ((), False)
+
+
+def test_the_sending_list_is_exactly_the_two_knowledge_bases() -> None:
+    """Literal check: only these two values (as `str` or enum member) send knowledge."""
+    assert {b.value if isinstance(b, RecordEgressBasis) else b for b in SENDING} == {
+        "declared_local",
+        "remote_knowledge_opt_in",
+    }
+    sending = {b.value for b in RecordEgressBasis if split_for_egress(_kb_items(), b.value).sent}
+    assert sending == {"declared_local", "remote_knowledge_opt_in"}
 
 
 @pytest.mark.parametrize("basis", WITHHOLDING, ids=repr)
@@ -168,11 +212,15 @@ def test_a_knowledge_kind_without_a_kb_id_is_withheld_but_not_listed() -> None:
     assert (split.sent, split.withheld, split.any_withheld) == ((), (), True)
 
 
+@pytest.mark.parametrize("basis", ["declared_local", "remote_knowledge_opt_in"])
 @pytest.mark.parametrize("bad", ["kb:Bad_Doc:1:1", "kb:doc:0:1", "KB:doc:1:1"])
-def test_a_malformed_kb_id_is_never_sent_even_under_declared_local(bad: str) -> None:
+def test_a_malformed_kb_id_is_never_sent_even_under_a_knowledge_basis(bad: str, basis: str) -> None:
     item = _kb_items()[0].model_copy(update={"id": bad})
-    split = split_for_egress([item], "declared_local")
+    split = split_for_egress([item], basis)
     assert (split.sent, split.withheld, split.any_withheld) == ((), (), True)
+    # Alongside well-formed items, only the well-formed ones go.
+    mixed = split_for_egress([*_kb_items(), item], basis)
+    assert [e.id for e in mixed.sent] == [SITE_DOC, GUIDE] and mixed.any_withheld
 
 
 def test_a_duplicate_knowledge_ref_is_listed_once() -> None:
@@ -210,12 +258,24 @@ def _stage(provider: FakeProvider, basis: Any, extra: tuple[EvidenceItem, ...] =
     )
 
 
-def test_declared_local_stage_offers_knowledge_to_the_models() -> None:
+@pytest.mark.parametrize("basis", SENDING, ids=repr)
+def test_a_knowledge_basis_stage_offers_knowledge_to_the_models(basis: Any) -> None:
     provider = sl.fake()
-    result = _stage(provider, "declared_local")
+    result = _stage(provider, basis)
     assert {SITE_DOC, GUIDE} <= _allowed(provider)
     assert result.withheld_knowledge == ()
     assert set(result.sent_evidence_ids) == {SITE_DOC, GUIDE}
+
+
+def test_the_new_basis_prompts_hold_chunk_text_and_no_attribution_or_licence() -> None:
+    """ADR 0028: the prompt carries the approved text, never the provenance values a hosted model
+    has no need for (attribution, licence)."""
+    provider = sl.fake()
+    _stage(provider, "remote_knowledge_opt_in")
+    text = _texts(provider)
+    assert "Text of site-doc v1 chunk 1." in text and "Text of guide v1 chunk 1." in text
+    assert "A. Person" not in text
+    assert "Synthetic test licence" not in text
 
 
 @pytest.mark.parametrize("basis", WITHHOLDING, ids=repr)
@@ -243,10 +303,25 @@ STAGE_MUTATIONS = [
     pytest.param(("    evidence = split.sent\n", ""), id="filter-not-applied"),
     pytest.param(
         (
-            "    return isinstance(basis, str) and basis == ",
-            "    return basis is not None or basis == ",
+            "    return basis in _KNOWLEDGE_BASES\n",
+            "    return True\n",
         ),
         id="any-basis-is-local",
+    ),
+    pytest.param(
+        ("    if type(basis) is not str:\n", "    if not isinstance(basis, str):\n"),
+        id="exact-type-guard-dropped",
+    ),
+    pytest.param(
+        ("    return basis in _KNOWLEDGE_BASES\n",
+         "    return basis.strip().lower() in _KNOWLEDGE_BASES\n"),
+        id="filter-folds-case",
+    ),
+    pytest.param(
+        ('        RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN.value,\n    }\n',
+         '        RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN.value,\n'
+         '        RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN.value,\n    }\n'),
+        id="remote-external-is-a-knowledge-basis",
     ),
     pytest.param(
         ("        if local or (ref is None and not is_knowledge(item)):\n",
@@ -267,25 +342,40 @@ STAGE_MUTATIONS = [
 
 @pytest.mark.parametrize("edit", STAGE_MUTATIONS)
 def test_mutation_of_the_stage_filter_is_caught(edit: tuple[str, str]) -> None:
+    """Caught under at least one withholding basis: the real stage withholds under each of them
+    (asserted first), the mutant leaks or misreports under one."""
     mutant = mutated_module(stage_module, edit)
-    provider = sl.fake()
     knowledge_kind = _kb_items()[0].model_copy(update={"id": "manual:1"})
-    result = asyncio.run(
-        mutant.run_agent_stage(
-            provider,
-            sl.PLAN,
-            (*_kb_items(), knowledge_kind),
-            [],
-            R.INSUFFICIENT_EVIDENCE,
-            egress_basis="remote_external_opt_in",
-        )
-    )
-    leaked = _allowed(provider) & {SITE_DOC, GUIDE, "manual:1"}
-    assert (
-        leaked
-        or set(result.withheld_knowledge) != set(REFS)
-        or set(result.sent_evidence_ids) & {SITE_DOC, GUIDE, "manual:1"}
-    )
+    caught = []
+    for basis in (
+        "remote_external_opt_in",
+        "Remote_Knowledge_Opt_In",
+        "remote_knowledge_opt_in ",
+        _StrSubclass("remote_knowledge_opt_in"),
+    ):
+        for module, is_real in ((stage_module, True), (mutant, False)):
+            provider = sl.fake()
+            result = asyncio.run(
+                module.run_agent_stage(
+                    provider,
+                    sl.PLAN,
+                    (*_kb_items(), knowledge_kind),
+                    [],
+                    R.INSUFFICIENT_EVIDENCE,
+                    egress_basis=basis,
+                )
+            )
+            leaked = _allowed(provider) & {SITE_DOC, GUIDE, "manual:1"}
+            wrong = (
+                leaked
+                or set(result.withheld_knowledge) != set(REFS)
+                or set(result.sent_evidence_ids) & {SITE_DOC, GUIDE, "manual:1"}
+            )
+            if is_real:
+                assert not wrong, repr(basis)
+            elif wrong:
+                caught.append(repr(basis))
+    assert caught
 
 
 # --- the pipeline and the stored record ----------------------------------------------------------
@@ -300,6 +390,161 @@ def test_declared_local_record_keeps_knowledge_and_lists_nothing() -> None:
     )
     assert record.withheld_knowledge == ()
     assert {SITE_DOC, GUIDE} <= _allowed(provider)
+
+
+def test_the_new_basis_record_keeps_knowledge_and_round_trips() -> None:
+    """ADR 0028: `remote_knowledge_opt_in` with a remote DNS host sends knowledge, lists nothing as
+    withheld, matches the stage's own split and round-trips through the record validator."""
+    provider = sl.fake()
+    record = _run(provider, "remote_knowledge_opt_in", "llm.example.org")
+    assert (record.egress_basis, record.model_host) == (
+        RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN,
+        "llm.example.org",
+    )
+    assert record.withheld_knowledge == ()
+    assert {SITE_DOC, GUIDE} <= _allowed(provider)
+    assert "Text of site-doc v1 chunk 1." in _texts(provider)
+    assert not any("not approved for the model host" in i for i in record.evidence_issues)
+    kb = [e for e in record.evidence if e.id.startswith("kb:")]
+    assert record.withheld_knowledge == split_for_egress(kb, "remote_knowledge_opt_in").withheld
+    assert not any(i.startswith("egress.") for i in record.agent_issues)
+    assert AssessmentRecord.model_validate_json(record.model_dump_json()) == record
+
+
+def test_the_new_basis_with_unattested_versions_sends_no_knowledge() -> None:
+    """End to end: the run's basis reaches Retrieve, which excludes unattested families, so no
+    `kb:` item exists to send; the fixed issue says why."""
+    provider = sl.fake()
+    record = _run_with(
+        pipeline_module,
+        knowledge(attests=False),
+        "remote_knowledge_opt_in",
+        "llm.example.org",
+        provider,
+    )
+    assert not any(e.id.startswith("kb:") for e in record.evidence)
+    assert any(
+        i.endswith("knowledge store: a document version is not approved for the model host")
+        for i in record.evidence_issues
+    )
+    assert not _allowed(provider) & {SITE_DOC, GUIDE}
+    # The same unattested store under remote_external_opt_in still returns the items (withheld).
+    other = _run_with(
+        pipeline_module, knowledge(attests=False), "remote_external_opt_in", "llm.example.org"
+    )
+    assert {SITE_DOC, GUIDE} <= {e.id for e in other.evidence}
+    assert set(other.withheld_knowledge) == set(REFS)
+
+
+def test_the_new_basis_without_a_host_is_none_with_everything_withheld() -> None:
+    provider = sl.fake()
+    record = _run(provider, "remote_knowledge_opt_in", None)
+    assert (record.egress_basis, record.model_host) == (RecordEgressBasis.NONE, None)
+    assert record.agent_issues[0] == pipeline_module.EGRESS_HOST_MISSING == "egress.host_missing"
+    assert set(record.withheld_knowledge) == set(REFS)
+    assert not _allowed(provider) & {SITE_DOC, GUIDE}
+    assert "Text of site-doc" not in _texts(provider)
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "::1", "203.0.113.7"])
+def test_the_new_basis_with_a_loopback_or_ip_host_is_refused_by_the_record(host: str) -> None:
+    with pytest.raises(ValidationError):
+        _run(sl.fake(), "remote_knowledge_opt_in", host)
+
+
+def test_record_egress_for_the_new_basis() -> None:
+    record_egress = pipeline_module.record_egress
+    fake = sl.fake()
+    assert record_egress(fake, "remote_knowledge_opt_in", "llm.example.org") == (
+        RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN,
+        "llm.example.org",
+        None,
+    )
+    assert record_egress(fake, "remote_knowledge_opt_in", None) == (
+        RecordEgressBasis.NONE,
+        None,
+        "egress.host_missing",
+    )
+    assert record_egress(None, "remote_knowledge_opt_in", "llm.example.org") == (
+        RecordEgressBasis.NO_AGENT_STAGE,
+        None,
+        None,
+    )
+    for near in ("Remote_Knowledge_Opt_In", "remote_knowledge_opt_in ", None, 7):
+        assert record_egress(fake, near, "llm.example.org") == (
+            RecordEgressBasis.NONE,
+            None,
+            "egress.basis_unrecognised",
+        )
+
+
+class _BasisSpy:
+    """A knowledge connector that records the basis each `retrieve` call receives."""
+
+    def __init__(self) -> None:
+        self.inner = knowledge()
+        self.bases: list[object] = []
+        self.name = self.inner.name
+
+    async def retrieve(self, *args: Any, egress_basis: object) -> Any:
+        self.bases.append(egress_basis)
+        return await self.inner.retrieve(*args, egress_basis=egress_basis)
+
+
+def _run_with(
+    module: Any, connector: Any, basis: Any, host: str | None, provider: Any = None
+) -> AssessmentRecord:
+    record: AssessmentRecord = asyncio.run(
+        module.assess_dive(
+            assessment_id="agent-1",
+            plan=sl.PLAN,
+            site=SITE,
+            connectors=_connectors(),
+            engine=sl.engine(with_warning_rule=True),
+            now=sl.NOW,
+            provider=sl.fake() if provider is None else provider,
+            clock=lambda: sl.NOW,
+            egress_basis=basis,
+            model_host=host,
+            knowledge_connector=connector,
+        )
+    )
+    return record
+
+
+@pytest.mark.parametrize(
+    ("basis", "host", "expected"),
+    [
+        ("remote_knowledge_opt_in", "llm.example.org", RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN),
+        ("remote_external_opt_in", "llm.example.org", RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN),
+        ("declared_local", "localhost", RecordEgressBasis.DECLARED_LOCAL),
+        ("remote_knowledge_opt_in", None, RecordEgressBasis.NONE),
+    ],
+)
+def test_assess_dive_passes_the_recorded_basis_to_retrieve(
+    basis: str, host: str | None, expected: RecordEgressBasis
+) -> None:
+    """ADR 0028 decision 7: Retrieve receives the run's recorded basis (after `record_egress`), so
+    the exclusion follows what the record says."""
+    spy = _BasisSpy()
+    record = _run_with(pipeline_module, spy, basis, host)
+    assert record.egress_basis is expected
+    assert len(spy.bases) == 1
+    assert spy.bases[0] == expected.value or spy.bases[0] is expected
+
+
+def test_mutation_assess_dive_not_passing_the_basis_is_caught() -> None:
+    mutant = mutated_module(
+        pipeline_module,
+        (
+            "                    egress_basis=run.egress_basis,\n                ),\n",
+            "                    egress_basis='remote_external_opt_in',\n                ),\n",
+        ),
+    )
+    spy = _BasisSpy()
+    _run_with(mutant, spy, "remote_knowledge_opt_in", "llm.example.org")
+    assert spy.bases != ["remote_knowledge_opt_in"]
+    assert spy.bases != [RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN]
 
 
 @pytest.mark.parametrize(
@@ -577,6 +822,26 @@ def test_a_create_only_key_never_sees_model_host_on_create_poll_or_later_read() 
     assert replay.status_code == 200
     _hidden(replay.json())
     assert "localhost" not in client.get(f"/v1/assessments/{rid}", headers=CREATE_AUTH).text
+
+
+def test_a_create_only_key_never_sees_a_named_knowledge_host() -> None:
+    """ADR 0028 (API): under `remote_knowledge_opt_in` the stored host is a remote name; a
+    create-only key still never sees it on create, poll or a later read; other roles do."""
+    client, repo = _client()
+    state = client.app.state.divesafe
+    state.egress_basis, state.model_host = "remote_knowledge_opt_in", "llm.example.org"
+    done = create_and_poll(client, BODY, CREATE_AUTH)
+    body = done.json()
+    assert body["model_host_withheld"] is True
+    assert "model_host" not in body["record"]
+    assert body["record"]["egress_basis"] == "remote_knowledge_opt_in"
+    rid = body["record"]["id"]
+    stored = repo.get(rid)
+    assert stored.model_host == "llm.example.org"  # stored, only hidden
+    for text in (done.text, client.get(f"/v1/assessments/{rid}", headers=CREATE_AUTH).text):
+        assert "llm.example.org" not in text and "example.org" not in text
+    shown = client.get(f"/v1/assessments/{rid}", headers=AUTH_A).json()
+    assert shown["record"]["model_host"] == "llm.example.org"
 
 
 def test_other_roles_still_see_model_host() -> None:
