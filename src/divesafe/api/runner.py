@@ -4,11 +4,16 @@ Tasks live in a set this object owns, not in Starlette's `BackgroundTasks`, so s
 for them, cancel them and mark them failed before the model provider closes. A run stores a result
 only through the compare-and-set `complete`; every other ending stores a fixed failure code and
 never exception text.
+
+Tracing (ADR 0027 amendment): with a sink, each run collects into its own context and hands its
+trace to the sink once, last, after `complete` has returned or `_mark_failed` has run. Tracing
+never changes what is stored or how the run's task ends.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -16,6 +21,7 @@ from datetime import timedelta
 from fastapi.concurrency import run_in_threadpool
 
 from divesafe.domain import AssessmentRecord
+from divesafe.observability import RunCollector, TraceSink, start_collecting
 from divesafe.orchestration import StartPassedError
 from divesafe.services import RepositoryUnavailableError
 from divesafe.services.runs import FailureCode, RunStore
@@ -27,8 +33,16 @@ CLEANUP_BATCH = 200
 
 
 class RunManager:
-    def __init__(self, store: RunStore, *, deadline: timedelta, grace: timedelta) -> None:
+    def __init__(
+        self,
+        store: RunStore,
+        *,
+        deadline: timedelta,
+        grace: timedelta,
+        sink: TraceSink | None = None,
+    ) -> None:
         self._store = store
+        self._sink = sink
         self._deadline = deadline
         self._grace = grace
         self._tasks: set[asyncio.Task[None]] = set()
@@ -62,6 +76,10 @@ class RunManager:
         work: Callable[[], Awaitable[AssessmentRecord]],
     ) -> None:
         code: FailureCode | None = None
+        collector: RunCollector | None = None
+        if self._sink is not None:
+            with contextlib.suppress(Exception):  # tracing must never change the run
+                collector = start_collecting()
         deadline = asyncio.timeout(self._deadline.total_seconds())
         try:
             async with deadline:
@@ -94,6 +112,12 @@ class RunManager:
         finally:
             if code is not None:
                 await self._mark_failed(run_id, run_token, code)
+            # Last, synchronous and suppressed: the stored result or failure code is final.
+            # `Exception` only: a `BaseException` such as `CancelledError` passes through.
+            if collector is not None and self._sink is not None:
+                with contextlib.suppress(Exception):
+                    outcome = "stored" if code is None else code.value
+                    self._sink.emit(collector.finish(run_id, outcome))
 
     @staticmethod
     def _log_failure(run_id: str, actor: str, exc: BaseException) -> None:
