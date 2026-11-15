@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from divesafe.api.auth import Authenticator, build_authenticator
 from divesafe.api.ratelimit import Limit, RateLimiter
+from divesafe.api.tracing import check_tracing_startup
 from divesafe.config import Settings
 from divesafe.config.loader_settings import LOADER_FIELD, LOADER_URL_KEY, SECRETS_DIR_KEY
 from divesafe.config.secret_files import secret_file_name
@@ -302,6 +303,7 @@ def build_default_state(settings: Settings) -> AppState:
         )
     if settings.environment == "production":
         refuse_loader_credentials(os.environ)
+    check_tracing_startup(settings, os.environ)
     leftover = sorted(k for k in os.environ if k.startswith("DIVESAFE_OLLAMA_"))
     if leftover:
         logger.warning(

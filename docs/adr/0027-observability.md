@@ -191,14 +191,17 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     endpoint has passed the value check, the API checks that it has its own interface in the `/24`
     that holds that address: it connects a UDP socket to the address (no packet is sent) and
     compares `getsockname()`. Otherwise start-up refuses, so a container that is not on
-    `divesafe-trace` never sends spans through its default route. An `OSError` from `connect`
-    is a refusal with the same fixed message.
+    `divesafe-trace` never sends spans through its default route. A failed `connect` (an error
+    number or an `OSError`) is a refusal with the same fixed message.
   - **Tracing off.** With tracing off, no socket is created, no tracer provider or exporter is
-    built, and the only tracing-related refusal is an endpoint set without the flag. `OTEL_*`
+    built, and the only tracing-related refusals are an endpoint set without the flag and an
+    unusable `divesafe_trace_*` secret file (the general ADR 0024 secret-file rule); the keys'
+    presence and shape are not checked. `OTEL_*`
     variables are refused only when tracing is enabled: with tracing off no OpenTelemetry SDK
     object exists, so they have no effect, and an unused feature never stops the service.
-  - **Plain http** is allowed to that address only, because it is on a Docker network with no
-    gateway, so the traffic cannot leave Docker. This is the first of two exceptions to item 4's
+  - **Plain http** is allowed to that address only, because it is on an `internal: true` Docker
+    network, which has no route out of Docker (its bridge address, `.1`, is refused as an
+    endpoint), so the traffic cannot leave Docker. This is the first of two exceptions to item 4's
     https rule and to AGENTS.md section 12's "https for outbound calls" (the second is
     development evaluation on loopback, section 2 below).
   - **The HTTP session.** The exporter gets a `requests.Session` with `trust_env=False` and
@@ -218,7 +221,9 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     ADR 0023 (which allowed only the model host) for span metadata only, never a prompt.
   - **Keys.** The production project's public and secret key are secret files under
     `DIVESAFE_SECRETS_DIR` (ADR 0024), read into `SecretStr` settings, sent only in the
-    exporter's `Authorization` header, never logged.
+    exporter's `Authorization` header, never logged. With tracing enabled, start-up refuses
+    unless both are set and each matches `[A-Za-z0-9._-]{1,256}` (a fixed message), which keeps
+    CR, LF and `:` out of the header.
 - **Two Langfuse projects.** `divesafe-prod` holds production spans only; its keys exist only in
   the API container. `divesafe-eval` holds evaluation runs and the prompt mirror; its keys exist
   only as files in the directory named by `DIVESAFE_EVAL_SECRETS_DIR` on the owner's
@@ -487,14 +492,18 @@ A server that sends no usage leaves the counts empty.
   module-level `opentelemetry` import in `src`). The image build checks that `langfuse`,
   `opentelemetry-distro`, `opentelemetry-instrumentation` and the `opentelemetry-instrument`
   launcher are absent.
-- **Start-up refusals:** tracing enabled without an endpoint or the reverse; an endpoint that is
-  not exactly the fixed address form (a host name, another scheme, port or path, credentials, a
-  query or a fragment, an address outside the private ranges); a failed subnet check or an
-  `OSError` from its `connect`; any `OTEL_*` variable while tracing is enabled; never echoing
-  the value. With tracing off and no endpoint, start-up succeeds even when the subnet check
-  would fail and an `OTEL_*` variable is set, and no socket is created (mutations: running the
-  subnet check, or the `OTEL_*` refusal, unconditionally fails it; the test patches
-  `socket.socket` to prove no socket is created).
+- **Start-up refusals:** tracing enabled without an endpoint or the reverse; tracing enabled
+  without both project keys, or with a key of the wrong shape; an endpoint that is not exactly the
+  fixed address form (a host name, another scheme or path, a missing, zero-padded or out-of-range
+  port, credentials, a query or a fragment, an address outside the private ranges, or the network,
+  gateway (.1) or broadcast address of its /24); a failed subnet check or a failed `connect` (an
+  error number or an `OSError`); any `OTEL_*` variable while tracing is enabled; never echoing the
+  value. The address is not pinned to the web container's fixed `ipv4_address`: any acceptable
+  private address passes, and the subnet check and the operator's `docker network inspect` stand
+  in for it. With tracing off and no endpoint, start-up succeeds even when the subnet check would
+  fail and an `OTEL_*` variable is set, and no socket is created (mutations: running the subnet
+  check, or the `OTEL_*` refusal, unconditionally fails it; the test patches `socket.socket` to
+  prove no socket is created).
 
 Also: in `tests/unit` (not safety), with two concurrent runs, each trace holds only its own model
 calls. The evaluation refusal tests (section 2) live in `tests/evaluation`, are marked `safety`,
@@ -535,6 +544,12 @@ verify from package metadata at build.
 - Because tracing is built before items 1 to 3, it has no metrics or alerts on export failures
   or dropped collector entries until item 2 is built: they show only as the once-per-reason log
   codes and as missing or partial traces. Spans carry no request id until item 1 is built.
+- With tracing off, the test that no OpenTelemetry module is loaded proves nothing until the
+  SDK is installed (step 3); the planned import pin is the real guard.
+- The no-socket test sees only `socket.socket`: a later `socket.create_connection` or
+  `from socket import socket` would get past it. An AST pin would close that.
+- For step 2: the exporter is built only on the path that has just passed the start-up check,
+  and a test shows no exporter or session exists when the check refuses.
 - Langfuse is a second store of run metadata with its own retention; nothing deletes it in step
   with DiveSafe.
 - A run that stores nothing (a Supervise invariant breach or a crash in Reason) still leaves a

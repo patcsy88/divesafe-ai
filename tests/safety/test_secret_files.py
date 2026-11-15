@@ -259,8 +259,9 @@ def test_a_dotenv_file_is_still_read_when_no_secrets_directory_is_set(
     assert load_settings().log_level == "DEBUG"
 
 
-def test_the_allow_list_is_exactly_these_six_names() -> None:
-    """The sixth, `loader_database_url`, is read only by the loader's own narrow settings (ADR 0024
+def test_the_allow_list_is_exactly_these_eight_names() -> None:
+    """The two Langfuse production project keys were added by the ADR 0027 amendment. The
+    loader's `loader_database_url` is read only by the loader's own narrow settings (ADR 0024
     A4); the shared `Settings` has no field for it and the API refuses it in production."""
     from divesafe.config import Settings
 
@@ -270,6 +271,8 @@ def test_the_allow_list_is_exactly_these_six_names() -> None:
         "llm_api_key",
         "met_api_token",
         "api_key_hashes",
+        "trace_public_key",
+        "trace_secret_key",
         "loader_database_url",
     }
     assert "loader_database_url" not in Settings.model_fields
