@@ -96,3 +96,71 @@ fixed message). The reply is still refused and the agent issue reads
 `<task>: output stopped at the token limit`. The classification is what the server reported, and it
 is raised as soon as "length" is seen, so a malformed event after it is also labelled this way.
 Other non-"stop" reasons still raise the generic error. See ADR 0016.
+
+## Amendment (2026-11-15): one log line per model call
+
+Owner decision (2026-11-15), so that `DIVESAFE_LLM_MAX_OUTPUT_TOKENS` is chosen from measured reply
+sizes and not guessed. In production, 2 of about 72 calls stopped at the limit of 3000, both in
+one run (ADR 0024 A8), and nothing recorded how long the other replies were.
+
+- **What is logged:** `call_structured` (`agents/runner.py`) logs exactly one INFO line,
+  "model call finished", per model call, with only these `extra` fields:
+  - `task`, the fixed task name, such as `specialist:weather`;
+  - `outcome`, one of `ok`, `token_limit`, `timed_out`, `provider_error`, `too_long`, `schema`,
+    `unknown_evidence_id`, `cancelled` (the call was cancelled, for example by the stage deadline
+    or a shutdown) or `error` (anything else unexpected, which still propagates unchanged);
+  - `output_limit`, the output-token limit sent with the request;
+  - `output_chars`, the reply's length in characters (on a token-limit stop, the characters
+    received before the stop);
+  - `output_used`, the server's `usage.completion_tokens`, in tokens;
+  - `duration_ms`, from a monotonic clock.
+
+  Counts are plain non-negative ints up to `MAX_LOGGED_COUNT` (10^9), or `null`. A larger
+  server count is `null`, and the reply is still judged as before. A prompt refused as too
+  large before any call logs nothing.
+- **Reading the counts:**
+  - On a `token_limit` stop, `output_used` is usually `null`. Servers send usage after the
+    finish event, and the reply is refused as soon as "length" is seen; `output_chars` is then
+    the measure.
+  - `completion_tokens` can include a model's hidden reasoning tokens, so `output_used` can be
+    far larger than `output_chars` suggests.
+  - Calls cut off by the stage deadline log `cancelled` with no counts, and they are probably
+    among the longest replies. Count them alongside `token_limit`.
+- **Field names:** the two token counts are named without "token" because the JSON formatter
+  masks any field whose name matches `config.logging._SENSITIVE`. That rule is unchanged, and a
+  test fails if a field is renamed back into it.
+- **Never logged:** prompts, reply or partial text, headers, keys, URLs, hosts, evidence ids, plan
+  fields or provider error text. A safety test (`tests/safety/test_model_call_log_leaks.py`)
+  scans the record and has an in-test mutation check.
+- **Usage is read, never trusted:** `join_sse` reads `usage.completion_tokens` from the last event
+  whose `usage` is not null, after the event-level checks (JSON, duplicate keys, `error`,
+  `choices` shape). Reading it cannot raise, and the count is discarded on any refusal. A
+  missing, malformed or oversized count is `null`. A count never changes whether a reply is
+  accepted or refused, and every refusal is
+  unchanged.
+- **Logging cannot change a result:** a failure to read a count gives `null`, and a logging error
+  is dropped. The line holds only counts: no reply, partial reply or error object is kept for
+  it. Agent issues, records, error strings, `kind` and `label` are unchanged. One small
+  difference: too-long and unknown-evidence-id errors now have `__suppress_context__` set; their
+  `__context__` is `None`, as before.
+- **A safety test strengthened (2026-11-15):** the `token_limit` case of
+  `tests/safety/test_duplicate_json_keys.py::test_a_provider_error_leaves_no_provider_text_in_the_exception_context`
+  raised `TokenLimitError("…")`. The constructor takes no positional argument, so the case
+  raised `TypeError` and actually tested the provider-error path. It now raises a real
+  `TokenLimitError` and asserts the token-limit message, so it cannot fall through again.
+- **`stream_options` is deliberately not sent:** the request body is byte-for-byte unchanged (a
+  test pins it). Asking for usage with `stream_options.include_usage` could break calls on a
+  server that refuses unknown fields. So `output_used` is `null` when the server does not send
+  usage on its own, and `output_chars` is the fallback measure. Whether to ask for usage is a
+  separate decision.
+- **Production log level:** the line is INFO. Production compose sets `DIVESAFE_LOG_LEVEL: INFO`
+  (the settings default too), so it is written. Raising the level to WARNING hides it.
+- **Known gaps (review nits, 2026-11-15):**
+  - `LLMResponse.output_tokens` is strict (`ge=0`, `le=MAX_LOGGED_COUNT`). An adapter must pass a
+    server count through `plain_count` first; the OpenAI-compatible adapter does. A future
+    adapter that passed a raw negative, bool or oversized count would raise, so a reply would be
+    refused over a number that is only logged. A `BeforeValidator` would close this.
+  - `tests/safety/test_model_call_log_leaks.py` sets the mutant's `logger` again although the
+    copy already names its own logger. This is harmless.
+  - `output_used` is `null` unless the server sends usage without being asked (`stream_options`
+    is not sent). Check after the first assessment on the deployed image.

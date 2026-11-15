@@ -8,7 +8,10 @@ used. Provider error text is not propagated (it may contain prompt content).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
+import time
 from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -16,7 +19,9 @@ from pydantic import BaseModel, ValidationError
 from divesafe.agents.prompts import SYSTEM_PROMPT
 from divesafe.domain import MAX_EVIDENCE_ITEMS as _MAX_EVIDENCE_ITEMS
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
-from divesafe.models.llm import TokenLimitError
+from divesafe.models.llm import TokenLimitError, plain_count
+
+logger = logging.getLogger(__name__)
 
 CALL_TIMEOUT_SECONDS = 60.0
 MAX_OUTPUT_TOKENS = 1500
@@ -102,6 +107,77 @@ def _json_text(raw: str) -> str:
     return text
 
 
+# The fixed `outcome` labels of the "model call finished" log line (ADR 0018 amendment
+# 2026-11-15): `ok` (accepted), `token_limit` (stopped at the output-token limit), `timed_out`,
+# `provider_error`, the three rejections `too_long`, `schema` and `unknown_evidence_id`,
+# `cancelled` (an `asyncio.CancelledError`: the stage deadline or shutdown) and `error` (any
+# other unexpected exception, including a `BaseException` such as KeyboardInterrupt).
+CallOutcome = Literal[
+    "ok",
+    "token_limit",
+    "timed_out",
+    "provider_error",
+    "too_long",
+    "schema",
+    "unknown_evidence_id",
+    "cancelled",
+    "error",
+]
+CALL_OUTCOMES: frozenset[str] = frozenset(CallOutcome.__args__)  # type: ignore[attr-defined]
+# Exactly the `extra` keys of that line. Nothing else: never a prompt, reply or partial text,
+# header, key, URL, evidence id, plan field or provider error message. `output_limit` is the
+# output-token limit sent with the request and `output_used` the server's reported output
+# tokens (`usage.completion_tokens`), both counted in tokens. The names avoid "token" because the
+# JSON formatter masks any field whose name matches `config.logging._SENSITIVE`.
+CALL_LOG_FIELDS: frozenset[str] = frozenset(
+    {"task", "outcome", "output_limit", "output_chars", "output_used", "duration_ms"}
+)
+
+
+def _response_counts(response: object) -> tuple[int | None, int | None]:
+    """(characters, server output tokens) of a response; None for any count not readable."""
+    try:
+        text = getattr(response, "text", None)
+        chars = plain_count(len(text)) if type(text) is str else None
+        return chars, plain_count(getattr(response, "output_tokens", None))
+    except Exception:
+        return None, None
+
+
+def _token_limit_counts(exc: BaseException) -> tuple[int | None, int | None]:
+    """(characters joined before the stop, server output tokens) carried by a token-limit error;
+    None for any count not readable. Reads plain attributes only, never text."""
+    try:
+        state = vars(exc)
+        return plain_count(state.get("output_chars")), plain_count(state.get("output_tokens"))
+    except Exception:
+        return None, None
+
+
+def _log_call(
+    task: str,
+    outcome: CallOutcome,
+    output_limit: int | None,
+    output_chars: int | None,
+    output_used: int | None,
+    started: float,
+) -> None:
+    """One INFO line per model call, with counts only. `output_limit` and `output_used` are
+    counts of tokens, `output_chars` of characters. Never raises: a logging failure is dropped."""
+    with contextlib.suppress(Exception):  # logging must never change the call's result
+        logger.info(
+            "model call finished",
+            extra={
+                "task": task,
+                "outcome": outcome,
+                "output_limit": plain_count(output_limit),
+                "output_chars": plain_count(output_chars),
+                "output_used": plain_count(output_used),
+                "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+            },
+        )
+
+
 async def call_structured(
     provider: LLMProvider,
     *,
@@ -122,25 +198,92 @@ async def call_structured(
         max_output_tokens=output_tokens(provider),
         json_schema=output.model_json_schema(),
     )
+    # Defaults hold if the call ends some other way (a BaseException such as KeyboardInterrupt):
+    # it is still logged, and never swallowed.
+    outcome: CallOutcome = "error"
+    chars: int | None = None
+    used: int | None = None
+    error: AgentError | None = None
+    started = time.monotonic()
+    try:
+        try:
+            parsed, chars, used = await _call(provider, request, task, output, allowed_ids, timeout)
+            outcome = "ok"
+        except _Finished as finished:
+            outcome, chars, used = finished.outcome, finished.output_chars, finished.output_used
+            error = finished.error
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception:
+            outcome = "error"
+            raise
+    finally:
+        _log_call(task, outcome, request.max_output_tokens, chars, used, started)
+    # Raised outside the `except`, so `__context__` never holds the reply (as before).
+    if error is not None:
+        raise error from None
+    return parsed
+
+
+class _Finished(Exception):
+    """Internal: carries a call's outcome label and its counts (plain ints, never the response
+    or the provider's exception) to the log line, with the `AgentError` the caller sees."""
+
+    def __init__(
+        self,
+        outcome: CallOutcome,
+        error: AgentError,
+        counts: tuple[int | None, int | None] = (None, None),
+    ) -> None:
+        super().__init__()
+        self.outcome: CallOutcome = outcome
+        self.output_chars, self.output_used = counts
+        self.error = error
+
+
+async def _call(
+    provider: LLMProvider,
+    request: LLMRequest,
+    task: str,
+    output: type[T],
+    allowed_ids: frozenset[str],
+    timeout: float | None,
+) -> tuple[T, int | None, int | None]:
+    """The validated output, with the reply's character count and the server's output-token
+    count (for the log line; counts only, never the response)."""
     # The errors below are raised outside their `except` blocks, so `__context__` never holds a
     # provider's or a model's text.
-    failure: AgentError | None = None
+    failure: _Finished | None = None
     try:
         response = await asyncio.wait_for(
             provider.complete(request),
             timeout=timeout if timeout is not None else call_timeout(provider),
         )
     except TimeoutError:
-        failure = AgentError(f"{task}: provider timed out", kind="timed_out")
-    except TokenLimitError:
-        failure = AgentError(f"{task}: output stopped at the token limit")
+        failure = _Finished(
+            "timed_out", AgentError(f"{task}: provider timed out", kind="timed_out")
+        )
+    except TokenLimitError as exc:
+        failure = _Finished(
+            "token_limit",
+            AgentError(f"{task}: output stopped at the token limit"),
+            _token_limit_counts(exc),
+        )
     except Exception as exc:  # provider adapters may raise anything; never chain their text
-        failure = AgentError(f"{task}: provider error ({type(exc).__name__})")
+        failure = _Finished(
+            "provider_error", AgentError(f"{task}: provider error ({type(exc).__name__})")
+        )
     if failure is not None:
         raise failure from None
 
+    counts = _response_counts(response)
     if len(response.text) > MAX_OUTPUT_CHARS:
-        raise AgentError(f"{task}: output too long", kind="rejected", label="too_long")
+        raise _Finished(
+            "too_long",
+            AgentError(f"{task}: output too long", kind="rejected", label="too_long"),
+            counts,
+        )
     parsed: T | None = None
     try:
         parsed = output.model_validate(
@@ -149,18 +292,26 @@ async def call_structured(
     except (json.JSONDecodeError, ValueError, ValidationError, RecursionError):
         parsed = None
     if parsed is None:
-        raise AgentError(
-            f"{task}: output rejected (not valid for the schema)",
-            kind="rejected",
-            label="schema",
+        raise _Finished(
+            "schema",
+            AgentError(
+                f"{task}: output rejected (not valid for the schema)",
+                kind="rejected",
+                label="schema",
+            ),
+            counts,
         ) from None
 
     cited: tuple[str, ...] = getattr(parsed, "evidence_ids", ())
     unknown = set(cited) - allowed_ids
     if unknown:
-        raise AgentError(
-            f"{task}: output cites {len(unknown)} unknown evidence id(s)",
-            kind="rejected",
-            label="unknown_evidence_id",
+        raise _Finished(
+            "unknown_evidence_id",
+            AgentError(
+                f"{task}: output cites {len(unknown)} unknown evidence id(s)",
+                kind="rejected",
+                label="unknown_evidence_id",
+            ),
+            counts,
         )
-    return parsed
+    return parsed, *counts

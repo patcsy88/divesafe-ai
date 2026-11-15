@@ -221,3 +221,6 @@ Still open, with the recommended default:
   to look.
 - `host.docker.internal` from Uptime Kuma's container to the host-published port is unverified
   until build time on the owner's Docker Desktop.
+- Built ahead of this ADR (2026-11-15, ADR 0018 amendment): one "model call finished" log line
+  per model call, with task, outcome, output-token limit and use, characters and duration. It is
+  a log line, not a metric; this ADR's metrics may count its outcomes later.

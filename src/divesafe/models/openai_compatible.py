@@ -39,7 +39,13 @@ from divesafe.models.limits import (
     check_budgets,
     check_output_tokens,
 )
-from divesafe.models.llm import LLMRequest, LLMResponse, TokenLimitError, register_provider
+from divesafe.models.llm import (
+    LLMRequest,
+    LLMResponse,
+    TokenLimitError,
+    plain_count,
+    register_provider,
+)
 from divesafe.models.loopback import (
     LoopbackHTTPHandler,
     LoopbackHTTPSHandler,
@@ -94,8 +100,8 @@ class OpenAICompatibleError(RuntimeError):
 class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
     """The reply stopped at the output-token limit."""
 
-    def __init__(self) -> None:
-        TokenLimitError.__init__(self)
+    def __init__(self, *, output_chars: object = None, output_tokens: object = None) -> None:
+        TokenLimitError.__init__(self, output_chars=output_chars, output_tokens=output_tokens)
         self.reason = "token_limit"
 
 
@@ -206,8 +212,23 @@ def _post(
     return b"".join(chunks)
 
 
+def _completion_tokens(event: dict[str, object]) -> int | None:
+    """`usage.completion_tokens` of one event, or None. Never raises and never refuses: the
+    count is logged only (ADR 0018 amendment 2026-11-15)."""
+    usage = event.get("usage")
+    return plain_count(usage.get("completion_tokens")) if isinstance(usage, dict) else None
+
+
 def join_sse(raw: bytes) -> str:
     """Join the streamed `data:` events into the reply text, or refuse the whole reply."""
+    return join_sse_counted(raw)[0]
+
+
+def join_sse_counted(raw: bytes) -> tuple[str, int | None]:
+    """`join_sse`, plus the server's `usage.completion_tokens` from the last event that carries a
+    `usage` object (a usage-only event or a choice event), or None. The count never changes what
+    is accepted or refused. A "length" stop carries the characters joined so far and the count
+    seen so far, as plain ints."""
     try:
         lines = re.split(r"\r\n|\r|\n", raw.decode("utf-8"))
     except UnicodeDecodeError:
@@ -218,6 +239,7 @@ def join_sse(raw: bytes) -> str:
     finished = False
     done = False
     seen_data = False
+    tokens: int | None = None
     for line in lines:
         if not line.strip() or line.startswith(":"):  # blank or keep-alive comment
             continue
@@ -241,6 +263,8 @@ def join_sse(raw: bytes) -> str:
         choices = event.get("choices")
         if not isinstance(choices, list) or len(choices) > 1:
             raise _refuse("bad_shape")
+        if event.get("usage") is not None:  # some servers send `"usage": null` on every chunk
+            tokens = _completion_tokens(event)
         if not choices:
             continue  # a usage-only event
         choice = choices[0]
@@ -263,13 +287,15 @@ def join_sse(raw: bytes) -> str:
         reason = choice.get("finish_reason")
         if reason is not None:
             if reason == "length":
-                raise OpenAICompatibleTokenLimitError
+                raise OpenAICompatibleTokenLimitError(
+                    output_chars=sum(len(part) for part in parts), output_tokens=tokens
+                )
             if reason != "stop":
                 raise _refuse("bad_shape")
             finished = True
     if not (finished and done):
         raise _refuse("no_done_marker" if seen_data else "empty_stream")
-    return "".join(parts)
+    return "".join(parts), tokens
 
 
 class OpenAICompatibleProvider:
@@ -379,7 +405,8 @@ class OpenAICompatibleProvider:
         raw = await asyncio.get_running_loop().run_in_executor(
             self._executor, self._transport, self._url, body, self._deadline
         )
-        return LLMResponse(text=join_sse(raw), provider=self.name, model=self.model)
+        text, tokens = join_sse_counted(raw)
+        return LLMResponse(text=text, provider=self.name, model=self.model, output_tokens=tokens)
 
 
 def _factory(settings: Settings) -> OpenAICompatibleProvider:

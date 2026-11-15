@@ -31,12 +31,26 @@ class LLMRequest(BaseModel):
     json_schema: dict[str, object] | None = None
 
 
+# Larger than any real reply or token count; a bigger "count" is treated as absent (None).
+MAX_LOGGED_COUNT = 10**9
+
+
+def plain_count(value: object) -> int | None:
+    """`value` if it is a plain `int` from 0 to `MAX_LOGGED_COUNT` (never a bool, a float, a
+    string or an int subclass); otherwise None. Never raises: a count is for logging only and
+    decides nothing."""
+    return value if type(value) is int and 0 <= value <= MAX_LOGGED_COUNT else None
+
+
 class LLMResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str
     provider: str
     model: str
+    # The server's own count of output tokens, when it sent one (ADR 0018 amendment 2026-11-15).
+    # Logged only; it never changes whether a reply is accepted. Strict: a bool is not a count.
+    output_tokens: int | None = Field(default=None, strict=True, ge=0, le=MAX_LOGGED_COUNT)
 
 
 class LLMProvider(Protocol):
@@ -52,13 +66,25 @@ class LLMProvider(Protocol):
 
 class TokenLimitError(RuntimeError):
     """The model stopped at the output-token limit, so its reply is cut off and is refused.
-    The message is fixed; no reply text is carried."""
+    The message is fixed; no reply text is carried. `output_chars` (characters joined before the
+    stop) and `output_tokens` (the server's usage count) are plain ints or None, for logging."""
 
-    def __init__(self) -> None:
+    output_chars: int | None
+    output_tokens: int | None
+
+    def __init__(self, *, output_chars: object = None, output_tokens: object = None) -> None:
         super().__init__("the model stopped at the output-token limit")
+        self.output_chars = plain_count(output_chars)
+        self.output_tokens = plain_count(output_tokens)
 
-    def __reduce__(self) -> tuple[type[TokenLimitError], tuple[()]]:
-        return (type(self), ())
+    def __reduce__(
+        self,
+    ) -> tuple[type[TokenLimitError], tuple[()], dict[str, int | None]]:
+        state = {
+            "output_chars": plain_count(vars(self).get("output_chars")),
+            "output_tokens": plain_count(vars(self).get("output_tokens")),
+        }
+        return (type(self), (), state)
 
 
 class ProviderNotAvailableError(RuntimeError):
