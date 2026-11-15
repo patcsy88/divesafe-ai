@@ -315,6 +315,7 @@ class OpenAICompatibleProvider:
             raise ValueError("the model API key is not a plausible bearer token")
         self.model = model.strip()
         self.external = not loopback
+        self._host = host
         self._url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/chat/completions"
         check_budgets(
             call_timeout_seconds,
@@ -340,6 +341,12 @@ class OpenAICompatibleProvider:
             slots=threading.BoundedSemaphore(max_concurrent_calls),
             socket_timeout=first_byte_timeout_seconds,
         )
+
+    @property
+    def host(self) -> str:
+        """The lowercased host name this provider parsed from its base URL and calls (ADR 0028
+        decision 3). Read-only; `check_egress` compares it with the knowledge host."""
+        return self._host
 
     def __repr__(self) -> str:
         return f"OpenAICompatibleProvider(model={self.model!r}, external={self.external})"

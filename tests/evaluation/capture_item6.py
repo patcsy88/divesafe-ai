@@ -182,6 +182,9 @@ def offline_egress_basis(settings: Settings) -> EgressBasis:
             provider,
             allow_external=settings.allow_external_llm,
             server_is_local=settings.llm_server_is_local,
+            base_url=str(settings.llm_base_url),
+            allowed_hosts=settings.llm_allowed_hosts,
+            knowledge_host=settings.llm_knowledge_host,
         )
     except pytest.skip.Exception as exc:
         # egress_gate refuses by skipping. A skip is a BaseException, so it would escape main's
@@ -583,8 +586,9 @@ async def run_live_assessment(
 
 
 def egress_basis_label(provider: Any, settings: Settings) -> str:
-    """The egress basis as one of the four fixed `EgressBasis` labels (ADR 0023), from the same
-    `check_egress` the start-up gate uses. The label is a literal, never the base URL or host."""
+    """The egress basis as one of the five fixed `EgressBasis` labels (ADR 0023, ADR 0028), from
+    the same `check_egress` the start-up gate uses. The label is a literal, never the base URL or
+    host."""
     from divesafe.models.egress import check_egress
 
     basis: str = check_egress(provider, settings)
@@ -594,7 +598,13 @@ def egress_basis_label(provider: Any, settings: Settings) -> str:
 
 
 EGRESS_BASES = frozenset(
-    {"none", "declared_local", "loopback_external_opt_in", "remote_external_opt_in"}
+    {
+        "none",
+        "declared_local",
+        "loopback_external_opt_in",
+        "remote_external_opt_in",
+        "remote_knowledge_opt_in",
+    }
 )
 
 

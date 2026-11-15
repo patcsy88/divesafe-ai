@@ -56,9 +56,128 @@ def test_both_flags_together_fail_instead_of_skipping() -> None:
         egress_gate(_loopback(), allow_external=True, server_is_local=True)
 
 
+KNOWLEDGE_URL = "https://llm.example.org/v1"
+KNOWLEDGE_HOSTS = "llm.example.org,other.example.org"
+
+
+def _knowledge_gate(provider: OpenAICompatibleProvider, knowledge_host: str | None) -> str:
+    return egress_gate(
+        provider,
+        allow_external=True,
+        server_is_local=False,
+        base_url=KNOWLEDGE_URL,
+        allowed_hosts=KNOWLEDGE_HOSTS,
+        knowledge_host=knowledge_host,
+    )
+
+
+def test_the_knowledge_basis_only_when_the_host_is_the_urls_and_the_providers() -> None:
+    """ADR 0028 decision 9: the gate builds real `Settings`, so every refusal applies."""
+    assert _knowledge_gate(_remote(), "llm.example.org") == "remote_knowledge_opt_in"
+    assert _knowledge_gate(_remote(), None) == "remote_external_opt_in"
+    assert _knowledge_gate(_remote(), "") == "remote_external_opt_in"  # empty means absent
+
+
+def test_a_provider_on_another_host_is_skipped_with_the_fixed_message() -> None:
+    """Settings match; the provider calls another host: `check_egress` raises a RuntimeError,
+    which skips with the fixed message (its own text, which names the setting, is not used)."""
+    other = OpenAICompatibleProvider(
+        "m", "https://other.example.org/v1", allowed_hosts=frozenset({"other.example.org"})
+    )
+    with pytest.raises(pytest.skip.Exception) as caught:
+        _knowledge_gate(other, "llm.example.org")
+    assert str(caught.value.msg) == (
+        "egress refused: the LLM server is not declared (see ADR 0023)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("knowledge_host", "extra"),
+    [
+        pytest.param("other.example.org", {}, id="host-mismatch"),
+        pytest.param("llm.example.org,other.example.org", {}, id="comma-list"),
+        pytest.param("localhost", {}, id="loopback-name"),
+        pytest.param("llm.example.org", {"server_is_local": True}, id="declared-local"),
+        pytest.param("llm.example.org", {"allow_external": False}, id="no-opt-in"),
+        pytest.param("llm.example.org", {"allowed_hosts": "other.example.org"}, id="not-listed"),
+    ],
+)
+def test_a_knowledge_host_settings_refusal_fails_the_run_instead_of_skipping(
+    knowledge_host: str, extra: dict[str, object]
+) -> None:
+    kwargs: dict[str, object] = {
+        "allow_external": True,
+        "server_is_local": False,
+        "base_url": KNOWLEDGE_URL,
+        "allowed_hosts": KNOWLEDGE_HOSTS,
+        "knowledge_host": knowledge_host,
+        **extra,
+    }
+    with pytest.raises(ValidationError):
+        egress_gate(_remote(), **kwargs)  # type: ignore[arg-type]
+
+
+def test_mutation_the_gate_catching_validation_error_is_caught() -> None:
+    """The Settings are built before the `try`, so widening only the `except` is an equivalent
+    mutant. The mutant here builds them under a handler for `ValueError` (which ValidationError
+    subclasses) that skips: the mismatch must then skip instead of failing, so the test above
+    fails against it."""
+    from tests.evaluation import egress_gate as gate_module
+    from tests.safety.kb_fakes import mutated_module
+
+    mutant = mutated_module(
+        gate_module,
+        ("    settings = Settings(\n", "    try:\n      settings = Settings(\n"),
+        (
+            "    try:\n        return check_egress(provider, settings)\n",
+            "    except ValueError:\n        pytest.skip('egress refused')\n"
+            "    try:\n        return check_egress(provider, settings)\n",
+        ),
+    )
+    with pytest.raises(pytest.skip.Exception):
+        mutant.egress_gate(
+            _remote(),
+            allow_external=True,
+            server_is_local=False,
+            base_url=KNOWLEDGE_URL,
+            allowed_hosts=KNOWLEDGE_HOSTS,
+            knowledge_host="other.example.org",
+        )
+
+
+def test_mutation_widening_the_tide_rule_to_the_knowledge_basis_is_caught() -> None:
+    """ADR 0028 decision 9: the knowledge attestation does not cover PHN data."""
+    from tests.evaluation import egress_gate as gate_module
+    from tests.safety.kb_fakes import mutated_module
+
+    assert tide_check_allowed("remote_knowledge_opt_in", phn_terms_acknowledged=False) is False
+    mutant = mutated_module(
+        gate_module,
+        (
+            '    return basis == "declared_local" or phn_terms_acknowledged\n',
+            '    return basis in ("declared_local", "remote_knowledge_opt_in") or phn_terms_acknowledged\n',  # noqa: E501
+        ),
+    )
+    assert mutant.tide_check_allowed("remote_knowledge_opt_in", phn_terms_acknowledged=False)
+
+
+def test_the_capture_knows_the_knowledge_label() -> None:
+    from tests.evaluation.capture_item6 import EGRESS_BASES
+
+    assert {
+        "none",
+        "declared_local",
+        "loopback_external_opt_in",
+        "remote_external_opt_in",
+        "remote_knowledge_opt_in",
+    } == EGRESS_BASES
+
+
 @pytest.mark.parametrize(
     ("basis", "acknowledged", "allowed"),
     [
+        ("remote_knowledge_opt_in", False, False),
+        ("remote_knowledge_opt_in", True, True),
         ("declared_local", False, True),
         ("declared_local", True, True),
         ("loopback_external_opt_in", False, False),

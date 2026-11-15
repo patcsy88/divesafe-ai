@@ -1417,7 +1417,7 @@ def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> No
 
     _postgres()
     try:
-        # Back to version 2: migrations 4 and 5 sit above 3, so they go too (4 with its objects).
+        # Back to version 2: migrations 4, 5 and 6 sit above 3, so they go too (4 with its objects).
         _sql("DELETE FROM schema_migrations WHERE version >= 3")
         drop_knowledge_objects()
         for trigger in GUARD_TRIGGERS:
@@ -1426,7 +1426,7 @@ def test_migration_three_upgrades_a_database_that_has_the_plain_triggers() -> No
         problems = repo.verify(least_privilege=False)
         assert any("schema version 2" in p for p in problems)
         assert all(any(t in p for p in problems) for t in GUARD_TRIGGERS)
-        assert migrate(DSN) == [3, 4, 5]  # type: ignore[arg-type]
+        assert migrate(DSN) == [3, 4, 5, 6]  # type: ignore[arg-type]
         assert repo.verify(least_privilege=False) == []
     finally:
         _postgres()

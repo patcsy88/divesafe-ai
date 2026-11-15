@@ -42,11 +42,14 @@ SITE_DOC, GUIDE = "kb:site-doc:1:1", "kb:guide:1:1"
 SITE_TEXT = "Text of site-doc v1 chunk 1."
 
 
-def store(*, extra_version: Any = None, empty: bool = False) -> FakeStore:
+def store(*, extra_version: Any = None, empty: bool = False, attests: bool = False) -> FakeStore:
     if empty:
         return FakeStore(Selection((), (), 0))
     rows = [chunk("site-doc", site=SITE.id, rev=REVIEW_BY), chunk("guide", rev=REVIEW_BY)]
-    versions = [ver("site-doc", site=SITE.id, rev=REVIEW_BY), ver("guide", rev=REVIEW_BY)]
+    versions = [
+        ver("site-doc", site=SITE.id, rev=REVIEW_BY, attests=attests),
+        ver("guide", rev=REVIEW_BY, attests=attests),
+    ]
     if extra_version is not None:
         versions.append(extra_version)
     return FakeStore(Selection(tuple(versions), tuple(rows), len(rows)))
@@ -60,9 +63,11 @@ class Stub:
 
     def __init__(self, result: Any = None, *, stall: bool = False) -> None:
         self.result, self.stall, self.calls = result, stall, 0
+        self.bases: list[object] = []
 
-    async def retrieve(self, *_a: object) -> KnowledgeResult:
+    async def retrieve(self, *_a: object, egress_basis: object) -> KnowledgeResult:
         self.calls += 1
+        self.bases.append(egress_basis)
         if self.stall:
             await asyncio.sleep(30)
         if isinstance(self.result, Exception):
@@ -230,7 +235,9 @@ def test_mutation_passing_no_instance_to_observe_is_caught() -> None:
 
 
 def test_kb_items_from_an_observe_connector_are_dropped_with_the_fixed_issue() -> None:
-    other = KnowledgeConnector(store())  # not the Retrieve instance
+    # Not the Retrieve instance. Attested: `fetch` always excludes unattested versions (ADR 0028),
+    # and this test needs it to return `kb:` items for Observe to refuse.
+    other = KnowledgeConnector(store(attests=True))
     record = assess(None, connectors=_connectors(other))
     assert not any(e.id.startswith("kb:") for e in record.evidence)
     assert any("evidence.knowledge_refused" in i for i in record.evidence_issues)
@@ -261,7 +268,8 @@ def test_mutation_retrieving_twice_is_caught() -> None:
         (
             "    fetch = screen_knowledge(connector, connector, result.fetch)\n",
             "    result = await connector.retrieve(\n"
-            "        run.site, run.plan.planned_start, _window_end(run.plan), run.now\n"
+            "        run.site, run.plan.planned_start, _window_end(run.plan), run.now,\n"
+            "        egress_basis=run.egress_basis,\n"
             "    )\n"
             "    fetch = screen_knowledge(connector, connector, result.fetch)\n",
         ),

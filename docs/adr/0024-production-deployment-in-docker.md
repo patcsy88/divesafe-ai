@@ -168,6 +168,12 @@ results and the specialist findings** (the prompt layer's payload) to
   data to a third-party model host were not checked** (ADR 0023).
 - PHN e-Tide data is **off** in this stack. If it is turned on, its terms are not on file and the
   start-up warning above says so, but nothing stops it (ADR 0021).
+- **Site documents** (ADR 0028, accepted 2026-11-14): with `DIVESAFE_LLM_KNOWLEDGE_HOST` empty
+  (the default) every knowledge extract is withheld from the model host. Set to the model host,
+  the text of APPROVED site documents (text, section, document id, version, chunk; never licence,
+  attribution or origin) goes to it and to the vendor behind it with every assessment; start-up
+  logs "knowledge is sent to the model host" and refuses while any APPROVED, non-withdrawn version
+  lacks the `attests_model_host_egress` attestation.
 - The host and the egress basis are in the start-up log. **They are not recorded on the assessment
   record**, so a stored assessment does not say where its data went.
 - If the model host cannot be reached (DNS, trust store, certificate expiry on 2026-12-20, a path

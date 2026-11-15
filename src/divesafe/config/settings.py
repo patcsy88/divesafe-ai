@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     # Comma-separated exact hostnames of the non-loopback servers the openai_compatible provider
     # may call (ADR 0018). Empty: only a loopback server is allowed.
     llm_allowed_hosts: str | None = None
+    # ADR 0028: the one named model host that approved knowledge may be sent to (basis
+    # `remote_knowledge_opt_in`). Unset or empty: every knowledge item is withheld from a hosted
+    # model, as before. Must equal the base URL's host and be in DIVESAFE_LLM_ALLOWED_HOSTS.
+    llm_knowledge_host: str | None = None
 
     @field_validator("loader_db_role")
     @classmethod
@@ -211,6 +215,7 @@ class Settings(BaseSettings):
                 "other; set only one"
             )
         self.llm_allowed_host_set()
+        self._check_knowledge_host()
         if self.environment == "production" and self.llm_provider == "fake":
             raise ValueError("the fake LLM provider cannot be used in production")
         if self.environment == "production" and self.auth_mode == "dev":
@@ -231,6 +236,51 @@ class Settings(BaseSettings):
         ):
             raise ValueError("a production ruleset must be pinned with DIVESAFE_RULESET_SHA256")
         return self
+
+    def _check_knowledge_host(self) -> None:
+        """ADR 0028 decision 3, in every environment. Fixed messages; the value is never echoed.
+        `check_egress` repeats these checks, because `model_copy` and `model_construct` skip
+        validators."""
+        host = self.llm_knowledge_host
+        if host is None or host == "":
+            return
+        name = "DIVESAFE_LLM_KNOWLEDGE_HOST"
+        if self.llm_server_is_local:
+            raise ValueError(f"{name} cannot be used with DIVESAFE_LLM_SERVER_IS_LOCAL")
+        if not self.allow_external_llm:
+            raise ValueError(f"{name} needs DIVESAFE_ALLOW_EXTERNAL_LLM=true")
+        if self.llm_provider == "fake" or self.llm_base_url is None:
+            raise ValueError(f"{name} needs a model server provider and DIVESAFE_LLM_BASE_URL")
+        if not is_single_knowledge_host(host):
+            raise ValueError(f"{name} must be exactly one hostname, not a loopback name")
+        if host not in self.llm_allowed_host_set():
+            raise ValueError(f"{name} must be one of DIVESAFE_LLM_ALLOWED_HOSTS")
+        if host != base_url_host(str(self.llm_base_url)):
+            raise ValueError(f"{name} must be the host of DIVESAFE_LLM_BASE_URL")
+
+
+def is_single_knowledge_host(value: str) -> bool:
+    """Exactly one host in the allow-list grammar, already lowercase, with no surrounding space,
+    no comma and no trailing dot, and not `localhost` or `*.localhost` (ADR 0028 decision 3)."""
+    if value != value.strip().lower() or "," in value or value.endswith("."):
+        return False
+    try:
+        hosts = _host_set(value, "DIVESAFE_LLM_KNOWLEDGE_HOST")
+    except ValueError:
+        return False
+    if hosts != frozenset({value}):
+        return False
+    return value != "localhost" and not value.endswith(".localhost")
+
+
+def base_url_host(url: str) -> str | None:
+    """The lowercased hostname of a URL, or None when it has none or cannot be parsed."""
+    from urllib.parse import urlsplit
+
+    try:
+        return urlsplit(url).hostname
+    except ValueError:
+        return None
 
 
 def _host_set(value: str | None, name: str) -> frozenset[str]:

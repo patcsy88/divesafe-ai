@@ -192,6 +192,50 @@ def test_phn_data_with_a_model_server_not_declared_local_is_warned_about_at_star
     assert not any("PHN e-Tide data is ON" in r.getMessage() for r in caplog.records)
 
 
+# ADR 0028 decision 9: the knowledge basis does not cover PHN data. Literal settings, real adapter.
+_KNOWLEDGE_SETTINGS: dict[str, object] = {
+    "llm_provider": "openai_compatible",
+    "llm_model": "m",
+    "llm_base_url": "https://llm.example.org/v1",
+    "llm_allowed_hosts": "llm.example.org",
+    "allow_external_llm": True,
+    "llm_knowledge_host": "llm.example.org",
+}
+
+
+def _phn_warned(caplog: pytest.LogCaptureFixture, build: object, phn: bool) -> bool:
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        provider, basis = build(_settings(**_KNOWLEDGE_SETTINGS, phn_etide_enabled=phn))  # type: ignore[operator]
+    provider.close()
+    assert basis == "remote_knowledge_opt_in"
+    return any("PHN e-Tide data is ON" in r.getMessage() for r in caplog.records)
+
+
+def test_phn_data_under_the_knowledge_basis_is_still_warned_about_at_start_up(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert _phn_warned(caplog, build_provider, phn=True) is True
+    assert _phn_warned(caplog, build_provider, phn=False) is False
+
+
+def test_mutation_widening_the_phn_warning_to_the_knowledge_basis_is_caught(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from tests.safety.kb_fakes import mutated_module
+
+    from divesafe.api import state as state_module
+
+    mutant = mutated_module(
+        state_module,
+        (
+            'if settings.phn_etide_enabled and basis != "declared_local":',
+            'if settings.phn_etide_enabled and basis not in ("declared_local", "remote_knowledge_opt_in"):',  # noqa: E501
+        ),
+    )
+    assert _phn_warned(caplog, mutant.build_provider, phn=True) is False
+
+
 _CALLERS = {
     # name -> the only files that may mention it at all (call, index, pass as a value, iterate)
     "create_provider": {"models/llm.py", "models/__init__.py", "api/state.py"},
@@ -324,6 +368,17 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(live, "SERVER_IS_LOCAL", "true")
     with pytest.raises(ValidationError, match="contradict"):
         live._setup()
+
+    # ADR 0028: the evaluation's knowledge host gives the new basis only when it is the base URL's.
+    monkeypatch.setattr(live, "SERVER_IS_LOCAL", "false")
+    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", "https://llm.example.org/v1")
+    monkeypatch.setenv("DIVESAFE_EVAL_ALLOWED_HOSTS", "llm.example.org,other.example.org")
+    assert basis() == "remote_external_opt_in"
+    monkeypatch.setenv("DIVESAFE_EVAL_KNOWLEDGE_HOST", "llm.example.org")
+    assert basis() == "remote_knowledge_opt_in"
+    monkeypatch.setenv("DIVESAFE_EVAL_KNOWLEDGE_HOST", "other.example.org")
+    with pytest.raises(ValidationError, match="must be the host of DIVESAFE_LLM_BASE_URL"):
+        live._setup()  # a mismatch fails the run, never a skip
 
 
 _PLACEHOLDER_KEY = "placeholder-not-a-real-key-7f3a9c"

@@ -1,9 +1,10 @@
 # ADR 0028: Approved knowledge may go to one named forwarding model host
 
-Status: PROPOSED (2026-11-14; owner answers recorded below; four review rounds, the last with
-no blockers and no should-fix from `security-reviewer` or `risk-reviewer`). Relaxes ADR 0022
-decision 15 (knowledge reaches a prompt only under `declared_local`), so it needs the owner's acceptance and both reviewers (config,
-the egress gate, the knowledge store, `domain`, `agents`, `tests/safety/`). Nothing is built.
+Status: ACCEPTED (2026-11-14, by merging PR #7; owner answers recorded below; four review rounds,
+the last with no blockers and no should-fix from `security-reviewer` or `risk-reviewer`). Relaxes
+ADR 0022 decision 15 (knowledge reaches a prompt only under `declared_local`); the code still
+needs both reviewers (config, the egress gate, the knowledge store, `domain`, `agents`,
+`tests/safety/`). Being built on branch `knowledge-host-impl`; not yet merged or deployed.
 Amends ADR 0022 (decision 15) and ADR 0023 (the open "trusted host" decision); does not amend
 ADR 0021.
 
@@ -206,10 +207,11 @@ imported from the code, so a code change cannot move the test with it.
   `localhost` is refused by the record.
 - **`check_egress`, provider and Settings:** each refusal in decision 3 through normal validation,
   `model_copy` and `model_construct`; provider host differs from the knowledge host while the
-  Settings host matches → refused; comma lists, trailing dot, upper-case base URL, `localhost`,
-  fake provider, no base URL, and (through `model_construct`) `llm_base_url` or `provider.host`
-  `None` → raises; empty means absent (`env_ignore_empty`); messages carry no host or
-  URL.
+  Settings host matches → refused; comma lists, trailing dot, an upper-case knowledge host,
+  `localhost`, fake provider, no base URL, and (through `model_construct`) `llm_base_url` or `provider.host`
+  `None` → raises; an upper-case base URL names the same (lowercased) host and is accepted
+  (corrected at code review, 2026-11-15); empty means absent (`env_ignore_empty`); messages carry
+  no host or URL.
 - **Migration and pins:** `guarded()` accepts migration 6's exact SQL; migration 6 adds the column
   with `false` for existing rows; the regenerated 16/17 pins pass the live pin test and `verify()`
   on a migrated database; an older image refuses a migrated database.
@@ -291,11 +293,32 @@ Each keeps a mutation check, re-pointed where its edit target moves; none is ski
 - The trial is a handful of runs with unmerged code; the evaluation harness has not measured
   knowledge with a hosted model (ADR 0022 Known gap 21 applies when it does).
 - Settings are read at start-up; a change needs a restart.
-- **Review nits for the build (round 4, both reviewers):** the new `egress_basis` argument of
-  `KnowledgeConnector.retrieve` and `KnowledgeStore.select` should be keyword-only with no
-  default, and `fetch` should take it too or always exclude (the mutation then reads "passes the
-  wrong basis"); the knowledge store and connector test fakes (`FakeStore` in
-  `tests/agent/test_knowledge_connector.py`) need the argument (mechanical).
+- Round-4 design nits are resolved in the build: `egress_basis` is required and keyword-only on
+  `retrieve`, `select`, `check`, `classify` and `store.parameters`; `fetch` always excludes
+  unattested versions; the test fakes take the argument.
+- **Code review nits (2026-11-15, security- and risk-reviewer; no blockers, no should-fix):**
+  - no test pins the start-up check's connect, statement and lock timeouts, or that its
+    `search_path` statement runs before the read-only query (a stall hangs start-up; it still
+    sends nothing);
+  - `kb_attestation.py` reads `public.kb_*` without `ONLY`, unlike `rag/store.py` (stricter, not
+    looser);
+  - `selection.excludes_unattested` and the start-up keying use `isinstance`/`==`, not the stage
+    filter's exact type (a near miss excludes more, never less);
+  - `test_mutation_exclusion_in_code_only_is_caught` only checks the source offline; the real check
+    is the live test in `tests/agent/test_knowledge_connector_live.py`, marked `integration`, so it
+    runs in CI's full suite with a database but not under `-m safety`;
+  - no test pins that a family held back only by `NOT_ATTESTED` raises no all-expired issue
+    (a regression would only add an issue);
+  - the new-basis prompt test checks attribution and licence but not origin;
+  - the view sentence keys on unwithheld `kb:` evidence, not on a `kb:` id in `sent_evidence_ids`;
+  - ADR 0024's "not recorded on the assessment record" predates the record's egress fields.
+- **Mechanical test amendments beyond the list below** (signature, re-pointed mutation targets,
+  attested fakes; none weakened, each mutation check kept, reviewed by risk-reviewer 2026-11-15):
+  `tests/agent/test_knowledge_selection.py` (`test_mutation_all_expired_as_note_is_caught`),
+  `test_knowledge_connector.py` (`code-site-filter-removed`, the window-start mutations),
+  `test_knowledge_connector_review.py`, `test_retrieve_wiring.py` (Stub signature, the
+  retrieve-twice target, `attests=True`), and `tests/safety/test_migration_guard.py` (expects
+  `[2, 6]` and pins migration 6's exact SQL; owner option A, 2026-11-14). Owner to note.
 
 ## Owner answers (2026-11-14)
 

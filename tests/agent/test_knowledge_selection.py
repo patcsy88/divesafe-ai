@@ -142,13 +142,13 @@ CASES: dict[str, tuple[list[VersionRow], FamilyClass, int | None]] = {
 
 
 def _run(module: Any, name: str) -> Any:
-    return module.classify_family(CASES[name][0], NOW, END)
+    return module.classify_family(CASES[name][0], NOW, END, egress_basis="remote_external_opt_in")
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_every_decision_3_row(name: str) -> None:
     rows, kind, version = CASES[name]
-    result = selection.classify_family(rows, NOW, END)
+    result = selection.classify_family(rows, NOW, END, egress_basis="remote_external_opt_in")
     assert result.kind is kind
     assert result.version == version
     if version is not None:
@@ -161,8 +161,16 @@ def test_a_window_reaching_the_exclusive_end_is_expired() -> None:
     rows = [v(1, rev=TODAY, eff=TODAY - 30 * DAY)]
     last_second = datetime(2026, 6, 15, 23, 59, 59, tzinfo=KL)
     midnight = datetime(2026, 6, 16, 0, 0, tzinfo=KL)
-    assert selection.classify_family(rows, NOW, last_second).kind is F.RETURNED
-    assert selection.classify_family(rows, NOW, midnight).kind is F.EXPIRED
+    assert (
+        selection.classify_family(
+            rows, NOW, last_second, egress_basis="remote_external_opt_in"
+        ).kind
+        is F.RETURNED
+    )
+    assert (
+        selection.classify_family(rows, NOW, midnight, egress_basis="remote_external_opt_in").kind
+        is F.EXPIRED
+    )
 
 
 def test_dates_are_kuala_lumpur_dates_with_a_fixed_offset() -> None:
@@ -170,7 +178,9 @@ def test_dates_are_kuala_lumpur_dates_with_a_fixed_offset() -> None:
     late_utc = datetime(2026, 6, 14, 23, 30, tzinfo=UTC)
     rows = [v(1, approved_on=TODAY)]
     assert selection.local_date(late_utc) == TODAY
-    result = selection.classify_family(rows, late_utc, late_utc + timedelta(hours=2))
+    result = selection.classify_family(
+        rows, late_utc, late_utc + timedelta(hours=2), egress_basis="remote_external_opt_in"
+    )
     assert result.kind is F.RETURNED
     assert selection.valid_from(TODAY) == datetime(2026, 6, 14, 16, 0, tzinfo=UTC)
     assert selection.valid_until(TODAY) == datetime(2026, 6, 15, 16, 0, tzinfo=UTC)
@@ -181,8 +191,18 @@ def test_dates_are_kuala_lumpur_dates_with_a_fixed_offset() -> None:
 def test_a_version_taking_effect_inside_a_window_that_crosses_midnight_governs() -> None:
     now = datetime(2026, 6, 15, 22, 0, tzinfo=KL)
     rows = [v(1), v(2, eff=TODAY + DAY)]
-    assert selection.classify_family(rows, now, now + timedelta(hours=4)).version == 2
-    assert selection.classify_family(rows, now, now + timedelta(hours=1)).version == 1
+    assert (
+        selection.classify_family(
+            rows, now, now + timedelta(hours=4), egress_basis="remote_external_opt_in"
+        ).version
+        == 2
+    )
+    assert (
+        selection.classify_family(
+            rows, now, now + timedelta(hours=1), egress_basis="remote_external_opt_in"
+        ).version
+        == 1
+    )
 
 
 def _r(kind: FamilyClass, doc: str = "d") -> FamilyResult:
@@ -231,14 +251,19 @@ def test_issue_wording_carries_no_title_and_no_id() -> None:
 
 def test_classify_groups_families() -> None:
     rows = [v(1, doc="b-doc"), v(1, doc="a-doc", withdrawn=True), v(2, doc="b-doc", checked=False)]
-    assert [(r.document_id, r.kind) for r in selection.classify(rows, NOW, END)] == [
+    assert [
+        (r.document_id, r.kind)
+        for r in selection.classify(rows, NOW, END, egress_basis="remote_external_opt_in")
+    ] == [
         ("a-doc", F.WITHDRAWN),
         ("b-doc", F.UNCHECKED_ISSUE),
     ]
     with pytest.raises(ValueError):
-        selection.classify_family([], NOW, END)
+        selection.classify_family([], NOW, END, egress_basis="remote_external_opt_in")
     with pytest.raises(ValueError):
-        selection.classify_family([v(1, doc="a-doc"), v(1, doc="b-doc")], NOW, END)
+        selection.classify_family(
+            [v(1, doc="a-doc"), v(1, doc="b-doc")], NOW, END, egress_basis="remote_external_opt_in"
+        )
 
 
 def test_a_version_row_refuses_impossible_facts() -> None:
@@ -352,8 +377,16 @@ def test_mutation_inclusive_review_by_comparison_is_caught() -> None:
     mutant = mutated_module(
         selection, ("    return window_end < valid_until(", "    return window_end <= valid_until(")
     )
-    assert selection.classify_family(rows, NOW, midnight).kind is F.EXPIRED
-    assert mutant.classify_family(rows, NOW, midnight).kind.value == F.RETURNED.value
+    assert (
+        selection.classify_family(rows, NOW, midnight, egress_basis="remote_external_opt_in").kind
+        is F.EXPIRED
+    )
+    assert (
+        mutant.classify_family(
+            rows, NOW, midnight, egress_basis="remote_external_opt_in"
+        ).kind.value
+        == F.RETURNED.value
+    )
 
 
 def test_mutation_utc_dates_are_caught() -> None:
@@ -362,7 +395,9 @@ def test_mutation_utc_dates_are_caught() -> None:
     mutant = mutated_module(
         selection, ("    return instant.astimezone(KL).date()", "    return instant.date()")
     )
-    result = mutant.classify_family(rows, late_utc, late_utc + timedelta(hours=2))
+    result = mutant.classify_family(
+        rows, late_utc, late_utc + timedelta(hours=2), egress_basis="remote_external_opt_in"
+    )
     assert result.kind.value == F.CLOCK_ISSUE.value
 
 
@@ -370,7 +405,12 @@ def test_mutation_in_force_by_now_is_caught() -> None:
     now = datetime(2026, 6, 15, 22, 0, tzinfo=KL)
     rows = [v(1), v(2, eff=TODAY + DAY)]
     mutant = mutated_module(selection, (IN_FORCE, IN_FORCE.replace("<= window_end", "<= now")))
-    assert mutant.classify_family(rows, now, now + timedelta(hours=4)).version == 1
+    assert (
+        mutant.classify_family(
+            rows, now, now + timedelta(hours=4), egress_basis="remote_external_opt_in"
+        ).version
+        == 1
+    )
 
 
 def test_mutation_all_expired_as_note_is_caught() -> None:
@@ -378,7 +418,7 @@ def test_mutation_all_expired_as_note_is_caught() -> None:
     mutant = mutated_module(
         selection,
         (
-            "    if FamilyClass.EXPIRED in kinds and FamilyClass.RETURNED not in kinds:\n",
+            "    if FamilyClass.EXPIRED in kinds and not _USABLE.intersection(kinds):\n",
             "    if False:\n",
         ),
     )

@@ -56,9 +56,10 @@ def document(path: str = "guide.txt", **over: Any) -> dict[str, Any]:
 
 def draft(*docs: dict[str, Any], **over: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
-        "format": 1,
+        "format": 2,
         "attests_no_generated_text": True,
         "attests_no_personal_names": True,
+        "attests_model_host_egress": True,
         "documents": list(docs) or [document()],
     }
     out.update(over)

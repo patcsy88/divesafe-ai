@@ -159,7 +159,7 @@ def test_an_oversize_paragraph_of_many_lines_is_refused(tmp_path: Path) -> None:
         json.dumps({**draft(), "extra": 1}).encode(),
         json.dumps(draft(document(file={"path": "guide.txt"}))).encode(),
         json.dumps(draft(document(chunks=[]))).encode(),
-        json.dumps(draft()).replace('"format": 1,', '"format": 1, "format": 1,').encode(),
+        json.dumps(draft()).replace('"format": 2,', '"format": 2, "format": 2,').encode(),
         json.dumps(draft()).replace('"version": 1,', '"version": 1, "version": 2,').encode(),
         json.dumps({**draft(), "documents": []}).encode(),
         json.dumps({**draft(), "documents": {}}).encode(),
@@ -176,7 +176,7 @@ def test_an_extra_repeated_or_malformed_draft_is_refused(tmp_path: Path, raw: by
 @pytest.mark.parametrize(
     ("top", "doc"),
     [
-        ({"format": 2}, {}),
+        ({"format": 3}, {}),
         ({}, {"licence": ""}),
         ({}, {"supersedes": 1}),
         ({}, {"review_by_date": "2027-02-01"}),
@@ -577,7 +577,7 @@ def test_mutation_each_builder_refusal_is_caught(
 
 
 def test_mutation_duplicate_keys_allowed_is_caught(tmp_path: Path) -> None:
-    raw = json.dumps(draft()).replace('"format": 1,', '"format": 1, "format": 1,').encode()
+    raw = json.dumps(draft()).replace('"format": 2,', '"format": 2, "format": 2,').encode()
     path = corpus(tmp_path, {"guide.txt": GUIDE}, raw)
     mutant = mutated_module(
         kb_manifest_build, ("object_pairs_hook=_no_duplicate_keys", "strict=True")

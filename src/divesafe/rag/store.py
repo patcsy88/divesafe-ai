@@ -8,7 +8,8 @@ Two read-only queries in one REPEATABLE READ transaction, so both see one snapsh
   by the same rules, ordered by (document id, version, chunk), at most `MAX_KNOWLEDGE_ITEMS`
   rows plus the count available.
 
-The only parameters are the plan's `site_id`, the run's `now` and the dive window end. Local dates
+The only parameters are the plan's `site_id`, the run's `now`, the dive window end and one boolean
+derived from the run's recorded egress basis (ADR 0028 decision 7). Local dates
 use `AT TIME ZONE 'Asia/Kuala_Lumpur'` written in the SQL, never the database clock or a numeric
 zone. Every database error becomes a `KnowledgeStoreError` with a fixed string, never driver text.
 """
@@ -25,7 +26,7 @@ import psycopg
 
 from divesafe.data import ConnectorError
 from divesafe.domain import MAX_KNOWLEDGE_ITEMS
-from divesafe.rag.selection import STATUSES, VersionRow
+from divesafe.rag.selection import STATUSES, VersionRow, excludes_unattested
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ STORE_MALFORMED = "knowledge store returned a malformed row"
 STORE_NAIVE_CLOCK = "knowledge store: the run clock or the window has no time zone"
 
 # The per-version facts selection needs. Never a title. `hash_checked` is true only when every
-# APPROVED event is checked; `approved_on` is the latest APPROVED event's local date.
+# APPROVED event is checked; `approved_on` is the latest APPROVED event's local date;
+# `attests_model_host_egress` is the stored manifest attestation (ADR 0028, migration 6).
 _VERSIONS = """
 SELECT d.document_id, d.version, d.site_id, d.all_sites, d.effective_date, d.review_by_date,
        ev.latest IS NOT NULL AS has_events,
@@ -62,7 +64,8 @@ SELECT d.document_id, d.version, d.site_id, d.all_sites, d.effective_date, d.rev
        ev.approved_on,
        ev.latest,
        (SELECT count(*) FROM ONLY public.kb_chunks c
-         WHERE c.document_id = d.document_id AND c.version = d.version) AS chunks
+         WHERE c.document_id = d.document_id AND c.version = d.version) AS chunks,
+       d.attests_model_host_egress
 FROM ONLY public.kb_documents d
 LEFT JOIN LATERAL (
     SELECT bool_or(e.status = 'APPROVED') AS approved,
@@ -82,7 +85,9 @@ VERSIONS_SQL = _VERSIONS + "ORDER BY d.document_id, d.version\n"
 # Decision 3 in SQL: the governing version is the highest ever-approved version in force by the
 # window end; its chunks are returned only when it is checked, never withdrawn, currently
 # APPROVED, approved on or before the run's local date and usable to the window end. No
-# fall-back: a governing version that fails returns nothing from its family.
+# fall-back: a governing version that fails returns nothing from its family. ADR 0028 decision 7:
+# when the run's basis is `remote_knowledge_opt_in` the governing version must also carry the
+# attestation; it is chosen exactly as before, so an older attested version is never used instead.
 SELECTION_SQL = f"""
 WITH v AS ({_VERSIONS}),
 governing AS (
@@ -101,6 +106,7 @@ chosen AS (
       AND g.approved_on <= (%(now)s::timestamptz AT TIME ZONE 'Asia/Kuala_Lumpur')::date
       AND %(window_end)s
           < ((g.review_by_date + 1)::timestamp AT TIME ZONE 'Asia/Kuala_Lumpur')
+      AND (NOT %(exclude_unattested)s::boolean OR g.attests_model_host_egress IS TRUE)
 )
 SELECT c.document_id, c.version, c.chunk, c.section, c.chunk_text, c.content_sha256,
        d.origin, d.licence, d.attribution, d.author_role, d.approver_role,
@@ -152,7 +158,9 @@ class Selection:
 
 
 class KnowledgeStore(Protocol):
-    def select(self, site_id: str, now: datetime, window_end: datetime) -> Selection: ...
+    def select(
+        self, site_id: str, now: datetime, window_end: datetime, *, egress_basis: object
+    ) -> Selection: ...
 
 
 def _str(value: object, *, optional: bool = False) -> Any:
@@ -185,7 +193,7 @@ def _date(value: object, *, optional: bool = False) -> Any:
 
 def version_row(row: tuple[Any, ...]) -> VersionRow:
     """A summary row, type-checked; anything unexpected is a malformed row."""
-    if len(row) != 13:
+    if len(row) != 14:
         raise KnowledgeStoreError(STORE_MALFORMED)
     latest = _str(row[11], optional=True)
     if latest is not None and latest not in STATUSES:
@@ -205,6 +213,7 @@ def version_row(row: tuple[Any, ...]) -> VersionRow:
             approved_on=_date(row[10], optional=True),
             latest=latest,
             chunks=_int(row[12]),
+            attests_model_host_egress=_bool(row[13]),
         )
     except ValueError:
         raise KnowledgeStoreError(STORE_MALFORMED) from None
@@ -243,10 +252,18 @@ def require_aware(*instants: datetime) -> None:
         raise KnowledgeStoreError(STORE_NAIVE_CLOCK)
 
 
-def parameters(site_id: str, now: datetime, window_end: datetime) -> dict[str, Any]:
-    """The only values that reach SQL (decision 2)."""
+def parameters(
+    site_id: str, now: datetime, window_end: datetime, *, egress_basis: object
+) -> dict[str, Any]:
+    """The only values that reach SQL (decision 2). The basis itself never does: only whether it
+    excludes unattested versions, by the same test the code layer uses (ADR 0028 decision 7)."""
     require_aware(now, window_end)
-    return {"site_id": site_id, "now": now, "window_end": window_end}
+    return {
+        "site_id": site_id,
+        "now": now,
+        "window_end": window_end,
+        "exclude_unattested": excludes_unattested(egress_basis),
+    }
 
 
 class PostgresKnowledgeStore:
@@ -269,8 +286,10 @@ class PostgresKnowledgeStore:
             raise
         return conn
 
-    def select(self, site_id: str, now: datetime, window_end: datetime) -> Selection:
-        params = parameters(site_id, now, window_end)
+    def select(
+        self, site_id: str, now: datetime, window_end: datetime, *, egress_basis: object
+    ) -> Selection:
+        params = parameters(site_id, now, window_end, egress_basis=egress_basis)
         try:
             conn = self._connect()
             try:

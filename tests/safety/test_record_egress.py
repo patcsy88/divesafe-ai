@@ -1,5 +1,10 @@
-"""ADR 0022 decision 15 / condition 7: the record's egress fields and the invariant "knowledge in
-a prompt implies `declared_local`", checked from the record alone by `AssessmentRecord`.
+"""ADR 0022 decision 15 / condition 7, as amended by ADR 0028 decision 4: the record's egress
+fields and the invariant "knowledge in a prompt implies `declared_local`, or
+`remote_knowledge_opt_in` with a non-loopback DNS `model_host` (never an IP literal)", checked from
+the record alone by `AssessmentRecord`.
+
+Allowed and refusing bases are written here as LITERALS (ADR 0028 Tests), never derived from the
+code's enum or sets, so a code change cannot move the test with it.
 
 Knowledge here is evidence with a `kb:` id (owner decision 2026-11-06). Every evidence item below is
 SYNTHETIC test data.
@@ -42,14 +47,25 @@ R = Recommendation
 B = RecordEgressBasis
 KB_ID = "kb:site-guide:2:7"
 REF = KnowledgeRef(document_id="site-guide", version=2, chunk=7)
-NOT_DECLARED_LOCAL = [b for b in B if b is not B.DECLARED_LOCAL]
-HOST = {
-    B.DECLARED_LOCAL: "127.0.0.1",
-    B.LOOPBACK_EXTERNAL_OPT_IN: "localhost",
-    B.REMOTE_EXTERNAL_OPT_IN: "models.example.org",
-    B.NONE: None,
-    B.NO_AGENT_STAGE: None,
+# Literals (ADR 0028 Tests): every basis under which knowledge must NOT reach a prompt.
+NOT_A_KNOWLEDGE_BASIS = [
+    "loopback_external_opt_in",
+    "remote_external_opt_in",
+    "none",
+    "no_agent_stage",
+]
+# The two bases under which it may, each with a host the record accepts for it.
+KNOWLEDGE_BASES = ["declared_local", "remote_knowledge_opt_in"]
+ALL_BASES = [*KNOWLEDGE_BASES, *NOT_A_KNOWLEDGE_BASIS]
+HOST: dict[str, str | None] = {
+    "declared_local": "127.0.0.1",
+    "loopback_external_opt_in": "localhost",
+    "remote_external_opt_in": "models.example.org",
+    "remote_knowledge_opt_in": "models.example.org",
+    "none": None,
+    "no_agent_stage": None,
 }
+ONLY_UNDER = "only under egress basis declared_local or remote_knowledge_opt_in"
 
 
 def _knowledge(evidence_id: str = KB_ID) -> EvidenceItem:
@@ -114,6 +130,27 @@ def test_the_record_enum_is_the_gate_values_plus_no_agent_stage() -> None:
     gate = set(EgressBasis.__args__)  # type: ignore[attr-defined]
     assert {b.value for b in B} == gate | {"no_agent_stage"}
     assert "no_agent_stage" not in gate
+    # Strengthened (ADR 0028): both sides pinned as literals, not only to each other.
+    assert gate == {
+        "none",
+        "declared_local",
+        "loopback_external_opt_in",
+        "remote_external_opt_in",
+        "remote_knowledge_opt_in",
+    }
+
+
+def test_the_record_enum_has_exactly_these_six_values() -> None:
+    """ADR 0028 Tests: a literal six-value check, in declaration order."""
+    assert [b.value for b in B] == [
+        "declared_local",
+        "loopback_external_opt_in",
+        "remote_external_opt_in",
+        "remote_knowledge_opt_in",
+        "none",
+        "no_agent_stage",
+    ]
+    assert set(ALL_BASES) == {b.value for b in B}
 
 
 @pytest.mark.parametrize("bad", ["local", "DECLARED_LOCAL", "", 1, True])
@@ -133,10 +170,11 @@ def test_a_record_made_before_the_fields_existed_still_validates() -> None:
 # --- the invariant ------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("basis", NOT_DECLARED_LOCAL, ids=str)
-def test_knowledge_not_withheld_is_refused_unless_declared_local(basis: B) -> None:
+@pytest.mark.parametrize("basis", NOT_A_KNOWLEDGE_BASIS)
+def test_knowledge_not_withheld_is_refused_unless_declared_local(basis: str) -> None:
+    """Amended by ADR 0028: refused under every basis but the two knowledge bases."""
     doc = _doc(_knowledge(), egress_basis=basis, model_host=HOST[basis])
-    assert _refused(doc, "only under egress basis declared_local")
+    assert _refused(doc, ONLY_UNDER)
     held = {**doc, "withheld_knowledge": _held(REF)}
     assert AssessmentRecord.model_validate(held).withheld_knowledge == (REF,)
 
@@ -155,8 +193,8 @@ def test_declared_local_may_send_knowledge_or_withhold_it() -> None:
     AssessmentRecord.model_validate({**doc, "withheld_knowledge": _held(REF)})
 
 
-@pytest.mark.parametrize("basis", NOT_DECLARED_LOCAL, ids=str)
-def test_one_unwithheld_item_among_several_is_refused(basis: B) -> None:
+@pytest.mark.parametrize("basis", NOT_A_KNOWLEDGE_BASIS)
+def test_one_unwithheld_item_among_several_is_refused(basis: str) -> None:
     other = KnowledgeRef(document_id="site-guide", version=2, chunk=8)
     doc = _doc(
         _knowledge(),
@@ -165,7 +203,7 @@ def test_one_unwithheld_item_among_several_is_refused(basis: B) -> None:
         model_host=HOST[basis],
         withheld_knowledge=_held(REF),
     )
-    assert _refused(doc, "only under egress basis declared_local")
+    assert _refused(doc, ONLY_UNDER)
     AssessmentRecord.model_validate({**doc, "withheld_knowledge": _held(REF, other)})
 
 
@@ -242,7 +280,7 @@ def test_knowledge_without_a_kb_id_is_refused_by_the_record() -> None:
     a `kb:` id is refused, whatever the basis, so the egress check cannot be dodged by the id.
     Both directions and both fields: `tests/safety/test_record_knowledge_identity.py`."""
     message = "a knowledge evidence item must have a kb: id"
-    for basis in B:
+    for basis in ALL_BASES:
         assert _refused(
             _doc(_knowledge("syn-site"), egress_basis=basis, model_host=HOST[basis]), message
         )
@@ -277,6 +315,121 @@ def test_knowledge_ref_parses_the_three_parts() -> None:
     assert knowledge_ref("ev-waves_swell") is None
 
 
+# --- ADR 0028: remote_knowledge_opt_in ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("host", ["models.example.org", "wall-e.ch30ng.org", "localhost.example"])
+def test_unwithheld_knowledge_is_accepted_under_the_knowledge_basis_with_a_remote_dns_host(
+    host: str,
+) -> None:
+    doc = _doc(
+        _knowledge(),
+        _knowledge("kb:site-guide:2:8"),
+        egress_basis="remote_knowledge_opt_in",
+        model_host=host,
+    )
+    record = AssessmentRecord.model_validate(doc)
+    assert record.egress_basis == "remote_knowledge_opt_in"
+    assert record.withheld_knowledge == ()
+    # Round trip: the stored JSON form loads back unchanged.
+    assert AssessmentRecord.model_validate(record.model_dump(mode="json")) == record
+    # Withholding under it is still allowed.
+    AssessmentRecord.model_validate({**doc, "withheld_knowledge": _held(REF)})
+
+
+@pytest.mark.parametrize(
+    ("host", "message"),
+    [
+        ("localhost", "does not match"),
+        ("127.0.0.1", "does not match"),
+        ("::1", "does not match"),
+        ("::ffff:7f00:1", "does not match"),
+        ("10.0.0.1", "must be a DNS name under remote_knowledge_opt_in"),
+        ("203.0.113.7", "must be a DNS name under remote_knowledge_opt_in"),
+        ("2001:db8::1", "must be a DNS name under remote_knowledge_opt_in"),
+        (None, "host name only"),
+    ],
+)
+def test_the_knowledge_basis_refuses_a_loopback_an_ip_literal_or_no_host(
+    host: str | None, message: str
+) -> None:
+    for knowledge in ((_knowledge(),), ()):
+        doc = _doc(*knowledge, egress_basis="remote_knowledge_opt_in", model_host=host)
+        assert _refused(doc, message)
+    # Even with every knowledge item withheld: the host refusals do not depend on knowledge.
+    held = _doc(
+        _knowledge(),
+        egress_basis="remote_knowledge_opt_in",
+        model_host=host,
+        withheld_knowledge=_held(REF),
+    )
+    assert _refused(held, message)
+
+
+def test_the_ip_literal_refusal_is_for_the_knowledge_basis_only() -> None:
+    """Older bases are unaffected: `remote_external_opt_in` still takes an IP literal."""
+    for host in ("10.0.0.1", "2001:db8::1"):
+        AssessmentRecord.model_validate(
+            _doc(egress_basis="remote_external_opt_in", model_host=host)
+        )
+
+
+@pytest.mark.parametrize("basis", [*NOT_A_KNOWLEDGE_BASIS, None])
+def test_unwithheld_knowledge_is_still_refused_under_every_other_basis_and_absent(
+    basis: str | None,
+) -> None:
+    host = HOST[basis] if basis is not None else None
+    doc = _doc(_knowledge(), egress_basis=basis, model_host=host)
+    expected = ONLY_UNDER if basis is not None else "needs an egress basis"
+    assert _refused(doc, expected)
+
+
+@pytest.mark.parametrize(
+    "channel", ["findings", "cross_examination_findings", "scenarios", "proposal", "reason_trace"]
+)
+def test_withheld_knowledge_stays_uncitable_under_the_knowledge_basis(channel: str) -> None:
+    doc = _doc(
+        _knowledge(),
+        egress_basis="remote_knowledge_opt_in",
+        model_host="models.example.org",
+        withheld_knowledge=_held(REF),
+        **_citing(channel),
+    )
+    assert _refused(doc, "cannot be cited by model output")
+    # Control: sent (not withheld) knowledge may be cited under this basis.
+    AssessmentRecord.model_validate({**doc, "withheld_knowledge": []})
+
+
+@pytest.mark.parametrize(
+    "basis",
+    [
+        "remote_knowledge_opt_in ",
+        "Remote_Knowledge_Opt_In",
+        "REMOTE_KNOWLEDGE_OPT_IN",
+        "RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN",
+        "remote_knowledge",
+    ],
+)
+def test_a_near_miss_of_the_knowledge_basis_is_not_a_basis(basis: str) -> None:
+    with pytest.raises(ValidationError):
+        AssessmentRecord.model_validate(
+            _doc(_knowledge(), egress_basis=basis, model_host="models.example.org")
+        )
+
+
+def test_an_older_record_with_knowledge_withheld_still_loads() -> None:
+    """Records stored before ADR 0028 hold one of the five older bases; they still load."""
+    for basis in ("declared_local", *NOT_A_KNOWLEDGE_BASIS):
+        AssessmentRecord.model_validate(
+            _doc(
+                _knowledge(),
+                egress_basis=basis,
+                model_host=HOST[basis],
+                withheld_knowledge=_held(REF),
+            )
+        )
+
+
 # --- model_host ---------------------------------------------------------------------------------
 
 
@@ -287,11 +440,20 @@ def test_no_host_without_a_model_server(basis: B | None) -> None:
 
 
 @pytest.mark.parametrize(
-    "basis", [B.DECLARED_LOCAL, B.LOOPBACK_EXTERNAL_OPT_IN, B.REMOTE_EXTERNAL_OPT_IN], ids=str
+    "basis",
+    [
+        "declared_local",
+        "loopback_external_opt_in",
+        "remote_external_opt_in",
+        "remote_knowledge_opt_in",
+    ],
 )
-def test_a_model_server_basis_needs_its_host(basis: B) -> None:
+def test_a_model_server_basis_needs_its_host(basis: str) -> None:
     assert _refused(_doc(egress_basis=basis), "host name only")
     AssessmentRecord.model_validate(_doc(egress_basis=basis, model_host=HOST[basis]))
+    # Strengthened: with knowledge too, and an empty host is no host.
+    assert _refused(_doc(_knowledge(), egress_basis=basis), "host name only")
+    assert _refused(_doc(egress_basis=basis, model_host=""), "host name only")
 
 
 @pytest.mark.parametrize(
@@ -327,6 +489,13 @@ def test_model_host_is_a_host_name_only(host: str) -> None:
 def test_a_loopback_basis_needs_a_loopback_host(basis: str, host: str) -> None:
     AssessmentRecord.model_validate(_doc(egress_basis=basis, model_host=host))
     assert _refused(_doc(egress_basis="remote_external_opt_in", model_host=host), "does not match")
+    # ADR 0028: the knowledge basis is a remote one; a loopback host is refused, with or without
+    # knowledge on the record.
+    assert _refused(_doc(egress_basis="remote_knowledge_opt_in", model_host=host), "does not match")
+    assert _refused(
+        _doc(_knowledge(), egress_basis="remote_knowledge_opt_in", model_host=host),
+        "does not match",
+    )
 
 
 @pytest.mark.parametrize(
@@ -338,6 +507,12 @@ def test_a_remote_host_under_a_loopback_basis_is_refused(basis: str, host: str) 
     A remote host labelled declared_local would let knowledge leave the machine."""
     assert _refused(_doc(egress_basis=basis, model_host=host), "does not match")
     AssessmentRecord.model_validate(_doc(egress_basis="remote_external_opt_in", model_host=host))
+    # ADR 0028: the knowledge basis takes the DNS names but never an IP literal.
+    knowledge_doc = _doc(egress_basis="remote_knowledge_opt_in", model_host=host)
+    if host in ("10.0.0.1", "2001:db8::1"):
+        assert _refused(knowledge_doc, "must be a DNS name under remote_knowledge_opt_in")
+    else:
+        AssessmentRecord.model_validate(knowledge_doc)
 
 
 def test_more_than_the_bound_of_knowledge_items_is_refused_explicitly() -> None:
@@ -368,33 +543,68 @@ def _unwithheld(basis: str, host: str | None) -> dict[str, Any]:
         (
             ("        self._check_egress()\n", ""),
             _unwithheld("remote_external_opt_in", "models.example.org"),
-            "only under egress basis declared_local",
+            ONLY_UNDER,
         ),
+        # ADR 0028: the edit target moved from `basis is not DECLARED_LOCAL` to the set test.
         (
             (
-                "if basis is not RecordEgressBasis.DECLARED_LOCAL and",
-                "if basis not in (RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.NONE) and",
+                "if basis not in _KNOWLEDGE_BASES and",
+                "if basis not in (*_KNOWLEDGE_BASES, RecordEgressBasis.NONE) and",
             ),
             _unwithheld("none", None),
-            "only under egress basis declared_local",
+            ONLY_UNDER,
         ),
         (
             (
-                "if basis is not RecordEgressBasis.DECLARED_LOCAL and",
-                "if basis not in (RecordEgressBasis.DECLARED_LOCAL, "
-                "RecordEgressBasis.NO_AGENT_STAGE) and",
+                "if basis not in _KNOWLEDGE_BASES and",
+                "if basis not in (*_KNOWLEDGE_BASES, RecordEgressBasis.NO_AGENT_STAGE) and",
             ),
             _unwithheld("no_agent_stage", None),
-            "only under egress basis declared_local",
+            ONLY_UNDER,
         ),
         (
             (
-                "if basis is not RecordEgressBasis.DECLARED_LOCAL and",
-                "if basis not in (RecordEgressBasis.DECLARED_LOCAL, "
-                "RecordEgressBasis.LOOPBACK_EXTERNAL_OPT_IN) and",
+                "if basis not in _KNOWLEDGE_BASES and",
+                "if basis not in (*_KNOWLEDGE_BASES, RecordEgressBasis.LOOPBACK_EXTERNAL_OPT_IN) "
+                "and",
             ),
             _unwithheld("loopback_external_opt_in", "localhost"),
-            "only under egress basis declared_local",
+            ONLY_UNDER,
+        ),
+        (
+            (
+                "if basis not in _KNOWLEDGE_BASES and",
+                "if basis not in (*_KNOWLEDGE_BASES, RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN) and",
+            ),
+            _unwithheld("remote_external_opt_in", "models.example.org"),
+            ONLY_UNDER,
+        ),
+        (
+            (
+                "{RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN}",
+                "{RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN, "
+                "RecordEgressBasis.REMOTE_EXTERNAL_OPT_IN}",
+            ),
+            _unwithheld("remote_external_opt_in", "models.example.org"),
+            ONLY_UNDER,
+        ),
+        (
+            (
+                "        elif basis is RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN and "
+                "_is_ip_literal(host):\n",
+                "        elif False:\n",
+            ),
+            _unwithheld("remote_knowledge_opt_in", "10.0.0.1"),
+            "must be a DNS name under remote_knowledge_opt_in",
+        ),
+        (
+            (
+                "        elif (basis in _LOOPBACK_BASES) != _is_loopback(host):\n",
+                "        elif basis is not RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN and "
+                "(basis in _LOOPBACK_BASES) != _is_loopback(host):\n",
+            ),
+            _unwithheld("remote_knowledge_opt_in", "localhost"),
+            "does not match",
         ),
         (
             ("        if knowledge and basis is None:\n", "        if False:\n"),
@@ -478,6 +688,10 @@ def _unwithheld(basis: str, host: str | None) -> dict[str, Any]:
         "none-sends",
         "no-agent-stage-sends",
         "loopback-opt-in-sends",
+        "remote-external-sends",
+        "knowledge-set-widened",
+        "knowledge-ip-literal",
+        "knowledge-loopback",
         "absent-basis",
         "phantom-withheld",
         "withheld-cited",

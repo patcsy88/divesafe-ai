@@ -189,7 +189,12 @@ async def _observe(run: _Run) -> StageOutcome:
         run.retrieval = asyncio.create_task(
             asyncio.wait_for(
                 knowledge.retrieve(
-                    run.site, run.plan.planned_start, _window_end(run.plan), run.now
+                    run.site,
+                    run.plan.planned_start,
+                    _window_end(run.plan),
+                    run.now,
+                    # ADR 0028 decision 7: the run's recorded basis, on every call.
+                    egress_basis=run.egress_basis,
                 ),
                 run.connector_timeout_seconds,
             )

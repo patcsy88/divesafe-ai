@@ -83,6 +83,7 @@ def ver(
     approved_on: date | None = TODAY - 5 * DAY,
     eff: date = TODAY - 10 * DAY,
     rev: date = TODAY + 90 * DAY,
+    attests: bool = False,
 ) -> VersionRow:
     latest = "WITHDRAWN" if withdrawn else ("APPROVED" if approved_on else "DRAFT")
     return VersionRow(
@@ -99,6 +100,7 @@ def ver(
         approved_on,
         latest,
         chunks,
+        attests,
     )
 
 
@@ -135,9 +137,13 @@ class FakeStore:
     def __init__(self, selection: Selection | Exception) -> None:
         self.selection = selection
         self.calls: list[tuple[str, datetime, datetime]] = []
+        self.bases: list[object] = []
 
-    def select(self, site_id: str, now: datetime, window_end: datetime) -> Selection:
+    def select(
+        self, site_id: str, now: datetime, window_end: datetime, *, egress_basis: object
+    ) -> Selection:
         self.calls.append((site_id, now, window_end))
+        self.bases.append(egress_basis)
         if isinstance(self.selection, Exception):
             raise self.selection
         return self.selection
@@ -145,7 +151,11 @@ class FakeStore:
 
 def run(versions: list[VersionRow], chunks: list[ChunkRow], available: int | None = None) -> Any:
     sel = Selection(tuple(versions), tuple(chunks), len(chunks) if available is None else available)
-    return asyncio.run(KnowledgeConnector(FakeStore(sel)).retrieve(SITE, START, END, NOW))
+    return asyncio.run(
+        KnowledgeConnector(FakeStore(sel)).retrieve(
+            SITE, START, END, NOW, egress_basis="remote_external_opt_in"
+        )
+    )
 
 
 def ids(result: Any) -> list[str]:
@@ -380,7 +390,7 @@ def test_a_malformed_id_is_dropped_with_a_fixed_issue() -> None:
 
 def test_a_row_failing_the_item_schema_is_dropped_with_a_fixed_issue() -> None:
     bad = replace(chunk("x"), effective_date=TODAY + 400 * DAY)  # valid_until before valid_at
-    result = check(SITE, [ver("x")], [bad], 1, NOW, END)
+    result = check(SITE, [ver("x")], [bad], 1, NOW, END, egress_basis="remote_external_opt_in")
     assert result.fetch.items == ()
     assert result.fetch.issues == (SCHEMA_ISSUE,)
 
@@ -438,7 +448,9 @@ def test_driver_errors_become_fixed_strings(
     conn = _Conn(fail=error)
     monkeypatch.setattr(store_module.psycopg, "connect", lambda *a, **k: conn)
     with pytest.raises(KnowledgeStoreError) as raised:
-        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(SITE.id, NOW, END)
+        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(
+            SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+        )
     assert str(raised.value) == text
     assert raised.value.__cause__ is None and raised.value.__suppress_context__
     assert "CLOSE" in conn.log
@@ -450,7 +462,9 @@ def test_a_failed_connect_is_a_fixed_string(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(store_module.psycopg, "connect", refuse)
     with pytest.raises(KnowledgeStoreError) as raised:
-        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(SITE.id, NOW, END)
+        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(
+            SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+        )
     assert str(raised.value) == STORE_UNAVAILABLE
 
 
@@ -465,7 +479,9 @@ def test_the_connection_has_options_timeouts_and_a_read_only_session(
         return conn
 
     monkeypatch.setattr(store_module.psycopg, "connect", connect)
-    PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(SITE.id, NOW, END)
+    PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(
+        SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+    )
     ((_, kwargs),) = seen
     assert kwargs == {
         "connect_timeout": store_module.CONNECT_TIMEOUT_SECONDS,
@@ -490,7 +506,9 @@ def test_a_session_that_cannot_be_set_up_is_closed(monkeypatch: pytest.MonkeyPat
     conn = Failing()
     monkeypatch.setattr(store_module.psycopg, "connect", lambda *a, **k: conn)
     with pytest.raises(KnowledgeStoreError):
-        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(SITE.id, NOW, END)
+        PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(
+            SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+        )
     assert conn.log == ["CLOSE"]
 
 
@@ -506,7 +524,13 @@ def test_only_site_id_now_and_window_end_reach_sql(monkeypatch: pytest.MonkeyPat
     queries = [entry for entry in conn.log if isinstance(entry, tuple) and entry[1] is not None]
     assert [q for q, _ in queries] == [store_module.VERSIONS_SQL, store_module.SELECTION_SQL]
     assert queries[0][1] == {"site_id": SITE.id}
-    assert queries[1][1] == {"site_id": SITE.id, "now": NOW, "window_end": END}
+    # ADR 0028: plus one boolean from the basis; `fetch` always excludes unattested versions.
+    assert queries[1][1] == {
+        "site_id": SITE.id,
+        "now": NOW,
+        "window_end": END,
+        "exclude_unattested": True,
+    }
     for query, _ in queries:
         assert "'; DROP" not in query and "$$" not in query
 
@@ -543,6 +567,7 @@ def _summary_tuple(**over: Any) -> tuple[Any, ...]:
         "on": TODAY - DAY,
         "latest": "APPROVED",
         "chunks": 1,
+        "attests": False,
     }
     base.update(over)
     return tuple(base.values())
@@ -596,7 +621,7 @@ def test_run_item_refuses_a_malformed_id() -> None:
 
 
 def _mut_run(module: Any, versions: list[VersionRow], chunks: list[ChunkRow], n: int) -> Any:
-    return module.check(SITE, versions, chunks, n, NOW, END)
+    return module.check(SITE, versions, chunks, n, NOW, END, egress_basis="remote_external_opt_in")
 
 
 CONNECTOR_MUTATIONS = [
@@ -625,9 +650,8 @@ CONNECTOR_MUTATIONS = [
     ),
     pytest.param(
         (
-            "    results = classify((v for v in versions if v.applies_to(site.id)), now, "
-            "window_end)",
-            "    results = classify(versions, now, window_end)",
+            "        (v for v in versions if v.applies_to(site.id)),\n",
+            "        versions,\n",
         ),
         "other-site-unchecked",
         id="code-site-filter-removed",
@@ -723,7 +747,9 @@ def test_mutation_driver_text_in_the_error_is_caught(monkeypatch: pytest.MonkeyP
     conn = _Conn(fail=psycopg.OperationalError("driver detail"))
     monkeypatch.setattr(mutant.psycopg, "connect", lambda *a, **k: conn)
     with pytest.raises(ConnectorError) as raised:
-        mutant.PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(SITE.id, NOW, END)
+        mutant.PostgresKnowledgeStore("postgresql://u@db.invalid/x_test").select(
+            SITE.id, NOW, END, egress_basis="remote_external_opt_in"
+        )
     assert str(raised.value) != STORE_UNAVAILABLE
 
 
@@ -755,14 +781,22 @@ def test_a_dropped_chunk_drops_its_whole_family_and_only_that_family() -> None:
         (replace(chunk("x", n=1), text="a" * 1501, content_sha256="0" * 64), TOO_LONG_ISSUE),
         (_bad_schema(chunk("x", n=1)), SCHEMA_ISSUE),
     ):
-        result = check(SITE, versions, [*rows, bad, chunk("x", n=2)], 4, NOW, END)
+        result = check(
+            SITE,
+            versions,
+            [*rows, bad, chunk("x", n=2)],
+            4,
+            NOW,
+            END,
+            egress_basis="remote_external_opt_in",
+        )
         assert ids(result) == ["kb:a-doc:1:1", "kb:a-doc:1:2"]
         assert result.fetch.issues == (issue,)
 
 
 def test_a_malformed_id_drops_its_whole_family() -> None:
     result = check(SITE, [ver("Bad-Id", chunks=2)], [chunk("Bad-Id", n=1), chunk("Bad-Id", n=2)],
-                   2, NOW, END)  # fmt: skip
+                   2, NOW, END, egress_basis="remote_external_opt_in")  # fmt: skip
     assert result.fetch.items == ()
     assert result.fetch.issues == (MALFORMED_ID_ISSUE,)
 
@@ -783,7 +817,11 @@ def test_mutation_per_chunk_drop_is_caught() -> None:
 
 def _retrieve(module: Any, selection: Selection, start: datetime, end: datetime) -> Any:
     store = FakeStore(selection)
-    result = asyncio.run(module.KnowledgeConnector(store).retrieve(SITE, start, end, NOW))
+    result = asyncio.run(
+        module.KnowledgeConnector(store).retrieve(
+            SITE, start, end, NOW, egress_basis="remote_external_opt_in"
+        )
+    )
     return store, result
 
 
@@ -806,8 +844,8 @@ def test_a_window_ending_past_review_by_is_the_all_expired_issue() -> None:
 def test_mutation_window_start_at_the_store_call_is_caught() -> None:
     mutant = mutated_module(
         connector_module,
-        ("self._store.select, site.id, now, window_end)", "self._store.select, site.id, now, "
-         "window_start)"),
+        ("self._store.select, site.id, now, window_end, egress_basis", "self._store.select, "
+         "site.id, now, window_start, egress_basis"),
     )  # fmt: skip
     store, _ = _retrieve(mutant, Selection((), (), 0), START, END)
     assert store.calls == [(SITE.id, NOW, START)]
@@ -816,7 +854,10 @@ def test_mutation_window_start_at_the_store_call_is_caught() -> None:
 def test_mutation_window_start_at_check_is_caught() -> None:
     mutant = mutated_module(
         connector_module,
-        ("selection.available, now, window_end", "selection.available, now, window_start"),
+        (
+            "            selection.available,\n            now,\n            window_end,\n",
+            "            selection.available,\n            now,\n            window_start,\n",
+        ),
     )
     sel = Selection((ver("x", rev=TODAY),), (), 0)
     _, result = _retrieve(mutant, sel, *EXPIRY)
@@ -827,7 +868,15 @@ def test_mutation_window_start_at_check_is_caught() -> None:
 
 
 def test_a_chunk_row_whose_review_by_disagrees_with_the_summary_is_a_disagreement() -> None:
-    result = check(SITE, [ver("x")], [chunk("x", rev=TODAY - DAY)], 1, NOW, END)
+    result = check(
+        SITE,
+        [ver("x")],
+        [chunk("x", rev=TODAY - DAY)],
+        1,
+        NOW,
+        END,
+        egress_basis="remote_external_opt_in",
+    )
     assert result.fetch.items == ()
     assert result.fetch.issues == (DISAGREEMENT_ISSUE,)
     mutant = mutated_module(
@@ -841,7 +890,7 @@ def test_a_chunk_row_whose_review_by_disagrees_with_the_summary_is_a_disagreemen
 
 def test_a_returned_version_with_no_chunks_is_a_malformed_store() -> None:
     with pytest.raises(KnowledgeStoreError) as raised:
-        check(SITE, [ver("x", chunks=0)], [], 0, NOW, END)
+        check(SITE, [ver("x", chunks=0)], [], 0, NOW, END, egress_basis="remote_external_opt_in")
     assert str(raised.value) == STORE_MALFORMED
     mutant = mutated_module(
         connector_module,

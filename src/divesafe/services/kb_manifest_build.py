@@ -10,8 +10,9 @@ validated (UTF-8 JSON, two-space indent, one final newline); messages go to stde
 no value, path or parser text. It runs with no network and a read-only corpus.
 
 The draft (JSON, in the corpus directory; document paths are relative to that directory) holds
-every human-supplied field and nothing else: top level exactly `format`,
-`attests_no_generated_text`, `attests_no_personal_names`, `documents`; each document exactly
+every human-supplied field and nothing else: top level exactly `format` (2; a format-1 draft is
+refused with its own message), `attests_no_generated_text`, `attests_no_personal_names`,
+`attests_model_host_egress` (ADR 0028), `documents`; each document exactly
 `document_id`, `version`, `title`, `origin`, `author_role`, `effective_date`, `review_by_date`,
 `licence`, `licence_reference`, `attribution`, `licence_requires_personal_name`, `site_id`,
 `all_sites`, `display_permitted`, `display_permission_reference`, `supersedes`, `path`. A missing
@@ -54,7 +55,13 @@ from divesafe.services.kb_common import LoaderRefusal
 HEADING = "## "
 FLAG_CHECK = "--check"
 
-TOP_KEYS = ("format", "attests_no_generated_text", "attests_no_personal_names", "documents")
+TOP_KEYS = (
+    "format",
+    "attests_no_generated_text",
+    "attests_no_personal_names",
+    "attests_model_host_egress",
+    "documents",
+)
 DOCUMENT_KEYS = (
     "document_id",
     "version",
@@ -99,6 +106,11 @@ FAILED_LIMIT = Outcome(12, "refused: the corpus is over a loader limit")
 FAILED_LOADER = Outcome(13, "refused: the loader would not accept this manifest")
 FAILED_CHECK = Outcome(14, "refused: the loader does not accept this corpus")
 FAILED_OUTPUT = Outcome(15, "failed: the output could not be written")
+FAILED_FORMAT = Outcome(
+    16,
+    "refused: draft format 1 is no longer accepted; write format 2 with "
+    "attests_model_host_egress (ADR 0028)",
+)
 
 
 class BuildRefused(Exception):
@@ -121,6 +133,8 @@ def parse_draft(raw: bytes) -> dict[str, Any]:
         draft = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
     except (ValueError, RecursionError):
         raise BuildRefused(FAILED_DRAFT) from None
+    if isinstance(draft, dict) and type(draft.get("format")) is int and draft["format"] == 1:
+        raise BuildRefused(FAILED_FORMAT)
     if not isinstance(draft, dict) or set(draft) != set(TOP_KEYS):
         raise BuildRefused(FAILED_DRAFT)
     documents = draft["documents"]

@@ -78,9 +78,10 @@ def write_corpus(
 ) -> str:
     specs = list(specs) if specs is not None else [doc_spec()]
     manifest: dict[str, Any] = {
-        "format": 1,
+        "format": 2,
         "attests_no_generated_text": True,
         "attests_no_personal_names": True,
+        "attests_model_host_egress": True,
         "documents": [s["entry"] for s in specs],
     }
     manifest.update(top or {})

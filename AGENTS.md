@@ -139,6 +139,11 @@ method exists. LLM self-estimates are uncalibrated and never shown as confidence
   evidence and plan fields, never identities or decision text. A loopback model server also needs
   the operator's declaration (`DIVESAFE_LLM_SERVER_IS_LOCAL`, a statement the software cannot
   check) or that opt-in, because a local proxy or tunnel can forward prompts off the machine (ADR 0023).
+- Approved site documents go to a hosted model only through `DIVESAFE_LLM_KNOWLEDGE_HOST`: one
+  named https host, equal to the base URL's host and in the allow-list, never loopback (basis
+  `remote_knowledge_opt_in`, ADR 0028). Start-up refuses while any APPROVED, non-withdrawn
+  version lacks the `attests_model_host_egress` attestation; otherwise knowledge is withheld
+  unless the server is declared local.
 
 ## 13. Agent responsibilities
 

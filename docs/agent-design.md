@@ -11,6 +11,10 @@
   an output with no valid citation is rejected whole. Claims are not individually bound to ids,
   and invented numbers in prose are not detected, so prose is untrusted (ADR 0007).
 - Agents are stateless; all state lives in the orchestrator's run context and the audit record.
+- Knowledge (`kb:` evidence) is offered to a model only under egress basis `declared_local` or
+  `remote_knowledge_opt_in` (ADR 0022 decision 15, ADR 0028). The basis must be exactly a `str`
+  or `RecordEgressBasis`; any other type, including a `str` subclass, withholds. Otherwise it is
+  withheld and recorded in `withheld_knowledge`, and a model may cite only the ids it was sent.
 
 ## Agents
 

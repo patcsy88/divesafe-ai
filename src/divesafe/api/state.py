@@ -35,7 +35,7 @@ from divesafe.data import (
     UrllibJsonGetter,
 )
 from divesafe.data.http import HTTP_POOL_CEILING, configure_http_pool, http_pool_size
-from divesafe.domain import DataCategory, RiskFactorKind
+from divesafe.domain import DataCategory, RecordEgressBasis, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
 from divesafe.models.egress import EgressBasis, check_egress
 from divesafe.orchestration import (
@@ -57,6 +57,7 @@ from divesafe.services import (
     InMemoryAssessmentRepository,
     PostgresAssessmentRepository,
     RunAwareRepository,
+    kb_attestation,
 )
 
 # Interim and unreviewed: tide predictions are DEGRADED (PHN e-Tide, ADR 0021, off by default) and
@@ -195,6 +196,31 @@ def model_host(settings: Settings) -> str | None:
     return urlsplit(str(settings.llm_base_url)).hostname
 
 
+def knowledge_goes_to_model_host(settings: Settings, basis: object) -> bool:
+    """ADR 0028: the basis `check_egress` returned is `remote_knowledge_opt_in`, or the knowledge
+    host is set. Either one turns the start-up attestation check on; the setting alone is enough
+    so that the check cannot be skipped while `check_egress` does not yet give the basis."""
+    return (
+        isinstance(basis, str) and basis == RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN.value
+    ) or bool(settings.llm_knowledge_host)
+
+
+def check_knowledge_attestations(
+    settings: Settings, basis: object, knowledge_connector: KnowledgeConnector | None
+) -> None:
+    """ADR 0028 decision 7: with knowledge going to the model host, refuse to start without a
+    knowledge store, when it cannot be read, or while an APPROVED, non-withdrawn version lacks the
+    attestation. Fixed messages, no document text."""
+    if not knowledge_goes_to_model_host(settings, basis):
+        return
+    if knowledge_connector is None or settings.database_url is None:
+        raise RuntimeError(kb_attestation.NO_STORE)
+    try:
+        kb_attestation.check_attestations(settings.database_url.get_secret_value())
+    except kb_attestation.AttestationRefused as refused:
+        raise RuntimeError(str(refused)) from None
+
+
 def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasis]:
     """The provider and its egress basis as one pair, so they cannot be separated (ADR 0022
     decision 15). `(None, "no_agent_stage")` disables the agent stage (the default `fake`
@@ -215,6 +241,12 @@ def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasi
             "egress_basis": basis,
         },
     )
+    if knowledge_goes_to_model_host(settings, basis):
+        logger.warning(
+            "knowledge is sent to the model host",
+            extra={"model_host": model_host(settings), "egress_basis": basis},
+        )
+    # ADR 0028 decision 9: unchanged; the knowledge basis does not cover PHN data.
     if settings.phn_etide_enabled and basis != "declared_local":
         logger.warning(
             "PHN e-Tide data is ON and the model server is not declared local: the PHN tide item "
@@ -349,6 +381,7 @@ def build_default_state(settings: Settings) -> AppState:
             "DIVESAFE_DATABASE_URL "
             "(ADR 0022, owner decision 2026-11-12)"
         )
+    check_knowledge_attestations(settings, basis, knowledge_connector)
     return AppState(
         repository=build_repository(settings),
         connectors=connectors,

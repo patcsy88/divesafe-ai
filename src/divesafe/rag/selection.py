@@ -34,6 +34,18 @@ INCONSISTENT_ISSUE = "knowledge store: a document family has an inconsistent sta
 ALL_EXPIRED_ISSUE = (
     "knowledge store: every document family that applies to this site is past its review-by date"
 )
+# ADR 0028 decision 7: fixed by the ADR.
+NOT_ATTESTED_ISSUE = "knowledge store: a document version is not approved for the model host"
+
+# ADR 0028 decision 7: the run basis under which an unattested governing version is excluded.
+REMOTE_KNOWLEDGE_OPT_IN = "remote_knowledge_opt_in"
+
+
+def excludes_unattested(egress_basis: object) -> bool:
+    """True when the run's recorded basis is `remote_knowledge_opt_in` (a plain string or the
+    record enum, which is a `str`). Errs towards excluding: any string equal to it excludes.
+    Under every other basis selection is unchanged (knowledge is withheld or declared local)."""
+    return isinstance(egress_basis, str) and egress_basis == REMOTE_KNOWLEDGE_OPT_IN
 
 
 def local_date(instant: datetime) -> date:
@@ -68,7 +80,9 @@ class VersionRow:
     """One document version as the store summarises it: dates, status facts, chunk count.
     Never a title. `approved_on` is the local date of the APPROVED event; `hash_checked` is True
     only when every APPROVED event of the version is checked; `withdrawn` is True when any
-    WITHDRAWN event exists; `latest` is the status of the last event by server order."""
+    WITHDRAWN event exists; `latest` is the status of the last event by server order.
+    `attests_model_host_egress` is the manifest attestation stored with the version (ADR 0028);
+    False when not given, so a row built without it is excluded under the knowledge basis."""
 
     document_id: str
     version: int
@@ -83,6 +97,7 @@ class VersionRow:
     approved_on: date | None
     latest: str | None
     chunks: int
+    attests_model_host_egress: bool = False
 
     def applies_to(self, site_id: str) -> bool:
         """The site filter: this site's own document, or an all-sites document."""
@@ -113,13 +128,19 @@ class FamilyClass(StrEnum):
     CLOCK_ISSUE = "clock_issue"
     UNCHECKED_ISSUE = "unchecked_issue"
     INCONSISTENT_ISSUE = "inconsistent_issue"
+    # ADR 0028: would be returned, but the governing version lacks the attestation and the run's
+    # basis is `remote_knowledge_opt_in`. Nothing from the family; no fall-back.
+    NOT_ATTESTED = "not_attested"
 
 
 ISSUE_CLASSES: dict[FamilyClass, str] = {
     FamilyClass.CLOCK_ISSUE: CLOCK_ISSUE,
     FamilyClass.UNCHECKED_ISSUE: UNCHECKED_ISSUE,
     FamilyClass.INCONSISTENT_ISSUE: INCONSISTENT_ISSUE,
+    FamilyClass.NOT_ATTESTED: NOT_ATTESTED_ISSUE,
 }
+# Families whose governing version is clean and usable: returned, or held back only by ADR 0028.
+_USABLE = frozenset({FamilyClass.RETURNED, FamilyClass.NOT_ATTESTED})
 
 
 @dataclass(frozen=True)
@@ -148,7 +169,7 @@ def _clean(row: VersionRow, today: date) -> bool:
 
 
 def classify_family(
-    rows: Sequence[VersionRow], now: datetime, window_end: datetime
+    rows: Sequence[VersionRow], now: datetime, window_end: datetime, *, egress_basis: object
 ) -> FamilyResult:
     """One family, by the decision 3 table with the issue rows first.
 
@@ -156,7 +177,24 @@ def classify_family(
     window end. Walk down from it to the first clean version: an issue is raised when any version
     above that one is dated after `now` (the clock issue, which wins) or has an unchecked approval
     (owner decision 2026-11-09: the prose of decision 3 wins over the table). Nothing ever falls
-    back to a lower version: only a clean governing version returns its chunks."""
+    back to a lower version: only a clean governing version returns its chunks.
+
+    ADR 0028 decision 7: under the run basis `remote_knowledge_opt_in` a family that would be
+    returned is `NOT_ATTESTED` when its governing version lacks the attestation. The governing
+    version is chosen exactly as above, so an older attested version is never used instead."""
+    result = _classify_family(rows, now, window_end)
+    if result.kind is not FamilyClass.RETURNED or not excludes_unattested(egress_basis):
+        return result
+    governing = [r for r in rows if r.version == result.version]
+    if governing and all(r.attests_model_host_egress is True for r in governing):
+        return result
+    return FamilyResult(result.document_id, FamilyClass.NOT_ATTESTED)
+
+
+def _classify_family(
+    rows: Sequence[VersionRow], now: datetime, window_end: datetime
+) -> FamilyResult:
+    """`classify_family` without the ADR 0028 exclusion."""
     if not rows or len({r.document_id for r in rows}) != 1:
         raise ValueError("one family, at least one version")
     family = rows[0].document_id
@@ -188,23 +226,27 @@ def classify_family(
 
 
 def classify(
-    rows: Iterable[VersionRow], now: datetime, window_end: datetime
+    rows: Iterable[VersionRow], now: datetime, window_end: datetime, *, egress_basis: object
 ) -> tuple[FamilyResult, ...]:
     """Every family the rows name, in document id order. Versions with no status event are
     ignored by selection; a family made only of them counts as not in force."""
     families: dict[str, list[VersionRow]] = {}
     for row in rows:
         families.setdefault(row.document_id, []).append(row)
-    return tuple(classify_family(families[name], now, window_end) for name in sorted(families))
+    return tuple(
+        classify_family(families[name], now, window_end, egress_basis=egress_basis)
+        for name in sorted(families)
+    )
 
 
 def family_issues(results: Sequence[FamilyResult]) -> tuple[str, ...]:
     """One issue per issue family, in family order, then the all-expired issue: every family
     that would otherwise be returned (its governing version clean, withdrawn excluded) is past
-    review-by."""
+    review-by. A family held back only by ADR 0028 counts as usable here, so its own issue is
+    not followed by a false all-expired one."""
     issues = [ISSUE_CLASSES[r.kind] for r in results if r.kind in ISSUE_CLASSES]
     kinds = [r.kind for r in results]
-    if FamilyClass.EXPIRED in kinds and FamilyClass.RETURNED not in kinds:
+    if FamilyClass.EXPIRED in kinds and not _USABLE.intersection(kinds):
         issues.append(ALL_EXPIRED_ISSUE)
     return tuple(issues)
 
@@ -212,7 +254,8 @@ def family_issues(results: Sequence[FamilyResult]) -> tuple[str, ...]:
 def family_notes(results: Sequence[FamilyResult]) -> tuple[KnowledgeNote, ...]:
     """Notes for the families that are not issues, in the domain's one note enum (wiring
     condition 1). No family at all is "none returned" with count 0. Expired is a note only beside
-    a returned family (otherwise it is the all-expired issue)."""
+    a returned family, or one held back only by ADR 0028 (otherwise it is the all-expired
+    issue)."""
     if not results:
         return (KnowledgeNote(code=KnowledgeNoteCode.NONE_RETURNED),)
     counts = {kind: sum(1 for r in results if r.kind is kind) for kind in FamilyClass}
@@ -223,7 +266,7 @@ def family_notes(results: Sequence[FamilyResult]) -> tuple[KnowledgeNote, ...]:
     ):
         if counts[kind]:
             notes.append(KnowledgeNote(code=code, count=counts[kind]))
-    if counts[FamilyClass.EXPIRED] and counts[FamilyClass.RETURNED]:
+    if counts[FamilyClass.EXPIRED] and any(counts[k] for k in _USABLE):
         notes.append(
             KnowledgeNote(code=KnowledgeNoteCode.EXPIRED, count=counts[FamilyClass.EXPIRED])
         )

@@ -41,6 +41,7 @@ EXPECTED_TOP_KEYS = (
     "format",
     "attests_no_generated_text",
     "attests_no_personal_names",
+    "attests_model_host_egress",
     "documents",
 )
 EXPECTED_DOCUMENT_KEYS = (
@@ -233,6 +234,18 @@ REFUSABLE = {
         False,
     ),
     "all_sites": ({}, {"site_id": None, "all_sites": False}, "all_sites", True),
+    "attests_model_host_egress": (
+        {"attests_model_host_egress": False},
+        {},
+        "attests_model_host_egress",
+        True,
+    ),
+    "attests_model_host_egress-null": (
+        {"attests_model_host_egress": None},
+        {},
+        "attests_model_host_egress",
+        True,
+    ),
     "attests_no_generated_text-null": (
         {"attests_no_generated_text": None},
         {},

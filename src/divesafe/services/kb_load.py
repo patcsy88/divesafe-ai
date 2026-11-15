@@ -315,8 +315,10 @@ def _write_load(
         conn.execute(
             "INSERT INTO public.kb_documents (document_id, version, title, origin, author_role, "
             "approver_role, effective_date, review_by_date, licence, licence_reference_present, "
-            "attribution, site_id, all_sites, display_permitted, supersedes, manifest_sha256) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s, %s, true, %s, %s)",
+            "attribution, site_id, all_sites, display_permitted, supersedes, manifest_sha256, "
+            "attests_model_host_egress) "
+            # attests_model_host_egress: the format-2 manifest refuses anything but true (ADR 0028)
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s, %s, true, %s, %s, true)",
             (
                 e.document_id,
                 e.version,

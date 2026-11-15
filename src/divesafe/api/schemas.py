@@ -29,9 +29,12 @@ from divesafe.domain import (
     EvidenceItem,
     KnowledgeNoteCode,
     Recommendation,
+    RecordEgressBasis,
     ScenarioKind,
     StageName,
+    StageOutcome,
     effective_quality,
+    knowledge_ref,
 )
 from divesafe.orchestration.pipeline import EGRESS_BASIS_UNRECOGNISED, EGRESS_HOST_MISSING
 from divesafe.risk import NOT_EVALUATED_MARKER
@@ -176,6 +179,28 @@ def _knowledge_failed(record: AssessmentRecord) -> bool:
     )
 
 
+_KNOWLEDGE_SENT_EXTERNAL = (
+    "Site document extracts were included in prompts to the external model server."
+)
+# A Reason trace with one of these outcomes sent no prompt; any other outcome may have.
+_REASON_NOT_RUN = frozenset({StageOutcome.SKIPPED, StageOutcome.NOT_CONFIGURED})
+
+
+def _knowledge_sent_to_external_server(record: AssessmentRecord) -> bool:
+    """ADR 0028 decision 6: basis `remote_knowledge_opt_in`, unwithheld `kb:` evidence on the
+    record, and a Reason stage that ran. No host is shown."""
+    if record.egress_basis is not RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN:
+        return False
+    withheld = set(record.withheld_knowledge)
+    unwithheld = any(
+        (ref := knowledge_ref(e.id)) is not None and ref not in withheld for e in record.evidence
+    )
+    reason_ran = any(
+        t.name is StageName.REASON and t.outcome not in _REASON_NOT_RUN for t in record.stages
+    )
+    return unwithheld and reason_ran
+
+
 def knowledge_note(record: AssessmentRecord) -> str:
     """The knowledge notes, superseded and withheld documents in fixed wording (ADR 0022
     decisions 14 and 15). Empty when the record says nothing about knowledge (older records)."""
@@ -190,8 +215,11 @@ def knowledge_note(record: AssessmentRecord) -> str:
     if record.withheld_knowledge:
         parts.append(
             f"{len(record.withheld_knowledge)} site document extract(s) were not sent to the "
-            "language model because the model server is not declared local."
+            "language model because the model server is not declared local or named for site "
+            "documents."
         )
+    if _knowledge_sent_to_external_server(record):
+        parts.append(_KNOWLEDGE_SENT_EXTERNAL)
     failed = _knowledge_failed(record)
     if failed:
         # Known gap 4: knowledge that failed only as an issue (no note) still gets a sentence.

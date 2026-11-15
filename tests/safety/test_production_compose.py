@@ -162,7 +162,8 @@ def test_the_api_runs_in_production_with_the_agent_stage_on(
     assert env["DIVESAFE_ENVIRONMENT"] == "production"
     assert env["DIVESAFE_LLM_PROVIDER"] not in ("fake", "")
     assert env["DIVESAFE_ALLOW_EXTERNAL_LLM"] == '"true"'
-    # Also ADR 0022 decision 15: without the declaration every knowledge item is withheld.
+    # ADR 0022 decision 15 / ADR 0028: without the declaration knowledge is withheld unless the
+    # knowledge host is set (empty by default; see the knowledge-host tests below).
     assert "DIVESAFE_LLM_SERVER_IS_LOCAL" not in env, "contradicts the external opt-in (ADR 0023)"
     assert "DIVESAFE_AUTH_MODE" not in env or "dev" not in env["DIVESAFE_AUTH_MODE"]
     assert env["DIVESAFE_SECRETS_DIR"] == "/run/secrets"
@@ -340,7 +341,72 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_EVIDENCE_MAX_AGE_MINUTES",
         "DIVESAFE_DECISION_MAX_AGE_MINUTES",
         "DIVESAFE_TRUSTED_PROXIES",
+        "DIVESAFE_LLM_KNOWLEDGE_HOST",
     }
+
+
+# --- ADR 0028: the knowledge host ---------------------------------------------------------------
+
+KNOWLEDGE_HOST = "DIVESAFE_LLM_KNOWLEDGE_HOST"
+
+
+def test_the_knowledge_host_is_empty_by_default_and_only_on_the_api(
+    services: dict[str, list[str]],
+) -> None:
+    """An empty default keeps every knowledge item withheld until the operator names the host."""
+    assert _environment(services["api"])[KNOWLEDGE_HOST] == "${DIVESAFE_LLM_KNOWLEDGE_HOST:-}"
+    for name, block in services.items():
+        if name != "api":
+            assert KNOWLEDGE_HOST not in "\n".join(block), name
+
+
+def test_the_production_env_example_has_the_knowledge_host_empty() -> None:
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert "DIVESAFE_LLM_KNOWLEDGE_HOST=" in lines
+    assert [line for line in lines if line.startswith(KNOWLEDGE_HOST)] == [
+        "DIVESAFE_LLM_KNOWLEDGE_HOST="
+    ]
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "DIVESAFE_LLM_KNOWLEDGE_HOST: ${DIVESAFE_LLM_KNOWLEDGE_HOST:-}",
+            "DIVESAFE_LLM_KNOWLEDGE_HOST: ${DIVESAFE_LLM_KNOWLEDGE_HOST:-wall-e.ch30ng.org}",
+        ),
+        (
+            "DIVESAFE_LLM_KNOWLEDGE_HOST: ${DIVESAFE_LLM_KNOWLEDGE_HOST:-}",
+            "DIVESAFE_LLM_KNOWLEDGE_HOST: wall-e.ch30ng.org",
+        ),
+    ],
+    ids=["non-empty-default", "fixed-value"],
+)
+def test_mutation_a_non_empty_knowledge_host_default_is_caught(old: str, new: str) -> None:
+    raw = COMPOSE.read_text()
+    assert raw.count(old) == 1
+    mutated = _blocks(_strip_comments(raw.replace(old, new)), "services")
+    assert _environment(mutated["api"])[KNOWLEDGE_HOST] != "${DIVESAFE_LLM_KNOWLEDGE_HOST:-}"
+
+
+def test_mutation_the_knowledge_host_on_a_loader_is_caught() -> None:
+    raw = COMPOSE.read_text()
+    anchor = "  kb_load:\n"
+    assert raw.count(anchor) == 1
+    mutated = _blocks(
+        _strip_comments(raw.replace(anchor, anchor + "    # DIVESAFE_LLM_KNOWLEDGE_HOST\n")),
+        "services",
+    )
+    # A comment never counts (comments are stripped first) ...
+    assert KNOWLEDGE_HOST not in "\n".join(mutated["kb_load"])
+    mutated = _blocks(
+        _strip_comments(
+            raw.replace(anchor, anchor + "    labels:\n      x: ${DIVESAFE_LLM_KNOWLEDGE_HOST:-}\n")
+        ),
+        "services",
+    )
+    # ... but any real line naming it does, so the scan above would fail.
+    assert KNOWLEDGE_HOST in "\n".join(mutated["kb_load"])
 
 
 def test_the_output_token_budget_defaults_to_the_value_the_live_runs_used(

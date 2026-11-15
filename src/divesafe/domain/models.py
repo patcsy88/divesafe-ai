@@ -355,11 +355,13 @@ class RecordEgressBasis(StrEnum):
     """Why the run's model server could receive a prompt, as stored on the record (ADR 0022
     decision 15). A superset of `models.egress.EgressBasis`: `no_agent_stage` comes only from the
     no-provider case and never from `check_egress`. Knowledge may reach a prompt only under
-    `declared_local`."""
+    `declared_local` or `remote_knowledge_opt_in` (ADR 0028)."""
 
     DECLARED_LOCAL = "declared_local"
     LOOPBACK_EXTERNAL_OPT_IN = "loopback_external_opt_in"
     REMOTE_EXTERNAL_OPT_IN = "remote_external_opt_in"
+    # ADR 0028: approved knowledge may go to the one named, non-loopback model host.
+    REMOTE_KNOWLEDGE_OPT_IN = "remote_knowledge_opt_in"
     NONE = "none"
     NO_AGENT_STAGE = "no_agent_stage"
 
@@ -503,6 +505,19 @@ def _is_loopback(host: str) -> bool:
 _LOOPBACK_BASES: frozenset[RecordEgressBasis] = frozenset(
     {RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.LOOPBACK_EXTERNAL_OPT_IN}
 )
+# The bases under which unwithheld knowledge may be on the record (ADR 0022 decision 15,
+# ADR 0028 decision 4).
+_KNOWLEDGE_BASES: frozenset[RecordEgressBasis] = frozenset(
+    {RecordEgressBasis.DECLARED_LOCAL, RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN}
+)
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 class AssessmentRecord(_Frozen):
@@ -609,8 +624,8 @@ class AssessmentRecord(_Frozen):
         description=(
             "Why the model server could receive a prompt (ADR 0022 decision 15, ADR 0023). None "
             "on records made before it existed. Knowledge (`kb:` evidence) may reach a prompt "
-            "only under `declared_local`; under any other value, or None, every knowledge item "
-            "is listed in `withheld_knowledge`."
+            "only under `declared_local` or `remote_knowledge_opt_in` (ADR 0028); under any "
+            "other value, or None, every knowledge item is listed in `withheld_knowledge`."
         ),
     )
     model_host: str | None = Field(
@@ -618,7 +633,8 @@ class AssessmentRecord(_Frozen):
         max_length=253,
         description=(
             "Host name of the model server only: no scheme, port, path or userinfo. None when "
-            "the basis is `none` or `no_agent_stage`, or the basis is absent."
+            "the basis is `none` or `no_agent_stage`, or the basis is absent. Under "
+            "`remote_knowledge_opt_in` a non-loopback DNS name, never an IP literal (ADR 0028)."
         ),
     )
     withheld_knowledge: tuple[KnowledgeRef, ...] = Field(
@@ -765,12 +781,13 @@ class AssessmentRecord(_Frozen):
         return self
 
     def _check_egress(self) -> None:
-        """ADR 0022 decision 15, checkable from the record alone: knowledge in a prompt implies
-        `declared_local`. Knowledge here means evidence with a `kb:` id (owner decision
-        2026-11-06). Since the owner decision of 2026-11-10 (reversing condition 7) the record
-        refuses a KNOWLEDGE item without a `kb:` id and a `kb:` id on any other kind, in both
-        directions as `services.evidence.screen_knowledge` does, so the two meanings coincide.
-        Fixed messages: no id or content."""
+        """ADR 0022 decision 15 as amended by ADR 0028 decision 4, checkable from the record
+        alone: knowledge in a prompt implies `declared_local`, or `remote_knowledge_opt_in` with a
+        non-loopback DNS name (not an IP literal) as `model_host`. Knowledge here means evidence
+        with a `kb:` id (owner decision 2026-11-06). Since the owner decision of 2026-11-10
+        (reversing condition 7) the record refuses a KNOWLEDGE item without a `kb:` id and a
+        `kb:` id on any other kind, in both directions as `services.evidence.screen_knowledge`
+        does, so the two meanings coincide. Fixed messages: no id or content."""
         # Withheld items too: they are shown to the human and read by the variant search.
         # The messages for `evidence` are unchanged; withheld ones name the field (no id).
         for items, where in ((self.evidence, "evidence"), (self.withheld_evidence, "withheld")):
@@ -787,6 +804,8 @@ class AssessmentRecord(_Frozen):
             raise ValueError("model_host must be the model server's host name only")
         elif (basis in _LOOPBACK_BASES) != _is_loopback(host):
             raise ValueError("model_host does not match the egress basis")
+        elif basis is RecordEgressBasis.REMOTE_KNOWLEDGE_OPT_IN and _is_ip_literal(host):
+            raise ValueError("model_host must be a DNS name under remote_knowledge_opt_in")
 
         knowledge = {ref: e.id for e in self.evidence if (ref := knowledge_ref(e.id)) is not None}
         if len(knowledge) > MAX_KNOWLEDGE_ITEMS:
@@ -798,8 +817,11 @@ class AssessmentRecord(_Frozen):
             raise ValueError("each withheld knowledge item appears at most once")
         if set(withheld) - knowledge.keys():
             raise ValueError("withheld knowledge must name knowledge evidence in the record")
-        if basis is not RecordEgressBasis.DECLARED_LOCAL and knowledge.keys() - set(withheld):
-            raise ValueError("knowledge may reach a prompt only under egress basis declared_local")
+        if basis not in _KNOWLEDGE_BASES and knowledge.keys() - set(withheld):
+            raise ValueError(
+                "knowledge may reach a prompt only under egress basis declared_local or "
+                "remote_knowledge_opt_in"
+            )
         held_ids = {knowledge[ref] for ref in withheld if ref in knowledge}
         model_cited = {
             i for f in (*self.findings, *self.cross_examination_findings) for i in f.evidence_ids
