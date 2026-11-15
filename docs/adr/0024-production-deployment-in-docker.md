@@ -2175,7 +2175,49 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       (read-only, bootstrap user): v1 and v2 WITHDRAWN, v3 APPROVED and attested, and the start-up
       attestation query (`services/kb_attestation.py`) returns 0. Section name "Pulau Tioman site
       guide"; review by 2027-05-13.
-    - **Step 3** (set `DIVESAFE_LLM_KNOWLEDGE_HOST=wall-e.ch30ng.org`, restart): not yet run.
+    - **Step 3, knowledge to the model host (owner approved).** The previous
+      `docker/production.env` was kept as `records/production.env.before-knowledge-host-20261115`
+      (mode 600). `DIVESAFE_LLM_KNOWLEDGE_HOST=wall-e.ch30ng.org` added with a comment line;
+      `C up -d --no-build --wait api` at 01:34:38Z, same image `85648e026e2b`. Start-up log:
+      `egress_basis` `remote_knowledge_opt_in` and "knowledge is sent to the model host"
+      (`model_host` `wall-e.ch30ng.org`); the start-up attestation check passed (it would refuse
+      otherwise); health 200, an unauthenticated read 401.
+      - **Removed and re-added by the owner:** the two lines were removed at 01:38:34Z and the API
+        recreated at 01:40:11Z. The check assessment `56b674fd…` (01:44:23Z) therefore ran under
+        `remote_external_opt_in`: `kb:tioman-site-guide:3:1` withheld, the reworded withheld
+        sentence shown. Correct for the setting in force, and fails safe. The owner added the line
+        back and restarted at 01:48:08Z (log as above). The truncated comment line was completed
+        at 01:56:00Z, with the file before that edit kept as
+        `records/production.env.before-comment-fix-20261115`; comments are not read, so no
+        restart was needed.
+      - **Check assessment `a74f7510aea61f611f35ec133c6b0d26`** (01:52:43Z, read-only check of the
+        stored record):
+        - `egress_basis` `remote_knowledge_opt_in`, `model_host` `wall-e.ch30ng.org`,
+          `withheld_knowledge` empty;
+        - Retrieve fetched `kb:tioman-site-guide:3:1`, and the Reason stage's `evidence_ids` (the
+          ids the prompts held) include it;
+        - one of five findings and the risk proposal cite it;
+        - 0 agent issues;
+        - deterministic and final recommendation INSUFFICIENT EVIDENCE;
+        - the view shows "Site document extracts were included in prompts to the external model
+          server.".
+      - **Rollback, no restore needed:** remove the line (or copy the saved file back) and run
+        `C up -d --no-build --wait api`; knowledge is then withheld again.
+  - **Gaps found during the ADR 0028 deploy (2026-11-15):**
+    - **Flaky safety test:**
+      `tests/safety/test_llm_egress_declaration.py::test_the_start_up_log_names_the_model_host_and_nothing_else_of_the_url`
+      looks for `"8443"` anywhere in `repr(vars(record))`, including the log record's
+      `relativeCreated` timer. It failed once in CI on PR #9 (`relativeCreated` 84435.19…) and
+      passed on re-run. The proposed fix checks only the fields the code adds, plus the message,
+      and is equally strict for a leak. Not changed: it is a safety test, so the owner decides.
+    - **Model output cut at the token limit:** `56b674fd…` had 2 agent issues, "output stopped at
+      the token limit" (`specialist:weather`, `scenario:marginal`), with
+      `DIVESAFE_LLM_MAX_OUTPUT_TOKENS` at its compose default of 3000 and `claude-sonnet-5-5`.
+      Those parts were dropped and the deterministic result stood (fails closed); `a74f7510…` had
+      none. Not investigated.
+    - The check one-liner the assistant gave the owner read `sent_evidence_ids` and `status` from
+      the record view; neither is there, so it printed `[]` and `None`. Read the Reason stage's
+      `evidence_ids` instead (`docs/architecture.md` corrected in this change).
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
