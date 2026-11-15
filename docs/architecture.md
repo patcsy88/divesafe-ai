@@ -247,9 +247,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   shared actor) using `prometheus_client`, Uptime Kuma for alerting over
   `host.docker.internal`. Tracing (amended 2026-11-15, owner): self-hosted Langfuse for
   metadata-only production spans over an internal Docker network, development evaluation of the
-  synthetic sets, a read-only prompt mirror and cost reporting; built after the request id,
-  metrics and alerting. `src` never imports `langfuse`, and tracing never changes a result. See
-  [ADR 0027](adr/0027-observability.md).
+  synthetic sets, a read-only prompt mirror and cost reporting; built first, before the request
+  id, metrics and alerting (owner, 2026-11-15). `src` never imports `langfuse`, and tracing
+  never changes a result. See [ADR 0027](adr/0027-observability.md).
 - **OpenCode permissions and the `rtk` plugin:** a global `rtk` plugin rewrites `git ...` to
   `rtk git ...` before permissions are checked, so `opencode.jsonc` and the code-reviewer carry
   `rtk git ...` variants, including a deny for `rtk git push`. Verified by running the reviewer:
