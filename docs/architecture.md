@@ -133,8 +133,9 @@ empty on older records; never prompts, model text or provider error text), the e
 (ADR 0022 decision 15, written on every new record since the Retrieve wiring of 2026-11-10:
 `egress_basis`, one of five fixed values; `model_host`, a host name only, hidden from create-only
 keys in the API view with `model_host_withheld: true`; `withheld_knowledge`, the `kb:` items not
-sent to a model, by document id, version and chunk; `sent_evidence_ids`, the ids a prompt
-actually held; all absent on older records; a host-needing basis without a host is recorded as
+sent to a model, by document id, version and chunk; the record has no `sent_evidence_ids` field:
+the ids a prompt actually held are the Reason stage's `evidence_ids` in `stages` (the run keeps
+them for Supervise); all absent on older records; a host-needing basis without a host is recorded as
 `none` with everything withheld and a fixed `egress.host_missing` or `egress.basis_unrecognised`
 first in `agent_issues`, which therefore holds more than failed agent calls; the record refuses
 `kb:` evidence that is not withheld unless the basis is `declared_local` or (ADR 0028) `remote_knowledge_opt_in` with a
