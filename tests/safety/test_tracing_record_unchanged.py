@@ -3,14 +3,17 @@
 Each path runs through `RunManager` with an in-memory store and a fixed clock, once with tracing
 off (no sink) and once per traced setup. The stored record (except `stages[*].duration_ms`), the
 run's state and failure code, how the run's task ends and the error log records must be equal.
-Step 2 has no OpenTelemetry SDK, so the setups are a sink whose `emit` raises, a collector whose
-append, start or finish raises, and a full collector; step 3 adds the tracer and exporter setups.
+The setups are a sink whose `emit` raises, a collector whose append, start or finish raises, a
+full collector, and (step 3) the real exporter over the stub wire (`tests.safety.trace_wire`):
+exporting, with a tracer whose `start_span` raises, with an export that hangs, and with a session
+that raises a connection error.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -18,7 +21,11 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+import requests
+from opentelemetry.exporter.otlp.common import http as otlp_http
+from opentelemetry.sdk import trace as sdk_trace
 from tests.agent import scripted_llm as sl
+from tests.safety import trace_wire as tw
 from tests.safety.kb_fakes import mutated_module
 
 from divesafe.agents import STAGE_TIMED_OUT_ISSUE, cross_examination, risk_agent, specialists, tot
@@ -181,18 +188,86 @@ def _full_collector(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(collector_module, "_drops", dict.fromkeys(collector_module.DROP_REASONS, 0))
 
 
-SETUPS: dict[str, tuple[type[RecordingSink], Callable[[pytest.MonkeyPatch], None]]] = {
+@dataclass
+class ExportSink(RecordingSink):
+    """Records the trace, then hands it to a real export."""
+
+    export: Any = None
+    wire: tw.Wire | None = None
+
+    def emit(self, trace: RunTrace) -> None:
+        super().emit(trace)
+        self.export.sink.emit(trace)
+
+
+class _Export:
+    """A real export over the stub wire, built by `patch` (after the path's own patches);
+    `sink` hands it to the traced run. Library backoff waits are skipped, not the retries."""
+
+    def __init__(self, mode: str = "ok", *, tracer_raises: bool = False) -> None:
+        self.mode, self.tracer_raises = mode, tracer_raises
+        self.starts = 0
+        self.wire = tw.Wire()
+        self.export: Any = None
+
+    def patch(self, mp: pytest.MonkeyPatch) -> None:
+        error = requests.ConnectionError("refused") if self.mode == "raise" else None
+        self.wire = tw.install(mp, tw.Wire(mode=self.mode, error=error))
+        mp.setattr(otlp_http._OTLPHTTPClient, "_compute_backoff", lambda _self, _retry: 0.0)
+        self.starts = 0
+        if self.tracer_raises:
+
+            def start_span(*args: Any, **kwargs: Any) -> Any:
+                self.starts += 1
+                raise RuntimeError("tracer failed")
+
+            mp.setattr(sdk_trace.Tracer, "start_span", start_span)
+        self.export = self.wire.build()
+
+    def sink(self) -> ExportSink:
+        return ExportSink(export=self.export, wire=self.wire)
+
+
+EXPORTS = {
+    "export": _Export(),
+    "tracer_raises": _Export(tracer_raises=True),
+    "export_blocks": _Export("block"),
+    "export_connection_error": _Export("raise"),
+}
+
+SETUPS: dict[str, tuple[Callable[[], RecordingSink], Callable[[pytest.MonkeyPatch], None]]] = {
     "recording": (RecordingSink, lambda _: None),
     "emit_raises": (RaisingSink, lambda _: None),
     "append_raises": (RecordingSink, _append_raises),
     "full_collector": (RecordingSink, _full_collector),
     "start_raises": (RecordingSink, lambda mp: mp.setattr(api_runner, "start_collecting", _raise)),
     "finish_raises": (RecordingSink, lambda mp: mp.setattr(RunCollector, "finish", _raise)),
+    **{name: (setup.sink, setup.patch) for name, setup in EXPORTS.items()},
 }
 
 
 def _empty(sink: RecordingSink) -> bool:
     return [(t.stages, t.model_calls) for t in sink.traces] == [((), ())]
+
+
+def _exported(sink: RecordingSink) -> tw.Wire:
+    """Shut the export down (bounded) and return its wire."""
+    assert isinstance(sink, ExportSink) and sink.wire is not None
+    assert sink.export.shutdown(5.0), "the export did not finish"
+    return sink.wire
+
+
+def _hung(sink: RecordingSink) -> bool:
+    """The export reached the wire and was still blocked when the bounded shutdown returned."""
+    assert isinstance(sink, ExportSink) and sink.wire is not None
+    try:
+        finished = sink.export.shutdown(0.3)
+        deadline = time.monotonic() + 2.0
+        while not sink.wire.sent and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return not finished and bool(sink.wire.sent)
+    finally:
+        sink.wire.release.set()
 
 
 # What each setup must visibly do, so a setup that silently stops applying fails here.
@@ -203,6 +278,16 @@ SETUP_EFFECTS: dict[str, Callable[[RecordingSink], bool]] = {
     "full_collector": lambda s: _empty(s) and collector_module.drop_counts()["collector_full"] > 0,
     "start_raises": lambda s: s.traces == [],
     "finish_raises": lambda s: s.traces == [],
+    "export": lambda s: len(s.traces) == 1 and "run" in {x.name for x in _exported(s).spans()},
+    "tracer_raises": lambda s: (
+        len(s.traces) == 1 and _exported(s).sent == [] and EXPORTS["tracer_raises"].starts == 1
+    ),
+    "export_blocks": lambda s: len(s.traces) == 1 and _hung(s),
+    "export_connection_error": lambda s: (
+        len(s.traces) == 1
+        and bool(_exported(s).sent)
+        and collector_module.drop_counts()["connection"] == 1
+    ),
 }
 
 

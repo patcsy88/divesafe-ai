@@ -69,13 +69,16 @@ class ModelCallEntry:
 
 @dataclass(frozen=True, slots=True)
 class StageEntry:
-    """The exportable part of a `StageTrace`: never its evidence ids or issue codes."""
+    """The exportable part of a `StageTrace`: never its evidence ids or issue codes. `ended_ns` is
+    the wall clock when the stage's trace was appended, for the span only (the record's times
+    are coarse run-clock bounds)."""
 
     name: StageName
     outcome: StageOutcome
     started_at: datetime
     finished_at: datetime
     duration_ms: int
+    ended_ns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +125,7 @@ class RunCollector:
                     trace.started_at,
                     trace.finished_at,
                     trace.duration_ms,
+                    time.time_ns(),
                 )
             )
 

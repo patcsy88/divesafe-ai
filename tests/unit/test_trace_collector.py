@@ -213,6 +213,7 @@ def test_a_collected_stage_holds_no_evidence_ids_or_issues() -> None:
         "started_at",
         "finished_at",
         "duration_ms",
+        "ended_ns",
     }
     trace = StageTrace(
         name=StageName.OBSERVE,
@@ -227,5 +228,8 @@ def test_a_collected_stage_holds_no_evidence_ids_or_issues() -> None:
     collector = RunCollector()
     collector.add_stage(trace)
     (entry,) = collector.finish("a", "stored").stages
-    assert entry == StageEntry(StageName.OBSERVE, StageOutcome.COMPLETED, sl.NOW, sl.NOW, 3)
+    assert entry == StageEntry(
+        StageName.OBSERVE, StageOutcome.COMPLETED, sl.NOW, sl.NOW, 3, entry.ended_ns
+    )
+    assert entry.ended_ns > 0
     assert "ev-marker" not in repr(collector.finish("a", "stored"))
