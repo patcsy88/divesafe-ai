@@ -135,39 +135,55 @@ CALL_LOG_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def _response_counts(response: object) -> tuple[int | None, int | None]:
-    """(characters, server output tokens) of a response; None for any count not readable."""
+Counts = tuple[int | None, int | None, int | None]
+NO_COUNTS: Counts = (None, None, None)
+
+
+def _response_counts(response: object) -> Counts:
+    """(characters, server output tokens, server input tokens) of a response; None for any count
+    not readable."""
     try:
         text = getattr(response, "text", None)
         chars = plain_count(len(text)) if type(text) is str else None
-        return chars, plain_count(getattr(response, "output_tokens", None))
+        return (
+            chars,
+            plain_count(getattr(response, "output_tokens", None)),
+            plain_count(getattr(response, "input_tokens", None)),
+        )
     except Exception:
-        return None, None
+        return NO_COUNTS
 
 
-def _token_limit_counts(exc: BaseException) -> tuple[int | None, int | None]:
-    """(characters joined before the stop, server output tokens) carried by a token-limit error;
-    None for any count not readable. Reads plain attributes only, never text."""
+def _token_limit_counts(exc: BaseException) -> Counts:
+    """(characters joined before the stop, server output tokens, server input tokens) carried by
+    a token-limit error; None for any count not readable. Reads plain attributes only, never
+    text."""
     try:
         state = vars(exc)
-        return plain_count(state.get("output_chars")), plain_count(state.get("output_tokens"))
+        return (
+            plain_count(state.get("output_chars")),
+            plain_count(state.get("output_tokens")),
+            plain_count(state.get("input_tokens")),
+        )
     except Exception:
-        return None, None
+        return NO_COUNTS
 
 
 def _log_call(
     task: str,
     outcome: CallOutcome,
+    *,
     output_limit: int | None,
     output_chars: int | None,
     output_used: int | None,
+    input_used: int | None,
     started: float,
     started_ns: int,
 ) -> None:
     """One INFO line per model call, with counts only. `output_limit` and `output_used` are
-    counts of tokens, `output_chars` of characters. The same fields go to the run's trace
-    collector, if any (ADR 0027 amendment). Never raises: a logging or tracing failure is
-    dropped."""
+    counts of tokens, `output_chars` of characters. The same fields, plus `input_used` (the
+    server's input tokens, span-only: never on the log line), go to the run's trace collector,
+    if any (ADR 0027 amendment). Never raises: a logging or tracing failure is dropped."""
     fields: dict[str, object] | None = None
     with contextlib.suppress(Exception):  # logging must never change the call's result
         fields = {
@@ -181,7 +197,7 @@ def _log_call(
         logger.info("model call finished", extra=fields)
     if fields is not None:
         with contextlib.suppress(Exception):  # tracing must never change the call's result
-            record_model_call(fields, started_ns)
+            record_model_call({**fields, "input_used": plain_count(input_used)}, started_ns)
 
 
 async def call_structured(
@@ -209,15 +225,19 @@ async def call_structured(
     outcome: CallOutcome = "error"
     chars: int | None = None
     used: int | None = None
+    used_in: int | None = None
     error: AgentError | None = None
     started = time.monotonic()
     started_ns = time.time_ns()  # the span's wall-clock start only; never on the record
     try:
         try:
-            parsed, chars, used = await _call(provider, request, task, output, allowed_ids, timeout)
+            parsed, (chars, used, used_in) = await _call(
+                provider, request, task, output, allowed_ids, timeout
+            )
             outcome = "ok"
         except _Finished as finished:
-            outcome, chars, used = finished.outcome, finished.output_chars, finished.output_used
+            outcome = finished.outcome
+            chars, used, used_in = finished.counts
             error = finished.error
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -226,7 +246,16 @@ async def call_structured(
             outcome = "error"
             raise
     finally:
-        _log_call(task, outcome, request.max_output_tokens, chars, used, started, started_ns)
+        _log_call(
+            task,
+            outcome,
+            output_limit=request.max_output_tokens,
+            output_chars=chars,
+            output_used=used,
+            input_used=used_in,
+            started=started,
+            started_ns=started_ns,
+        )
     # Raised outside the `except`, so `__context__` never holds the reply (as before).
     if error is not None:
         raise error from None
@@ -241,11 +270,11 @@ class _Finished(Exception):
         self,
         outcome: CallOutcome,
         error: AgentError,
-        counts: tuple[int | None, int | None] = (None, None),
+        counts: Counts = NO_COUNTS,
     ) -> None:
         super().__init__()
         self.outcome: CallOutcome = outcome
-        self.output_chars, self.output_used = counts
+        self.counts = counts
         self.error = error
 
 
@@ -256,9 +285,9 @@ async def _call(
     output: type[T],
     allowed_ids: frozenset[str],
     timeout: float | None,
-) -> tuple[T, int | None, int | None]:
-    """The validated output, with the reply's character count and the server's output-token
-    count (for the log line; counts only, never the response)."""
+) -> tuple[T, Counts]:
+    """The validated output, with the reply's character count and the server's output and input
+    token counts (for the log line and the trace; counts only, never the response)."""
     # The errors below are raised outside their `except` blocks, so `__context__` never holds a
     # provider's or a model's text.
     failure: _Finished | None = None
@@ -321,4 +350,4 @@ async def _call(
             ),
             counts,
         )
-    return parsed, *counts
+    return parsed, counts

@@ -240,7 +240,7 @@ def test_a_length_stop_carries_the_chars_joined_and_the_count() -> None:
     assert error.args == ("the model stopped at the output-token limit",)
     assert failure_reason(error) == "token_limit"
     assert not hasattr(error, "text")
-    assert set(vars(error)) == {"output_chars", "output_tokens", "reason"}
+    assert set(vars(error)) == {"output_chars", "output_tokens", "input_tokens", "reason"}
     assert "SECRET-PART" not in repr(vars(error)) + repr(error) + str(error)
 
 

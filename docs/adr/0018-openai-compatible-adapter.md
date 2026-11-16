@@ -138,6 +138,12 @@ one run (ADR 0024 A8), and nothing recorded how long the other replies were.
   missing, malformed or oversized count is `null`. A count never changes whether a reply is
   accepted or refused, and every refusal is
   unchanged.
+- **Input count (ADR 0027 amendment, step 4, 2026-11-16):** the adapter also reads
+  `usage.prompt_tokens` from the same `usage` object, by the same rule, into
+  `LLMResponse.input_tokens` (and `TokenLimitError.input_tokens` on a "length" stop). It goes to
+  the run's trace only, as `input_used`; it is never on the log line, and `CALL_LOG_FIELDS` is
+  unchanged. Unlike `output_tokens`, the field maps any value `plain_count` rejects to `null`, so
+  building a response never fails on it.
 - **Logging cannot change a result:** a failure to read a count gives `null`, and a logging error
   is dropped. The line holds only counts: no reply, partial reply or error object is kept for
   it. Agent issues, records, error strings, `kind` and `label` are unchanged. One small

@@ -100,8 +100,19 @@ class OpenAICompatibleError(RuntimeError):
 class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
     """The reply stopped at the output-token limit."""
 
-    def __init__(self, *, output_chars: object = None, output_tokens: object = None) -> None:
-        TokenLimitError.__init__(self, output_chars=output_chars, output_tokens=output_tokens)
+    def __init__(
+        self,
+        *,
+        output_chars: object = None,
+        output_tokens: object = None,
+        input_tokens: object = None,
+    ) -> None:
+        TokenLimitError.__init__(
+            self,
+            output_chars=output_chars,
+            output_tokens=output_tokens,
+            input_tokens=input_tokens,
+        )
         self.reason = "token_limit"
 
 
@@ -212,11 +223,14 @@ def _post(
     return b"".join(chunks)
 
 
-def _completion_tokens(event: dict[str, object]) -> int | None:
-    """`usage.completion_tokens` of one event, or None. Never raises and never refuses: the
-    count is logged only (ADR 0018 amendment 2026-11-15)."""
+def _usage_counts(event: dict[str, object]) -> tuple[int | None, int | None]:
+    """(`usage.completion_tokens`, `usage.prompt_tokens`) of one event, each or None. Never
+    raises and never refuses: the counts are logged or traced only (ADR 0018 amendment
+    2026-11-15; ADR 0027 amendment, step 4)."""
     usage = event.get("usage")
-    return plain_count(usage.get("completion_tokens")) if isinstance(usage, dict) else None
+    if not isinstance(usage, dict):
+        return None, None
+    return plain_count(usage.get("completion_tokens")), plain_count(usage.get("prompt_tokens"))
 
 
 def join_sse(raw: bytes) -> str:
@@ -225,10 +239,16 @@ def join_sse(raw: bytes) -> str:
 
 
 def join_sse_counted(raw: bytes) -> tuple[str, int | None]:
-    """`join_sse`, plus the server's `usage.completion_tokens` from the last event that carries a
-    `usage` object (a usage-only event or a choice event), or None. The count never changes what
-    is accepted or refused. A "length" stop carries the characters joined so far and the count
-    seen so far, as plain ints."""
+    """`join_sse`, plus the server's `usage.completion_tokens` (see `join_sse_usage`)."""
+    text, output_tokens, _ = join_sse_usage(raw)
+    return text, output_tokens
+
+
+def join_sse_usage(raw: bytes) -> tuple[str, int | None, int | None]:
+    """`join_sse`, plus the server's `usage.completion_tokens` and `usage.prompt_tokens`, both
+    from the last event that carries a `usage` object (a usage-only event or a choice event), or
+    None. The counts never change what is accepted or refused. A "length" stop carries the
+    characters joined so far and the counts seen so far, as plain ints."""
     try:
         lines = re.split(r"\r\n|\r|\n", raw.decode("utf-8"))
     except UnicodeDecodeError:
@@ -240,6 +260,7 @@ def join_sse_counted(raw: bytes) -> tuple[str, int | None]:
     done = False
     seen_data = False
     tokens: int | None = None
+    prompt: int | None = None
     for line in lines:
         if not line.strip() or line.startswith(":"):  # blank or keep-alive comment
             continue
@@ -264,7 +285,7 @@ def join_sse_counted(raw: bytes) -> tuple[str, int | None]:
         if not isinstance(choices, list) or len(choices) > 1:
             raise _refuse("bad_shape")
         if event.get("usage") is not None:  # some servers send `"usage": null` on every chunk
-            tokens = _completion_tokens(event)
+            tokens, prompt = _usage_counts(event)
         if not choices:
             continue  # a usage-only event
         choice = choices[0]
@@ -288,14 +309,16 @@ def join_sse_counted(raw: bytes) -> tuple[str, int | None]:
         if reason is not None:
             if reason == "length":
                 raise OpenAICompatibleTokenLimitError(
-                    output_chars=sum(len(part) for part in parts), output_tokens=tokens
+                    output_chars=sum(len(part) for part in parts),
+                    output_tokens=tokens,
+                    input_tokens=prompt,
                 )
             if reason != "stop":
                 raise _refuse("bad_shape")
             finished = True
     if not (finished and done):
         raise _refuse("no_done_marker" if seen_data else "empty_stream")
-    return "".join(parts), tokens
+    return "".join(parts), tokens, prompt
 
 
 class OpenAICompatibleProvider:
@@ -405,8 +428,14 @@ class OpenAICompatibleProvider:
         raw = await asyncio.get_running_loop().run_in_executor(
             self._executor, self._transport, self._url, body, self._deadline
         )
-        text, tokens = join_sse_counted(raw)
-        return LLMResponse(text=text, provider=self.name, model=self.model, output_tokens=tokens)
+        text, tokens, prompt = join_sse_usage(raw)
+        return LLMResponse(
+            text=text,
+            provider=self.name,
+            model=self.model,
+            output_tokens=tokens,
+            input_tokens=prompt,
+        )
 
 
 def _factory(settings: Settings) -> OpenAICompatibleProvider:
