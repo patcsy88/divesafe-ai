@@ -205,11 +205,28 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     https rule and to AGENTS.md section 12's "https for outbound calls" (the second is
     development evaluation on loopback, section 2 below).
   - **The HTTP session.** The exporter gets a `requests.Session` with `trust_env=False` and
-    `max_redirects=0`, passed as its `session=` (verify at build), like the model adapter
-    (`ProxyHandler({})`, `_NoRedirect`). Endpoint, headers, timeout and processor limits are passed
-    explicitly from `Settings`; when tracing is enabled, start-up refuses while any `OTEL_*`
-    variable is set, so the environment cannot change where spans go, what they hold or the queue
-    limits.
+    `max_redirects=0`, passed as its `session=` (verified at build, step 3), like the model adapter
+    (`ProxyHandler({})`, `_NoRedirect`). Only `http://` is mounted, with
+    `HTTPAdapter(max_retries=0)`; the session refuses anything but a `POST` to the exact endpoint
+    and forces `allow_redirects=False`. Every 3xx reply counts as `http_status` (with
+    `max_redirects=0` requests raises `TooManyRedirects`; no second request is sent); a failure the
+    session never saw (encoding, the size cap) counts as `connection`. Headers are exactly
+    `Authorization` and `x-langfuse-ingestion-version: 4` besides the library's own. Endpoint,
+    headers, timeout and processor limits are passed explicitly; when tracing is enabled,
+    start-up refuses while any `OTEL_*` variable is set, so the environment cannot change where
+    spans go, what they hold or the queue limits.
+  - **Fixed bounds** (step 3): export timeout 3 s, queue 512 spans, batch 128, schedule delay
+    2 s, request size 4 MiB, shutdown wait 4 s, attribute length 128 characters. A reservation
+    (`_Pending`) capped at the queue size is taken per run before any span is made, so a run
+    whose spans do not fit is dropped whole and counted `queue_full`, never partly exported, and
+    the SDK's own queue (which drops the oldest silently) never overflows.
+  - **FastAPI's own telemetry is off** (step 3). FastAPI 0.142+ has native OpenTelemetry: it
+    requires and imports `opentelemetry-api`, records request spans, validation input and
+    exception text once a global provider is set, and from 0.143 adds exporters from `OTEL_*`
+    variables only on opt-in (`FASTAPI_OTEL_AUTO_CONFIGURE=true`). `create_app` passes
+    `telemetry=FASTAPI_TELEMETRY_OFF` (tracing, metrics, logs, operation spans and
+    auto-configuration all off, whatever the environment), and the dependency floor is
+    `fastapi>=0.143,<1`.
   - **A private provider.** The API builds its own `TracerProvider` instance and takes tracers
     only from it. It never calls `trace.set_tracer_provider` or `trace.get_tracer_provider`, so
     no other library's spans (an instrumented library, or the `langfuse` SDK, which puts prompts
@@ -280,11 +297,10 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     and each stub-session failure increments its own reason. Item 2 moves the count into its
     dedicated `CollectorRegistry` in the same change that adds its AST pin on
     `start_http_server`, `make_asgi_app`, `make_wsgi_app` and the global `REGISTRY`. The
-    `opentelemetry` and
-    `urllib3` loggers each get `propagate=False` and a `logging.NullHandler()` (without a
-    handler Python's last-resort handler would print to stderr),
-    because they can print the endpoint, the server's reply text and connection errors with host
-    and port.
+    `opentelemetry`, `urllib3` and `requests` loggers each get `propagate=False` and a
+    `logging.NullHandler()` (without a handler Python's last-resort handler would print to
+    stderr), because they can print the endpoint, the server's reply text and connection errors
+    with host and port.
   - **Never read back.** Nothing read from Langfuse reaches a prompt, a rule, a record or the
     corpus. Langfuse is not the audit record: where a trace and a record disagree, the record
     wins.
@@ -323,15 +339,22 @@ section 9).
   - Run span attributes: `run_outcome` (`stored` or a `FailureCode` value), `prompt_version`
     (`PROMPT_VERSION`), the request id (once item 1 is built; when it is added, the whole-export
     allow-list pin is updated in the same change, as a `tests/safety` change reviewed by
-    `risk-reviewer`) and the assessment id.
+    `risk-reviewer`) and the assessment id, only when it is 32 lowercase hex characters (the
+    two forms the API creates, `uuid4().hex` and `_idempotent_id`); otherwise it is left out.
   - Stage span attributes: the stage name, outcome and duration from its `StageTrace`, never its
-    evidence ids or issue codes' free parts.
+    evidence ids or issue codes' free parts. A stage span ends at `StageEntry.ended_ns`, the wall
+    clock when the collector appended the entry, and starts its duration earlier. An unknown
+    stage name is dropped.
   - Model-call span attributes, exactly these and pinned by a test:
-    - `CALL_LOG_FIELDS` (`task`, `outcome` as one of the nine `CALL_OUTCOMES` labels,
-      `output_limit`, `output_chars`, `output_used`, `duration_ms`), taken from the same dict
-      the "model call finished" line uses;
-    - `input_used` (the server's `usage.prompt_tokens` through `plain_count`) and `model`
-      (`provider.model`, needed for Langfuse prices), both span-only: they stay off the log line;
+    - `task`, `outcome` (one of the nine `CALL_OUTCOMES` labels), `output_limit`,
+      `output_chars` and `duration_ms`, taken from the same dict the "model call finished" line
+      uses; an unknown task is named `unlisted_task`;
+    - span-only, under the Langfuse / OpenTelemetry GenAI names (owner, 2026-11-16):
+      `gen_ai.usage.output_tokens` (the log line's `output_used`), `gen_ai.usage.input_tokens`
+      (`input_used`, the server's `usage.prompt_tokens` through `plain_count`, filled from step
+      4) and `gen_ai.request.model` (`provider.model`, needed for Langfuse prices, only when it
+      matches `[A-Za-z0-9._:/@-]{1,128}`, holds no `//`, a model host is recorded and the
+      name does not contain it (case-insensitive); otherwise left out). The log line,
       `CALL_LOG_FIELDS` and its log-leak test are unchanged. The prompt version is a run-span
       attribute only.
   - The resource is built explicitly with `service.name` and the SDK's `telemetry.sdk.*` only:
@@ -446,11 +469,14 @@ A server that sends no usage leaves the counts empty.
 ### Safety tests (MUST, `tests/safety/`, never skipped)
 
 - **Export scan:** the whole-export allow-list pin, and a scan of the serialised OTLP request
-  body for the markers of `test_model_call_log_leaks.py`, with mutation checks (reply text,
-  prompt, exception text, evidence id, recommendation). The model-name marker may appear only
-  as the value of the `model` attribute of model-call spans (asserted separately: it appears
-  nowhere else in the body). The body scan runs the real
-  OTLP/HTTP exporter with a stub session that keeps the request body (no socket).
+  body for the markers of `test_model_call_log_leaks.py`, with mutation checks, one mutant per
+  field (reply text, prompt, exception text, evidence id, recommendation) plus `run_outcome`,
+  assessment id, task name, model name and events, each asserted to be caught by its own
+  marker. The model-name marker may appear only as the value of the `gen_ai.request.model`
+  attribute of model-call spans (asserted separately: it appears
+  nowhere else in the body). The body scan runs the real session, OTLP/HTTP exporter, batch
+  processor and tracer provider over a stub HTTP adapter that keeps each request (no socket;
+  `tests/safety/trace_wire.py`), on a real 14-call cross-examination run and a planted trace.
 - **Silent export logs:** after start-up, a WARNING record carrying a marker on
   `opentelemetry.sdk.trace.export`, `opentelemetry.exporter.otlp.proto.http.trace_exporter` and
   `urllib3.connectionpool` reaches neither the JSON handler nor stderr (`capsys`); removing the
@@ -458,17 +484,18 @@ A server that sends no usage leaves the counts empty.
   handler).
 - **Record unchanged.** Through `RunManager`, with an in-memory run store and a fixed clock,
   each traced setup is compared against tracing off:
-  - **Setups:** a tracer whose every method raises; a collector whose append raises; a full
-    collector; an exporter that blocks until the test releases it at teardown (so no test can
-    hang the suite); an exporter whose session raises a connection
-    error (no socket).
+  - **Setups:** a tracer whose `start_span` raises (the only tracer method the exporter calls);
+    a collector whose append, start or finish raises; a full collector; a sink whose `emit`
+    raises; the real export over the stub wire; an export that blocks until the test releases
+    it (so no test can hang the suite); a session that raises a connection error (no socket).
+    Each setup also checks that it took effect.
   - **Must be equal:** the stored record, field by field except `stages[*].duration_ms`; the
     run's status and failure code; and how the `_wrapped` task ends (it returns `None`, or
     raises the same exception type as with tracing off), with no extra error log record.
   - **Paths:** ok; call timeout; stage deadline (`STAGE_TIMED_OUT_ISSUE`); run deadline;
     cancellation (`CancelledError` still leaves `_wrapped`, code `shutdown`); Supervise
     invariant breach; a crash in Reason (nothing stored, code `internal`).
-  - These use the SDK's in-memory exporter except where the setup names another.
+  - The export setups use the stub wire (the real exporter), not the SDK's in-memory exporter.
 - **Ordering:** no span reaches the exporter before `complete` has returned or `_mark_failed`
   has run; the test exporter records the store's state when it receives each span.
 - **Shutdown bound:** with the blocking exporter (released at teardown) and the provider built
@@ -489,11 +516,22 @@ A server that sends no usage leaves the counts empty.
 - **AST pins:** no `opentelemetry` import in `domain` or `risk`; no `langfuse` import anywhere
   in `src`, and `langfuse` is not a runtime dependency in `pyproject.toml` (the image build
   checks it is not installed); no `trace.set_tracer_provider` or `trace.get_tracer_provider` in
-  `src`; the process-wide provider is still the default after start-up; the OpenTelemetry SDK
-  is imported only inside the tracing set-up, which runs only when tracing is enabled (no
-  module-level `opentelemetry` import in `src`). The image build checks that `langfuse`,
-  `opentelemetry-distro`, `opentelemetry-instrumentation` and the `opentelemetry-instrument`
-  launcher are absent.
+  `src` (nor any other global getter or setter, and `get_tracer` only on the private provider);
+  the process-wide provider is still the default after start-up; the OpenTelemetry SDK, the
+  exporter and `requests` are imported only inside the tracing set-up, which runs only when
+  tracing is enabled (no module-level `opentelemetry`, `requests` or `urllib3` import in `src`;
+  a subprocess test shows that with tracing off none of the SDK, exporter, `requests`,
+  `urllib3` or `google.protobuf` is loaded). The image build checks that the SDK and exporter
+  import and that `langfuse`, `opentelemetry-distro`, `opentelemetry-instrumentation` and the
+  `opentelemetry-instrument` and `opentelemetry-bootstrap` launchers are absent.
+- **FastAPI telemetry:** with a global SDK provider set, the app records no span; with
+  `FASTAPI_OTEL_AUTO_CONFIGURE=true` and an `OTEL_*` endpoint set, starting the app sets no
+  global provider. Mutations: dropping `telemetry=FASTAPI_TELEMETRY_OFF`, or turning tracing and
+  auto-configuration on, fails each.
+- **Session and refusal:** the session ignores proxy and CA variables, mounts only `http://`
+  with no retries, refuses any other method or URL, never follows a redirect (mutations:
+  following redirects, trusting the environment); nothing is built when the start-up check
+  refuses or tracing is off (mutation: skipping the check).
 - **Start-up refusals:** tracing enabled without an endpoint or the reverse; tracing enabled
   without both project keys, or with a key of the wrong shape; an endpoint that is not exactly the
   fixed address form (a host name, another scheme or path, a missing, zero-padded or out-of-range
@@ -521,8 +559,10 @@ line, update the target; never loosen the check.
 ### Dependencies
 
 `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (runtime, bounded ranges,
-`pip-audit`); `langfuse` in a new `[eval]` extra only, never in the runtime image. Licences to
-verify from package metadata at build.
+`pip-audit`); `requests` declared directly as `>=2.32.4,<3` (step 3: the trace session imports
+it and relies on its redirect, proxy and environment behaviour; 2.32.4 fixes the `.netrc`
+credential leak, CVE-2024-47081); `langfuse` in a new `[eval]` extra only, never in the
+runtime image. Licences to verify from package metadata at build.
 
 ### Owner decisions (2026-11-15, each as the recommended default)
 
@@ -546,12 +586,44 @@ verify from package metadata at build.
 - Because tracing is built before items 1 to 3, it has no metrics or alerts on export failures
   or dropped collector entries until item 2 is built: they show only as the once-per-reason log
   codes and as missing or partial traces. Spans carry no request id until item 1 is built.
-- With tracing off, the test that no OpenTelemetry module is loaded proves nothing until the
-  SDK is installed (step 3); the planned import pin is the real guard.
+- FastAPI itself requires and imports `opentelemetry-api`, so with tracing off the OpenTelemetry
+  API is loaded (inert: no provider is set and FastAPI's telemetry is off). The SDK, the
+  exporter, `requests`, `urllib3` and `google.protobuf` are not loaded (subprocess test, step 3).
+- The library retries 429, 502, 503, 504 and connection errors up to its internal
+  `_MAX_RETRIES=6`, with backoff, bounded only by the 3 s export timeout; the adapter's own
+  `max_retries=0` does not change that. Each failed export is still counted once.
+- `gen_ai.usage.input_tokens` is absent until step 4 maps `usage.prompt_tokens` to
+  `input_used`.
+- The model-name filter refuses only the run's own model host (and the whole name when no
+  model host is recorded; `host` has no default): any other host written into the model name
+  by the operator still passes the pattern and reaches a span. The host is
+  `urlsplit(...).hostname` (no port, lowercased); a base URL written with a trailing dot
+  (`host.example.`) would miss a name holding `host.example`.
+- `OTLPSpanExporter` falls back to `OTEL_EXPORTER_OTLP_*` variables for every argument passed
+  as `None` (certificate and client-key files among them). That is safe only because start-up
+  refuses any `OTEL_*` variable while tracing is enabled; the two must change together.
+- The `_global_tracer` AST pin allows `get_tracer` on a name `provider` only; an alias of the
+  global provider under that name would pass. The exact ban on `set_tracer_provider` and
+  `get_tracer_provider` by attribute name is the real pin.
+- Tests rely on private internals: `opentelemetry.trace._TRACER_PROVIDER`, FastAPI's
+  `telemetry._runtime._shutdown` and `_OTLPHTTPClient._compute_backoff`. Re-check them on any
+  OpenTelemetry or FastAPI version bump.
+- `check_tracing_startup` runs twice (in `build_default_state` and in `build_trace_export`);
+  harmless, and it makes the exporter fail closed on its own.
+- `trace_export.shutdown()` blocks the event loop in the lifespan for up to its 4 s bound, at
+  exit only.
+- A failure while building spans (after the reservation) loses that run's trace without a
+  drop count: the reservation is released and the runner swallows the error, but no reason is
+  counted.
+- The fixed bounds are pinned by the code's constants; the tests read those constants rather
+  than literals, so changing a bound changes the test with it.
+- `test_tracing_record_unchanged.py`'s `EXPORTS` holds module-level mutable `_Export`
+  instances, reset per test.
+- Verified at build (step 3, SDK 1.45.2, FastAPI 0.162.7): `OTLPSpanExporter` takes
+  `max_request_size`; FastAPI's only telemetry variable is `FASTAPI_OTEL_AUTO_CONFIGURE`
+  (`FASTAPI_ENV` controls a front-end path check only). Re-check on a version bump.
 - The no-socket test sees only `socket.socket`: a later `socket.create_connection` or
   `from socket import socket` would get past it. An AST pin would close that.
-- For step 2: the exporter is built only on the path that has just passed the start-up check,
-  and a test shows no exporter or session exists when the check refuses.
 - Langfuse is a second store of run metadata with its own retention; nothing deletes it in step
   with DiveSafe.
 - A run that stores nothing (a Supervise invariant breach or a crash in Reason) still leaves a
@@ -595,10 +667,6 @@ verify from package metadata at build.
 - If `_mark_failed` itself fails, `run_outcome` shows the intended code while the store keeps
   `RUNNING` until cleanup marks it (later `timeout`); if the run's task is cancelled again while
   `_mark_failed` is awaited, no trace is emitted. The record and the store win.
-- For step 3: span attributes are built from a fixed field list, never by serialising a whole
-  `fields` mapping or collector entry; the export scan plants an evidence id through the
-  model-call fields. Step 3's AST pin on `domain` and `risk` also forbids importing
-  `divesafe.observability`.
 - The collector's module is imported by `agents`, `orchestration` and `api`, so it imports
   nothing from `api` or `orchestration` (AGENTS.md section 2).
 - AGENTS.md section 12's "only destination of run data" covers destinations the app pushes to;

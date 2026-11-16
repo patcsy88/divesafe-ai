@@ -51,7 +51,8 @@ The final decision always belongs to the diver, dive master or dive leader.
   only to the local, self-hosted Langfuse after the run has stored its record or failed.
   Production spans never carry prompt or reply text, evidence values or ids, plan or site free
   text, actor, `key_id` or client address, decision or rationale text, recommendations, URLs,
-  hosts, headers or exception text. Tracing never changes a result, a refusal or what is stored.
+  hosts, headers or exception text. FastAPI's native telemetry is off. Tracing never changes a
+  result, a refusal or what is stored.
   No scores or annotations are made on production traces; decisions and actual conditions are
   recorded only through the API (section 6). The only exception to "never log prompts" is
   section 4's evaluation runs.

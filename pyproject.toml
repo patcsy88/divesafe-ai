@@ -9,7 +9,14 @@ description = "Agentic environmental risk assessment and decision support for re
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "fastapi>=0.110,<1",
+  # 0.143: automatic OpenTelemetry export is opt-in; `create_app` turns all of it off.
+  "fastapi>=0.143,<1",
+  # ADR 0027 amendment: tracing to the local Langfuse; imported only when tracing is enabled.
+  "opentelemetry-sdk>=1.45.2,<1.46",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.2,<1.46",
+  # Imported directly by the trace session (redirect, proxy and environment behaviour pinned);
+  # 2.32.4 fixes the .netrc credential leak (CVE-2024-47081).
+  "requests>=2.32.4,<3",
   "pydantic>=2.6,<3",
   "pydantic-settings>=2.2,<3",
   "psycopg[binary]>=3.1,<4",

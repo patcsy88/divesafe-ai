@@ -85,6 +85,20 @@ jobs:
           assert os.getuid() == 10001, os.getuid()
           print(sys.version.split()[0], unicodedata.unidata_version, os.getuid())
           '
+      - name: The image has the OpenTelemetry SDK and exporter, and no Langfuse SDK or auto-instrumentation
+        run: |
+          docker run --rm --network none --entrypoint python divesafe-ci -c '
+          import importlib.metadata as md, importlib.util, shutil, sys
+          import opentelemetry.sdk.trace, opentelemetry.exporter.otlp.proto.http.trace_exporter
+          names = {(d.metadata["Name"] or "").lower().replace("_", "-") for d in md.distributions()}
+          banned = [n for n in names if "langfuse" in n
+                    or n.startswith(("opentelemetry-distro", "opentelemetry-instrumentation"))]
+          assert not banned, banned
+          assert importlib.util.find_spec("langfuse") is None
+          assert shutil.which("opentelemetry-instrument") is None
+          assert shutil.which("opentelemetry-bootstrap") is None
+          print(sorted(n for n in names if n.startswith("opentelemetry")))
+          '
 
   web:
     runs-on: ubuntu-24.04

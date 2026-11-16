@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator, Iterable
@@ -21,6 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request, Resp
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.telemetry import TelemetryConfig
 from pydantic import ValidationError
 
 from divesafe import __version__
@@ -40,6 +42,7 @@ from divesafe.api.schemas import (
     SiteView,
 )
 from divesafe.api.state import AppState, build_default_state
+from divesafe.api.trace_export import build_trace_export
 from divesafe.config import configure_logging, get_settings
 from divesafe.config.settings import (
     CONNECTOR_BUDGET_SECONDS,
@@ -113,6 +116,17 @@ def _idempotent_id(actor: str, key: str) -> str:
     return hashlib.sha256(f"divesafe-idempotency-v1\0{actor}\0{key}".encode()).hexdigest()[:32]
 
 
+# FastAPI's native OpenTelemetry (0.142+) records request spans, validation input and exception
+# text, and `FASTAPI_OTEL_AUTO_CONFIGURE=true` adds exporters from `OTEL_*` variables. All of it is
+# off whatever the environment; DiveSafe's only spans are ADR 0027's manual ones.
+FASTAPI_TELEMETRY_OFF: TelemetryConfig = {
+    "tracing": False,
+    "metrics": False,
+    "logs": False,
+    "operation_spans": False,
+    "auto_configure": False,
+}
+
 READ = require_role(Role.VIEWER, limit_key="read")
 # A key without the viewer role may still poll the runs it started (ADR 0019).
 READ_OWN = require_any_role((Role.VIEWER, Role.ASSESSOR), limit_key="read")
@@ -154,8 +168,18 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 "connector budget and margin; every run would be cut off mid-stage"
             )
 
+    # ADR 0027 amendment: None with tracing off; otherwise built only after the start-up check.
+    trace_export = build_trace_export(
+        settings,
+        os.environ,
+        model=getattr(app_state.provider, "model", None),
+        host=app_state.model_host,
+    )
     runner = RunManager(
-        app_state.repository, deadline=app_state.runs.deadline, grace=app_state.runs.shutdown_grace
+        app_state.repository,
+        deadline=app_state.runs.deadline,
+        grace=app_state.runs.shutdown_grace,
+        sink=None if trace_export is None else trace_export.sink,
     )
 
     @asynccontextmanager
@@ -168,6 +192,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 await runner.shutdown()  # before the provider closes, so cancelled runs end first
             except Exception:
                 logger.error("running assessments did not stop cleanly")
+            if trace_export is not None and not trace_export.shutdown():
+                # After every run is marked; a hung export delays exit by the fixed bound only.
+                logger.warning("trace export did not finish within its shutdown bound")
             shutdown_http_pool()
             close = getattr(app_state.provider, "close", None)
             if callable(close):
@@ -190,6 +217,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         docs_url=None if hidden else "/docs",
         redoc_url=None if hidden else "/redoc",
         openapi_url=None if hidden else "/openapi.json",
+        telemetry=FASTAPI_TELEMETRY_OFF,
     )
     app.add_middleware(BodySizeLimitMiddleware)
 
