@@ -791,3 +791,59 @@ def test_a_choice_index_that_is_not_the_integer_zero_is_refused(index: str) -> N
     chunk = f'{{"choices": [{{"index": {index}, "delta": {{"content": "x"}}}}]}}'
     raw = f"data: {chunk}\n\n".encode() + _event(None, "stop").encode() + b"data: [DONE]\n\n"
     assert _reason_of(raw) == "bad_shape"
+
+
+def test_the_host_schema_walks_nested_schemas_and_keeps_only_min_items_up_to_one() -> None:
+    from divesafe.models.openai_compatible import host_schema
+
+    number = {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 9, "multipleOf": 2}
+    schema = {
+        "$defs": {"N": {"type": "integer", "minimum": 0, "maximum": 5}},
+        "type": "object",
+        "properties": {
+            "a": {"type": "array", "items": number, "minItems": 3, "maxItems": 4},
+            "b": {"anyOf": [{"type": "array", "minItems": 1}, {"type": "null"}]},
+            "c": {"type": "array", "prefixItems": [{"type": "number", "maximum": 1}]},
+            "d": {"type": "array", "minItems": True},
+            "e": {"type": "array", "minItems": 2},
+            "f": {"type": "array", "minItems": 0},
+            "g": {"type": "array", "minItems": -1},
+        },
+        "additionalProperties": {"type": "number", "minimum": 1},
+    }
+    assert host_schema(schema) == {
+        "$defs": {"N": {"type": "integer"}},
+        "type": "object",
+        "properties": {
+            "a": {"type": "array", "items": {"type": "number"}},
+            "b": {"anyOf": [{"type": "array", "minItems": 1}, {"type": "null"}]},
+            "c": {"type": "array", "prefixItems": [{"type": "number"}]},
+            "d": {"type": "array"},
+            "e": {"type": "array"},
+            "f": {"type": "array", "minItems": 0},
+            "g": {"type": "array"},
+        },
+        "additionalProperties": {"type": "number"},
+    }
+    assert host_schema(True) is True
+
+
+def test_the_request_sends_the_host_schema_and_leaves_the_request_unchanged() -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"c": {"type": "number", "minimum": 0, "maximum": 1}},
+    }
+    request = REQUEST.model_copy(update={"json_schema": schema})
+    transport = _Recorder(_ok())
+    provider = OpenAICompatibleProvider("m1", "http://localhost:8000/v1", transport=transport)
+    asyncio.run(provider.complete(request))
+    sent = transport.calls[0][1]["response_format"]
+    assert sent == {  # type: ignore[comparison-overlap]
+        "type": "json_schema",
+        "json_schema": {
+            "name": "divesafe_output",
+            "schema": {"type": "object", "properties": {"c": {"type": "number"}}},
+        },
+    }
+    assert request.json_schema == schema
+    assert "maximum" in json.dumps(schema)
