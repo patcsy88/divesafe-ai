@@ -56,6 +56,39 @@ from divesafe.models.loopback import (
 _CHUNK = 64 * 1024
 _KEY = re.compile(r"[\x21-\x7e]{1,512}")  # printable ASCII, no whitespace: no header injection
 _SCHEMA_NAME = "divesafe_output"
+# Range and count keywords some hosts refuse in `response_format` (ADR 0018 amendment). Only the
+# copy sent as `response_format` loses them; the prompt keeps the full schema and the reply is
+# still validated against it by `call_structured`.
+_HOST_DROPPED = frozenset(
+    {"maxItems", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"}
+)
+_SUBSCHEMA_MAPS = ("properties", "$defs", "definitions")
+_SUBSCHEMA_LISTS = ("anyOf", "allOf", "oneOf", "prefixItems")
+_SUBSCHEMA_ONE = ("items", "additionalProperties", "not")
+
+
+def host_schema(schema: object) -> object:
+    """A copy of `schema` without the keywords in `_HOST_DROPPED`, keeping `minItems` only when it
+    is 0 or 1, walked by JSON Schema structure (a property named like a keyword is kept). Never
+    adds a keyword, so the host is asked for a looser shape, never a different one."""
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, object] = {}
+    for key, value in schema.items():
+        if key in _HOST_DROPPED:
+            continue
+        if key == "minItems" and not (type(value) is int and 0 <= value <= 1):
+            continue
+        if key in _SUBSCHEMA_MAPS and isinstance(value, dict):
+            out[key] = {name: host_schema(sub) for name, sub in value.items()}
+        elif key in _SUBSCHEMA_LISTS and isinstance(value, list):
+            out[key] = [host_schema(sub) for sub in value]
+        elif key in _SUBSCHEMA_ONE:
+            out[key] = host_schema(value)
+        else:
+            out[key] = value
+    return out
+
 
 Transport = Callable[[str, bytes, float], bytes]
 
@@ -412,7 +445,7 @@ class OpenAICompatibleProvider:
         if request.json_schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": _SCHEMA_NAME, "schema": request.json_schema},
+                "json_schema": {"name": _SCHEMA_NAME, "schema": host_schema(request.json_schema)},
             }
         return json.dumps(payload).encode()
 

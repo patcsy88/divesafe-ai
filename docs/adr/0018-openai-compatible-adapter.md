@@ -170,3 +170,33 @@ one run (ADR 0024 A8), and nothing recorded how long the other replies were.
     copy already names its own logger. This is harmless.
   - `output_used` is `null` unless the server sends usage without being asked (`stream_options`
     is not sent). Check after the first assessment on the deployed image.
+
+## Amendment (2026-11-16): the schema sent to the host
+
+On 2026-11-16 every model call of two production assessments failed with an HTTP 400 from the
+model host: it now refuses `maxItems`, `minimum`/`maximum` and a `minItems` other than 0 or 1 in
+`response_format` (synthetic probes; `maxLength`, `minLength`,
+`enum`, `anyOf`, `default`, `title` and `description` are accepted). The previous image sent the
+same schema, so the deploy of that day was not the cause; the host changed.
+
+- **Decision:** the adapter sends `host_schema(request.json_schema)`: a copy without `maxItems`,
+  `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and any `minItems`
+  other than 0 or 1, walked by JSON Schema structure (`properties`, `$defs`, `definitions`,
+  `items`, `prefixItems`, `additionalProperties`, `anyOf`, `allOf`, `oneOf`, `not`), so a property
+  that happens to be named `maximum` is kept. It only removes keywords; it never adds one.
+- **Acceptance is unchanged.** The request's own schema is not modified, the prompt still states
+  the full schema, and `call_structured` still validates the reply against the full Pydantic
+  model. A reply over a removed limit (confidence outside 0–1, more than 10 risk factors, more
+  than 120 evidence ids) is refused as before; `tests/safety/test_host_schema_acceptance.py`
+  pins this and that the host copy is exactly the original minus those keywords.
+- **Consequence:** the host's constrained decoding no longer enforces those limits, so a reply
+  that breaks one becomes a refused task (an agent issue), not a result. No authority changes.
+- **Known gaps:** a host that refuses another keyword fails the same way, visibly, as every call
+  a `provider_error`. The walk covers only `properties`, `$defs`, `definitions`, `items` (an
+  object), `prefixItems`, `additionalProperties`, `anyOf`, `allOf`, `oneOf` and `not`. A dropped
+  keyword under any other location (`patternProperties`, `contains`, `if`/`then`/`else`,
+  `dependentSchemas`, a list `items`) is sent as is. Today's outputs use none of them, and such a
+  keyword fails as a visible `provider_error`, never as an acceptance.
+  The run logs and the record do not show the adapter's `http_error` label or the host's
+  message, which made this slow to diagnose (ADR 0027's observability work). A fix surfaces the
+  fixed label only, never the host's error body, which can echo the request and so the prompt.
