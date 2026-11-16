@@ -336,6 +336,13 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
   - Built (step 5, 2026-11-16) in `~/DiveSafe/langfuse/`: Langfuse 4.80.0, no ai-gateway, Redis
     as its own user with the password in a 0600 file, secrets from a 0600 `langfuse.env` made by
     `make-secrets.sh`; the network is `10.231.77.0/24`, pool `.128/25`, web at `10.231.77.10`.
+    `langfuse-web` sets `HOSTNAME=0.0.0.0`: Next.js binds to `$HOSTNAME`, and Docker's default
+    (the container id) resolves to the first network's address only, so `10.231.77.10` had no
+    listener and the API's connection was refused. It also has a healthcheck on
+    `/api/public/health`, so `up --wait` returns only once the UI answers (the worker has none).
+    The owner created the `divesafe-prod` project and its keys in the UI and changed the admin
+    password; the `LANGFUSE_INIT_*` lines and `ADMIN_*` values are removed. `make-secrets.sh`
+    is for first set-up only: re-running it replaces every secret.
 
 ### 1. Tracing (production)
 
