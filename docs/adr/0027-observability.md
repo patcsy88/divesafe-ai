@@ -326,6 +326,16 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
   - Images pulled from Docker Hub (`langfuse/...`, not `docker.langfuse.com`) and pinned by
     digest; updated by the owner.
   - Its data stays outside DiveSafe's backups. It is a secret store and a store of run metadata.
+  - `docker inspect` and `docker compose config` show every Langfuse secret: their output is never
+    pasted anywhere. After each Langfuse compose change the operator also checks that
+    `langfuse-web` still has `CapDrop: [ALL]` (it is what keeps the web container from routing
+    between its networks). Headless initialisation creates the admin login only if it does not
+    exist, so after the owner changes the password in the UI the `inspect` value is stale; the
+    `LANGFUSE_INIT_USER_*` lines are then removed from the compose file, `ADMIN_PASSWORD` from
+    `langfuse.env`, and the stack recreated.
+  - Built (step 5, 2026-11-16) in `~/DiveSafe/langfuse/`: Langfuse 4.80.0, no ai-gateway, Redis
+    as its own user with the password in a 0600 file, secrets from a 0600 `langfuse.env` made by
+    `make-secrets.sh`; the network is `10.231.77.0/24`, pool `.128/25`, web at `10.231.77.10`.
 
 ### 1. Tracing (production)
 
@@ -640,12 +650,23 @@ runtime image. Licences to verify from package metadata at build.
   (routing, evaluation-strategy.md).
 - Langfuse's web container has internet access, and it holds every evaluation prompt and output.
   Its documented outbound call is the update check to `langfuse.com`. The UI loads assets from
-  `img.shields.io` and `static.langfuse.com` in the owner's browser.
+  `img.shields.io` and `static.langfuse.com` in the owner's browser. Because of that route, an
+  LLM connection or the playground, if added in the UI, would send data off the Mac; the rules
+  forbid them, but only the operator stops it.
 - Like ADR 0023, "local" rests on the operator's compose files: the code checks that the
   endpoint is the fixed address, and the network provides the isolation. Compose does not check
   the `internal` flag of a network created elsewhere (hence the operator's inspect check).
 - Langfuse's web container can reach the API's port on `divesafe-trace`. Every endpoint but
-  `/health` still needs a key.
+  `/health` still needs a key; this path bypasses the TLS terminator, and
+  `DIVESAFE_TRUSTED_PROXIES` must never include an address on `divesafe-trace` (only the
+  `production.env.example` comment says so; a start-up refusal would enforce it).
+- A container joined to `divesafe-trace` with a network alias equal to a name the API resolves
+  (`db`, the model host) would answer that lookup. SCRAM channel binding stops a fake database,
+  the adapter's https certificate check a fake model host, and the operator's inspect check is
+  what stops anything else joining.
+- The `test_production_compose.py` check that no service has a tracing setting matches the
+  substring `TRAC`; when tracing is switched on it is replaced by an exact pin of the settings
+  (a `tests/safety` change).
 - Loopback is a port, not a proof (ADR 0023). The evaluation project check stops a listener
   started by mistake, not a hostile local process.
 - OpenTelemetry, `requests`, `httpx` and Langfuse SDK behaviour (proxies, redirects, logging,

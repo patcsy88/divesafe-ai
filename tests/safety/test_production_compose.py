@@ -4,10 +4,13 @@ file by indentation, which holds for this file's layout and fails loudly if the 
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from pathlib import Path
 
 import pytest
+
+from divesafe.config.settings import trace_endpoint_address
 
 pytestmark = pytest.mark.safety
 
@@ -189,10 +192,50 @@ def test_the_database_is_not_published_and_the_data_network_has_no_route_out(
     for name in ("db", "db-tls", "db-init", *LOADERS):
         assert not any(line.strip() == "ports:" for line in services[name]), name
     networks = _blocks(text, "networks")
+    assert set(networks) == {"data", "egress", "divesafe-trace"}
     assert "internal: true" in "\n".join(networks["data"])
     assert "internal: true" not in "\n".join(networks["egress"])
     for name in ("db", "db-init", "db-tls", *LOADERS):
         assert "egress" not in "\n".join(services[name]), name
+        assert "divesafe-trace" not in "\n".join(services[name]), name
+
+
+TRACE_WEB_ADDRESS = ipaddress.IPv4Address("10.231.77.10")
+
+
+def test_the_trace_network_is_internal_fixed_and_never_hands_out_the_langfuse_address(
+    text: str,
+) -> None:
+    """ADR 0027 amendment: `divesafe-trace` has no route out, a fixed name and /24, and an
+    `ip_range` that excludes Langfuse's fixed address, which is itself not the network, gateway
+    or broadcast address."""
+    block = [line.strip() for line in _blocks(text, "networks")["divesafe-trace"] if line.strip()]
+    assert block == [
+        "name: divesafe-trace",
+        "internal: true",
+        "ipam:",
+        "config:",
+        "- subnet: 10.231.77.0/24",
+        "ip_range: 10.231.77.128/25",
+    ]
+    subnet = ipaddress.IPv4Network(block[4].split(": ")[1])
+    pool = ipaddress.IPv4Network(block[5].split(": ")[1])
+    assert subnet.prefixlen == 24 and pool.subnet_of(subnet) and subnet.is_private
+    assert TRACE_WEB_ADDRESS in subnet and TRACE_WEB_ADDRESS not in pool
+    for reserved in (0, 1, 255):
+        assert TRACE_WEB_ADDRESS.packed[-1] != reserved
+    assert trace_endpoint_address(f"http://{TRACE_WEB_ADDRESS}:3000/api/public/otel/v1/traces") == (
+        TRACE_WEB_ADDRESS,
+        3000,
+    )
+
+
+def test_the_api_passes_no_tracing_setting_yet(services: dict[str, list[str]]) -> None:
+    """Tracing stays off until the owner switches it on (a separate change): no compose setting
+    and no trace secret reaches any container."""
+    for name, block in services.items():
+        joined = "\n".join(block).upper()
+        assert "TRAC" not in joined.replace("DIVESAFE-TRACE", ""), name
 
 
 def test_the_api_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
@@ -275,7 +318,7 @@ def test_each_service_is_on_exactly_the_networks_it_should_be(
     assert _value(services["db-init"], "networks") == "[data]"
     for name in LOADERS:
         assert _value(services[name], "networks") == "[data]", name
-    assert _value(services["api"], "networks") == "[data, egress]"
+    assert _value(services["api"], "networks") == "[data, egress, divesafe-trace]"
     assert _value(services["db-tls"], "network_mode") == "none"
     assert _value(services["db-tls"], "networks") is None
 

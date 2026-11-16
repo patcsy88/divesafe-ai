@@ -152,7 +152,7 @@ services:
         target: divesafe_api_key_hashes
       - source: met_api_token
         target: divesafe_met_api_token
-    networks: [data, egress]
+    networks: [data, egress, divesafe-trace]
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -243,6 +243,18 @@ networks:
     internal: true
   # Outbound access for the API only (the model host and the data sources).
   egress: {}
+  # ADR 0027 amendment: spans to the local Langfuse only. No route out; joined only by the API
+  # and Langfuse's web container (its own compose, `external: true`), which has the fixed
+  # address 10.231.77.10, outside `ip_range`, so no other container is ever given it. The
+  # subnet avoids the LAN, Tailscale and Docker Desktop's ranges. Tracing stays off until the
+  # owner switches it on; the API passes no tracing setting yet.
+  divesafe-trace:
+    name: divesafe-trace
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.77.0/24
+          ip_range: 10.231.77.128/25
 
 volumes:
   db-data:
