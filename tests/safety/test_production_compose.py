@@ -149,6 +149,8 @@ def test_the_api_never_sees_the_owner_credentials(services: dict[str, list[str]]
         "llm_api_key",
         "api_key_hashes",
         "met_api_token",
+        "trace_public_key",
+        "trace_secret_key",
     }
     assert "loader" not in api.lower(), "the API never receives the loader credential (A4)"
 
@@ -230,12 +232,118 @@ def test_the_trace_network_is_internal_fixed_and_never_hands_out_the_langfuse_ad
     )
 
 
-def test_the_api_passes_no_tracing_setting_yet(services: dict[str, list[str]]) -> None:
-    """Tracing stays off until the owner switches it on (a separate change): no compose setting
-    and no trace secret reaches any container."""
+TRACE_SETTINGS = {
+    "DIVESAFE_TRACING_ENABLED": "${DIVESAFE_TRACING_ENABLED:-false}",
+    "DIVESAFE_TRACE_ENDPOINT": "${DIVESAFE_TRACE_ENDPOINT:-}",
+}
+TRACE_SECRET_LINES = [
+    "      - source: trace_public_key",
+    "        target: divesafe_trace_public_key",
+    "      - source: trace_secret_key",
+    "        target: divesafe_trace_secret_key",
+]
+
+
+def _tracing_problems(services: dict[str, list[str]]) -> list[str]:
+    """ADR 0027 amendment: the API's only tracing lines are the two settings, off by default (the
+    flag `false`, the endpoint empty), and the two key secrets; no other service has a line naming
+    tracing, and no service has an `OTEL_` line. The network name `divesafe-trace` is not a
+    setting and is left out of the scan."""
+    problems: list[str] = []
+    expected_api = {f"      {key}: {value}" for key, value in TRACE_SETTINGS.items()}
+    expected_api |= set(TRACE_SECRET_LINES)
     for name, block in services.items():
-        joined = "\n".join(block).upper()
-        assert "TRAC" not in joined.replace("DIVESAFE-TRACE", ""), name
+        named = [
+            line
+            for line in block
+            if "TRAC" in line.upper().replace("DIVESAFE-TRACE", "") or "OTEL" in line.upper()
+        ]
+        if name == "api":
+            if len(named) != len(expected_api) or set(named) != expected_api:
+                problems.append(f"api: {sorted(set(named) ^ expected_api)}")
+        elif named:
+            problems.append(f"{name}: {named}")
+    return problems
+
+
+def test_only_the_api_has_tracing_and_it_is_off_by_default(services: dict[str, list[str]]) -> None:
+    """Tracing is on only when production.env sets both values (start-up refuses one alone). No
+    other container gets a tracing setting or a Langfuse key."""
+    assert _tracing_problems(services) == []
+    env = _environment(services["api"])
+    for key, value in TRACE_SETTINGS.items():
+        assert env[key] == value, key
+
+
+def test_the_api_gets_the_trace_keys_as_its_last_two_secrets(
+    services: dict[str, list[str]],
+) -> None:
+    assert (_list(services["api"], "secrets") or [])[-4:] == TRACE_SECRET_LINES
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("${DIVESAFE_TRACING_ENABLED:-false}", "${DIVESAFE_TRACING_ENABLED:-true}"),
+        ("${DIVESAFE_TRACING_ENABLED:-false}", '"true"'),
+        (
+            "${DIVESAFE_TRACE_ENDPOINT:-}",
+            "${DIVESAFE_TRACE_ENDPOINT:-http://10.231.77.10:3000/api/public/otel/v1/traces}",
+        ),
+        (
+            "      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}\n",
+            "      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}\n"
+            "      OTEL_EXPORTER_OTLP_ENDPOINT: http://10.231.77.10:3000\n",
+        ),
+        (
+            "      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}\n",
+            "      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}\n"
+            "      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}\n",
+        ),
+        ("      - source: trace_secret_key\n        target: divesafe_trace_secret_key\n", ""),
+        (
+            "      - source: loader_database_url\n        target: divesafe_loader_database_url\n",
+            "      - source: loader_database_url\n        target: divesafe_loader_database_url\n"
+            "      - source: trace_secret_key\n        target: divesafe_trace_secret_key\n",
+        ),
+        (
+            "      DIVESAFE_CORPUS_TARGET: /corpus\n",
+            '      DIVESAFE_CORPUS_TARGET: /corpus\n      DIVESAFE_TRACING_ENABLED: "false"\n',
+        ),
+    ],
+    ids=[
+        "flag-default-true",
+        "flag-literal-true",
+        "endpoint-default-set",
+        "otel-variable",
+        "duplicate-setting",
+        "secret-key-dropped",
+        "key-on-a-loader",
+        "setting-on-a-loader",
+    ],
+)
+def test_mutation_each_tracing_change_is_caught(old: str, new: str) -> None:
+    raw = COMPOSE.read_text()
+    assert raw.count(old) >= 1, old
+    mutated = _blocks(_strip_comments(raw.replace(old, new, 1)), "services")
+    caught = bool(_tracing_problems(mutated)) or any(
+        _environment(mutated["api"]).get(key) != value for key, value in TRACE_SETTINGS.items()
+    )
+    assert caught
+
+
+def test_the_production_env_example_has_tracing_off() -> None:
+    """A fresh copy of the example never switches tracing on; the on values are a comment."""
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    named = [
+        x
+        for x in lines
+        if x.strip() and not x.lstrip().startswith("#") and re.search(r"TRAC|OTEL", x.upper())
+    ]
+    assert named == [
+        "DIVESAFE_TRACING_ENABLED=false",
+        "DIVESAFE_TRACE_ENDPOINT=",
+    ]
 
 
 def test_the_api_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
@@ -309,6 +417,8 @@ def test_the_file_uses_no_yaml_feature_the_scan_cannot_see(text: str) -> None:
         assert token not in text.replace("network_mode: none", ""), token
     assert not re.search(r"(^|\s)[&*][A-Za-z]", text, re.MULTILINE)
     assert not re.search(r"^x-", text, re.MULTILINE)
+    # A YAML escape would hide a name (`tr\x61ce`) from the text scans.
+    assert not re.search(r"\\[xuU]", text)
 
 
 def test_each_service_is_on_exactly_the_networks_it_should_be(
@@ -385,6 +495,8 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_DECISION_MAX_AGE_MINUTES",
         "DIVESAFE_TRUSTED_PROXIES",
         "DIVESAFE_LLM_KNOWLEDGE_HOST",
+        "DIVESAFE_TRACING_ENABLED",
+        "DIVESAFE_TRACE_ENDPOINT",
     }
 
 
@@ -498,6 +610,8 @@ def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> No
         "api_key_hashes": "divesafe_api_key_hashes",
         "met_api_token": "divesafe_met_api_token",
         "loader_database_url": "divesafe_loader_database_url",
+        "trace_public_key": "divesafe_trace_public_key",
+        "trace_secret_key": "divesafe_trace_secret_key",
     }
 
 

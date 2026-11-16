@@ -55,6 +55,10 @@ fi
 
 # An empty file means "not set" (the MET connector is then not used).
 [ -e "$dir/divesafe_met_api_token" ] || { : | write_new divesafe_met_api_token; }
+# The Langfuse production project's keys (ADR 0027 amendment). Empty means "not set"; with
+# tracing on, start-up then refuses.
+[ -e "$dir/divesafe_trace_public_key" ] || { : | write_new divesafe_trace_public_key; }
+[ -e "$dir/divesafe_trace_secret_key" ] || { : | write_new divesafe_trace_secret_key; }
 
 for needed in divesafe_llm_api_key divesafe_api_key_hashes; do
   [ -e "$dir/$needed" ] || echo "still to add by hand: $dir/$needed" >&2

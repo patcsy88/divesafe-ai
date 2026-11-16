@@ -70,6 +70,28 @@ unset HASH
 The one key holds all three roles so a single person can do the whole run. A real deployment should
 give the roles to different people. The MET token file is created empty; leave it empty unless you
 have a token, in which case that source is simply missing and the result says so.
+The two Langfuse key files (`divesafe_trace_public_key`, `divesafe_trace_secret_key`) are also
+created empty; tracing stays off (ADR 0027).
+
+To switch tracing on later (ADR 0027), write both keys from the `divesafe-prod` project. The files
+are 0444, so each is made writable first. On an existing deployment, run
+`sh docker/make-secrets.sh docker/secrets` first: it keeps every existing file and adds the two
+empty ones. Otherwise `up` refuses.
+
+```sh
+( umask 077
+  for f in public secret; do
+    read -rs "V?Langfuse $f key: "; echo
+    p=docker/secrets/divesafe_trace_${f}_key
+    [ -e "$p" ] && chmod 0600 "$p"
+    printf '%s' "$V" > "$p"; unset V; chmod 0444 "$p"
+  done )
+```
+
+Then set `DIVESAFE_TRACING_ENABLED=true` and
+`DIVESAFE_TRACE_ENDPOINT=http://10.231.77.10:3000/api/public/otel/v1/traces` in
+`docker/production.env` and recreate the API. To switch it off, set them back to `false` and
+empty, and recreate the API.
 
 ## 2. Start the stack
 

@@ -143,6 +143,10 @@ services:
       # Owner decision 2026-10-18: 180 minutes. Overriding the default needs a recorded reason.
       DIVESAFE_DECISION_MAX_AGE_MINUTES: ${DIVESAFE_DECISION_MAX_AGE_MINUTES:-180}
       DIVESAFE_TRUSTED_PROXIES: ${DIVESAFE_TRUSTED_PROXIES:-}
+      # ADR 0027 amendment: off unless production.env sets both; start-up refuses either alone,
+      # any endpoint but http://<private IPv4>:<port>/api/public/otel/v1/traces, and OTEL_*.
+      DIVESAFE_TRACING_ENABLED: ${DIVESAFE_TRACING_ENABLED:-false}
+      DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}
     secrets:
       - source: database_url
         target: divesafe_database_url
@@ -152,6 +156,11 @@ services:
         target: divesafe_api_key_hashes
       - source: met_api_token
         target: divesafe_met_api_token
+      # The Langfuse production project's keys; an empty file means "not set".
+      - source: trace_public_key
+        target: divesafe_trace_public_key
+      - source: trace_secret_key
+        target: divesafe_trace_secret_key
     networks: [data, egress, divesafe-trace]
     ports:
       - "127.0.0.1:8000:8000"
@@ -246,8 +255,8 @@ networks:
   # ADR 0027 amendment: spans to the local Langfuse only. No route out; joined only by the API
   # and Langfuse's web container (its own compose, `external: true`), which has the fixed
   # address 10.231.77.10, outside `ip_range`, so no other container is ever given it. The
-  # subnet avoids the LAN, Tailscale and Docker Desktop's ranges. Tracing stays off until the
-  # owner switches it on; the API passes no tracing setting yet.
+  # subnet avoids the LAN, Tailscale and Docker Desktop's ranges. Tracing is off unless
+  # production.env switches it on.
   divesafe-trace:
     name: divesafe-trace
     internal: true
@@ -281,3 +290,7 @@ secrets:
     file: ./secrets/divesafe_met_api_token
   loader_database_url:
     file: ./secrets/divesafe_loader_database_url
+  trace_public_key:
+    file: ./secrets/divesafe_trace_public_key
+  trace_secret_key:
+    file: ./secrets/divesafe_trace_secret_key

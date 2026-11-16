@@ -343,6 +343,14 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     The owner created the `divesafe-prod` project and its keys in the UI and changed the admin
     password; the `LANGFUSE_INIT_*` lines and `ADMIN_*` values are removed. `make-secrets.sh`
     is for first set-up only: re-running it replaces every secret.
+  - Compose wiring (2026-11-16): the API service passes the two settings, off by default, and
+    mounts `divesafe_trace_public_key` and `divesafe_trace_secret_key`. Compose needs both files
+    even with tracing off. `make-secrets.sh` creates them empty if they're missing, and an empty
+    file means "not set". The owner writes the keys with the `read -rs` recipe in
+    `first-run-on-the-real-host.md` (each file made writable, then back to 0444); on an existing
+    deployment `make-secrets.sh` is re-run first to add the two empty files. Tracing is
+    switched on only by setting both values in `production.env`. Switching it off means setting
+    them back to `false` and empty and recreating the API.
 
 ### 1. Tracing (production)
 
@@ -671,9 +679,15 @@ runtime image. Licences to verify from package metadata at build.
   (`db`, the model host) would answer that lookup. SCRAM channel binding stops a fake database,
   the adapter's https certificate check a fake model host, and the operator's inspect check is
   what stops anything else joining.
-- The `test_production_compose.py` check that no service has a tracing setting matches the
-  substring `TRAC`; when tracing is switched on it is replaced by an exact pin of the settings
-  (a `tests/safety` change).
+- The `test_production_compose.py` tracing check is an exact pin (2026-11-16): the API's only
+  tracing lines are `DIVESAFE_TRACING_ENABLED` (default `false`), `DIVESAFE_TRACE_ENDPOINT`
+  (default empty) and the two key secrets. No other service has a line naming tracing, and no
+  service has an `OTEL_` line. It reads the compose file as text, so a setting arriving another
+  way (an `--env-file` value, `docker run -e`) is caught only by start-up's own checks.
+- The API's trace keys can also read the `divesafe-prod` project through Langfuse's public API.
+  The data is its own span metadata, and `src` never reads from Langfuse.
+- The compose scans read raw text, not decoded YAML. A YAML escape (`\x`, `\u`, `\U`) is refused
+  anywhere in the file, so a name can't be hidden from them.
 - Loopback is a port, not a proof (ADR 0023). The evaluation project check stops a listener
   started by mistake, not a hostile local process.
 - OpenTelemetry, `requests`, `httpx` and Langfuse SDK behaviour (proxies, redirects, logging,
