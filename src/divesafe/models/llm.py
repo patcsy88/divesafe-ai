@@ -8,9 +8,9 @@ here and the application is never hard-wired to one vendor.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from divesafe.config.settings import Settings
 
@@ -42,6 +42,10 @@ def plain_count(value: object) -> int | None:
     return value if type(value) is int and 0 <= value <= MAX_LOGGED_COUNT else None
 
 
+# Any value `plain_count` rejects becomes None, so building a response never fails on it.
+LenientCount = Annotated[int | None, BeforeValidator(plain_count)]
+
+
 class LLMResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -51,6 +55,9 @@ class LLMResponse(BaseModel):
     # The server's own count of output tokens, when it sent one (ADR 0018 amendment 2026-11-15).
     # Logged only; it never changes whether a reply is accepted. Strict: a bool is not a count.
     output_tokens: int | None = Field(default=None, strict=True, ge=0, le=MAX_LOGGED_COUNT)
+    # The server's own count of input tokens (`usage.prompt_tokens`), when it sent one (ADR 0027
+    # amendment, step 4). For the trace only; never on the log line, never decides anything.
+    input_tokens: LenientCount = None
 
 
 class LLMProvider(Protocol):
@@ -67,15 +74,24 @@ class LLMProvider(Protocol):
 class TokenLimitError(RuntimeError):
     """The model stopped at the output-token limit, so its reply is cut off and is refused.
     The message is fixed; no reply text is carried. `output_chars` (characters joined before the
-    stop) and `output_tokens` (the server's usage count) are plain ints or None, for logging."""
+    stop), `output_tokens` and `input_tokens` (the server's usage counts) are plain ints or
+    None, for logging and tracing."""
 
     output_chars: int | None
     output_tokens: int | None
+    input_tokens: int | None
 
-    def __init__(self, *, output_chars: object = None, output_tokens: object = None) -> None:
+    def __init__(
+        self,
+        *,
+        output_chars: object = None,
+        output_tokens: object = None,
+        input_tokens: object = None,
+    ) -> None:
         super().__init__("the model stopped at the output-token limit")
         self.output_chars = plain_count(output_chars)
         self.output_tokens = plain_count(output_tokens)
+        self.input_tokens = plain_count(input_tokens)
 
     def __reduce__(
         self,
@@ -83,6 +99,7 @@ class TokenLimitError(RuntimeError):
         state = {
             "output_chars": plain_count(vars(self).get("output_chars")),
             "output_tokens": plain_count(vars(self).get("output_tokens")),
+            "input_tokens": plain_count(vars(self).get("input_tokens")),
         }
         return (type(self), (), state)
 

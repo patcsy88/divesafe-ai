@@ -245,7 +245,8 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Per-category evidence quality policy and validity-window coverage of instants:** a hole between
   instants is not detected; interval coverage is fixed (see risk-model.md and ADR 0008).
 - **Rate limiting is per process**, not shared across workers.
-- **Observability: ADR 0027 accepted (2026-11-12; tracing amended 2026-11-15), not built.** No
+- **Observability: ADR 0027 accepted (2026-11-12; tracing amended 2026-11-15); tracing being
+  built (steps 1-4 of 5 merged; off in production).** No
   request id, metrics or alerting yet; on 2026-11-12 every model call of one production
   assessment failed (model-host 404) and only the record showed it. Decided: a request id,
   `/metrics` behind a new `metrics` role (isolated: never combined with other roles, groups or a

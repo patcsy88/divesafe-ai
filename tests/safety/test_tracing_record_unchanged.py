@@ -73,7 +73,14 @@ class _Provider:
         self.entered.set()
         if self._block or sl.task_of(request) in self._slow:
             await asyncio.sleep(60)
-        return LLMResponse(text=self._reply(request), provider=self.name, model=self.model)
+        # Real counts, so the record-unchanged paths also see a traced `input_used` (step 4).
+        return LLMResponse(
+            text=self._reply(request),
+            provider=self.name,
+            model=self.model,
+            output_tokens=7,
+            input_tokens=40,
+        )
 
 
 Assess = Callable[..., Awaitable[AssessmentRecord]]
@@ -572,7 +579,7 @@ def test_a_mutant_that_emits_before_storing_or_marking_fails_the_ordering_check(
 
 _MODEL_APPEND = (
     "        with contextlib.suppress(Exception):  # tracing must never change the call's result\n"
-    "            record_model_call(fields, started_ns)\n"
+    '            record_model_call({**fields, "input_used": plain_count(input_used)}, started_ns)\n'
 )
 _STAGE_APPEND = (
     "    with contextlib.suppress(Exception):  # tracing must never change the run (ADR 0027)\n"

@@ -351,8 +351,9 @@ section 9).
       uses; an unknown task is named `unlisted_task`;
     - span-only, under the Langfuse / OpenTelemetry GenAI names (owner, 2026-11-16):
       `gen_ai.usage.output_tokens` (the log line's `output_used`), `gen_ai.usage.input_tokens`
-      (`input_used`, the server's `usage.prompt_tokens` through `plain_count`, filled from step
-      4) and `gen_ai.request.model` (`provider.model`, needed for Langfuse prices, only when it
+      (`input_used`, the server's `usage.prompt_tokens` through `plain_count`, filled since
+      step 4, also on a token-limit stop when the server sent usage before stopping) and
+      `gen_ai.request.model` (`provider.model`, needed for Langfuse prices, only when it
       matches `[A-Za-z0-9._:/@-]{1,128}`, holds no `//`, a model host is recorded and the
       name does not contain it (case-insensitive); otherwise left out). The log line,
       `CALL_LOG_FIELDS` and its log-leak test are unchanged. The prompt version is a run-span
@@ -450,15 +451,19 @@ the system prompt and trusted notes; per-task instruction text is not pinned (AD
 ### 4. Cost reporting
 
 Model-call spans carry the model name and the server's input and output token counts when the
-server sends them. The adapter will also read `usage.prompt_tokens`, capped by `plain_count` like
-the output count (a change to ADR 0018's amendment), under the same rule and tests. A missing,
-malformed, negative or over-cap `prompt_tokens` gives None and never changes what is accepted or
-refused: the `BAD_USAGE`, ceiling and "usage never changes a refusal" cases are extended to it. A
-new `LLMResponse` count field maps any value `plain_count` rejects (wrong type, bool, negative, over
-the cap) to None, so building an `LLMResponse` never fails on it. The request body stays
-byte-for-byte the golden body (no `stream_options`). Production's server sends `completion_tokens`
-unasked (measured 2026-11-15, 27 of 27 calls); whether it sends `prompt_tokens` is not yet measured.
-A server that sends no usage leaves the counts empty.
+server sends them. The adapter also reads `usage.prompt_tokens` (step 4; a change to ADR 0018's
+amendment), from the same `usage` object as `completion_tokens` (the last event whose `usage` is
+not null), through `plain_count`. A missing, malformed, negative or over-cap `prompt_tokens` gives
+None and never changes what is accepted or refused: the bad-value, ceiling and "usage never
+changes a refusal" cases cover it (`tests/unit/test_openai_compatible_input_count.py`). The new
+`LLMResponse.input_tokens` field maps any value `plain_count` rejects (wrong type, bool, negative,
+over the cap) to None, so building an `LLMResponse` never fails on it; `TokenLimitError` carries
+`input_tokens` too, kept through pickle and copy. The runner passes it to the trace collector as
+`input_used` only: the "model call finished" line keeps exactly `CALL_LOG_FIELDS`
+(`tests/agent/test_model_call_input_count.py`, with mutants for logging it and for dropping it).
+The request body stays byte-for-byte the golden body (no `stream_options`). Production's server
+sends `completion_tokens` unasked (measured 2026-11-15, 27 of 27 calls); whether it sends
+`prompt_tokens` is not yet measured. A server that sends no usage leaves the counts empty.
 
 - Prices are Langfuse model-price entries kept by the owner. Costs are estimates, not invoices.
 - Cost is reporting only: no money value goes into a prompt, a rule or a record.
@@ -592,8 +597,8 @@ runtime image. Licences to verify from package metadata at build.
 - The library retries 429, 502, 503, 504 and connection errors up to its internal
   `_MAX_RETRIES=6`, with backoff, bounded only by the 3 s export timeout; the adapter's own
   `max_retries=0` does not change that. Each failed export is still counted once.
-- `gen_ai.usage.input_tokens` is absent until step 4 maps `usage.prompt_tokens` to
-  `input_used`.
+- On a token-limit stop, `input_used` is usually None: servers send usage after the finish
+  event, and the reply is refused as soon as "length" is seen (as for `output_used`).
 - The model-name filter refuses only the run's own model host (and the whole name when no
   model host is recorded; `host` has no default): any other host written into the model name
   by the operator still passes the pattern and reaches a span. The host is
@@ -629,8 +634,10 @@ runtime image. Licences to verify from package metadata at build.
 - A run that stores nothing (a Supervise invariant breach or a crash in Reason) still leaves a
   trace, marked by `run_outcome`, with no matching record.
 - Trace export is best effort; dropped spans are counted, not recovered.
-- Token counts exist only when the server sends usage unasked; prices apply to the requested
-  model name, not necessarily the model that answered (routing, evaluation-strategy.md).
+- Token counts are the server's own claims, unchecked (up to 10^9 per call), and exist only
+  when the server sends usage unasked; a misbehaving server can only inflate Langfuse's cost
+  estimate. Prices apply to the requested model name, not necessarily the model that answered
+  (routing, evaluation-strategy.md).
 - Langfuse's web container has internet access, and it holds every evaluation prompt and output.
   Its documented outbound call is the update check to `langfuse.com`. The UI loads assets from
   `img.shields.io` and `static.langfuse.com` in the owner's browser.
@@ -657,11 +664,6 @@ runtime image. Licences to verify from package metadata at build.
   running is not detected, and spans would then follow the default route until restart.
   Compose recreates the container on any network change, so this needs a manual command; the
   operator's inspect check is the only control after start-up.
-- `prompt_tokens` on a token-limit stop: `TokenLimitError` carries only `output_chars` and
-  `output_tokens` (`models/llm.py`, including its pickle state). The build either extends it
-  under `plain_count` with the same pickle test, or `input_used` is None on `token_limit`
-  calls. Both counts come from the same `usage` object, by the `completion_tokens` rule
-  (`join_sse_counted`, the last event carrying `usage`).
 - "No scores, annotations, comments or annotation queues on `divesafe-prod`" is operator
   discipline; the Langfuse UI does not prevent it unless project roles can (verify at build).
 - If `_mark_failed` itself fails, `run_outcome` shows the intended code while the store keeps
