@@ -356,12 +356,37 @@ def test_a_plain_model_name_without_the_host_is_exported(wire: tw.Wire) -> None:
 
 def test_a_mutant_without_the_host_check_is_caught(wire: tw.Wire) -> None:
     mutant = mutated_module(
-        trace_export, ("    if host and host.lower() in model.lower():\n", "    if False:\n")
+        trace_export, ("    if host.lower() in model.lower():\n", "    if False:\n")
     )
     export = wire.build("llm.example/qwen", module=mutant)
     export.sink.emit(_planted())
     _flush(export)
     assert "llm.example" in wire.body_text()
+
+
+def test_with_no_model_host_no_model_name_is_exported(wire: tw.Wire) -> None:
+    export = wire.build("qwen3.5:9b", host=None)
+    export.sink.emit(_planted())
+    _flush(export)
+    assert wire.spans() != []
+    for span in wire.spans():
+        assert "gen_ai.request.model" not in tw.attributes(span)
+    assert "qwen3.5:9b" not in wire.body_text()
+
+
+def test_a_mutant_without_the_no_host_refusal_is_caught(wire: tw.Wire) -> None:
+    mutant = mutated_module(
+        trace_export,
+        ("    if not host:\n        return None\n", ""),
+        (
+            "    if host.lower() in model.lower():\n",
+            "    if host and host.lower() in model.lower():\n",
+        ),
+    )
+    export = wire.build("qwen3.5:9b", module=mutant, host=None)
+    export.sink.emit(_planted())
+    _flush(export)
+    assert "qwen3.5:9b" in wire.body_text()
 
 
 def test_the_headers_are_exactly_these(wire: tw.Wire) -> None:
@@ -456,8 +481,8 @@ def test_a_mutant_that_widens_the_export_is_caught(name: str, wire: tw.Wire) -> 
     # expected marker or event shows this mutant was caught for its own reason.
     mutant = mutated_module(trace_export, *MUTANTS[name])
     model = URL_MODEL if name == "any_model_name" else MODEL_MARKER
-    # Without a host, so only the mutated pattern check stands between the URL and a span.
-    host = None if name == "any_model_name" else "llm.example"
+    # With an unrelated host, so only the mutated pattern check stands between the URL and a span.
+    host = "other.example" if name == "any_model_name" else "llm.example"
     record, _ = _export_both(wire, mutant, model, host)
     events = [event.name for span in wire.spans() for event in span.events]
     assert EXPECTED[name] in _leaks(wire, record) + events
@@ -621,7 +646,10 @@ def test_a_mutant_that_trusts_the_environment_is_caught(
 def test_with_a_refusal_nothing_is_built(wire: tw.Wire) -> None:
     with pytest.raises(RuntimeError):
         trace_export.build_trace_export(
-            tw.settings(), {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://203.0.113.9:4318"}, model="m"
+            tw.settings(),
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://203.0.113.9:4318"},
+            model="m",
+            host="llm.example",
         )
     assert (wire.providers, wire.sessions, wire.sent) == ([], [], [])
 
@@ -630,14 +658,20 @@ def test_with_tracing_off_nothing_is_built(wire: tw.Wire) -> None:
     off = tw.settings(
         tracing_enabled=False, trace_endpoint=None, trace_public_key=None, trace_secret_key=None
     )
-    assert trace_export.build_trace_export(off, {"OTEL_SDK_DISABLED": "1"}, model="m") is None
+    export = trace_export.build_trace_export(
+        off, {"OTEL_SDK_DISABLED": "1"}, model="m", host="llm.example"
+    )
+    assert export is None
     assert (wire.providers, wire.sessions) == ([], [])
 
 
 def test_a_mutant_that_skips_the_start_up_check_is_caught(wire: tw.Wire) -> None:
     mutant = mutated_module(trace_export, ("    check_tracing_startup(settings, environ)\n", ""))
     export = mutant.build_trace_export(
-        tw.settings(), {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://203.0.113.9:4318"}, model="m"
+        tw.settings(),
+        {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://203.0.113.9:4318"},
+        model="m",
+        host="llm.example",
     )
     wire.exports.append(export)
     assert wire.providers != []
@@ -648,7 +682,7 @@ import sys
 from divesafe.api.app import create_app
 from divesafe.api.trace_export import build_trace_export
 from divesafe.config import Settings
-assert build_trace_export(Settings(_env_file=None), {}, model="m") is None
+assert build_trace_export(Settings(_env_file=None), {}, model="m", host=None) is None
 heavy = ("opentelemetry.sdk", "opentelemetry.exporter", "requests", "urllib3", "google.protobuf")
 print(sorted(m for m in sys.modules if m.startswith(heavy)))
 """

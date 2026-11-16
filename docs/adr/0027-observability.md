@@ -353,8 +353,8 @@ section 9).
       `gen_ai.usage.output_tokens` (the log line's `output_used`), `gen_ai.usage.input_tokens`
       (`input_used`, the server's `usage.prompt_tokens` through `plain_count`, filled from step
       4) and `gen_ai.request.model` (`provider.model`, needed for Langfuse prices, only when it
-      matches `[A-Za-z0-9._:/@-]{1,128}`, holds no `//` and does not contain the model host
-      (case-insensitive); otherwise left out). The log line,
+      matches `[A-Za-z0-9._:/@-]{1,128}`, holds no `//`, a model host is recorded and the
+      name does not contain it (case-insensitive); otherwise left out). The log line,
       `CALL_LOG_FIELDS` and its log-leak test are unchanged. The prompt version is a run-span
       attribute only.
   - The resource is built explicitly with `service.name` and the SDK's `telemetry.sdk.*` only:
@@ -594,11 +594,11 @@ runtime image. Licences to verify from package metadata at build.
   `max_retries=0` does not change that. Each failed export is still counted once.
 - `gen_ai.usage.input_tokens` is absent until step 4 maps `usage.prompt_tokens` to
   `input_used`.
-- The model-name filter refuses only the run's own model host, and nothing when the run has no
-  recorded model host: any other host written into the model name by the operator still passes
-  the pattern and reaches a span. The host is `urlsplit(...).hostname` (no port, lowercased);
-  a base URL written with a trailing dot (`host.example.`) would miss a name holding
-  `host.example`.
+- The model-name filter refuses only the run's own model host (and the whole name when no
+  model host is recorded; `host` has no default): any other host written into the model name
+  by the operator still passes the pattern and reaches a span. The host is
+  `urlsplit(...).hostname` (no port, lowercased); a base URL written with a trailing dot
+  (`host.example.`) would miss a name holding `host.example`.
 - `OTLPSpanExporter` falls back to `OTEL_EXPORTER_OTLP_*` variables for every argument passed
   as `None` (certificate and client-key files among them). That is safe only because start-up
   refuses any `OTEL_*` variable while tracing is enabled; the two must change together.

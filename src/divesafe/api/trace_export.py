@@ -159,12 +159,15 @@ def model_call_attributes(entry: ModelCallEntry, model: str | None) -> dict[str,
     return attributes
 
 
-def exportable_model_name(model: object, host: str | None = None) -> str | None:
+def exportable_model_name(model: object, host: str | None) -> str | None:
     """The model name for the `gen_ai.request.model` attribute, or None if it is not a plain,
-    short name (Langfuse needs it for prices; it is never a URL, the model host or free text)."""
+    short name (Langfuse needs it for prices; it is never a URL, the model host or free text).
+    With no model host there is nothing to check the name against, so it is never exported."""
     if type(model) is not str or _MODEL_NAME.fullmatch(model) is None or "//" in model:
         return None
-    if host and host.lower() in model.lower():
+    if not host:
+        return None
+    if host.lower() in model.lower():
         return None
     return model
 
@@ -238,7 +241,7 @@ class TraceExport:
 
 
 def build_trace_export(
-    settings: Settings, environ: Mapping[str, str], *, model: object, host: str | None = None
+    settings: Settings, environ: Mapping[str, str], *, model: object, host: str | None
 ) -> TraceExport | None:
     """None with tracing off. Otherwise the start-up check runs first (and raises on any
     refusal), and only after it has passed is anything imported or built."""
