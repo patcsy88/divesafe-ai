@@ -127,7 +127,7 @@ plan fields leave the machine), and "no new dependency without an ADR".
    rate-limit key: `LIMIT_KEYS` is a fixed set; **owner decision 2026-11-15 (decision 7):** add a
    `metrics` entry with its own setting, rather than reusing `read`.
 
-   **Built (2026-11-17), not yet deployed:** `api/metrics.py`, with
+   **Built and deployed (2026-11-17):** `api/metrics.py`, with
    `prometheus_client>=0.26,<0.27`.
    - Owner decisions (2026-11-17): counts are taken in the API layer from the stored record and
      the run's trace collector, after the result or failure code is stored; nothing is hooked
@@ -154,6 +154,13 @@ plan fields leave the machine), and "no new dependency without an ADR".
      threshold, prompt or data check (as AGENTS.md section 4 says for scores). A rise in
      INSUFFICIENT EVIDENCE is worth alerting on as a data-source signal, not as a quality score.
    - Pinned by `tests/safety/test_metrics.py`.
+
+   Deployed (2026-11-17): main `cc32583`, image `e974d495a4f7`, with one scraper key whose only
+   role is `metrics`. That image's compose file did not yet pass
+   `DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE`, so the Settings default of 30 applied; the
+   follow-up adds it to the compose file with the same default. Checked in production: a request
+   without a key gets 401 on `/metrics`, the scraper key gets 200 with all nine families and 403
+   on `/v1/sites`, and no `PROMETHEUS_*` variable is set.
 3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
    Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
    runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;

@@ -497,7 +497,35 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_LLM_KNOWLEDGE_HOST",
         "DIVESAFE_TRACING_ENABLED",
         "DIVESAFE_TRACE_ENDPOINT",
+        "DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE",
     }
+
+
+def test_the_metrics_rate_limit_defaults_to_30_and_is_only_on_the_api(
+    services: dict[str, list[str]],
+) -> None:
+    """ADR 0027 item 2 (owner, 2026-11-17): scrapes of /metrics default to 30 per key per minute."""
+    name = "DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE"
+    assert _environment(services["api"])[name] == "${DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE:-30}"
+    for service, block in services.items():
+        if service != "api":
+            assert name not in "\n".join(block), service
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert [line for line in lines if line.startswith(f"{name}=")] == [f"{name}=30"]
+
+
+def test_every_setting_in_the_env_example_reaches_the_compose_file() -> None:
+    """A setting the example offers but compose never passes on would be silently ignored."""
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    names = [line.split("=", 1)[0] for line in lines if re.match(r"[A-Z][A-Z0-9_]*=", line)]
+    assert names
+    compose = COMPOSE.read_text()
+    passed = set(re.findall(r"(?m)^ +([A-Z][A-Z0-9_]*): \$\{\1:", compose))
+    # Used only to fill in compose itself (the corpus volume's host path), never an env setting.
+    interpolation_only = {"DIVESAFE_CORPUS_DIR"}
+    for name in interpolation_only:
+        assert "${" + name + ":" in compose, name
+    assert [name for name in names if name not in passed | interpolation_only] == []
 
 
 # --- ADR 0028: the knowledge host ---------------------------------------------------------------
