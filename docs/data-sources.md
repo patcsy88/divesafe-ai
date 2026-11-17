@@ -197,8 +197,8 @@ call made.
   waves (`FMWH`). The whole range is kept under `ranges` (never `variables`, so no hourly rule
   reads it) and `upper` is the top of MET's stated range (not a site maximum: no gusts, can be exceeded). The quota is 3 a minute and 1,000 a day. The
   credentialed getter refuses redirects and has its own host list. No rule uses these values yet,
-  and the engine does count a daily +08:00 range as covering the dive window (known gap, risk-model.md). Wave statistic,
-  zone extent and the licence stay unknown.
+  and the engine does count a daily +08:00 range as covering the dive window (known gap,
+  risk-model.md). Wave statistic and zone extent stay unknown; the terms of use are below.
   **Live in production (2026-11-17, owner).** The owner wrote `divesafe_met_api_token`, and it
   took effect when the API was recreated at 08:36 UTC (5 connectors). First production run,
   assessment `0ab20d5b…` (Tioman, window 2026-11-18): two `degraded` items for zone
@@ -208,10 +208,25 @@ call made.
   The final recommendation stayed INSUFFICIENT EVIDENCE: no rule uses these values. Every
   assessment for a site without a zone records a `met-api-marine-forecast` connector failure,
   which forces at least INSUFFICIENT EVIDENCE and counts as a failure in `/metrics` (a future
-  "any connector failure" alert would fire on every such run). The licence terms were not
-  checked (only a liability disclaimer was found, 2026-10-16). Since 2026-11-17 the MET values
+  "any connector failure" alert would fire on every such run). The terms of use were
+  checked on 2026-11-17 (see below). Since 2026-11-17 the MET values
   go to the model host with every Tioman assessment, and they are in the stored records and the
   backups (ADR 0024, "What leaves the machine"). The token is registered in the owner's name.
+  **Terms checked 2026-11-17 (owner):** MET's Open Data page
+  (https://www.met.gov.my/en/info/data-terbuka/, read 2026-11-17) is the right to use. It names
+  the MET API Web Services (`https://api.met.gov.my`) and states: "All open datasets provided
+  through this platform are accessible for integration and reuse by the public, government
+  agencies, and private entities across various applications" (the Government's "Open by
+  Default" principle). This covers integrating the values into assessments, sending them to the
+  model host and keeping them in stored records and backups.
+  - The site's Copyright Notice reserves the website and its contents (copying, distribution,
+    commercial dealing need MET's written consent); the Open Data page is the narrower grant for
+    the API datasets. The Disclaimer and the API home page exclude liability for loss or damage.
+  - The registration email (MET, 2026-10-16) has no terms; its "Peringatan" footer is a MyGovUC
+    notice to government staff, not a licence.
+  - **Still open:** no named licence and no attribution wording. Until MET says otherwise, the
+    record keeps `source` as MET; a written answer (multimedia@met.gov.my) would settle
+    attribution and the boundary with the Copyright Notice.
   **Findings 2026-10-16 (token used; developer guide read while logged in):**
   - **Base URL is `https://api.met.gov.my/v2.1/`**; `/v2/` is deprecated. Header
     `Authorization: METToken <token>`. The guide states 10 requests a minute and 2,000 a day; the

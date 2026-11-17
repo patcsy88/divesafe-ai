@@ -164,8 +164,10 @@ results and the specialist findings** (the prompt layer's payload) to
   from header names in the live runs, not confirmed), so the data may pass through a third party
   (ADR 0023).
 - The evidence comes from Open-Meteo (licensed for non-commercial use), data.gov.my and, when the
-  `divesafe_met_api_token` file is non-empty, MET Malaysia. **Those sources' terms on passing their
-  data to a third-party model host were not checked** (ADR 0023).
+  `divesafe_met_api_token` file is non-empty, MET Malaysia. **Open-Meteo's and data.gov.my's terms
+  on passing their data to a third-party model host were not checked** (ADR 0023). MET's were
+  checked on 2026-11-17: its Open Data page allows integration and reuse of the API datasets by
+  private entities; attribution wording is still open (data-sources.md, MET section).
 - PHN e-Tide data is **off** in this stack. If it is turned on, its terms are not on file and the
   start-up warning above says so, but nothing stops it (ADR 0021).
 - **Site documents** (ADR 0028, accepted 2026-11-14): with `DIVESAFE_LLM_KNOWLEDGE_HOST` empty
