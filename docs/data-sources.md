@@ -463,10 +463,10 @@ has no built-in default and must be chosen per category with a documented reason
     2026-11-17). Reproduced locally (2026-11-17): it was a false alarm from the extra `_socket_of`
     call after a body ends (`Content-Length` or chunked), when `http.client` has closed the
     response; the protections were active locally, and production matches (ADR 0024, MET deploy
-    note). **Fixed in code (2026-11-17), not yet deployed; takes effect at the next image build:** a
-    response whose `fp` is `None` gives no socket and no warning; a missing `fp` or `raw` still
-    warns once. Pinned by `test_a_response_read_to_its_end_does_not_use_up_the_warning`,
-    mutation-checked.
+    note). **Fixed and deployed (2026-11-17, image `10ed1e547b23`; the first run after it logged no
+    warning):** a response whose `fp` is `None` gives no socket and no warning; a missing `fp`
+    or `raw` still warns once. Pinned by
+    `test_a_response_read_to_its_end_does_not_use_up_the_warning`, mutation-checked.
   - No per-host thread limit: one misbehaving allow-listed host can hold every pool worker until
     the deadline or a cancel, so every connector fails closed to INSUFFICIENT EVIDENCE. This is an
     availability problem only.
