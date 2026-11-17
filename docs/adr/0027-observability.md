@@ -46,6 +46,14 @@ plan fields leave the machine), and "no new dependency without an ADR".
    client arrives from the Docker gateway address, so the proxy cannot be told apart from another
    local process (the same weakness rate limiting has); the impact is low, since the id is for log
    correlation only.
+
+   Built (2026-11-17, branch `request-id`): `api/request_id.py` (outermost middleware),
+   `config/logging.py` (the bound id and the formatter field), the run manager (the id passed in
+   and bound first in the run's task, guarded so it can never change the run), the run span
+   (`request_id`, only when valid). The 500 handler binds the id again and returns the header.
+   Connector worker threads get a fresh context holding only the id, never the run's trace
+   collector. Pinned by `tests/safety/test_request_id.py` and the whole-export pin in
+   `tests/safety/test_tracing_export.py`.
 2. **A `/metrics` endpoint in the Prometheus text format** with a small fixed set: assessments
    created and finished, by final recommendation; runs in flight; connector failures by connector
    name; model call outcomes by the nine `CALL_OUTCOMES` labels (`agents/runner.py`), the same set
@@ -374,9 +382,9 @@ section 9).
 - **The allow-list covers the whole export.**
   - Span names are fixed: `run`, the `StageName` values and the task names.
   - Run span attributes: `run_outcome` (`stored` or a `FailureCode` value), `prompt_version`
-    (`PROMPT_VERSION`), the request id (once item 1 is built; when it is added, the whole-export
-    allow-list pin is updated in the same change, as a `tests/safety` change reviewed by
-    `risk-reviewer`) and the assessment id, only when it is 32 lowercase hex characters (the
+    (`PROMPT_VERSION`), the request id, only when it matches `[A-Za-z0-9-]{1,64}` (item 1,
+    built 2026-11-17; the whole-export pin was updated in the same change) and the assessment
+    id, only when it is 32 lowercase hex characters (the
     two forms the API creates, `uuid4().hex` and `_idempotent_id`); otherwise it is left out.
   - Stage span attributes: the stage name, outcome and duration from its `StageTrace`, never its
     evidence ids or issue codes' free parts. A stage span ends at `StageEntry.ended_ns`, the wall
@@ -627,7 +635,8 @@ runtime image. Licences to verify from package metadata at build.
 
 - Because tracing is built before items 1 to 3, it has no metrics or alerts on export failures
   or dropped collector entries until item 2 is built: they show only as the once-per-reason log
-  codes and as missing or partial traces. Spans carry no request id until item 1 is built.
+  codes and as missing or partial traces. The run span carries the request id (item 1); stage
+  and model-call spans never do.
 - FastAPI itself requires and imports `opentelemetry-api`, so with tracing off the OpenTelemetry
   API is loaded (inert: no provider is set and FastAPI's telemetry is off). The SDK, the
   exporter, `requests`, `urllib3` and `google.protobuf` are not loaded (subprocess test, step 3).
@@ -801,6 +810,11 @@ Settled 2026-11-15, each as the recommended default:
   port every local process looks like the proxy (log correlation only; no authority attaches to
   the id).
 - No alert can be checked by a test in this repository; alerting is operator discipline.
+- Connector worker threads carry only the request id (a fresh context per job). The run's trace
+  collector is not thread-safe, so any future `record_*` call from `data` needs a lock or must
+  stay out of the worker.
+- An idempotent replay gets its own request id; the run keeps the id of the request that started
+  it, so a replayed POST and its run show different ids in the logs.
 - `prometheus_client`'s multiprocess mode is not used; with more than one worker each process
   exposes its own counters and a scrape sees whichever answers (same as the per-process rate
   limit). One worker is the production setting today (ADR 0024).

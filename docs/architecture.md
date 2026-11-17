@@ -160,6 +160,8 @@ stdlib JSON logging, `pydantic-settings` for configuration. LLMs sit behind
 One sibling import is recorded (2026-11-10): `rag -> services` (`rag.items` reuses the read-time
 character screen `services.kb_screen`; `services` does not import `rag`, so there is no cycle).
 Alternative, not chosen yet: move the pure screen functions to a neutral module.
+A second is recorded (2026-11-17): `data.http` imports `config.logging` (the request id only,
+ADR 0027 item 1); `config.logging` imports only the standard library.
 
 `observability` is a leaf beside `domain` (ADR 0027 amendment, 2026-11-15): `agents`,
 `orchestration` and `api` may import it; it imports only `domain` and the standard library
@@ -247,8 +249,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
 - **Rate limiting is per process**, not shared across workers.
 - **Observability: ADR 0027 accepted (2026-11-12; tracing amended 2026-11-15); tracing
   built and switched on in production on 2026-11-16 (metadata-only spans to the self-hosted
-  Langfuse; the first trace was checked).** No
-  request id, metrics or alerting yet; on 2026-11-12 every model call of one production
+  Langfuse; the first trace was checked).** The request id is built (item 1, 2026-11-17: on log
+  lines, the `X-Request-ID` response header and the run span only). No metrics or alerting yet;
+  on 2026-11-12 every model call of one production
   assessment failed (model-host 404) and only the record showed it. Decided: a request id,
   `/metrics` behind a new `metrics` role (isolated: never combined with other roles, groups or a
   shared actor) using `prometheus_client`, Uptime Kuma for alerting over

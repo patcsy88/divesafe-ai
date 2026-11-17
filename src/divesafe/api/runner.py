@@ -8,6 +8,10 @@ never exception text.
 Tracing (ADR 0027 amendment): with a sink, each run collects into its own context and hands its
 trace to the sink once, last, after `complete` has returned or `_mark_failed` has run. Tracing
 never changes what is stored or how the run's task ends.
+
+Request id (ADR 0027 item 1): the run never relies on the request's context. The id is passed
+in and bound first thing in the run's own task (replacing anything inherited), for the run's log
+lines and its run span.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from datetime import timedelta
 
 from fastapi.concurrency import run_in_threadpool
 
+from divesafe.config.logging import bind_request_id
 from divesafe.domain import AssessmentRecord
 from divesafe.observability import RunCollector, TraceSink, start_collecting
 from divesafe.orchestration import StartPassedError
@@ -59,11 +64,14 @@ class RunManager:
         run_token: str,
         actor: str,
         work: Callable[[], Awaitable[AssessmentRecord]],
+        *,
+        request_id: str | None = None,
     ) -> None:
         if self.closing:
             raise RuntimeError("the server is shutting down")
         task = asyncio.get_running_loop().create_task(
-            self._wrapped(run_id, run_token, actor, work), name=f"run-{run_id}"
+            self._wrapped(run_id, run_token, actor, work, request_id),
+            name=f"run-{run_id}",
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -74,7 +82,10 @@ class RunManager:
         run_token: str,
         actor: str,
         work: Callable[[], Awaitable[AssessmentRecord]],
+        request_id: str | None = None,
     ) -> None:
+        with contextlib.suppress(Exception):  # the request id must never change the run
+            bind_request_id(request_id)  # the task's own context copy; it ends with the task
         code: FailureCode | None = None
         collector: RunCollector | None = None
         if self._sink is not None:
@@ -117,7 +128,7 @@ class RunManager:
             if collector is not None and self._sink is not None:
                 with contextlib.suppress(Exception):
                     outcome = "stored" if code is None else code.value
-                    self._sink.emit(collector.finish(run_id, outcome))
+                    self._sink.emit(collector.finish(run_id, outcome, request_id=request_id))
 
     @staticmethod
     def _log_failure(run_id: str, actor: str, exc: BaseException) -> None:

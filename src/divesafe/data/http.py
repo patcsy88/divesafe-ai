@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import http.client
 import json
 import logging
@@ -22,6 +23,7 @@ from collections.abc import Callable, Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any, Protocol
 
+from divesafe.config.logging import bind_request_id, current_request_id
 from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
 
 USER_AGENT = "divesafe-ai/0.1 (non-commercial research; decision support only)"
@@ -251,7 +253,13 @@ async def _call_in_pool(
     deadline_seconds: float,
 ) -> Any:
     job = _Job(_label(url), deadline_seconds)
-    future = asyncio.get_running_loop().run_in_executor(_POOL, _run_job, job, fn, url, params)
+    # Only the request id goes with the job, so a worker's log line keeps it: never the run's
+    # trace collector or anything else in the caller's context.
+    context = contextvars.Context()
+    with contextlib.suppress(Exception):  # the id is for logs only; never fail the call
+        context.run(bind_request_id, current_request_id())
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_POOL, context.run, _run_job, job, fn, url, params)
     try:
         return await asyncio.wait_for(future, timeout=deadline_seconds)
     except TimeoutError as exc:
