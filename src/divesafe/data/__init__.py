@@ -10,6 +10,7 @@ from divesafe.data.errors import ConnectorError, ConnectorResponseError, Connect
 from divesafe.data.http import (
     MET_API_HOSTS,
     PHN_HOSTS,
+    TIDES_TODAY_HOSTS,
     JsonGetter,
     UrllibFormPostJsonGetter,
     UrllibJsonGetter,
@@ -22,10 +23,12 @@ from divesafe.data.ratelimit import (
     MET_API_QUOTA,
     OPEN_METEO_QUOTA,
     PHN_ETIDE_QUOTA,
+    TIDES_TODAY_QUOTA,
     CachingRateLimitedGetter,
     QuotaGroup,
 )
 from divesafe.data.sites import SITES, TIOMAN_ISLAND
+from divesafe.data.tides_today import TidesTodayConnector
 from divesafe.domain import DiveSite
 
 __all__ = [
@@ -37,6 +40,9 @@ __all__ = [
     "PHN_ETIDE_QUOTA",
     "PHN_HOSTS",
     "PhnEtideConnector",
+    "TIDES_TODAY_HOSTS",
+    "TIDES_TODAY_QUOTA",
+    "TidesTodayConnector",
     "UrllibFormPostJsonGetter",
     "MetApiMarineConnector",
     "CachingRateLimitedGetter",

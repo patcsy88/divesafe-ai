@@ -472,7 +472,8 @@ def test_max_connectors_covers_every_connector_registrable_today() -> None:
 
     source = inspect.getsource(state_module.build_default_state)
     registrable = source.count("Connector(")
-    assert registrable == 6  # the four always-on plus MET and PHN (opt-in); update with the code
+    # the four always-on plus MET, PHN and tides.today (opt-in); update with the code
+    assert registrable == 7
     assert registrable <= MAX_CONNECTORS
 
 

@@ -259,8 +259,9 @@ def test_a_dotenv_file_is_still_read_when_no_secrets_directory_is_set(
     assert load_settings().log_level == "DEBUG"
 
 
-def test_the_allow_list_is_exactly_these_eight_names() -> None:
-    """The two Langfuse production project keys were added by the ADR 0027 amendment. The
+def test_the_allow_list_is_exactly_these_ten_names() -> None:
+    """The two Langfuse production project keys were added by the ADR 0027 amendment, the two
+    tides.today credentials by ADR 0029. The
     loader's `loader_database_url` is read only by the loader's own narrow settings (ADR 0024
     A4); the shared `Settings` has no field for it and the API refuses it in production."""
     from divesafe.config import Settings
@@ -270,6 +271,8 @@ def test_the_allow_list_is_exactly_these_eight_names() -> None:
         "admin_database_url",
         "llm_api_key",
         "met_api_token",
+        "tides_today_app_id",
+        "tides_today_api_key",
         "api_key_hashes",
         "trace_public_key",
         "trace_secret_key",

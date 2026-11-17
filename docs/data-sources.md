@@ -24,7 +24,7 @@ source is verified and recorded here.
 | `weather`, `wind` | Forecast + observation | Surface conditions, trend |
 | `waves_swell` | Forecast + observation | Entry/exit and surface safety |
 | `currents` | Forecast + observation | Drift and exertion risk |
-| `tides` | Prediction (+ observed level) | Timing of high and low water (PHN gives heights and times only, not slack windows) |
+| `tides` | Prediction (+ observed level) | Timing of high and low water (PHN and tides.today give heights and times only, not slack windows) |
 | `sea_temperature` | Forecast + observation | Thermal protection |
 | `marine_warnings` | Official notices | Hard constraints |
 | `historical_observations` | Archive | Prediction, calibration |
@@ -97,7 +97,7 @@ reachable but not yet approved or implemented. Nothing here has been called from
   a dedicated `ThreadPoolExecutor` (thread prefix `divesafe-http`), not asyncio's default pool.
   Queued work whose caller gave up never opens a connection. Pool size is connectors x `DIVESAFE_MAX_RUNS_IN_FLIGHT`, floor
   1, ceiling `HTTP_POOL_CEILING` = 64 (the maximum of that setting); by default 4 x 4 = 16 (20 with
-  MET or PHN, 24 with both). It is built at start-up in `api/state.py` and shut down in the app
+  MET, PHN or tides.today; one more connector for each opt-in, up to 28 with all three). It is built at start-up in `api/state.py` and shut down in the app
   lifespan with `wait=False, cancel_futures=True`. Code that builds getters without the app uses a
   default 8-worker pool. Gaps are listed in "Not yet done (connectors)".
 - **Tests** use recorded real responses in `tests/fixtures` (see its README) and no live calls.
@@ -365,6 +365,18 @@ from the national hydrographic office instead. Neither source gives tidal stream
 
 **PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording is still not on file.
 
+**tides.today API (2026-11-17):** a documented, invite-only API (`api.tidestoday.io/v1`, HTTP
+Basic with an application ID and key). The owner made one request per endpoint on 2026-11-17;
+the responses are kept outside the repository and the test fixture is SYNTHETIC. Location 2960
+"Teluk Tekek" is the only one within 25 km of the Tioman reference point (about 3.7 km away). It
+gives UTC times of high and low water with heights, plus sunrise/sunset and spring/neap per day.
+The API states no units, datum or rate limit: metres are the owner's reading of the website, the
+datum is not stated (the engine page suggests LAT), and the budget (6 a minute, 300 a day) is our
+assumption. The terms (§2, §6, §9) forbid use as a sole source for diving and need written
+permission for automated use in another application, so the connector `TidesTodayConnector` is
+**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until that permission is on file. No
+tidal-stream data. Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED).
+
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
 credential or licence was pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
 requires them gives `INSUFFICIENT EVIDENCE`. Revisit if the dive professional says tide timing
@@ -381,9 +393,9 @@ matters for Tioman, or if JUPEM data becomes available.
   and tidal-stream conditions at a dive site are not resolved.
 - **Open-Meteo's free tier forbids commercial use.** Fine for a capstone or research; a
   commercial deployment would need a paid plan or a different source.
-- **No VALIDATED or documented source of tidal predictions.** The PHN e-Tide connector (off by
-  default) supplies DEGRADED predictions only, so a required-tides policy still gives
-  `INSUFFICIENT EVIDENCE` for GO or CAUTION.
+- **No VALIDATED or documented source of tidal predictions.** The PHN e-Tide and tides.today
+  connectors (both off by default) supply DEGRADED predictions only, so a required-tides policy
+  still gives `INSUFFICIENT EVIDENCE` for GO or CAUTION.
 - data.gov.my text values are in Bahasa Melayu; a connector must map them explicitly and treat
   unmapped values as invalid, not guess.
 

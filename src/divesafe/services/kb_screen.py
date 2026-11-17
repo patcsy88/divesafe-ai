@@ -19,6 +19,7 @@ from divesafe.data import (
     open_meteo_marine,
     open_meteo_wind,
     phn_etide,
+    tides_today,
 )
 from divesafe.services.kb_common import LoaderRefusal
 
@@ -32,6 +33,7 @@ CONNECTOR_PREFIXES: tuple[str, ...] = (
     open_meteo_marine.SOURCE,
     open_meteo_wind.SOURCE,
     phn_etide.SOURCE,
+    tides_today.SOURCE,
 )
 
 # Decision 6: tokens named by the ADR, "and similar" (the ADR fixes no fuller list). Whole token.

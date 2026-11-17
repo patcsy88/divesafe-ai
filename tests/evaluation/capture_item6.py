@@ -13,7 +13,7 @@ and `build_provider`), runs one assessment, and writes only what the recorder ca
 payload boundary: provider reply text after parsing, and connector payloads as the connectors
 received them. Raw HTTP, request URLs, headers, tokens, provider metadata, hosts and ports are never
 written. Every file is scrubbed and screened before it is written; a rule that fires refuses the
-capture. PHN payloads are excluded (ADR 0021).
+capture. PHN payloads (ADR 0021) and tides.today payloads (ADR 0029) are excluded.
 """
 
 from __future__ import annotations
@@ -54,7 +54,8 @@ CONFIRM_VALUE = "item6"
 DIR_ENV = "DIVESAFE_CAPTURE_DIR"
 # The only connectors the live run may call: the agreed sources from the production connector set
 # (api/state.py). An allow-list, not an exclusion, so a new connector is refused until it is added
-# here on purpose. PHN (ADR 0021, no permission wording on file) is not on it.
+# here on purpose. PHN (ADR 0021) and tides.today (ADR 0029), no permission wording on file, are
+# not on it.
 ALLOWED_CONNECTORS = frozenset(
     {
         "open-meteo-marine",
@@ -652,7 +653,8 @@ class _LiveParts:
 def build_live_state(settings: Settings) -> Any:
     """Connectors, engine and provider only: the same getters and engine construction as
     `api.state.build_default_state`, without its repository, authenticator or pool settings, so no
-    database is ever constructed (F2). Mirrors state.py's connector list; PHN is never built."""
+    database is ever constructed (F2). Mirrors state.py's connector list; PHN and tides.today are
+    never built."""
     from divesafe.api.state import build_engine, build_provider, model_host
     from divesafe.data import (
         MET_API_HOSTS,

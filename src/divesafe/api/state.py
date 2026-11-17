@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import os
@@ -23,6 +24,8 @@ from divesafe.data import (
     MET_API_QUOTA,
     PHN_ETIDE_QUOTA,
     SITES,
+    TIDES_TODAY_HOSTS,
+    TIDES_TODAY_QUOTA,
     CachingRateLimitedGetter,
     Connector,
     DataGovMyForecastConnector,
@@ -32,6 +35,7 @@ from divesafe.data import (
     OpenMeteoMarineConnector,
     OpenMeteoWindConnector,
     PhnEtideConnector,
+    TidesTodayConnector,
     UrllibFormPostJsonGetter,
     UrllibJsonGetter,
 )
@@ -249,6 +253,13 @@ def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasi
             "knowledge is sent to the model host",
             extra={"model_host": model_host(settings), "egress_basis": basis},
         )
+    if settings.tides_today_enabled and basis != "declared_local":
+        logger.warning(
+            "tides.today data is ON and the model server is not declared local: the tides.today "
+            "tide item is sent to it with every assessment; the provider's permission must cover "
+            "this (ADR 0029)",
+            extra={"egress_basis": basis},
+        )
     # ADR 0028 decision 9: unchanged; the knowledge basis does not cover PHN data.
     if settings.phn_etide_enabled and basis != "declared_local":
         logger.warning(
@@ -257,6 +268,22 @@ def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasi
             extra={"egress_basis": basis},
         )
     return provider, basis
+
+
+def build_tides_today_getter(settings: Settings) -> CachingRateLimitedGetter:
+    """HTTP Basic to api.tidestoday.io only (ADR 0029). The header lives only in this getter."""
+    app_id, api_key = settings.tides_today_app_id, settings.tides_today_api_key
+    if app_id is None or api_key is None:
+        raise RuntimeError("tides.today is enabled without both credentials")
+    pair = f"{app_id.get_secret_value()}:{api_key.get_secret_value()}".encode()
+    return CachingRateLimitedGetter(
+        UrllibJsonGetter(
+            allowed_hosts=TIDES_TODAY_HOSTS,
+            auth_header=("Authorization", f"Basic {base64.b64encode(pair).decode('ascii')}"),
+        ),
+        min_interval_seconds={"api.tidestoday.io": 0.0},
+        quotas=(TIDES_TODAY_QUOTA,),
+    )
 
 
 def build_repository(settings: Settings) -> RunAwareRepository:
@@ -351,6 +378,12 @@ def build_default_state(settings: Settings) -> AppState:
                 )
             )
         )
+    if settings.tides_today_enabled:
+        logger.warning(
+            "tides.today tide predictions are ON (DIVESAFE_TIDES_TODAY_ENABLED); the provider's "
+            "written permission must be on file (ADR 0029)"
+        )
+        connectors.append(TidesTodayConnector(build_tides_today_getter(settings)))
     pool_size = http_pool_size(len(connectors), settings.max_runs_in_flight)
     configure_http_pool(pool_size)
     logger.info(

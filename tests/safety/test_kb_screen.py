@@ -361,7 +361,7 @@ def test_evidence_ids_are_caught_with_case_spaces_and_compatibility_forms() -> N
     check_ids(kb_screen)
 
 
-def test_the_connector_prefixes_are_exactly_the_six_connector_sources() -> None:
+def test_the_connector_prefixes_are_exactly_the_seven_connector_sources() -> None:
     assert set(kb_screen.CONNECTOR_PREFIXES) == {
         "data-gov-my-weather-forecast",
         "data-gov-my-weather-warning",
@@ -369,6 +369,7 @@ def test_the_connector_prefixes_are_exactly_the_six_connector_sources() -> None:
         "open-meteo-marine",
         "open-meteo-wind",
         "phn-etide-prediction",
+        "tides-today-prediction",
     }
     assert kb_screen.KB_ID_PREFIX == "kb"
 

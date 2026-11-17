@@ -32,6 +32,15 @@ ALLOWED_HOSTS: frozenset[str] = frozenset(
 )
 # Kept out of ALLOWED_HOSTS on purpose: only a getter built with a credential may call it.
 MET_API_HOSTS: frozenset[str] = frozenset({"api.met.gov.my"})
+# The same for tides.today (ADR 0029): HTTP Basic credentials, never in ALLOWED_HOSTS.
+TIDES_TODAY_HOSTS: frozenset[str] = frozenset({"api.tidestoday.io"})
+# Each credential's own host list and header scheme; a credentialed getter's hosts must sit
+# inside one list, and its header must use that list's scheme. The lists are disjoint (pinned).
+CREDENTIAL_SCHEMES: tuple[tuple[frozenset[str], str], ...] = (
+    (MET_API_HOSTS, "METToken "),
+    (TIDES_TODAY_HOSTS, "Basic "),
+)
+CREDENTIAL_HOST_LISTS: tuple[frozenset[str], ...] = tuple(h for h, _ in CREDENTIAL_SCHEMES)
 # Also kept out of ALLOWED_HOSTS: only the POST getter below may call it.
 PHN_HOSTS: frozenset[str] = frozenset({"etide.hydro.gov.my"})
 PHN_MAX_BYTES = 512 * 1024
@@ -320,8 +329,14 @@ class UrllibJsonGetter:
         if isinstance(allowed_hosts, str):
             raise TypeError("allowed_hosts must be a collection of host names")
         hosts = frozenset(allowed_hosts)
-        if auth_header is not None and (not hosts or not hosts <= MET_API_HOSTS):
-            raise ValueError("a getter with a credential needs its own host list")
+        if auth_header is not None and (
+            not hosts
+            or not any(
+                hosts <= own and auth_header[1].startswith(scheme)
+                for own, scheme in CREDENTIAL_SCHEMES
+            )
+        ):
+            raise ValueError("a getter with a credential needs its own host list and scheme")
         if hosts & PHN_HOSTS:
             raise ValueError("the PHN host may only be called by the PHN POST getter")
         self._timeout = timeout_seconds
