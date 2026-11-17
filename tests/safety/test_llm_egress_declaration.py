@@ -278,6 +278,74 @@ def test_mutation_widening_the_phn_warning_to_the_knowledge_basis_is_caught(
     assert _phn_warned(caplog, mutant.build_provider, phn=True) is False
 
 
+# ADR 0029 decision 12: the same warning for the tides.today item, under every basis not local.
+_TIDES_ON: dict[str, object] = {
+    "tides_today_enabled": True,
+    "tides_today_app_id": "app-1",
+    "tides_today_api_key": "key-2",
+}
+_TIDES_WARNING = "tides.today data is ON and the model server is not declared local"
+
+
+def _tides_warned(caplog: pytest.LogCaptureFixture, build: object, settings: Settings) -> bool:
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        provider, _ = build(settings)  # type: ignore[operator]
+    provider.close()
+    return any(_TIDES_WARNING in r.getMessage() for r in caplog.records)
+
+
+def _tides_cases(build: object, caplog: pytest.LogCaptureFixture) -> list[str]:
+    bad: list[str] = []
+    for label, flags in (
+        ("external", {**_KNOWLEDGE_SETTINGS, "llm_knowledge_host": None}),
+        ("knowledge", _KNOWLEDGE_SETTINGS),
+    ):
+        if not _tides_warned(caplog, build, _settings(**flags, **_TIDES_ON)):
+            bad.append(f"{label}: not warned when on")
+        if _tides_warned(caplog, build, _settings(**flags)):
+            bad.append(f"{label}: warned when off")
+    local = _settings(
+        llm_provider="openai_compatible",
+        llm_model="m",
+        llm_base_url=LOOPBACK_URL,
+        llm_server_is_local=True,
+        **_TIDES_ON,
+    )
+    if _tides_warned(caplog, build, local):
+        bad.append("declared local: warned")
+    return bad
+
+
+def test_tides_today_data_with_a_model_server_not_declared_local_is_warned_about(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert _tides_cases(build_provider, caplog) == []
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        (
+            'if settings.tides_today_enabled and basis != "declared_local":',
+            'if settings.tides_today_enabled and basis == "remote_external_opt_in":',
+        ),
+        ('if settings.tides_today_enabled and basis != "declared_local":', "if False:"),
+        ('if settings.tides_today_enabled and basis != "declared_local":', "if True:"),
+    ],
+    ids=["knowledge-basis-skipped", "never-warned", "warned-when-off"],
+)
+def test_mutations_of_the_tides_today_warning_are_caught(
+    caplog: pytest.LogCaptureFixture, edit: tuple[str, str]
+) -> None:
+    from tests.safety.kb_fakes import mutated_module
+
+    from divesafe.api import state as state_module
+
+    mutant = mutated_module(state_module, edit)
+    assert _tides_cases(mutant.build_provider, caplog) != []
+
+
 _CALLERS = {
     # name -> the only files that may mention it at all (call, index, pass as a value, iterate)
     "create_provider": {"models/llm.py", "models/__init__.py", "api/state.py"},

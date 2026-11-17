@@ -58,6 +58,8 @@ from divesafe.models import FakeProvider
 pytestmark = pytest.mark.safety
 
 TOKEN = "tok-SECRET-123"
+TT_APP = "tt-app-SECRET-456"
+TT_KEY = "tt-key-SECRET-789"
 SIZED = "connector HTTP pool sized"
 
 
@@ -295,11 +297,14 @@ def test_a_saturated_sized_pool_still_fails_at_the_deadline_and_spares_the_defau
 # --- (c) wiring in build_default_state ----------------------------------------------------------
 
 BOTH = {"phn_etide_enabled": True, "met_api_token": TOKEN}
+TIDES = {"tides_today_enabled": True, "tides_today_app_id": TT_APP, "tides_today_api_key": TT_KEY}
 CASES: list[tuple[dict[str, Any], int, int]] = [
     ({}, 4, 16),
     ({"phn_etide_enabled": True}, 5, 20),
     ({"met_api_token": TOKEN}, 5, 20),
+    (TIDES, 5, 20),
     (BOTH, 6, 24),
+    ({**BOTH, **TIDES}, 7, 28),
     ({**BOTH, "max_runs_in_flight": 64}, 6, 64),
     ({"max_runs_in_flight": 2}, 4, 8),
     ({"max_runs_in_flight": 1, "max_runs_per_actor": 1}, 4, 4),
@@ -326,7 +331,13 @@ def state_misses(mod: Any) -> list[str]:
         package.setLevel(logging.DEBUG)
         try:
             with pytest.MonkeyPatch.context() as m:
-                for name in ("DIVESAFE_MET_API_TOKEN", "DIVESAFE_PHN_ETIDE_ENABLED"):
+                for name in (
+                    "DIVESAFE_MET_API_TOKEN",
+                    "DIVESAFE_PHN_ETIDE_ENABLED",
+                    "DIVESAFE_TIDES_TODAY_ENABLED",
+                    "DIVESAFE_TIDES_TODAY_APP_ID",
+                    "DIVESAFE_TIDES_TODAY_API_KEY",
+                ):
                     m.delenv(name, raising=False)
                 settings = Settings(_env_file=None, **kwargs)  # type: ignore[call-arg]
                 state = mod.build_default_state(settings)
@@ -366,8 +377,8 @@ def state_misses(mod: Any) -> list[str]:
                 bad.append(f"{label}: log extras {extra}")
         for record in capture.records:
             text = record.getMessage() + " ".join(str(v) for v in record.__dict__.values())
-            if TOKEN in text:
-                bad.append(f"{label}: the token reached a log record")
+            if any(secret in text for secret in (TOKEN, TT_APP, TT_KEY)):
+                bad.append(f"{label}: a credential reached a log record")
                 break
     return bad
 
@@ -527,6 +538,16 @@ STATE_EDITS = [
             )
         ],
         id="log-carries-the-token",
+    ),
+    pytest.param(
+        [
+            (
+                LOG_EXTRA,
+                LOG_EXTRA + '            "tt": settings.tides_today_api_key.get_secret_value()'
+                " if settings.tides_today_api_key else None,\n",
+            )
+        ],
+        id="log-carries-the-tides-today-key",
     ),
     pytest.param(
         [('"connector HTTP pool sized",', '"connector pool sized",')], id="log-message-changed"

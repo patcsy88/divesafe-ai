@@ -149,6 +149,8 @@ def test_the_api_never_sees_the_owner_credentials(services: dict[str, list[str]]
         "llm_api_key",
         "api_key_hashes",
         "met_api_token",
+        "tides_today_app_id",
+        "tides_today_api_key",
         "trace_public_key",
         "trace_secret_key",
     }
@@ -498,7 +500,23 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_TRACING_ENABLED",
         "DIVESAFE_TRACE_ENDPOINT",
         "DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE",
+        "DIVESAFE_TIDES_TODAY_ENABLED",
     }
+
+
+def test_tides_today_defaults_off_in_compose_and_the_example(
+    services: dict[str, list[str]],
+) -> None:
+    """ADR 0029: off until the provider's written permission is on file; only the api gets it."""
+    name = "DIVESAFE_TIDES_TODAY_ENABLED"
+    assert _environment(services["api"])[name] == "${DIVESAFE_TIDES_TODAY_ENABLED:-false}"
+    for service, block in services.items():
+        if service != "api":
+            assert "tides_today" not in "\n".join(block).lower(), service
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert [line for line in lines if "TIDES_TODAY" in line and not line.startswith("#")] == [
+        f"{name}=false"
+    ]
 
 
 def test_the_metrics_rate_limit_defaults_to_30_and_is_only_on_the_api(
@@ -637,6 +655,8 @@ def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> No
         "llm_api_key": "divesafe_llm_api_key",
         "api_key_hashes": "divesafe_api_key_hashes",
         "met_api_token": "divesafe_met_api_token",
+        "tides_today_app_id": "divesafe_tides_today_app_id",
+        "tides_today_api_key": "divesafe_tides_today_api_key",
         "loader_database_url": "divesafe_loader_database_url",
         "trace_public_key": "divesafe_trace_public_key",
         "trace_secret_key": "divesafe_trace_secret_key",

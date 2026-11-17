@@ -174,7 +174,7 @@ see Known gaps and ADR 0012.) `StageTrace` holds `name` and `next_stage` (from t
   specialist, scenario kind and `risk_assessment`, from `evaluate_scenarios_with_outcomes`);
   rule ids, the reconciliation flag and the verdict. Nothing reads `evidence_issues` or
   `agent_issues`. Bound: `MAX_STAGE_ISSUES = 3 * MAX_CONNECTORS + 2 = 26` with
-  `MAX_CONNECTORS = 8` (six connectors registrable today, rounded up to a power of two; a
+  `MAX_CONNECTORS = 8` (seven connectors registrable today, rounded up to a power of two; a
   capacity bound, not a safety threshold). Observe is the widest stage (three codes per
   connector plus two); per-stage maxima from the enumerated list: observe 26, retrieve 1,
   assess 2, reason 21 (2 outcome codes + 5 specialists + 3 kinds + 1 proposal code + 9

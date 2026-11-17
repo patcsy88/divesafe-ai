@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import socket
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from divesafe.config import Settings
 from divesafe.data import TIOMAN_ISLAND
 from divesafe.data.met_api_marine import SOURCE as MET_SOURCE
 from divesafe.data.phn_etide import SOURCE as PHN_SOURCE
+from divesafe.data.tides_today import SOURCE as TIDES_TODAY_SOURCE
 from divesafe.models import FakeProvider
 
 pytestmark = pytest.mark.safety
@@ -178,15 +180,16 @@ class _Connector:
         self._getter = getter
 
 
-def test_phn_is_never_kept_and_its_getter_is_never_called() -> None:
-    phn_inner = _Inner({"would": "leak"})
-    phn = _Connector(PHN_SOURCE, phn_inner)
+@pytest.mark.parametrize("source", [PHN_SOURCE, TIDES_TODAY_SOURCE])
+def test_phn_and_tides_today_are_never_kept_and_their_getters_never_called(source: str) -> None:
+    excluded_inner = _Inner({"would": "leak"})
+    excluded = _Connector(source, excluded_inner)
     other = _Connector("open-meteo-marine", _Inner({"x": 1}))
     kept = cap.build_live_connectors(
-        [phn, other], cap.Recorder(), clock=lambda: 0.0, sleep=lambda _s: None
+        [excluded, other], cap.Recorder(), clock=lambda: 0.0, sleep=lambda _s: None
     )
     assert [c.name for c in kept] == ["open-meteo-marine"]
-    assert phn_inner.calls == []
+    assert excluded_inner.calls == []
 
 
 # ---- pacing -------------------------------------------------------------------------------------
@@ -632,6 +635,28 @@ def test_the_allow_list_is_the_five_agreed_sources_and_excludes_phn() -> None:
         == cap.ALLOWED_CONNECTORS
     )
     assert PHN_SOURCE not in cap.ALLOWED_CONNECTORS
+    assert TIDES_TODAY_SOURCE not in cap.ALLOWED_CONNECTORS
+
+
+def test_no_evaluation_module_builds_or_reads_tides_today() -> None:
+    """AGENTS.md section 4 / ADR 0029: the tides.today item never goes to an evaluation run.
+    Today that holds by construction; this pins it. Only this test file may name it."""
+    here = Path(__file__).resolve()
+    # The evaluation modules, and the scripted scenarios the harness builds its sets from.
+    scanned = [*here.parent.rglob("*.py"), here.parent.parent / "agent" / "scripted_llm.py"]
+    assert scanned[-1].is_file()
+    named = [
+        p.name
+        for p in scanned
+        if p != here
+        and re.search(
+            r"tides_today|TidesToday|tides-today", p.read_text(encoding="utf-8"), re.IGNORECASE
+        )
+        and p.name != "capture_item6.py"
+    ]
+    assert named == []
+    text = (here.parent / "capture_item6.py").read_text(encoding="utf-8")
+    assert "TidesTodayConnector" not in text and "tides_today_teluk_tekek" not in text
 
 
 # ---- F8 egress basis label, F9 provider settings (group C items 6 and 7) ---------------------

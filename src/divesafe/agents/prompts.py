@@ -117,6 +117,11 @@ def _knowledge_item(e: EvidenceItem) -> dict[str, Any]:
     }
 
 
+# Kept in the record only, never sent to a model: provider free text the model has no use for
+# (ADR 0029: tides.today's full notice).
+RECORD_ONLY_VALUE_KEYS = frozenset({"provider_notice"})
+
+
 def _payload_item(e: EvidenceItem) -> dict[str, Any]:
     if is_knowledge(e):
         return _knowledge_item(e)
@@ -141,7 +146,8 @@ def _payload_item(e: EvidenceItem) -> dict[str, Any]:
         item["conditions"] = "unavailable: the value failed validation"
         return item
     if observation is None:
-        item["value"] = e.value  # notices and other categories with no canonical form
+        # Notices and other categories with no canonical form.
+        item["value"] = {k: v for k, v in e.value.items() if k not in RECORD_ONLY_VALUE_KEYS}
         return item
     item["conditions"] = observation.conditions.model_dump(exclude_none=True)
     item["limitations"] = {k: e.value[k] for k in _KEPT_LIMITATIONS if k in e.value}

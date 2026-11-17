@@ -68,11 +68,11 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Live evaluation runs (marked `integration`) may send prompts and the stored record's outputs
   to the local Langfuse's evaluation project, for the allow-listed synthetic scenario sets only:
   never production data, knowledge extracts, refused or partial reply text, the model's
-  confidence self-estimate, the PHN tide item (ADR 0021), or the item-6 capture (ADR 0027
-  amendment). Their refusal checks are offline safety tests. Scores are advisory: they never
-  change rules, prompts, thresholds, `confidence` or the corpus automatically, and a change they
-  suggest goes through review like any other. The offline safety gates (`false_go = 0`) are not
-  scores; they stay hard gates.
+  confidence self-estimate, the PHN tide item (ADR 0021), the tides.today tide item (ADR 0029),
+  or the item-6 capture (ADR 0027 amendment). Their refusal checks are offline safety tests.
+  Scores are advisory: they never change rules, prompts, thresholds, `confidence` or the corpus
+  automatically, and a change they suggest goes through review like any other. The offline
+  safety gates (`false_go = 0`) are not scores; they stay hard gates.
 - Every safety rule needs a test of the **failure** condition, not just the happy path. Prove a
   new safety test has teeth by breaking the code once and watching it fail.
 - **NEVER** weaken, skip or delete a safety test to make a change pass. Strengthening is welcome.
