@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -44,6 +45,8 @@ class Role(StrEnum):
         "overrider"  # as a decider, choose a LESS severe outcome than the system's (ADR 0026)
     )
     ADMIN = "admin"  # move a pending assessment to another decider; cannot decide (ADR 0026)
+    # Read /metrics only (ADR 0027 item 2). A key file refuses it with any other role or groups.
+    METRICS = "metrics"
 
 
 @dataclass(frozen=True)
@@ -220,7 +223,10 @@ def parse_api_key_hashes(raw: str) -> dict[str, KeyEntry]:
             raise ValueError(
                 "an admin key may not also be a decider: it could take over and decide"
             )
-        entries[digest] = KeyEntry(actor, role_set, _groups(value.get("groups", [])))
+        groups = _groups(value.get("groups", []))
+        if Role.METRICS in role_set and (len(role_set) > 1 or groups):
+            raise ValueError("a metrics key may have no other role and no groups (ADR 0027)")
+        entries[digest] = KeyEntry(actor, role_set, groups)
     labels = [key_id_of(d) for d in entries]
     if len(set(labels)) != len(labels):
         raise ValueError("DIVESAFE_API_KEY_HASHES has two keys with the same key id")
@@ -291,6 +297,10 @@ def require_principal(request: Request) -> Principal:
     if principal is not None:
         state.limiter.release("auth_failure", source)
     else:
+        metrics = getattr(request.app.state, "metrics", None)
+        if metrics is not None:
+            with contextlib.suppress(Exception):  # a count never changes the answer
+                metrics.auth_failure()
         logger.warning(
             "authentication failed",
             extra={

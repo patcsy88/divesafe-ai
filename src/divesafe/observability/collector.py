@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # cross-examinations) and walks 8 stages; the bound leaves room for both several times over.
 MAX_TRACE_ENTRIES = 128
 
-# Fixed reasons for trace data that was dropped. Until ADR 0027 item 2 exists this is a plain
-# in-process count with no endpoint; the lock guards only the increment, never I/O or logging.
+# Fixed reasons for trace data that was dropped: a plain in-process count, read by `/metrics`
+# (ADR 0027 item 2); the lock guards only the increment, never I/O or logging.
 DropReason = Literal["timeout", "connection", "http_status", "queue_full", "collector_full"]
 DROP_REASONS: tuple[DropReason, ...] = (
     "timeout",

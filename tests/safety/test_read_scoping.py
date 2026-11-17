@@ -412,7 +412,7 @@ def test_mutation_the_evidence_path_is_not_scoped() -> None:
 
 def test_mutation_a_group_is_matched_case_sensitively() -> None:
     mutant = mutated_module(auth_module, (CASEFOLD, 'folded = unicodedata.normalize("NFKC", name)'))
-    roles = [r.value for r in frozenset(Role) - {Role.ADMIN}]
+    roles = [r.value for r in frozenset(Role) - {Role.ADMIN, Role.METRICS}]
     cfg = json.dumps(
         {
             _hash(KEY_A): {"actor": "alice", "roles": roles, "groups": ["North"]},

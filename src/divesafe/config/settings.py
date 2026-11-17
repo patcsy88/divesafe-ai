@@ -164,6 +164,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["api_key", "dev"] = "api_key"
     # JSON object mapping sha256 hex digest of an API key -> actor name. Never store raw keys.
     # {"<sha256 hex>": {"actor": "name", "roles": ["viewer"|"assessor"|"decider"|"overrider"]}}
+    # Also "admin"; a scraper key has only ["metrics"] and no groups (ADR 0027 item 2).
     api_key_hashes: SecretStr | None = None
 
     # Per-actor operational limits (abuse and upstream-quota protection, not safety limits).
@@ -180,6 +181,8 @@ class Settings(BaseSettings):
     rate_limit_read_per_minute: int = Field(default=120, gt=0, le=10_000)
     # Failed authentications allowed per source per minute before it is refused (429).
     rate_limit_auth_failures_per_minute: int = Field(default=10, gt=0, le=10_000)
+    # Scrapes of /metrics per key per minute (ADR 0027 item 2).
+    rate_limit_metrics_per_minute: int = Field(default=30, gt=0, le=10_000)
     # Comma-separated IP addresses of reverse proxies whose X-Forwarded-For may be believed (for
     # example the web server). Empty means the TCP peer is always the source.
     trusted_proxies: str | None = None

@@ -7,6 +7,7 @@ reported as client errors and internals are never echoed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import inspect
 import logging
@@ -29,6 +30,8 @@ from divesafe import __version__
 from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
+from divesafe.api.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from divesafe.api.metrics import Metrics
 from divesafe.api.request_id import RequestIdMiddleware, response_header
 from divesafe.api.runner import RunManager
 from divesafe.api.schemas import (
@@ -135,6 +138,7 @@ READ_OWN = require_any_role((Role.VIEWER, Role.ASSESSOR), limit_key="read")
 CREATE = require_role(Role.ASSESSOR, limit_key="create")
 DECIDE = require_role(Role.DECIDER, limit_key="decide")
 REASSIGN = require_role(Role.ADMIN, limit_key="decide")
+SCRAPE = require_role(Role.METRICS, limit_key="metrics")
 
 
 def _messages(exc: ValidationError) -> list[str]:
@@ -177,11 +181,14 @@ def create_app(state: AppState | None = None) -> FastAPI:
         model=getattr(app_state.provider, "model", None),
         host=app_state.model_host,
     )
+    # `runner` is bound below, before any scrape can read it.
+    metrics = Metrics((c.name for c in app_state.connectors), in_flight=lambda: runner.in_flight)
     runner = RunManager(
         app_state.repository,
         deadline=app_state.runs.deadline,
         grace=app_state.runs.shutdown_grace,
         sink=None if trace_export is None else trace_export.sink,
+        metrics=metrics,
     )
 
     @asynccontextmanager
@@ -235,6 +242,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     app.state.divesafe = app_state
     app.state.runner = runner
+    app.state.metrics = metrics
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -371,6 +379,14 @@ def create_app(state: AppState | None = None) -> FastAPI:
             "version": __version__,
             "storage": "durable" if durable else "in-memory (not durable)",
         }
+
+    @app.get("/metrics", tags=["meta"])
+    def scrape(principal: Annotated[Principal, Depends(SCRAPE)]) -> Response:
+        return Response(
+            metrics.render(),
+            media_type=METRICS_CONTENT_TYPE,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/v1/assessments", status_code=202, tags=["assessments"])
     async def create_assessment(
@@ -542,6 +558,8 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=503, detail="the server is shutting down; nothing was recorded"
                 ) from exc
+            with contextlib.suppress(Exception):  # a count never changes the answer
+                metrics.assessment_created()
         response.headers["Location"] = f"/v1/assessments/{assessment_id}"
         return RunStatusView.of(admission.run)
 
