@@ -190,9 +190,12 @@ def run_trace(
     run_outcome: str = "stored",
     stages: tuple[StageEntry, ...] = (),
     model_calls: tuple[ModelCallEntry, ...] = (),
+    request_id: Any = None,
 ) -> RunTrace:
     started = time.time_ns() - 1_000_000_000
-    return RunTrace(assessment_id, run_outcome, started, time.time_ns(), model_calls, stages)
+    return RunTrace(
+        assessment_id, run_outcome, started, time.time_ns(), model_calls, stages, request_id
+    )
 
 
 def attributes(span: Any) -> dict[str, object]:

@@ -62,8 +62,11 @@ EXCEPTION_MARKER = "EXCEPTION-MARKER-p5"
 MODEL_MARKER = "model-marker-m4"
 URL_MODEL = "https://llm.example/v1/model"
 ASSESSMENT_ID = "0123456789abcdef0123456789abcdef"
+REQUEST_ID = "proxy-Request-7f3a"
+# Not a valid request id (a space), so it must never reach the wire (ADR 0027 item 1).
+REQUEST_ID_MARKER = "REQUEST-ID MARKER-r8"
 
-RUN_KEYS = {"run_outcome", "prompt_version", "assessment_id"}
+RUN_KEYS = {"run_outcome", "prompt_version", "assessment_id", "request_id"}
 STAGE_KEYS = {"stage", "outcome", "duration_ms"}
 MODEL_KEYS = {
     "task",
@@ -142,7 +145,7 @@ def _real_run() -> tuple[RunTrace, AssessmentRecord, FakeProvider]:
             model_host="localhost",
             options=RunOptions(cross_examination=True),
         )
-        return collector.finish(ASSESSMENT_ID, "stored"), record
+        return collector.finish(ASSESSMENT_ID, "stored", request_id=REQUEST_ID), record
 
     trace, record = asyncio.run(run())
     return trace, record, provider
@@ -153,6 +156,7 @@ def _planted() -> RunTrace:
     return tw.run_trace(
         assessment_id=EVIDENCE_ID,
         run_outcome="NO-GO",
+        request_id=REQUEST_ID_MARKER,
         stages=(
             tw.stage(StageName.OBSERVE, StageOutcome.COMPLETED),
             tw.stage(EVIDENCE_ID, StageOutcome.COMPLETED),
@@ -192,6 +196,7 @@ def _scan_markers(record: AssessmentRecord) -> list[str]:
         PROMPT_MARKER,
         EVIDENCE_ID,
         EXCEPTION_MARKER,
+        REQUEST_ID_MARKER,
         URL_MODEL,
         "llm.example",
         "INSUFFICIENT EVIDENCE",
@@ -300,6 +305,7 @@ def test_the_real_run_and_the_planted_run_export_exactly_these_attributes(
         "run_outcome": "stored",
         "prompt_version": trace_export.PROMPT_VERSION,
         "assessment_id": ASSESSMENT_ID,
+        "request_id": REQUEST_ID,
     }
     planted_run = tw.attributes(next(s for s in planted if s.name == "run"))
     assert planted_run == {"prompt_version": trace_export.PROMPT_VERSION}
@@ -438,6 +444,7 @@ MUTANTS: dict[str, tuple[tuple[str, str], ...]] = {
             "True",
         ),
     ),
+    "any_request_id": (("    if valid_request_id(trace.request_id):\n", "    if True:\n"),),
     "any_task_name": (
         (
             "    return task if type(task) is str and task in TASK_NAMES else UNLISTED_TASK\n",
@@ -465,6 +472,7 @@ EXPECTED = {
     "field_recommendation": "NO-GO",
     "any_run_outcome": "NO-GO",
     "any_assessment_id": EVIDENCE_ID,
+    "any_request_id": REQUEST_ID_MARKER,
     "any_task_name": EVIDENCE_ID,
     "any_model_name": URL_MODEL,
     "event_without_limit": "exception",

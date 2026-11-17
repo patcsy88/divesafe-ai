@@ -68,7 +68,7 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 - Reviewed rules: no dive professional has signed a limit, so every assessment is
   `INSUFFICIENT EVIDENCE` by design.
 - The vendor-specific `openai` and `anthropic` adapters.
-- The request id, `/metrics` and alerting (ADR 0027 items 1–3).
+- `/metrics` and alerting (ADR 0027 items 2 and 3).
 - Calibrated confidence.
 - The agent stage has had only small live runs on synthetic scenarios (see
   [docs/evaluation-strategy.md](docs/evaluation-strategy.md)). With

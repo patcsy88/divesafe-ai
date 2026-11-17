@@ -83,7 +83,8 @@ class StageEntry:
 
 @dataclass(frozen=True, slots=True)
 class RunTrace:
-    """What one run hands to the sink. `run_outcome` is `stored` or a `FailureCode` value."""
+    """What one run hands to the sink. `run_outcome` is `stored` or a `FailureCode` value.
+    `request_id` is the id of the request that started the run (ADR 0027 item 1), or None."""
 
     assessment_id: str
     run_outcome: str
@@ -91,6 +92,7 @@ class RunTrace:
     finished_ns: int
     model_calls: tuple[ModelCallEntry, ...]
     stages: tuple[StageEntry, ...]
+    request_id: str | None = None
 
 
 class TraceSink(Protocol):
@@ -129,10 +131,13 @@ class RunCollector:
                 )
             )
 
-    def finish(self, assessment_id: str, run_outcome: str) -> RunTrace:
+    def finish(
+        self, assessment_id: str, run_outcome: str, *, request_id: str | None = None
+    ) -> RunTrace:
         return RunTrace(
             assessment_id=assessment_id,
             run_outcome=run_outcome,
+            request_id=request_id,
             started_ns=self._started_ns,
             finished_ns=time.time_ns(),
             model_calls=tuple(self._calls),

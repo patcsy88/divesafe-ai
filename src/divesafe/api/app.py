@@ -29,6 +29,7 @@ from divesafe import __version__
 from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
+from divesafe.api.request_id import RequestIdMiddleware, response_header
 from divesafe.api.runner import RunManager
 from divesafe.api.schemas import (
     ActualConditionsRequest,
@@ -44,6 +45,7 @@ from divesafe.api.schemas import (
 from divesafe.api.state import AppState, build_default_state
 from divesafe.api.trace_export import build_trace_export
 from divesafe.config import configure_logging, get_settings
+from divesafe.config.logging import bind_request_id, current_request_id, unbind_request_id
 from divesafe.config.settings import (
     CONNECTOR_BUDGET_SECONDS,
     RUN_MARGIN_SECONDS,
@@ -228,6 +230,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    # Added last, so it is the outermost of these and also covers the body-size refusal.
+    app.add_middleware(RequestIdMiddleware, trusted_proxies=lambda: app_state.trusted_proxies)
+
     app.state.divesafe = app_state
     app.state.runner = runner
 
@@ -267,8 +272,17 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unexpected(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("unhandled error", extra={"path": request.url.path})
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+        # Starlette runs this handler outside every middleware, after the request id was
+        # unbound, so it binds the id again from the request's state and returns its header.
+        request_id = getattr(request.state, "request_id", None)
+        token = bind_request_id(request_id)
+        try:
+            logger.exception("unhandled error", extra={"path": request.url.path})
+        finally:
+            unbind_request_id(token)
+        return JSONResponse(
+            {"detail": "internal error"}, status_code=500, headers=response_header(request_id)
+        )
 
     def _in_scope(names: Iterable[str | None], principal: Principal, *, pending: bool) -> bool:
         """Read scope (ADR 0026). A key with no groups reads everything, and so does an admin
@@ -511,7 +525,13 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 )
 
             try:
-                runner.start(assessment_id, admission.run_token, principal.actor, work)
+                runner.start(
+                    assessment_id,
+                    admission.run_token,
+                    principal.actor,
+                    work,
+                    request_id=current_request_id(),
+                )
             except RuntimeError as exc:
                 await run_in_threadpool(
                     app_state.repository.fail,

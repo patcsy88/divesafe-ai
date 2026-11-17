@@ -33,6 +33,7 @@ from divesafe.agents.runner import CALL_OUTCOMES
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.api.tracing import check_tracing_startup
 from divesafe.config import Settings
+from divesafe.config.logging import valid_request_id
 from divesafe.domain import ScenarioKind, StageName, StageOutcome
 from divesafe.models.llm import plain_count
 from divesafe.observability import (
@@ -67,7 +68,7 @@ SILENCED_LOGGERS = ("opentelemetry", "urllib3", "requests")
 
 # The whole export allow-list (ADR 0027 "The allow-list covers the whole export"). A change here
 # is a `tests/safety` change reviewed by risk-reviewer, with the pin in the same change.
-RUN_ATTRIBUTES = ("run_outcome", "prompt_version", "assessment_id")
+RUN_ATTRIBUTES = ("run_outcome", "prompt_version", "assessment_id", "request_id")
 STAGE_ATTRIBUTES = ("stage", "outcome", "duration_ms")
 # The log line's `CALL_LOG_FIELDS`, with `output_used` renamed on the span only so Langfuse reads
 # the count as usage (owner, 2026-11-16); `input_used` (step 4) likewise; and the model name.
@@ -114,6 +115,8 @@ def run_attributes(trace: RunTrace) -> dict[str, str]:
         attributes["run_outcome"] = trace.run_outcome
     if type(trace.assessment_id) is str and _ASSESSMENT_ID.fullmatch(trace.assessment_id):
         attributes["assessment_id"] = trace.assessment_id
+    if valid_request_id(trace.request_id):
+        attributes["request_id"] = str(trace.request_id)
     return attributes
 
 
