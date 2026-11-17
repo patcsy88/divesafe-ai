@@ -2318,9 +2318,20 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     effect: the false alarm uses up the once-per-process flag, so a real break later in the same
     process would go unlogged. **Fixed in code (2026-11-17):** `_socket_of` returns `None`
     without the warning when `fp` is `None` (chunked bodies did the same, found by the new safety
-    test); takes effect at the next image build. After that build, any "connector HTTP socket not
-    reachable" line is a real finding (the private path moved), not this false alarm: investigate
-    it.
+    test); deployed 2026-11-17 in image `10ed1e547b23` (next entry). Any "connector HTTP socket
+    not reachable" line from that image on is a real finding (the private path moved), not this
+    false alarm: investigate it.
+  - **Deploy of `513ac6f` (2026-11-17 09:49 UTC, owner).** PR #34 (the `_socket_of` false-alarm
+    fix; the only runtime change is `src/divesafe/data/http.py`). Backup
+    `divesafe-20261117T094448Z` (scratch restore equal: 20 assessments, 8 decided). The previous
+    image `e974d495a4f7` was tagged `divesafe-api:rollback-20261117c` before the build. `C up -d
+    --build --wait api`: new API image `10ed1e547b23`, healthy, 0 restarts; health 200, an
+    unauthenticated read 401, 5 connectors, no start-up error, Python 3.14.10, fix present.
+    First run `34128d1a…` (Tioman): every stage completed, 2 MET items, final INSUFFICIENT
+    EVIDENCE; `/metrics` matched the record (9 model calls `ok`, 0 MET failures); the token
+    value in 0 log lines; **no "connector HTTP socket not reachable" line** in the new
+    process. Rollback: tag `rollback-20261117c` as `divesafe-api:local`, then `C up -d
+    --no-build --wait api` (the key file is unchanged).
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
