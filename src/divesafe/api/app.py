@@ -31,7 +31,7 @@ from divesafe.agents.runner import call_timeout, stage_timeout
 from divesafe.api.auth import Principal, Role, require_any_role, require_role
 from divesafe.api.limits import BodySizeLimitMiddleware
 from divesafe.api.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
-from divesafe.api.metrics import Metrics
+from divesafe.api.metrics import Metrics, check_metrics_startup
 from divesafe.api.request_id import RequestIdMiddleware, response_header
 from divesafe.api.runner import RunManager
 from divesafe.api.schemas import (
@@ -181,6 +181,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         model=getattr(app_state.provider, "model", None),
         host=app_state.model_host,
     )
+    check_metrics_startup(os.environ)
     # `runner` is bound below, before any scrape can read it.
     metrics = Metrics((c.name for c in app_state.connectors), in_flight=lambda: runner.in_flight)
     runner = RunManager(

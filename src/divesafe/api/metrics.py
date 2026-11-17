@@ -10,6 +10,11 @@ Run counts are taken after the run has stored its record or its failure code, fr
 already produced (the stored record's stage trace and the run's collector), inside the caller's
 `suppress`: metrics never change a run. A run that fails before it is stored gives only its
 failure code and its model calls, never stage, connector or knowledge counts.
+
+`disable_created_metrics()` below is process-wide in the library: any later user of
+`prometheus_client` in this process gets no `_created` series either. Start-up refuses any
+`PROMETHEUS_*` variable (`check_metrics_startup`), because the library takes its storage mode
+and other settings from the environment.
 """
 
 from __future__ import annotations
@@ -38,6 +43,10 @@ from divesafe.services.runs import FailureCode
 logger = logging.getLogger(__name__)
 
 CONTENT_TYPE = CONTENT_TYPE_LATEST
+METRICS_REFUSAL = (
+    "refusing to start: a PROMETHEUS_* variable is set; /metrics takes no library setting from "
+    "the environment (ADR 0027 item 2)"
+)
 # A timestamp series per labelled child would double the output and say nothing operational.
 disable_created_metrics()  # type: ignore[no-untyped-call]
 
@@ -63,6 +72,13 @@ _CONNECTOR_PREFIXES: Mapping[str, str] = {
     "observe.connector_failed:": "failed",
     "observe.connector_timed_out:": "timed_out",
 }
+
+
+def check_metrics_startup(environ: Mapping[str, str]) -> None:
+    """Refuse every `PROMETHEUS_*` variable, in any case. Called before the first metric is
+    built: the library creates no value storage until then."""
+    if any(name.upper().startswith("PROMETHEUS_") for name in environ):
+        raise RuntimeError(METRICS_REFUSAL)
 
 
 class _DropCollector(Collector):
@@ -102,7 +118,8 @@ class Metrics:
         )
         self._finished = Counter(
             "divesafe_assessments_finished",
-            "Assessment runs ended: the final recommendation, or failed_<code>.",
+            "Assessment runs ended: the system's final recommendation at storage (before any "
+            "human decision), or failed_<code>.",
             ["outcome"],
             registry=registry,
         )

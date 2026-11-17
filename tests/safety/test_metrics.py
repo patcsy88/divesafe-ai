@@ -14,8 +14,10 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -29,12 +31,16 @@ from tests.safety import test_tracing_record_unchanged as tr
 from tests.safety.kb_fakes import mutated_module
 from tests.safety.test_api_roles_and_limits import BAD, HEADERS, KEYS, PLAN_D, _client
 
+from divesafe.agents.runner import CALL_OUTCOMES
+from divesafe.api import app as app_module
 from divesafe.api import auth as auth_module
+from divesafe.api import metrics as metrics_module
 from divesafe.api import runner as api_runner
 from divesafe.api.auth import ApiKeyAuthenticator, Role, parse_api_key_hashes
-from divesafe.api.metrics import Metrics
+from divesafe.api.metrics import Metrics, check_metrics_startup
 from divesafe.api.state import default_limits
-from divesafe.observability import ModelCallEntry, RunTrace
+from divesafe.domain import Recommendation, StageName, StageOutcome
+from divesafe.observability import DROP_REASONS, ModelCallEntry, RunTrace
 from divesafe.services import FailureCode, RunState
 
 pytestmark = pytest.mark.safety
@@ -259,6 +265,153 @@ def test_mutation_the_import_pin_has_teeth(rel: str, line: str, tmp_path: Path) 
     assert _prometheus_offenders(tmp_path) != []
 
 
+# Exactly what `api/metrics.py` may take from the library: an allow-list, so a sender (a bridge,
+# a handler, another exposition format) cannot be added without changing this test.
+ALLOWED_IMPORTS: dict[str, set[str]] = {
+    "prometheus_client": {
+        "CONTENT_TYPE_LATEST",
+        "CollectorRegistry",
+        "Counter",
+        "Gauge",
+        "Histogram",
+        "disable_created_metrics",
+        "generate_latest",
+    },
+    "prometheus_client.core": {"CounterMetricFamily"},
+    "prometheus_client.registry": {"Collector"},
+}
+
+
+def _metrics_import_problems(source: str) -> list[str]:
+    problems: list[str] = []
+    found: dict[str, set[str]] = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in {"prometheus_client", "importlib"}:
+                    problems.append(f"import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if node.level != 0 and root != "divesafe" and node.module is None:
+                problems.append("relative import")
+            if root == "importlib":
+                problems.append(f"from {node.module}")
+            if root == "prometheus_client":
+                if any(a.asname is not None for a in node.names):
+                    problems.append(f"aliased import from {node.module}")
+                found.setdefault(node.module or "", set()).update(a.name for a in node.names)
+        elif isinstance(node, ast.Name) and node.id in {"__import__", "getattr", "eval", "exec"}:
+            problems.append(f"uses {node.id}")
+    if found != ALLOWED_IMPORTS:
+        problems.append(f"imports {found}")
+    return problems
+
+
+def test_the_metrics_module_imports_exactly_the_allowed_names() -> None:
+    assert _metrics_import_problems((SRC / "api" / "metrics.py").read_text("utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from prometheus_client.bridge.graphite import GraphiteBridge\n",
+        "from prometheus_client.exposition import MetricsHandler\n",
+        "from prometheus_client.openmetrics import exposition\n",
+        "from prometheus_client import Summary\n",
+        "from prometheus_client import Counter as C\n",
+        "import importlib\n",
+        "x = __import__('prometheus_' + 'client')\n",
+        "x = getattr(object, 'y', None)\n",
+    ],
+)
+def test_mutation_the_allow_list_has_teeth(line: str) -> None:
+    source = (SRC / "api" / "metrics.py").read_text("utf-8")
+    assert _metrics_import_problems(line + source) != []
+
+
+def test_mutation_dropping_an_allowed_import_is_caught() -> None:
+    source = (SRC / "api" / "metrics.py").read_text("utf-8")
+    edited = source.replace("from prometheus_client.registry import Collector\n", "")
+    assert edited != source
+    assert _metrics_import_problems(edited) != []
+
+
+# ---- start-up --------------------------------------------------------------------------------
+
+
+def _refused_at_start_up(
+    create_app: Callable[..., Any], name: str, monkeypatch: pytest.MonkeyPatch, directory: Path
+) -> bool:
+    """True when `create_app` refuses with `name` set. The app is built first, so the variable
+    is set only for the start-up under test."""
+    client, _ = _client()
+    state = client.app.state.divesafe  # type: ignore[attr-defined]
+    with monkeypatch.context() as mp:
+        mp.setattr(sys.modules[create_app.__module__], "configure_logging", lambda *_: None)
+        mp.setenv(name, str(directory))
+        try:
+            create_app(state)
+        except RuntimeError as exc:
+            assert "PROMETHEUS_" in str(exc)
+            return True
+    return False
+
+
+# Built so that no string in this file names the multiprocess variable whole.
+_MULTI = "MULTI" + "PROC"
+REFUSED_NAMES = [
+    f"PROMETHEUS_{_MULTI}_DIR",
+    f"prometheus_{_MULTI.lower()}_dir",
+    "PROMETHEUS_DISABLE_CREATED_SERIES",
+    "PROMETHEUS_LEGACY_NAME_VALIDATION",
+    "Prometheus_anything",
+]
+
+
+@pytest.mark.parametrize("name", REFUSED_NAMES)
+def test_start_up_refuses_any_prometheus_variable(
+    name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert _refused_at_start_up(app_module.create_app, name, monkeypatch, tmp_path)
+    assert list(tmp_path.iterdir()) == [], "a value file was written before the refusal"
+
+
+def test_start_up_without_a_prometheus_variable_is_allowed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    check_metrics_startup({"DIVESAFE_X": "1", "PROMETHEUSX": "1", "X_PROMETHEUS_Y": "1"})
+    assert not _refused_at_start_up(app_module.create_app, "DIVESAFE_X", monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        ('if any(name.upper().startswith("PROMETHEUS_")', 'if any(name.startswith("PROMETHEUS_")'),
+        ("        raise RuntimeError(METRICS_REFUSAL)\n", "        pass\n"),
+    ],
+)
+def test_mutation_the_start_up_refusal_has_teeth(
+    edit: tuple[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mutant = mutated_module(metrics_module, edit)
+    with monkeypatch.context() as mp:
+        mp.setattr(app_module, "check_metrics_startup", mutant.check_metrics_startup)
+        refused = [
+            _refused_at_start_up(app_module.create_app, n, monkeypatch, tmp_path)
+            for n in REFUSED_NAMES
+        ]
+    assert not all(refused)
+
+
+def test_mutation_create_app_without_the_check_is_caught(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mutant = mutated_module(app_module, ("    check_metrics_startup(os.environ)\n", ""))
+    assert not _refused_at_start_up(
+        mutant.create_app, "PROMETHEUS_DISABLE_CREATED_SERIES", monkeypatch, tmp_path
+    )
+
+
 # ---- what it can say --------------------------------------------------------------------------
 
 
@@ -275,6 +428,36 @@ def test_the_output_is_exactly_the_fixed_families_and_label_names() -> None:
         assert family.type == kind, name
         for sample in family.samples:
             assert set(sample.labels) - {"le"} == labels, (name, sample.labels)
+    connectors = {c.name for c in client.app.state.divesafe.connectors}  # type: ignore[attr-defined]
+    allowed = _allowed_label_values(connectors)
+    for name, family in found.items():
+        for sample in family.samples:
+            for label, value in sample.labels.items():
+                if label != "le":
+                    assert value in allowed[name][label], (name, label, value)
+
+
+def _allowed_label_values(connectors: set[str]) -> dict[str, dict[str, set[str]]]:
+    """From the code enums and literal sets, never from `api/metrics.py`'s own tuples."""
+    return {
+        "divesafe_assessments_finished": {
+            "outcome": {r.value for r in Recommendation}
+            | {f"failed_{c.value}" for c in FailureCode}
+        },
+        "divesafe_knowledge_retrieval": {
+            "outcome": {"ok", "not_configured", "failed", "timed_out", "issue"}
+        },
+        "divesafe_model_calls": {"outcome": set(CALL_OUTCOMES)},
+        "divesafe_stage_duration_seconds": {
+            "stage": {s.value for s in StageName},
+            "outcome": {o.value for o in StageOutcome},
+        },
+        "divesafe_connector_failures": {
+            "connector": connectors | {"other"},
+            "kind": {"failed", "timed_out"},
+        },
+        "divesafe_trace_dropped": {"reason": set(DROP_REASONS)},
+    }
 
 
 def test_one_run_is_counted_once_by_its_stored_outcome() -> None:
@@ -438,7 +621,9 @@ def _assert_unchanged(
         off = tr.run_once(path, None, caplog)
         metrics = _Recording(raises)
         on = tr.run_once(path, None, caplog, manager_type=_manager_with(metrics, base))
-    assert on == off
+    # A mutant logs as `<module>_mutant`; only its behaviour may differ, never its name.
+    errors = tuple((name.removesuffix("_mutant"), message) for name, message in on.errors)
+    assert dataclasses.replace(on, errors=errors) == off
     assert (on.state, on.code, on.ending) == tr.EXPECTED[path_name]
     assert len(metrics.calls) == 1, "a run must be counted exactly once"
     record, failure, trace = metrics.calls[0]
@@ -450,7 +635,7 @@ def _assert_unchanged(
     seen = metrics.seen[0]
     if on.code is None:
         assert seen[0], "counted before the record was stored"
-    elif path_name != "cancellation":
+    else:
         assert seen == (False, RunState.FAILED), "counted before the run was marked failed"
 
 
@@ -531,3 +716,19 @@ def test_mutation_the_run_checks_have_teeth(
     mutant = mutated_module(api_runner, edit)
     with pytest.raises(AssertionError):
         _assert_unchanged(path_name, raises, monkeypatch, caplog, mutant.RunManager)
+
+
+_LATE = "self._metrics.run_finished(stored_record, code, trace)"
+
+
+@pytest.mark.parametrize("path_name", ["run_deadline", "cancellation", "reason_crash"])
+def test_mutation_counting_only_before_marked_failed_is_caught(
+    path_name: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The run is counted once, but before `_mark_failed`: only the `seen` check can catch it."""
+    early = _EARLY_FAILED.replace(
+        "(None, code, None)", "(None, code, collector.finish(run_id, 'm'))"
+    )
+    mutant = mutated_module(api_runner, (_MARK, early + _MARK), (_LATE, "None"))
+    with pytest.raises(AssertionError, match="marked failed"):
+        _assert_unchanged(path_name, False, monkeypatch, caplog, mutant.RunManager)
