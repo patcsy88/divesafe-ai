@@ -351,6 +351,18 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     deployment `make-secrets.sh` is re-run first to add the two empty files. Tracing is
     switched on only by setting both values in `production.env`. Switching it off means setting
     them back to `false` and empty and recreating the API.
+  - Switched on (2026-11-16, owner): main `cb999fd` deployed. `production.env` sets
+    `DIVESAFE_TRACING_ENABLED=true` and
+    `DIVESAFE_TRACE_ENDPOINT=http://10.231.77.10:3000/api/public/otel/v1/traces`, and start-up
+    passed every tracing check. First traced assessment, `9d60ab2e...`:
+    - one trace with 18 spans (the run, 8 stages, 9 model calls) in `divesafe-prod`;
+    - input, output, status message, user, session and tags are empty on every span;
+    - the metadata holds only the allow-listed names, codes, counts and durations, and the
+      longest value is the assessment id.
+
+    Langfuse 4 stores OTLP spans in its `events_*` ClickHouse tables, not `traces` or
+    `observations`, so a check must read those. To switch it off, set the flag to `false` and
+    the endpoint to empty, then recreate the API.
 
 ### 1. Tracing (production)
 
