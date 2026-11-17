@@ -465,7 +465,8 @@ def test_a_dive_across_local_midnight_gets_both_day_items() -> None:
 
 
 def test_the_host_is_kept_out_of_the_shared_list_and_has_its_own() -> None:
-    assert "api.tidestoday.io" not in ALLOWED_HOSTS and {"api.tidestoday.io"} == TIDES_TODAY_HOSTS
+    assert frozenset({"api.tidestoday.io"}) == TIDES_TODAY_HOSTS
+    assert not TIDES_TODAY_HOSTS & ALLOWED_HOSTS
     assert not TIDES_TODAY_HOSTS & MET_API_HOSTS
 
 

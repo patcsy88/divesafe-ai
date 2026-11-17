@@ -438,7 +438,7 @@ def test_every_mutation_of_the_connector_checks_is_caught(edits: list[tuple[str,
 
 def _host_misses(module: Any) -> list[str]:
     bad: list[str] = []
-    if "api.tidestoday.io" in module.ALLOWED_HOSTS:
+    if module.TIDES_TODAY_HOSTS & module.ALLOWED_HOSTS:
         bad.append("the shared list holds the host")
     for hosts in (
         module.ALLOWED_HOSTS,
