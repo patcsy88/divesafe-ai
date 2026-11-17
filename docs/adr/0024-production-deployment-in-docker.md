@@ -2306,6 +2306,18 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
         watching for `token_limit`, `timed_out` and `cancelled`, and for durations approaching
         120 s.
       - A higher cap allows longer, slower and costlier calls when the model reasons more.
+  - **MET switched on (2026-11-17 08:36 UTC, owner).** The API was recreated with a non-empty
+    `divesafe_met_api_token` (same image, 5 connectors); the first run `0ab20d5b…` was verified
+    (data-sources.md, "Live in production"). That process logged "connector HTTP socket not
+    reachable" once. **Likely cause (security review; reproduced locally on Python 3.14.10, the
+    production image's version, 2026-11-17): a false alarm.** `read_limited` calls `_socket_of`
+    once more after a `Content-Length` body has been read in full, when `http.client` has already
+    closed the response (`fp` is `None`). Locally the socket was found before the read and both
+    protections were active throughout. Production matches (the warning came 1 ms before "warnings
+    parsed"; no connector timed out or failed), but its own socket path was not observed. Side
+    effect: the false alarm uses up the once-per-process flag, so a real break later in the same
+    process would go unlogged. Open: a safety test and a fix in `_socket_of` (a closed response
+    returns `None` without the warning), reviewed by both reviewers.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could

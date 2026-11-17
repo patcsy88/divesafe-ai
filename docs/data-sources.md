@@ -199,6 +199,19 @@ call made.
   credentialed getter refuses redirects and has its own host list. No rule uses these values yet,
   and the engine does count a daily +08:00 range as covering the dive window (known gap, risk-model.md). Wave statistic,
   zone extent and the licence stay unknown.
+  **Live in production (2026-11-17, owner).** The owner wrote `divesafe_met_api_token`, and it
+  took effect when the API was recreated at 08:36 UTC (5 connectors). First production run,
+  assessment `0ab20d5b…` (Tioman, window 2026-11-18): two `degraded` items for zone
+  `LOCATION:499` / `TIOMAN` (wind 10–20 km/h NE, waves 0.5–1.0 m), no connector issue,
+  `/metrics` label `met-api-marine-forecast` with 0 failures, and the token value in no log line,
+  stored record or scrape (checked with `grep -cFf` on the secret file, printing counts only).
+  The final recommendation stayed INSUFFICIENT EVIDENCE: no rule uses these values. Every
+  assessment for a site without a zone records a `met-api-marine-forecast` connector failure,
+  which forces at least INSUFFICIENT EVIDENCE and counts as a failure in `/metrics` (a future
+  "any connector failure" alert would fire on every such run). The licence terms were not
+  checked (only a liability disclaimer was found, 2026-10-16). Since 2026-11-17 the MET values
+  go to the model host with every Tioman assessment, and they are in the stored records and the
+  backups (ADR 0024, "What leaves the machine"). The token is registered in the owner's name.
   **Findings 2026-10-16 (token used; developer guide read while logged in):**
   - **Base URL is `https://api.met.gov.my/v2.1/`**; `/v2/` is deprecated. Header
     `Authorization: METToken <token>`. The guide states 10 requests a minute and 2,000 a day; the
@@ -445,7 +458,12 @@ has no built-in default and must be chosen per category with a documented reason
     `response.fp.raw._sock`. If it is missing, a warning is logged once per process and both are
     skipped. An offline test now proves the path exists on a real `http.client.HTTPResponse` (a
     `socketpair`), but a later Python could still move it. The real slow-drip case against a live
-    server has not been run (a live check needs a network call and the owner's yes).
+    server has not been run (a live check needs a network call and the owner's yes). **The
+    warning is seen in production** (in a process before 2026-11-12, ADR 0024, and on
+    2026-11-17). Reproduced locally (2026-11-17): it is a false alarm from the extra `_socket_of`
+    call after a `Content-Length` body ends, when `http.client` has closed the response; the
+    protections were active locally, and production matches (ADR 0024, MET deploy note). It still
+    uses up the once-per-process warning. A test and a fix are open.
   - No per-host thread limit: one misbehaving allow-listed host can hold every pool worker until
     the deadline or a cancel, so every connector fails closed to INSUFFICIENT EVIDENCE. This is an
     availability problem only.
