@@ -23,7 +23,8 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
   - the LLM provider abstraction and settings.
 - Connectors for Pulau Tioman, Malaysia:
   - Open-Meteo marine and wind model data;
-  - MET Malaysia warnings through data.gov.my and the MET API;
+  - MET Malaysia warnings through data.gov.my, and the MET API marine forecast for the Tioman
+    waters zone (in production since 2026-11-17);
   - PHN e-Tide tide predictions, which are off by default and DEGRADED
     ([ADR 0021](docs/adr/0021-phn-etide-tide-predictions.md)).
 - An evidence and provenance service.
