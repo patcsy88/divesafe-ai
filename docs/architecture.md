@@ -251,8 +251,9 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   built and switched on in production on 2026-11-16 (metadata-only spans to the self-hosted
   Langfuse; the first trace was checked).** The request id is built and deployed (item 1,
   2026-11-17: on log lines, the `X-Request-ID` response header and the run span only). `/metrics`
-  (item 2) is built and deployed behind the isolated `metrics` role (2026-11-17). No
-  alerting yet; on 2026-11-12 every model call of one production
+  (item 2) is built and deployed behind the isolated `metrics` role (2026-11-17). Uptime
+  Kuma watches `/health` and the daily backup (item 3, 2026-11-17, dashboard only); no metric
+  alerts yet. On 2026-11-12 every model call of one production
   assessment failed (model-host 404) and only the record showed it. Decided: a request id,
   `/metrics` behind a new `metrics` role (isolated: never combined with other roles, groups or a
   shared actor) using `prometheus_client`, Uptime Kuma for alerting over

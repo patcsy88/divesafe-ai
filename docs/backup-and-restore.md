@@ -149,9 +149,12 @@ that holds the volume does not survive losing the host.
 **Frequency (owner decision, 2026-10-19): a backup every day.** That is the most history the
 owner accepts losing: after a restore, every assessment and human decision made since the last
 good backup is gone, up to about a day of them (more if a daily run fails and nobody notices).
-**Nothing runs `backup.sh` on a timetable yet.** The scripts do not schedule themselves, and no
-cron entry, timer or monitor is part of this repository, because the host, the account that may use
-the Docker engine, and the place the archives go are the operator's. When you schedule it:
+**Production runs it daily at 20:00 (2026-11-17)** through a LaunchAgent, with an Uptime Kuma push
+monitor that alerts on the dashboard when no successful backup has been reported for 36 hours
+(ADR 0027 item 3).
+The scripts do not schedule themselves, and the wrapper, the LaunchAgent and the monitor are not
+part of this repository, because the host, the account that may use the Docker engine, and the
+place the archives go are the operator's. When you schedule it:
 - Run it as the person who already operates the stack, with a directory that passes the script's
   checks, and keep the exit status. `backup.sh` exits non-zero and writes no archive when anything
   is off (a refused check, a database that kept changing, a scratch mismatch). A scheduler that
@@ -589,13 +592,14 @@ in the production backup directory, and delete them with it.
   the restore's closing report; there is no separate command to run it again later (its SQL is
   given under the recovery above, to run by hand).
 
-- A schedule that actually runs the daily backup (the frequency is decided: daily), a failure
-  alert, a retention period, an off-machine copy and encryption (operator decisions).
+- A retention period, an off-machine copy and encryption (operator decisions). The schedule and
+  its failure alert exist (ADR 0027 item 3) but alert only on the dashboard.
+- The push monitor reports a successful `backup.sh` run, not that the archive still exists or
+  restores; only a restore drill checks that.
 - A run on Linux, a run against real data, a restore of an archive from another host, and a run
   with actual conditions or pending runs in the data.
 - A restore drill on a timetable. Run one before relying on this, and again after any change to
   the schema or the images.
-- Any automatic check that a backup is recent.
 - A check that the guard functions are *correct* (a hash pinned from the migration; `db-init` does
   not re-apply migration 1 and `verify()` checks names only, so a replaced guard survives both),
   and a check that nothing but the expected objects exists in a restored database.

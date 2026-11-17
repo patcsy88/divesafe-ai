@@ -3,7 +3,10 @@
 - Status: ACCEPTED for items 1 to 3 (owner decisions 2026-11-12: `/metrics` behind a `metrics`
   role, `prometheus_client`, Uptime Kuma). Item 4 is ACCEPTED as amended on 2026-11-15:
   self-hosted Langfuse for tracing, evaluation, a read-only prompt mirror and cost reporting
-  (see "Amendment 2026-11-15"). **Nothing is built yet.** The remaining owner decisions were
+  (see "Amendment 2026-11-15"). **Items 1 and 2 are built and deployed (2026-11-17); item 4's
+  production tracing is built and switched on (2026-11-16); item 3 is built for `/health` and
+  backups (2026-11-17), and the metric alerts are deferred.** The remaining owner
+  decisions were
   settled on 2026-11-15, each as its recommended default (see "Owner decisions"); the
   metric-alert mechanism is deferred, not chosen. This ADR is the record for the
   `prometheus_client` and OpenTelemetry runtime dependencies and the `langfuse` development
@@ -194,6 +197,25 @@ plan fields leave the machine), and "no new dependency without an ADR".
      DiveSafe's backups. Its web UI is published on loopback only, with its own admin password
      and 2FA if available. It is a new external dependency: image pinned by digest, updated by
      the owner.
+
+   **Built (2026-11-17), outside the repository:** Uptime Kuma 2.5.11, rootless image pinned by
+   digest, in its own compose project at `~/DiveSafe/uptime-kuma` (web UI on `127.0.0.1:3001`
+   only, admin password and 2FA set by the owner, runs as uid 1000 with `cap_drop: [ALL]` and
+   `no-new-privileges`, its own volume, kept out of DiveSafe's backups). **Never mount
+   `/var/run/docker.sock` into it:** that gives root over the whole Docker VM, DiveSafe's secrets
+   and database included. Two monitors:
+   - `/health`: an HTTP monitor on `http://host.docker.internal:8000/health` every 60 s with 2
+     retries. This verified the network path: the checks arrive from the Docker gateway.
+   - The daily backup: a push monitor with a 36 h interval. A LaunchAgent
+     (`org.divesafe.backup`, 20:00 local) runs a wrapper around `docker/backup.sh` that pushes
+     only on exit 0, with `curl -q -K` reading the URL from a mode-600 file (`-q` ignores any
+     `~/.curlrc`; the file sets `noproxy`); the log is mode 600 and holds no URL. Checked: a
+     launchd run gave exit 0, a new archive and a push, before and after the rootless switch;
+     a wrong token (curl exit 22) and a stopped Uptime Kuma (exit 7) put no URL in curl's
+     error output.
+
+   No notification channel (owner, 2026-11-17): alerts show on the dashboard only, so no alert
+   text leaves the machine. The metric alerts stay deferred.
 4. **Later and optional: tracing.** OpenTelemetry spans per stage and per model call with
    timings and the fixed codes only, **never prompt or reply text**, sent to a self-hosted
    Langfuse on the same machine (Amendment 2026-11-15, which tightens these rules and states
@@ -883,8 +905,20 @@ Settled 2026-11-15, each as the recommended default:
 - The scraper shares the Docker gateway address with every other local client, so one client's
   bad keys can 429 the scraper (decision 7); the alert then says "auth blocked" and someone has
   to look.
-- `host.docker.internal` from Uptime Kuma's container to the host-published port is unverified
-  until build time on the owner's Docker Desktop.
+- Uptime Kuma has no notification channel (owner, 2026-11-17), so an alert is seen only when
+  someone opens the dashboard.
+- Uptime Kuma's own data (its monitors, the 2FA secret and the push URL) has no regular backup;
+  one copy from before the rootless switch is kept, mode 600, beside its compose file (its files
+  are root-owned: chown them to 1000:1000 after restoring). If it is ever restored on another
+  machine, rotate the push token.
+- The backup runs only while the owner is logged in and Docker Desktop is running. A run missed
+  while the Mac sleeps runs once on wake (it can fail if Docker Desktop is not ready yet); a run
+  missed while the Mac is off or logged out is skipped. Either way there is no retry, and the
+  monitor turns red 36 h after the last successful push.
+- Uptime Kuma's container has outbound network access, and its update check stays on (owner,
+  2026-11-17); no monitor data is sent.
+- The backup log (`~/Library/Logs/divesafe-backup.log`) grows by a few lines a day; the owner
+  trims it.
 - Built ahead of this ADR (2026-11-15, ADR 0018 amendment): one "model call finished" log line
   per model call, with task, outcome, output-token limit and use, characters and duration. It is
   a log line, not a metric; this ADR's metrics may count its outcomes later.
