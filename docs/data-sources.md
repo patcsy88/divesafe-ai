@@ -380,17 +380,19 @@ from the national hydrographic office instead. Neither source gives tidal stream
 
 **PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording is still not on file.
 
-**tides.today API (2026-11-17):** a documented, invite-only API (`api.tidestoday.io/v1`, HTTP
-Basic with an application ID and key). The owner made one request per endpoint on 2026-11-17;
-the responses are kept outside the repository and the test fixture is SYNTHETIC. Location 2960
-"Teluk Tekek" is the only one within 25 km of the Tioman reference point (about 3.7 km away). It
-gives UTC times of high and low water with heights, plus sunrise/sunset and spring/neap per day.
-The API states no units, datum or rate limit: metres are the owner's reading of the website, the
-datum is not stated (the engine page suggests LAT), and the budget (6 a minute, 300 a day) is our
-assumption. The terms (§2, §6, §9) forbid use as a sole source for diving and need written
-permission for automated use in another application, so the connector `TidesTodayConnector` is
-**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until that permission is on file. No
-tidal-stream data. Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED).
+**tides.today API (2026-11-17; V2 since Amendment 1):** a documented, invite-only API
+(`api.tidestoday.io/v2`, an `x-api-key` header). The owner made one request per endpoint on
+2026-11-17; the responses are kept outside the repository and the test fixture is SYNTHETIC.
+Location 2960 "Teluk Tekek" is the only one within 25 km of the Tioman reference point (about
+3.7 km away). Three GET calls: the location (datum `CD`, upstream `tpe`, notice), the tide
+extremes (UTC times, heights in metres from `heightM`) and the ephemeris (sunrise, sunset and moon
+phase per local day). Only chart datum and the `tpe` upstream are accepted; the level of CD at
+this point is not stated and the upstream is not verified. Spring/neap is not available (403 for
+this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is our assumption.
+The terms (§2, §6, §9) forbid use as a sole source for diving and need written permission for
+automated use in another application, so the connector `TidesTodayConnector` is **off by
+default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until that permission is on file. No tidal-stream data.
+Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED; Amendment 1).
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
 credential or licence was pursued. `tides` and `tidal_current` stay unevidenced, so any policy that

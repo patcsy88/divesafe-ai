@@ -150,7 +150,7 @@ services:
       DIVESAFE_TRACING_ENABLED: ${DIVESAFE_TRACING_ENABLED:-false}
       DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}
       # ADR 0029: tides.today stays off until the provider's written permission is on file; on
-      # also needs both credential files filled in, or start-up refuses.
+      # also needs the API key file filled in, or start-up refuses.
       DIVESAFE_TIDES_TODAY_ENABLED: ${DIVESAFE_TIDES_TODAY_ENABLED:-false}
     secrets:
       - source: database_url
@@ -161,9 +161,7 @@ services:
         target: divesafe_api_key_hashes
       - source: met_api_token
         target: divesafe_met_api_token
-      # tides.today (ADR 0029): empty files mean "not set"; enabling also needs the setting.
-      - source: tides_today_app_id
-        target: divesafe_tides_today_app_id
+      # tides.today (ADR 0029): an empty file means "not set"; enabling also needs the setting.
       - source: tides_today_api_key
         target: divesafe_tides_today_api_key
       # The Langfuse production project's keys; an empty file means "not set".
@@ -298,8 +296,6 @@ secrets:
     file: ./secrets/divesafe_api_key_hashes
   met_api_token:
     file: ./secrets/divesafe_met_api_token
-  tides_today_app_id:
-    file: ./secrets/divesafe_tides_today_app_id
   tides_today_api_key:
     file: ./secrets/divesafe_tides_today_api_key
   loader_database_url:

@@ -6,6 +6,9 @@ permission from the provider (Stephen Wright, trading as Tides Today) is being s
 that wording is on file, the connector must not be switched on**, and nothing here makes the
 permission verified. Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no
 blockers; their should-fix findings and nits are fixed, and the final round was clean.
+Amended 2026-11-17 (Amendment 1, owner): the connector now uses API V2 with an `x-api-key` header;
+the application ID and spring/neap are removed. See Amendment 1 at the end. Amendment 1 was reviewed
+by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-18); no blockers remain.
 
 ## Context
 
@@ -70,7 +73,7 @@ records; and how the attribution must be shown.
 - `GET /locations/2960/tides/now`: previous and next extreme, and a `currentHeight` marked
   `estimated: true`.
 
-## Units and datum: the basis used
+## Units and datum: the basis used (V1; superseded by Amendment 1, decisions 3 and 5)
 
 - **Units: the owner's statement from the tides.today website (2026-11-17)**: tide heights in
   metres, temperature in °C, wind in km/h. The API does not state them. Items say "m, per the
@@ -79,6 +82,9 @@ records; and how the attribution must be shown.
   that and carry no depth, clearance or "water over the reef" logic (as ADR 0021 decision 8).
 
 ## Decision (proposed)
+
+Decisions 2, 3, 4, 5, 8, 9 and 13 below describe V1. Where Amendment 1 differs, it governs; each
+affected decision is marked.
 
 A `TidesTodayConnector` reads high and low water, sun times and spring/neap for the local days a
 dive window touches.
@@ -94,6 +100,7 @@ dive window touches.
    whether an official prediction or FES was used for this point is not stated, so it never
    corroborates anything, ADR 0010). `valid_at`/`valid_until` are that local day in UTC.
    Retrieval time is the only age we know.
+   *(Superseded by Amendment 1: `api-v2`; lineage per Amendment 1 decision 4.)*
 3. **Value.** Everything sits under keys no rule or typed observation reads; never `variables`
    or `ranges`:
    - `tide`: `datum` (the wording above), `unit` "m" (with the basis), `extremes` (a list of
@@ -103,12 +110,14 @@ dive window touches.
    - `daylight`: `sunrise` and `sunset` (ISO, +08:00) as context only;
    - the "tide height and time only: no current speed, direction or slack-water time" statement,
      `requested_location_id` 2960, `location_name`, `spatial_scope` and `data_type`.
+   *(Superseded by Amendment 1: no `spring`/`neap`; `moon_phase` is `{name, fraction}`.)*
 4. **One item, all or nothing.** Sun times and spring/neap are put inside the `tides` item, not
    as items of their own. A separate item in `tides` could make the category look present when
    the extremes failed; a separate `weather` item could do the same if `weather` ever becomes
    required. So the connector makes three calls (tides, meteorology summary, spring/neap) and any
    failure means **no item at all** and an issue: the `tides` category is missing and the result
    is INSUFFICIENT EVIDENCE.
+   *(Superseded by Amendment 1: the three calls are location, tide extremes and ephemeris.)*
 5. **Fail closed.** It raises, and never returns partial data, when:
    - the response location id, name, latitude or longitude differs from the table, or its
      timezone is not `Asia/Kuala_Lumpur`;
@@ -128,6 +137,8 @@ dive window touches.
      the size cap, is nested deeper than the depth bound, or has the wrong shape.
    The request covers the needed local days plus one UTC day either side; the tides endpoint's
    `dateTo` is treated as exclusive and the other two as inclusive, as observed.
+   *(Superseded by Amendment 1: this list adapted to V2, plus decisions 3, 4 and 6 there; both
+   date filters are inclusive.)*
 6. **No rule, no limit.** No tide threshold and no rule. `tidal_current` stays unencodable, and
    tide evidence never gives GO or CAUTION on its own. **`degraded_may_support_go` must not be
    turned on for tides** (ADR 0021 decision 4 applies unchanged).
@@ -141,10 +152,12 @@ dive window touches.
    its list's header scheme (`CREDENTIAL_SCHEMES`: `METToken` for MET, `Basic` for tides.today),
    and the host lists are pinned disjoint. The credential never appears in logs, errors, issues,
    evidence or records.
+   *(Superseded by Amendment 1: the header is `x-api-key`, never `Authorization` (decision 1).)*
 9. **Credentials.** Two settings, `tides_today_app_id` and `tides_today_api_key` (`SecretStr`,
    shape-checked, no value in any message), read from secret files in production
    (`SECRET_FILES`, compose secrets with empty defaults from `docker/make-secrets.sh`). Enabled
    without both is a start-up error; both present but not enabled builds nothing.
+   *(Superseded by Amendment 1: one setting, `tides_today_api_key`.)*
 10. **Politeness.** No published limit. Our conservative assumption, recorded as such: 6 calls a
     minute and 300 a day per process (two assessments a minute, 100 a day at three calls each),
     with the usual 60 second response cache. Concurrent cache misses are not coalesced.
@@ -166,6 +179,8 @@ dive window touches.
 13. **Not included.** `tides/now` (its height is estimated and only valid for "now"), the daily
     weather numbers (one value a day is too coarse for a dive window; may be revisited), and
     `/moon-phase` (spring/neap already carries the phase).
+    *(Superseded by Amendment 1: the V2 exclusions are in decision 2 there; spring/neap is
+    no longer available.)*
 14. **Off by default.** `DIVESAFE_TIDES_TODAY_ENABLED` defaults to false. Enabling it is the
     owner's decision after the permission wording is on file. Production compose passes it to the
     api only, as `${DIVESAFE_TIDES_TODAY_ENABLED:-false}`, and `production.env.example` sets it to
@@ -201,34 +216,93 @@ nothing from them is committed.
 
 ## Known limits (to be carried into `docs/risk-model.md`)
 
-- Units come from the owner's reading of the website and the datum is not stated by the API.
+- V1: units came from the owner's reading of the website and the datum was not stated. V2
+  (Amendment 1): metres as named by the field `heightM`; datum CD as stated, its level unknown.
 - A prediction for Teluk Tekek, 3.7 km from the reference point, not for any reef. Astronomical
   prediction only, with no weather or pressure effects.
-- Which model (official or FES) produced the values is not stated.
+- Which model produced the values: V2 names `tpe` (the provider's engine on FES); not verified.
 - `estimated: true` extremes are refused, so a change upstream could make the category fail.
 - The plausibility bound on the gap between extremes (18 h) could refuse a real long diurnal
-  interval (fail closed; availability, not safety). It does **not** catch a single missing
-  high/low pair: alternation still holds and the gap can stay under 18 h (a test shows a dropped
-  pair in the synthetic fixture leaves a 17 h 40 min gap). Unlike PHN, there is no height series
-  to cross-check against, so an incomplete list for a day can pass. The items say they list the
-  provider's highs and lows, not that the list is complete.
+  interval (fail closed; availability, not safety). It does **not** catch a single missing high/low
+  pair: alternation still holds and the gap can stay under 18 h
+  (`test_known_gap_a_single_missing_high_low_pair_is_not_detected` shows a dropped pair in the
+  synthetic V2 fixture leaves a 17 h 20 min gap and is accepted). Unlike PHN, there is no height
+  series to cross-check against, so an incomplete list for a day can pass. The items say they list
+  the provider's highs and lows, not that the list is complete.
 - The call budget is per process and shared by all users; using it up makes tides missing for
   everyone (fails closed). Retrieval time may be up to the cache lifetime older than shown.
-- The API version is "v1" with no change notice; a shape change makes the category fail.
+- The API version is "v2" (Amendment 1) with no change notice; a shape change makes the category
+  fail.
 - The sole-source clause (§2) is met by the human gate and by official sources the diver checks;
   the software cannot check that.
 
 ## Acceptance tests
 
-Fixture parse; each failure in decision 5; no item at all when any of the three calls fails;
-`observation_from_evidence` is `None`; the prompt carries the `tide` value and the "not a
-current" wording; an engine test that this evidence alone never gives GO or CAUTION; the shared
-getter refuses the host; the tides.today getter refuses other hosts, never follows a redirect,
-sends Basic auth only to its own host, and the credential never appears in errors or logs;
-settings and secret-file tests; the start-up egress warning; the attribution in the user view.
-Mutation checks on the location check, the alternation check, the bracketing check, the horizon
-and past-window checks, the `estimated` refusal, the 18 h gap bound, high above low, the time
-zone, the notice length and printable checks, the single-page and echoed-dates checks, the
-daily-row checks, the host separation (shared list, merged or overlapping credential lists, the
-header scheme), the record-only filter for `provider_notice`, the fixed text of a validation
-error, the wiring and the egress warning.
+Fixture parse; each failure in decision 5 and Amendment 1 decisions 3, 4 and 6; no item at all when
+any of the three calls fails; `observation_from_evidence` is `None`; the prompt carries the `tide`
+value and the "not a current" wording; an engine test that this evidence alone never gives GO or
+CAUTION; the shared getter refuses the host; the tides.today getter refuses other hosts, never
+follows a redirect, sends the `x-api-key` header only to its own host (the tides.today host never
+accepts `Authorization`, the MET host never accepts `x-api-key`), and the credential never appears
+in errors or logs; settings and secret-file tests; the start-up egress warning; the attribution in
+the user view. Mutation checks on the location check (id, name and coordinates), the alternation
+check, the bracketing check, the horizon and past-window checks, the `estimated` refusal, the 18 h
+gap bound, high above low, the time zone, the notice length and printable checks, the single-page
+and echoed-dates checks, the ephemeris checks (day count and coverage, location, moon-phase name and
+range, sunrise and sunset within their day), the datum (CD only), the `source` block and the
+upstream (`tpe`), the host separation (shared list, merged or overlapping credential lists, the
+exact header name (not case-folded), the value prefix, a second scheme for either host, and a blank
+or line-breaking key value), the record-only filter for `provider_notice`, the fixed text of a
+validation error, the wiring, the egress warning, and a swallowed failure of each of the three
+calls. `test_known_gap_a_single_missing_high_low_pair_is_not_detected` pins the gap listed under
+Known limits.
+
+## Amendment 1: API V2 (2026-11-17, owner)
+
+The connector moves from API V1 to V2 (`https://api.tidestoday.io/v2`). `SOURCE_VERSION` is
+`api-v2`; `PROMPT_VERSION` is unchanged. Decisions:
+
+1. **Credential.** One API key, sent as the `x-api-key` header. The application ID is removed
+   from settings, secret files, Compose, `make-secrets.sh` and the example environment.
+   `CREDENTIAL_SCHEMES` binds each credential host list to an exact header name and a value
+   prefix: MET `Authorization` + `METToken `, tides.today `x-api-key` + no prefix. A getter whose
+   header name or prefix does not match its host list is refused at construction.
+2. **Calls (GET only, three per assessment):** `locations/2960?locale=en` (datum, upstream,
+   notice); `locations/2960/tide-extremes` with `filter.dateTime=$btw:<first-1>,<last+1>` and
+   150 per page; `locations/2960/ephemeris` with `filter.date=$btw:<first>,<last>` and 50 per
+   page. No write endpoint, `currentTide`, weather or wave value is used. The budget (6 a minute,
+   300 a day) is unchanged.
+3. **Datum.** Only chart datum is accepted: `source.datumType` must be `CD`. Anything else, or a
+   missing value or `source` block, is refused. The level of CD at this point is not stated.
+4. **Upstream.** `source.source` must be `tpe` (the provider's own engine on the FES models).
+   This is the provider's statement and is not verified, so `upstream_known` stays `False` and
+   the item never corroborates anything.
+5. **Units.** Metres, as named by the field `heightM` (the V2 specification documents no unit);
+   `heightF` is ignored.
+6. **Ephemeris.** Exactly one row per local day in the window, each with `locationId` 2960 and
+   sunrise before sunset on that day. `moonPhaseName` must be one of the eight documented names,
+   and `moonPhase` a finite number from 0 to 1. Stored as `tide.moon_phase = {name, fraction}`.
+   The API does not document what the fraction measures; a quality note says the moon phase is
+   astronomical context only, not a spring/neap classification, and says nothing about current
+   strength. Moonrise and moonset are dropped.
+7. **Spring/neap is dropped.** The V2 endpoint returns 403 for this key. Access is to be asked of
+   the provider along with the permission request.
+8. **Unchanged from V1:** DEGRADED, off by default, estimated extremes refused, the 18 h gap
+   bound, alternation, high above low, whole-day coverage, the single-page, count and echoed-
+   request checks, and no item at all if any call fails.
+
+Sources: the V2 OpenAPI specification (enums for `datumType` CD/LAT, `source` including `tpe`,
+and the eight `moonPhaseName` values) and the owner's V2 requests of 2026-11-17. The V2 parser
+was run locally against those recorded responses (HTTP 200) and accepted them: four extremes for
+19 Nov, moon phase "Waxing Gibbous" (the three days returned two of the eight names), and a
+1023-character notice; only the echoes were adjusted to the asked dates. Nothing is committed.
+
+Operator step after merging: delete `docker/secrets/divesafe_tides_today_app_id` on each
+deployment host; it is no longer mounted. If it was ever filled in, ask the provider to revoke
+that application ID.
+
+Known limits updated by this amendment: units are named by the API field, not documented; the datum
+is stated as CD, but its level is not; the stated upstream is unverified; the API version is "v2",
+with no change notice; spring/neap is not available.
+
+Reviewed by `security-reviewer` and `risk-reviewer` (2026-11-18).

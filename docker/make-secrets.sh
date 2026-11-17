@@ -57,7 +57,6 @@ fi
 [ -e "$dir/divesafe_met_api_token" ] || { : | write_new divesafe_met_api_token; }
 # tides.today (ADR 0029): empty means "not set"; the connector also needs
 # DIVESAFE_TIDES_TODAY_ENABLED, which stays off until the provider's permission is on file.
-[ -e "$dir/divesafe_tides_today_app_id" ] || { : | write_new divesafe_tides_today_app_id; }
 [ -e "$dir/divesafe_tides_today_api_key" ] || { : | write_new divesafe_tides_today_api_key; }
 # The Langfuse production project's keys (ADR 0027 amendment). Empty means "not set"; with
 # tracing on, start-up then refuses.

@@ -22,8 +22,7 @@ SECRET_FILES: dict[str, bool] = {
     "admin_database_url": False,
     "llm_api_key": False,
     "met_api_token": False,
-    # tides.today HTTP Basic credentials (ADR 0029); empty means "not set".
-    "tides_today_app_id": False,
+    # tides.today API key (ADR 0029 Amendment 1); empty means "not set".
     "tides_today_api_key": False,
     "api_key_hashes": True,
     # The Langfuse production project's keys (ADR 0027 amendment).

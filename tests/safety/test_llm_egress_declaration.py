@@ -281,7 +281,6 @@ def test_mutation_widening_the_phn_warning_to_the_knowledge_basis_is_caught(
 # ADR 0029 decision 12: the same warning for the tides.today item, under every basis not local.
 _TIDES_ON: dict[str, object] = {
     "tides_today_enabled": True,
-    "tides_today_app_id": "app-1",
     "tides_today_api_key": "key-2",
 }
 _TIDES_WARNING = "tides.today data is ON and the model server is not declared local"
