@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import hashlib
+import inspect
 import json
 import sys
 from collections.abc import Callable
@@ -282,26 +283,36 @@ ALLOWED_IMPORTS: dict[str, set[str]] = {
 }
 
 
+# Every module `api/metrics.py` may import from (besides `divesafe.*`): closes the `builtins`,
+# `sys` and `importlib` routes to the library.
+ALLOWED_MODULES = frozenset({"__future__", "logging", "collections.abc", *ALLOWED_IMPORTS})
+
+
 def _metrics_import_problems(source: str) -> list[str]:
     problems: list[str] = []
     found: dict[str, set[str]] = {}
     for node in ast.walk(ast.parse(source)):
+        modules: list[str] = []
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.split(".")[0] in {"prometheus_client", "importlib"}:
-                    problems.append(f"import {alias.name}")
+            modules = [alias.name for alias in node.names]
+            if any(a.name.split(".")[0] == "prometheus_client" for a in node.names):
+                problems.append("import prometheus_client")
         elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".")[0]
-            if node.level != 0 and root != "divesafe" and node.module is None:
+            if node.level != 0:
                 problems.append("relative import")
-            if root == "importlib":
-                problems.append(f"from {node.module}")
+            modules = [node.module or ""]
+            root = (node.module or "").split(".")[0]
             if root == "prometheus_client":
                 if any(a.asname is not None for a in node.names):
                     problems.append(f"aliased import from {node.module}")
                 found.setdefault(node.module or "", set()).update(a.name for a in node.names)
         elif isinstance(node, ast.Name) and node.id in {"__import__", "getattr", "eval", "exec"}:
             problems.append(f"uses {node.id}")
+        problems.extend(
+            f"imports from {m}"
+            for m in modules
+            if m not in ALLOWED_MODULES and m.split(".")[0] != "divesafe"
+        )
     if found != ALLOWED_IMPORTS:
         problems.append(f"imports {found}")
     return problems
@@ -320,6 +331,11 @@ def test_the_metrics_module_imports_exactly_the_allowed_names() -> None:
         "from prometheus_client import Summary\n",
         "from prometheus_client import Counter as C\n",
         "import importlib\n",
+        "import builtins\n",
+        "import sys\n",
+        "from sys import modules\n",
+        "from . import state\n",
+        "from .state import AppState\n",
         "x = __import__('prometheus_' + 'client')\n",
         "x = getattr(object, 'y', None)\n",
     ],
@@ -373,7 +389,23 @@ def test_start_up_refuses_any_prometheus_variable(
     name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     assert _refused_at_start_up(app_module.create_app, name, monkeypatch, tmp_path)
-    assert list(tmp_path.iterdir()) == [], "a value file was written before the refusal"
+
+
+def test_the_check_runs_before_any_metric_is_built() -> None:
+    """The library picks its storage when imported, and the tests import it first, so only the
+    source order shows that production refuses before the first metric could write a file."""
+    source = inspect.getsource(app_module.create_app)
+    assert 0 <= source.index("check_metrics_startup(os.environ)") < source.index("Metrics(")
+
+
+def test_mutation_the_order_check_has_teeth() -> None:
+    source = inspect.getsource(app_module.create_app)
+    call = "    check_metrics_startup(os.environ)\n"
+    moved = source.replace(call, "").replace(
+        "    runner = RunManager(", call + "    runner = RunManager("
+    )
+    assert moved != source
+    assert not (0 <= moved.index("check_metrics_startup(os.environ)") < moved.index("Metrics("))
 
 
 def test_start_up_without_a_prometheus_variable_is_allowed(
@@ -622,7 +654,11 @@ def _assert_unchanged(
         metrics = _Recording(raises)
         on = tr.run_once(path, None, caplog, manager_type=_manager_with(metrics, base))
     # A mutant logs as `<module>_mutant`; only its behaviour may differ, never its name.
-    errors = tuple((name.removesuffix("_mutant"), message) for name, message in on.errors)
+    mutant_name = api_runner.__name__ + "_mutant"
+    errors = tuple(
+        (api_runner.__name__ if name == mutant_name else name, message)
+        for name, message in on.errors
+    )
     assert dataclasses.replace(on, errors=errors) == off
     assert (on.state, on.code, on.ending) == tr.EXPECTED[path_name]
     assert len(metrics.calls) == 1, "a run must be counted exactly once"
