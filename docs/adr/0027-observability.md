@@ -54,6 +54,11 @@ plan fields leave the machine), and "no new dependency without an ADR".
    Connector worker threads get a fresh context holding only the id, never the run's trace
    collector. Pinned by `tests/safety/test_request_id.py` and the whole-export pin in
    `tests/safety/test_tracing_export.py`.
+
+   Deployed (2026-11-17): main `7856847`, image `1beef6c3bb80`, `DIVESAFE_TRUSTED_PROXIES` empty.
+   Checked on one production assessment: every log line of the request and its run carried the
+   generated id, which was also returned in `X-Request-ID`. Only the run span had `request_id`;
+   no stage or model-call span had it, and the stored record did not contain it.
 2. **A `/metrics` endpoint in the Prometheus text format** with a small fixed set: assessments
    created and finished, by final recommendation; runs in flight; connector failures by connector
    name; model call outcomes by the nine `CALL_OUTCOMES` labels (`agents/runner.py`), the same set
