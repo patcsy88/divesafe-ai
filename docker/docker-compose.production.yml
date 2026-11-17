@@ -143,6 +143,8 @@ services:
       # Owner decision 2026-10-18: 180 minutes. Overriding the default needs a recorded reason.
       DIVESAFE_DECISION_MAX_AGE_MINUTES: ${DIVESAFE_DECISION_MAX_AGE_MINUTES:-180}
       DIVESAFE_TRUSTED_PROXIES: ${DIVESAFE_TRUSTED_PROXIES:-}
+      # ADR 0027 item 2: scrapes of /metrics per key per minute (operational, not a safety limit).
+      DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE: ${DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE:-30}
       # ADR 0027 amendment: off unless production.env sets both; start-up refuses either alone,
       # any endpoint but http://<private IPv4>:<port>/api/public/otel/v1/traces, and OTEL_*.
       DIVESAFE_TRACING_ENABLED: ${DIVESAFE_TRACING_ENABLED:-false}

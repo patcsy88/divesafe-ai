@@ -63,14 +63,16 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 - metadata-only tracing to a self-hosted Langfuse
   ([ADR 0027](docs/adr/0027-observability.md)), switched on 2026-11-16;
 - a request id on every log line, in the `X-Request-ID` response header and on the run's trace
-  span ([ADR 0027](docs/adr/0027-observability.md) item 1), deployed 2026-11-17.
+  span ([ADR 0027](docs/adr/0027-observability.md) item 1), deployed 2026-11-17;
+- `/metrics` in the Prometheus text format, readable only by a key whose only role is `metrics`
+  (no groups) ([ADR 0027](docs/adr/0027-observability.md) item 2), deployed 2026-11-17.
 
 **Not built.**
 
 - Reviewed rules: no dive professional has signed a limit, so every assessment is
   `INSUFFICIENT EVIDENCE` by design.
 - The vendor-specific `openai` and `anthropic` adapters.
-- `/metrics` and alerting (ADR 0027 items 2 and 3).
+- Alerting (ADR 0027 item 3).
 - Calibrated confidence.
 - The agent stage has had only small live runs on synthetic scenarios (see
   [docs/evaluation-strategy.md](docs/evaluation-strategy.md)). With
