@@ -58,7 +58,6 @@ from divesafe.models import FakeProvider
 pytestmark = pytest.mark.safety
 
 TOKEN = "tok-SECRET-123"
-TT_APP = "tt-app-SECRET-456"
 TT_KEY = "tt-key-SECRET-789"
 SIZED = "connector HTTP pool sized"
 
@@ -297,7 +296,7 @@ def test_a_saturated_sized_pool_still_fails_at_the_deadline_and_spares_the_defau
 # --- (c) wiring in build_default_state ----------------------------------------------------------
 
 BOTH = {"phn_etide_enabled": True, "met_api_token": TOKEN}
-TIDES = {"tides_today_enabled": True, "tides_today_app_id": TT_APP, "tides_today_api_key": TT_KEY}
+TIDES = {"tides_today_enabled": True, "tides_today_api_key": TT_KEY}
 CASES: list[tuple[dict[str, Any], int, int]] = [
     ({}, 4, 16),
     ({"phn_etide_enabled": True}, 5, 20),
@@ -335,7 +334,6 @@ def state_misses(mod: Any) -> list[str]:
                     "DIVESAFE_MET_API_TOKEN",
                     "DIVESAFE_PHN_ETIDE_ENABLED",
                     "DIVESAFE_TIDES_TODAY_ENABLED",
-                    "DIVESAFE_TIDES_TODAY_APP_ID",
                     "DIVESAFE_TIDES_TODAY_API_KEY",
                 ):
                     m.delenv(name, raising=False)
@@ -377,7 +375,7 @@ def state_misses(mod: Any) -> list[str]:
                 bad.append(f"{label}: log extras {extra}")
         for record in capture.records:
             text = record.getMessage() + " ".join(str(v) for v in record.__dict__.values())
-            if any(secret in text for secret in (TOKEN, TT_APP, TT_KEY)):
+            if any(secret in text for secret in (TOKEN, TT_KEY)):
                 bad.append(f"{label}: a credential reached a log record")
                 break
     return bad

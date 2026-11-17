@@ -32,15 +32,16 @@ ALLOWED_HOSTS: frozenset[str] = frozenset(
 )
 # Kept out of ALLOWED_HOSTS on purpose: only a getter built with a credential may call it.
 MET_API_HOSTS: frozenset[str] = frozenset({"api.met.gov.my"})
-# The same for tides.today (ADR 0029): HTTP Basic credentials, never in ALLOWED_HOSTS.
+# The same for tides.today (ADR 0029 Amendment 1): an API key header, never in ALLOWED_HOSTS.
 TIDES_TODAY_HOSTS: frozenset[str] = frozenset({"api.tidestoday.io"})
-# Each credential's own host list and header scheme; a credentialed getter's hosts must sit
-# inside one list, and its header must use that list's scheme. The lists are disjoint (pinned).
-CREDENTIAL_SCHEMES: tuple[tuple[frozenset[str], str], ...] = (
-    (MET_API_HOSTS, "METToken "),
-    (TIDES_TODAY_HOSTS, "Basic "),
+# Each credential's own host list, exact header name and value prefix; a credentialed getter's
+# hosts must sit inside one list, and its header must have that list's name and prefix. The lists
+# are disjoint (pinned).
+CREDENTIAL_SCHEMES: tuple[tuple[frozenset[str], str, str], ...] = (
+    (MET_API_HOSTS, "Authorization", "METToken "),
+    (TIDES_TODAY_HOSTS, "x-api-key", ""),
 )
-CREDENTIAL_HOST_LISTS: tuple[frozenset[str], ...] = tuple(h for h, _ in CREDENTIAL_SCHEMES)
+CREDENTIAL_HOST_LISTS: tuple[frozenset[str], ...] = tuple(h for h, _, _ in CREDENTIAL_SCHEMES)
 # Also kept out of ALLOWED_HOSTS: only the POST getter below may call it.
 PHN_HOSTS: frozenset[str] = frozenset({"etide.hydro.gov.my"})
 PHN_MAX_BYTES = 512 * 1024
@@ -332,11 +333,18 @@ class UrllibJsonGetter:
         if auth_header is not None and (
             not hosts
             or not any(
-                hosts <= own and auth_header[1].startswith(scheme)
-                for own, scheme in CREDENTIAL_SCHEMES
+                hosts <= own and auth_header[0] == name and auth_header[1].startswith(prefix)
+                for own, name, prefix in CREDENTIAL_SCHEMES
             )
         ):
-            raise ValueError("a getter with a credential needs its own host list and scheme")
+            raise ValueError(
+                "a getter with a credential needs its own host list, header name and prefix"
+            )
+        if auth_header is not None and not (
+            auth_header[1].strip() and auth_header[1].isascii() and auth_header[1].isprintable()
+        ):
+            # Fixed text: never the value.
+            raise ValueError("a credential header value must be printable ASCII and not blank")
         if hosts & PHN_HOSTS:
             raise ValueError("the PHN host may only be called by the PHN POST getter")
         self._timeout = timeout_seconds

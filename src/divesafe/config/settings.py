@@ -155,30 +155,24 @@ class Settings(BaseSettings):
     phn_etide_enabled: bool = False
 
     # tides.today tide predictions (ADR 0029). Off until the provider's written permission is on
-    # file. Enabling it needs both credentials (HTTP Basic: application ID and API key).
+    # file. Enabling it needs the API key (header x-api-key; ADR 0029 Amendment 1).
     tides_today_enabled: bool = False
-    tides_today_app_id: SecretStr | None = None
     tides_today_api_key: SecretStr | None = None
 
-    @field_validator("tides_today_app_id", "tides_today_api_key")
+    @field_validator("tides_today_api_key")
     @classmethod
-    def _tides_today_credential_shape(cls, value: SecretStr | None) -> SecretStr | None:
-        # No ":" (it would split the Basic user name) and nothing a header could carry over.
+    def _tides_today_key_shape(cls, value: SecretStr | None) -> SecretStr | None:
+        # Nothing a header could carry over.
         if value is not None and not re.fullmatch(
             r"[A-Za-z0-9._~+/=-]{1,256}", value.get_secret_value()
         ):
-            raise ValueError("a tides.today credential has an unexpected shape")
+            raise ValueError("the tides.today API key has an unexpected shape")
         return value
 
     @model_validator(mode="after")
-    def _tides_today_needs_both_credentials(self) -> Settings:
-        if self.tides_today_enabled and (
-            self.tides_today_app_id is None or self.tides_today_api_key is None
-        ):
-            raise ValueError(
-                "DIVESAFE_TIDES_TODAY_ENABLED needs DIVESAFE_TIDES_TODAY_APP_ID and "
-                "DIVESAFE_TIDES_TODAY_API_KEY"
-            )
+    def _tides_today_needs_the_key(self) -> Settings:
+        if self.tides_today_enabled and self.tides_today_api_key is None:
+            raise ValueError("DIVESAFE_TIDES_TODAY_ENABLED needs DIVESAFE_TIDES_TODAY_API_KEY")
         return self
 
     evidence_max_age_minutes: int | None = Field(default=None, gt=0)

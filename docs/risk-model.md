@@ -288,14 +288,16 @@ cannot confirm the decision was saved.
   tides (per-category degraded policy is a follow-up to ADR 0008). The `tidal_current`
   placeholder no longer cites tide ids; the agent prompts say a tide is not a current.
 - **tides.today tide predictions (2026-11-17, [ADR 0029](adr/0029-tides-today-tide-predictions.md)):**
-  `TidesTodayConnector` items are DEGRADED daily predictions under `value["tide"]` (high/low
-  times and heights, spring/neap and moon phase) and `value["daylight"]`, for tides.today's Teluk
-  Tekek point about 3.7 km from the reference point, today plus six days. Units are the owner's
-  reading of the website; the datum is not stated. Whether an official prediction or the FES
-  models produced a value is not stated, so lineage is unknown and it never corroborates PHN or
-  anything else. An estimated extreme is refused. The parser checks order, alternation and an
-  18 h gap, but a single missing high/low pair can pass. All of PHN's limits on currents apply
-  unchanged: `tidal_current` stays unencodable, degraded data cannot support GO or CAUTION, and
+  `TidesTodayConnector` items are DEGRADED daily predictions under `value["tide"]` (high/low times
+  and heights, and moon phase; no spring/neap) and `value["daylight"]`, for tides.today's Teluk
+  Tekek point about 3.7 km from the reference point, today plus six days. Heights are taken as
+  metres from the API field name `heightM`; no unit is documented. Only chart datum (CD) is
+  accepted, and its level at this point is not stated. The provider names its own engine (`tpe`),
+  which is not verified, so lineage is unknown and it never corroborates PHN or anything else. The
+  moon phase is context only: not a spring/neap classification and nothing about current strength.
+  An estimated extreme is refused. The parser checks order, alternation and an 18 h gap, but a
+  single missing high/low pair can pass. All of PHN's limits on currents apply unchanged:
+  `tidal_current` stays unencodable, degraded data cannot support GO or CAUTION, and
   `degraded_may_support_go` must not be turned on for tides. With PHN also on, both items are
   present and no check compares them. Off by default until the provider's permission is on file.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future

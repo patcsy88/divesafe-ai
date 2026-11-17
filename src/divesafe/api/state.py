@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import os
@@ -271,15 +270,15 @@ def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasi
 
 
 def build_tides_today_getter(settings: Settings) -> CachingRateLimitedGetter:
-    """HTTP Basic to api.tidestoday.io only (ADR 0029). The header lives only in this getter."""
-    app_id, api_key = settings.tides_today_app_id, settings.tides_today_api_key
-    if app_id is None or api_key is None:
-        raise RuntimeError("tides.today is enabled without both credentials")
-    pair = f"{app_id.get_secret_value()}:{api_key.get_secret_value()}".encode()
+    """The x-api-key header to api.tidestoday.io only (ADR 0029 Amendment 1). The header lives
+    only in this getter."""
+    api_key = settings.tides_today_api_key
+    if api_key is None:
+        raise RuntimeError("tides.today is enabled without its API key")
     return CachingRateLimitedGetter(
         UrllibJsonGetter(
             allowed_hosts=TIDES_TODAY_HOSTS,
-            auth_header=("Authorization", f"Basic {base64.b64encode(pair).decode('ascii')}"),
+            auth_header=("x-api-key", api_key.get_secret_value()),
         ),
         min_interval_seconds={"api.tidestoday.io": 0.0},
         quotas=(TIDES_TODAY_QUOTA,),
