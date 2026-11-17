@@ -91,7 +91,7 @@ plan fields leave the machine), and "no new dependency without an ADR".
    runtime-built strings or exception text. Dependency terms: a bounded range `>=X,<Y` in
    `pyproject.toml` like the other runtime dependencies (the range chosen at build; a lock file
    with hashes is still open, ADR 0024 supply chain) and the same `pip-audit` in CI. Licence:
-   Apache-2.0, to verify from the package metadata at build (not installed here).
+   Apache-2.0 AND BSD-2-Clause (0.26.0 package metadata, checked 2026-11-17).
    **Authentication, owner decision 2026-11-12: (a), a `metrics` role; AGENTS.md section 12
    stays as written, no loopback-port exception.** The options were: (a) a
    `metrics` role on an API key (ADR 0013; the scraper holds a key with that role only), or (b)
@@ -126,6 +126,34 @@ plan fields leave the machine), and "no new dependency without an ADR".
    Uptime Kuma must therefore treat a 429 as its own alert ("auth blocked"), not as "down". The
    rate-limit key: `LIMIT_KEYS` is a fixed set; **owner decision 2026-11-15 (decision 7):** add a
    `metrics` entry with its own setting, rather than reusing `read`.
+
+   **Built (2026-11-17), not yet deployed:** `api/metrics.py`, with
+   `prometheus_client>=0.26,<0.27`.
+   - Owner decisions (2026-11-17): counts are taken in the API layer from the stored record and
+     the run's trace collector, after the result or failure code is stored; nothing is hooked
+     into orchestration. A run that fails before its record is stored is counted only by its
+     failure code and model calls. The rate limit is `DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE`,
+     default 30. The histogram buckets are 0.1, 0.5, 1, 2, 5, 10, 30, 60, 120 and 300 s.
+   - The metrics: `divesafe_assessments_created_total`,
+     `divesafe_assessments_finished_total{outcome}`,
+     `divesafe_stage_duration_seconds{stage,outcome}`,
+     `divesafe_connector_failures_total{connector,kind}`,
+     `divesafe_knowledge_retrieval_total{outcome}`, `divesafe_model_calls_total{outcome}`,
+     `divesafe_auth_failures_total`, `divesafe_runs_in_flight` and
+     `divesafe_trace_dropped_total{reason}`.
+   - Labels: a connector that is not configured is labelled `other`; model-call outcomes outside
+     `CALL_OUTCOMES` are dropped.
+   - Start-up refuses any `PROMETHEUS_*` environment variable, in any letter case, and a
+     `metrics` key that also has another role or any groups. Actor names were already unique,
+     which covers rule (c).
+   - The run's collector now runs whenever the app runs, with tracing off too. It is held in
+     memory only; nothing is exported unless tracing is on.
+   - `divesafe_assessments_finished_total` counts the system's final recommendation at storage,
+     before any human decision. A count of final recommendations is operational only: never a
+     target, never an alert on a GO or NO-GO rate, and never a reason to change a rule,
+     threshold, prompt or data check (as AGENTS.md section 4 says for scores). A rise in
+     INSUFFICIENT EVIDENCE is worth alerting on as a data-source signal, not as a quality score.
+   - Pinned by `tests/safety/test_metrics.py`.
 3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
    Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
    runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;
@@ -638,9 +666,10 @@ runtime image. Licences to verify from package metadata at build.
 
 ### Known gaps (amendment)
 
-- Because tracing is built before items 1 to 3, it has no metrics or alerts on export failures
-  or dropped collector entries until item 2 is built: they show only as the once-per-reason log
-  codes and as missing or partial traces. The run span carries the request id (item 1); stage
+- Export failures and dropped collector entries are counted in `/metrics` (item 2,
+  `divesafe_trace_dropped_total`). No alert is wired on them yet (item 3). The collector now
+  also runs with tracing off (for metrics), so the `collector_full` log line can appear then too.
+  The run span carries the request id (item 1); stage
   and model-call spans never do.
 - FastAPI itself requires and imports `opentelemetry-api`, so with tracing off the OpenTelemetry
   API is loaded (inert: no provider is set and FastAPI's telemetry is off). The SDK, the
@@ -828,6 +857,15 @@ Settled 2026-11-15, each as the recommended default:
   and backup are planned.
 - A `metrics`-only key that leaks lets the holder read activity and failure rates; rotation is
   manual, as for every key (ADR 0013).
+- A run that fails before its record is stored gives no stage, connector or knowledge counts,
+  only its failure code and model calls. To be revisited when such a failure occurs (owner,
+  2026-11-17).
+- The in-flight gauge reads the run set without a lock, so it is exact only on a standard (GIL)
+  Python build.
+- `disable_created_metrics()` applies to the whole process: any later user of
+  `prometheus_client` in the process gets no `_created` series either.
+- `prometheus_client` reads `PROMETHEUS_*` variables as soon as it is imported, which is before
+  the start-up check. Start-up still refuses before any metric or value file is created.
 - The scraper shares the Docker gateway address with every other local client, so one client's
   bad keys can 429 the scraper (decision 7); the alert then says "auth blocked" and someone has
   to look.

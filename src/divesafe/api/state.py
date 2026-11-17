@@ -129,6 +129,7 @@ def default_limits(
     decide_per_minute: int = 30,
     read_per_minute: int = 120,
     auth_failures_per_minute: int = 10,
+    metrics_per_minute: int = 30,
 ) -> dict[str, Limit]:
     """Operational limits per actor (abuse and upstream-quota protection), not safety limits."""
     return {
@@ -136,6 +137,7 @@ def default_limits(
         "decide": Limit(decide_per_minute, 60),
         "read": Limit(read_per_minute, 60),
         "auth_failure": Limit(auth_failures_per_minute, 60),
+        "metrics": Limit(metrics_per_minute, 60),
     }
 
 
@@ -406,6 +408,7 @@ def build_default_state(settings: Settings) -> AppState:
                 settings.rate_limit_decide_per_minute,
                 settings.rate_limit_read_per_minute,
                 settings.rate_limit_auth_failures_per_minute,
+                settings.rate_limit_metrics_per_minute,
             )
         ),
         trusted_proxies=settings.trusted_proxy_set(),

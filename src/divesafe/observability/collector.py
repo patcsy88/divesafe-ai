@@ -1,10 +1,11 @@
 """Per-run trace collection (ADR 0027 amendment 2026-11-15).
 
-A run's collector lives in a `ContextVar` that `RunManager` sets inside the run's own task, and
-only when tracing is enabled. Its default is None, so `assess_dive` called directly collects
-nothing. It holds plain values only (never a stage's evidence ids or issue codes) and is handed
-to a sink once, after the run has stored its record or been marked failed. Callers append under
-`contextlib.suppress(Exception)`: tracing never changes a run. `agents`, `orchestration` and
+A run's collector lives in a `ContextVar` that `RunManager` sets inside the run's own task, when
+tracing or metrics is configured (always, in the app; ADR 0027 item 2). Its default is None,
+so `assess_dive` called directly collects nothing. It holds plain values only (never a stage's
+evidence ids or issue codes) and is handed to a sink once, after the run has stored its record
+or been marked failed. Callers append under `contextlib.suppress(Exception)`: tracing never
+changes a run. `agents`, `orchestration` and
 `api` import this module, so it imports only `domain` and the standard library.
 """
 
@@ -28,8 +29,8 @@ logger = logging.getLogger(__name__)
 # cross-examinations) and walks 8 stages; the bound leaves room for both several times over.
 MAX_TRACE_ENTRIES = 128
 
-# Fixed reasons for trace data that was dropped. Until ADR 0027 item 2 exists this is a plain
-# in-process count with no endpoint; the lock guards only the increment, never I/O or logging.
+# Fixed reasons for trace data that was dropped: a plain in-process count, read by `/metrics`
+# (ADR 0027 item 2); the lock guards only the increment, never I/O or logging.
 DropReason = Literal["timeout", "connection", "http_status", "queue_full", "collector_full"]
 DROP_REASONS: tuple[DropReason, ...] = (
     "timeout",

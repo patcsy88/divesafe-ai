@@ -14,6 +14,8 @@ dependencies = [
   # ADR 0027 amendment: tracing to the local Langfuse; imported only when tracing is enabled.
   "opentelemetry-sdk>=1.45.2,<1.46",
   "opentelemetry-exporter-otlp-proto-http>=1.45.2,<1.46",
+  # ADR 0027 item 2: `/metrics`; imported only by `api/metrics.py` (Apache-2.0 AND BSD-2-Clause).
+  "prometheus_client>=0.26,<0.27",
   # Imported directly by the trace session (redirect, proxy and environment behaviour pinned);
   # 2.32.4 fixes the .netrc credential leak (CVE-2024-47081).
   "requests>=2.32.4,<3",

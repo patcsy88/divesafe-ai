@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 MAX_TRACKED = 10_000
-LIMIT_KEYS = frozenset({"create", "decide", "read"})
+LIMIT_KEYS = frozenset({"create", "decide", "read", "metrics"})
 
 
 @dataclass(frozen=True)

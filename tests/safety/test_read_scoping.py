@@ -26,6 +26,7 @@ KEY_DORA, KEY_CARA, KEY_GUS, KEY_ROOT = (
 )
 VIEW = frozenset({Role.VIEWER})
 DECIDER = frozenset({Role.VIEWER, Role.DECIDER, Role.OVERRIDER})
+ALICE_ROLES = frozenset({Role.VIEWER, Role.ASSESSOR, Role.DECIDER, Role.OVERRIDER})
 AUTH = {
     n: {"Authorization": f"Bearer {k}"}
     for n, k in (
@@ -47,7 +48,7 @@ def _keys() -> dict[str, KeyEntry]:
     nothing with alice; cara (decider) and fred are in `south`; root (admin) is in `west`."""
     north, east, south = frozenset({"north"}), frozenset({"east"}), frozenset({"south"})
     return {
-        _hash(KEY_A): KeyEntry("alice", frozenset(Role) - {Role.ADMIN}, north),
+        _hash(KEY_A): KeyEntry("alice", ALICE_ROLES, north),
         _hash(KEY_B): KeyEntry("bob", DECIDER, north),
         _hash(KEY_ERIN): KeyEntry("erin", VIEW, north),
         _hash(KEY_FRED): KeyEntry("fred", VIEW, south),
@@ -412,7 +413,7 @@ def test_mutation_the_evidence_path_is_not_scoped() -> None:
 
 def test_mutation_a_group_is_matched_case_sensitively() -> None:
     mutant = mutated_module(auth_module, (CASEFOLD, 'folded = unicodedata.normalize("NFKC", name)'))
-    roles = [r.value for r in frozenset(Role) - {Role.ADMIN}]
+    roles = [r.value for r in (Role.VIEWER, Role.ASSESSOR, Role.DECIDER, Role.OVERRIDER)]
     cfg = json.dumps(
         {
             _hash(KEY_A): {"actor": "alice", "roles": roles, "groups": ["North"]},

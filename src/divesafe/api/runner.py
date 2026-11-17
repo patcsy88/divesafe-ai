@@ -21,12 +21,13 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Protocol
 
 from fastapi.concurrency import run_in_threadpool
 
 from divesafe.config.logging import bind_request_id
 from divesafe.domain import AssessmentRecord
-from divesafe.observability import RunCollector, TraceSink, start_collecting
+from divesafe.observability import RunCollector, RunTrace, TraceSink, start_collecting
 from divesafe.orchestration import StartPassedError
 from divesafe.services import RepositoryUnavailableError
 from divesafe.services.runs import FailureCode, RunStore
@@ -37,6 +38,18 @@ CLEANUP_INTERVAL_SECONDS = 300.0
 CLEANUP_BATCH = 200
 
 
+class RunMetrics(Protocol):
+    """Receives each run's counts once, after its result or failure code is stored (ADR 0027
+    item 2). `record` is the stored record, None when the run failed."""
+
+    def run_finished(
+        self,
+        record: AssessmentRecord | None,
+        failure: FailureCode | None,
+        trace: RunTrace | None,
+    ) -> None: ...
+
+
 class RunManager:
     def __init__(
         self,
@@ -45,9 +58,11 @@ class RunManager:
         deadline: timedelta,
         grace: timedelta,
         sink: TraceSink | None = None,
+        metrics: RunMetrics | None = None,
     ) -> None:
         self._store = store
         self._sink = sink
+        self._metrics = metrics
         self._deadline = deadline
         self._grace = grace
         self._tasks: set[asyncio.Task[None]] = set()
@@ -88,15 +103,17 @@ class RunManager:
             bind_request_id(request_id)  # the task's own context copy; it ends with the task
         code: FailureCode | None = None
         collector: RunCollector | None = None
-        if self._sink is not None:
+        if self._sink is not None or self._metrics is not None:
             with contextlib.suppress(Exception):  # tracing must never change the run
                 collector = start_collecting()
+        stored_record: AssessmentRecord | None = None
         deadline = asyncio.timeout(self._deadline.total_seconds())
         try:
             async with deadline:
                 record = await work()
             stored = await run_in_threadpool(self._store.complete, record, run_token)
             if stored:
+                stored_record = record
                 logger.info("assessment stored", extra={"assessment_id": run_id, "actor": actor})
                 return
             # The lease ran out or the id was already finished: nothing was stored.
@@ -129,6 +146,11 @@ class RunManager:
                 with contextlib.suppress(Exception):
                     outcome = "stored" if code is None else code.value
                     self._sink.emit(collector.finish(run_id, outcome, request_id=request_id))
+            # After the stored result or failure code, like the trace: metrics never change a run.
+            if self._metrics is not None:
+                with contextlib.suppress(Exception):
+                    trace = None if collector is None else collector.finish(run_id, "metrics")
+                    self._metrics.run_finished(stored_record, code, trace)
 
     @staticmethod
     def _log_failure(run_id: str, actor: str, exc: BaseException) -> None:
