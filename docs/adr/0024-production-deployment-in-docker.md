@@ -2316,8 +2316,11 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     protections were active throughout. Production matches (the warning came 1 ms before "warnings
     parsed"; no connector timed out or failed), but its own socket path was not observed. Side
     effect: the false alarm uses up the once-per-process flag, so a real break later in the same
-    process would go unlogged. Open: a safety test and a fix in `_socket_of` (a closed response
-    returns `None` without the warning), reviewed by both reviewers.
+    process would go unlogged. **Fixed in code (2026-11-17):** `_socket_of` returns `None`
+    without the warning when `fp` is `None` (chunked bodies did the same, found by the new safety
+    test); takes effect at the next image build. After that build, any "connector HTTP socket not
+    reachable" line is a real finding (the private path moved), not this false alarm: investigate
+    it.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could

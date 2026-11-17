@@ -496,6 +496,69 @@ def test_a_missing_private_path_warns_once_with_fixed_text_and_reads_still_work(
     assert found == []
 
 
+CHUNKED = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+
+def s_closed_quiet(mod: Any) -> list[str]:
+    """A real response read to its end is closed by http.client (`fp` becomes None) before the
+    loop's last pass; that is not a missing private path and must not use up the one warning.
+    An object with an `fp` but no `raw` still warns (the closed case is `fp is None` only)."""
+    bad: list[str] = []
+    mod._local.job = None
+    package = logging.getLogger("divesafe")
+    capture, level, warned = Capture(), package.level, mod._socket_warned
+    package.addHandler(capture)
+    package.setLevel(logging.DEBUG)
+    try:
+        body = b'{"a": 1}'
+        replies = (
+            ("content-length", b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body),
+            ("chunked", CHUNKED + b"%x\r\n" % len(body) + body + b"\r\n0\r\n\r\n"),
+        )
+        for name, reply in replies:
+            mod._socket_warned = False
+            capture.records.clear()
+            client, peer = socket.socketpair()
+            try:
+                peer.sendall(reply)
+                response = http.client.HTTPResponse(client)
+                response.begin()
+                if mod._socket_of(response) is not client:
+                    bad.append(f"{name}: the socket was not found before the read")
+                got = attempt(bad, name, lambda r=response: mod.read_limited(r, 1000, later()))
+                if got != body:
+                    bad.append(f"{name}: {got!r} returned")
+                if response.fp is not None:
+                    bad.append(f"{name}: http.client did not close the response (test premise)")
+                if mod._socket_of(response) is not None:
+                    bad.append(f"{name}: a closed response did not give None")
+            finally:
+                for end in (client, peer):
+                    with contextlib.suppress(OSError):
+                        end.close()
+            ours = [r for r in capture.records if r.name == mod.logger.name]
+            if ours or mod._socket_warned:
+                bad.append(f"{name}: a response read to its end logged the warning")
+        mod._socket_warned = False
+        capture.records.clear()
+        no_raw = types.SimpleNamespace(fp=types.SimpleNamespace())
+        if mod._socket_of(no_raw) is not None:
+            bad.append("an fp without raw did not give None")
+        ours = [r for r in capture.records if r.name == mod.logger.name]
+        if len(ours) != 1:
+            bad.append(f"an fp without raw logged the warning {len(ours)} times, not once")
+    finally:
+        package.removeHandler(capture)
+        package.setLevel(level)
+        mod._socket_warned = warned
+    return bad
+
+
+def test_a_response_read_to_its_end_does_not_use_up_the_warning() -> None:
+    found = s_closed_quiet(http_module)
+    assert found == []
+
+
 # --- (e)(f) cancelled jobs and error mapping, both getters --------------------------------------
 
 
@@ -624,6 +687,7 @@ WARN_ONCE = "        if not _socket_warned:\n"
 STORE = "                self._sock = sock\n                return\n"
 SUPPRESS = "contextlib.suppress(OSError, ValueError)"
 PRE_CONNECT = "    if gave_up():\n        raise _timed_out(_label(url))\n"
+CLOSED_FP = '    if getattr(response, "fp", _NO_FP) is None:\n        return None\n'
 
 MUTANTS = [
     pytest.param([(READ_SOME, "read_some = response.read")], False, id="read1-replaced-by-read"),
@@ -679,6 +743,22 @@ MUTANTS = [
         False,
         id="warning-extra-lost",
     ),
+    pytest.param([(CLOSED_FP, "")], False, id="closed-response-warns"),
+    pytest.param(
+        [('getattr(response, "fp", _NO_FP)', 'getattr(response, "fp", None)')],
+        False,
+        id="missing-fp-taken-as-closed",
+    ),
+    pytest.param(
+        [
+            (
+                'if getattr(response, "fp", _NO_FP) is None:',
+                'if getattr(getattr(response, "fp", None), "raw", None) is None:',
+            )
+        ],
+        False,
+        id="fp-without-raw-taken-as-closed",
+    ),
 ]
 
 
@@ -687,6 +767,7 @@ def mutant_plan() -> list[tuple[str, Callable[[Any], list[str]]]]:
         ("read1", s_read1),
         ("job", s_job),
         ("warn", s_warn),
+        ("closed", s_closed_quiet),
         ("path", s_real_path),
         ("body", s_real_body),
     ]

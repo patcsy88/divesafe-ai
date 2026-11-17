@@ -460,10 +460,13 @@ has no built-in default and must be chosen per category with a documented reason
     `socketpair`), but a later Python could still move it. The real slow-drip case against a live
     server has not been run (a live check needs a network call and the owner's yes). **The
     warning is seen in production** (in a process before 2026-11-12, ADR 0024, and on
-    2026-11-17). Reproduced locally (2026-11-17): it is a false alarm from the extra `_socket_of`
-    call after a `Content-Length` body ends, when `http.client` has closed the response; the
-    protections were active locally, and production matches (ADR 0024, MET deploy note). It still
-    uses up the once-per-process warning. A test and a fix are open.
+    2026-11-17). Reproduced locally (2026-11-17): it was a false alarm from the extra `_socket_of`
+    call after a body ends (`Content-Length` or chunked), when `http.client` has closed the
+    response; the protections were active locally, and production matches (ADR 0024, MET deploy
+    note). **Fixed in code (2026-11-17), not yet deployed; takes effect at the next image build:** a
+    response whose `fp` is `None` gives no socket and no warning; a missing `fp` or `raw` still
+    warns once. Pinned by `test_a_response_read_to_its_end_does_not_use_up_the_warning`,
+    mutation-checked.
   - No per-host thread limit: one misbehaving allow-listed host can hold every pool worker until
     the deadline or a cancel, so every connector fails closed to INSUFFICIENT EVIDENCE. This is an
     availability problem only.

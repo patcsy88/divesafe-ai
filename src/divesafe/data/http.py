@@ -70,12 +70,19 @@ class _DeadlineExceeded(Exception):
 
 
 _socket_warned = False
+_NO_FP = object()
 
 
 def _socket_of(response: Any) -> Any:
     """The response's socket, or None. It is reached through private http.client/urllib
-    attributes, so a Python change can break it; that is reported once, with fixed text."""
+    attributes, so a Python change can break it; that is reported once, with fixed text.
+
+    http.client sets `fp` to None once a body has been read to its end, before the read loop's
+    last pass: that response is closed, not missing the path, so it gives None without the
+    warning."""
     global _socket_warned
+    if getattr(response, "fp", _NO_FP) is None:
+        return None
     try:
         return response.fp.raw._sock
     except AttributeError:
