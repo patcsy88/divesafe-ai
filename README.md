@@ -61,7 +61,9 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
 - the API, PostgreSQL with TLS, and the one-off knowledge-loader jobs;
 - a hosted model through an OpenAI-compatible proxy;
 - metadata-only tracing to a self-hosted Langfuse
-  ([ADR 0027](docs/adr/0027-observability.md)), switched on 2026-11-16.
+  ([ADR 0027](docs/adr/0027-observability.md)), switched on 2026-11-16;
+- a request id on every log line, in the `X-Request-ID` response header and on the run's trace
+  span ([ADR 0027](docs/adr/0027-observability.md) item 1), deployed 2026-11-17.
 
 **Not built.**
 
