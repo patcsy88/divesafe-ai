@@ -161,6 +161,13 @@ plan fields leave the machine), and "no new dependency without an ADR".
    follow-up adds it to the compose file with the same default. Checked in production: a request
    without a key gets 401 on `/metrics`, the scraper key gets 200 with all nine families and 403
    on `/v1/sites`, and no `PROMETHEUS_*` variable is set.
+
+   Run check (2026-11-17): one production assessment, scraped before and after its record was
+   stored. Before: `created` 1, `runs_in_flight` 1, nothing finished. After:
+   `finished{INSUFFICIENT EVIDENCE}` 1, one `completed` observation for each of the 8 stages
+   (the sums equal the record's stage durations), knowledge `ok` 1, model calls `ok` 9, no
+   connector failures, `runs_in_flight` 0. Every count matched the stored record and the run's
+   log lines.
 3. **Alerting stays outside the app.** The app exposes signals. **Owner decision 2026-11-12:
    Uptime Kuma, self-hosted.** Minimal set: agent-stage failure rate above zero over the last N
    runs (the incident above); any connector failure; `docker/backup.sh` exit status not 0;
