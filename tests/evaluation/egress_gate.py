@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.evaluation.output_dir import check_output_dir
 
 from divesafe.config import Settings
 from divesafe.models.egress import EgressBasis, check_egress
@@ -26,8 +27,6 @@ def eval_output_dir(configured: str | None, fallback: Path) -> Path:
     """The directory for raw evaluation records, which hold full assessment records and raw model
     replies. A directory inside the repository is refused (the run fails, it is not skipped), with
     the same check the item 6 capture uses. `.gitignore` is only a backstop."""
-    from tests.evaluation.capture_item6 import check_output_dir  # lazy: it imports this module
-
     directory = check_output_dir(Path(configured) if configured else fallback)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)  # before any prompt is sent
     return directory

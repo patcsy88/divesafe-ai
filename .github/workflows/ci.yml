@@ -60,9 +60,14 @@ jobs:
         run: "! grep -q 'restore round trip cannot run:' pytest.log"
       - name: Known vulnerabilities in Python dependencies (pip-audit, CI only)
         run: |
-          python -m venv /tmp/audit
+          python -m venv --clear /tmp/audit
           /tmp/audit/bin/pip install --quiet "pip-audit==2.10.1"
           /tmp/audit/bin/pip-audit --progress-spinner off .
+      - name: Known vulnerabilities in the evaluation extra (pip-audit, CI only; never in the image)
+        run: |
+          /tmp/audit/bin/python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))["project"]; print("\n".join([*p["dependencies"], *p["optional-dependencies"]["eval"]]))' > /tmp/eval-requirements.txt
+          grep -qx 'langfuse==[0-9.]*' /tmp/eval-requirements.txt
+          /tmp/audit/bin/pip-audit --progress-spinner off -r /tmp/eval-requirements.txt
 
   image:
     name: docker image

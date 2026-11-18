@@ -32,6 +32,12 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.5",
 ]
+# ADR 0027 "Dependencies" and ADR 0030: the development evaluation sender only (never `src`,
+# never the image). Pinned exactly; the sender (ADR 0030 decision 3, not yet built) will refuse
+# any other installed version. Not to be installed before that sender exists.
+eval = [
+  "langfuse==5.2.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/divesafe"]

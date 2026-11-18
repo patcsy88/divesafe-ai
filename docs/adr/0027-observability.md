@@ -688,8 +688,15 @@ line, update the target; never loosen the check.
 `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (runtime, bounded ranges,
 `pip-audit`); `requests` declared directly as `>=2.32.4,<3` (step 3: the trace session imports
 it and relies on its redirect, proxy and environment behaviour; 2.32.4 fixes the `.netrc`
-credential leak, CVE-2024-47081); `langfuse` in a new `[eval]` extra only, never in the
-runtime image. Licences to verify from package metadata at build.
+credential leak, CVE-2024-47081); `langfuse==5.2.0` in a new `[eval]` extra only, never in
+the runtime image (MIT, package metadata, checked 2026-11-18; the licences of its own
+dependencies are checked when §2's sender is built). CI audits the runtime dependencies together
+with `[eval]` with `pip-audit` (a test pins both audit steps). A local resolution on 2026-11-18
+(37 packages) held no `opentelemetry-instrumentation-*` or `opentelemetry-distro` package; CI
+does not check the resolved names, and the declared-name test cannot see transitive packages, so
+this is checked again with the build-step-1 `pip freeze` record (ADR 0030 Known gaps).
+ADR 0030's `LANGFUSE_VERIFIED_VERSION` will hold this version, and its build-step-1 checks are
+recorded against it.
 
 ### Owner decisions (2026-11-15, each as the recommended default)
 
@@ -821,6 +828,13 @@ runtime image. Licences to verify from package metadata at build.
   `DIVESAFE_EVAL_SECRETS_DIR` is described here, not in AGENTS.md.
 - Outside this amendment: the Supervise pin is a substring check (`prompts=2026-11-10.1` also
   matches `prompts=2026-11-10.12`); worth an exact-token match when the prompt mirror is built.
+- The `pip-audit` step pin (`tests/safety/test_safety_suite_ci_guard.py`) refuses a change to
+  either audit step, `continue-on-error` anywhere, `if:` or `defaults:` on the test job or the
+  workflow, any pip setting or `$GITHUB_ENV`/`$GITHUB_PATH` write, and any step between the two
+  audits; the runtime step recreates `/tmp/audit` with `--clear`. It does not refuse a non-pip
+  environment key (such as `PYTHONPATH`, `REQUESTS_CA_BUNDLE` or a proxy) set in an `env:` block,
+  or a job `container:` or a different `runs-on:` image. It is a tripwire against careless edits,
+  not a control against a deliberate multi-step CI change; CI edits remain reviewed changes.
 
 ## Consequences
 
