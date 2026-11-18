@@ -46,7 +46,7 @@ Status of each item is stated; "planned" means nothing builds or measures it yet
   - abstention quality: correct use of `INSUFFICIENT EVIDENCE`;
   - retrieval recall/precision for RAG;
   - explanation faithfulness (human-rated sample);
-  - judge scores (ADR 0030, PROPOSED, not built): a separate model rates the specialist findings
+  - judge scores (ADR 0030, accepted, not built): a separate model rates the specialist findings
     and the risk proposal against a fixed rubric, on the allow-listed synthetic sets only, in
     development, never on production data. The scores are uncalibrated; agreement with human
     ratings will be recorded here and is never a measure of dive safety.

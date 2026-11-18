@@ -1,10 +1,11 @@
 # ADR 0030: LLM-as-a-Judge for development evaluation
 
-- Status: PROPOSED (owner decisions 2026-11-18: development evaluation only; the judge runs in
-  DiveSafe's own evaluation script, not as a Langfuse-managed evaluator; judge model
-  `claude-fable-5-1` on the evaluation's existing model host, confirmed served on 2026-11-18;
-  ADR 0027 §2's dataset sender is built first). Revised after risk and security review,
-  2026-11-18.
+- Status: ACCEPTED (owner, 2026-11-18, after 22 rounds of risk and security review; the final
+  round had no blockers or should-fix items, and its nits are in Known gaps). Owner decisions
+  2026-11-18: development evaluation only; the judge runs in DiveSafe's own evaluation script,
+  not as a Langfuse-managed evaluator; judge model `claude-fable-5-1` on the evaluation's
+  existing model host, confirmed served on 2026-11-18; ADR 0027 §2's dataset sender is built
+  first. Not built yet.
 - Builds on ADR 0027 (amendment 2026-11-15, §2 evaluation), ADR 0016 (evaluation harness),
   ADR 0023 (egress), ADR 0025 (ablation and adversarial sets). Amends ADR 0027 §2 "What is
   sent" and AGENTS.md section 4 (see "Where scores go").

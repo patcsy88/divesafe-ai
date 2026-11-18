@@ -397,7 +397,7 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
   - No LLM connection or model-provider key in any Langfuse project (including `divesafe-eval`),
     no playground, no prompt experiment run from Langfuse, no Langfuse-managed evaluator of any
     kind, no Halo, SMTP, SSO, Slack, webhooks or blob-storage exports: each is new egress and
-    needs a new ADR. Langfuse never calls a model. (ADR 0030, proposed, would call its judge from
+    needs a new ADR. Langfuse never calls a model. (ADR 0030, accepted, calls its judge from
     the evaluation script under `egress_gate`, never from Langfuse, and send only its prompt,
     validated scores and flags, and screened `rationale`, plus a completion marker of case
     counts, a code-set run id and the commit, to `divesafe-eval` through §2's sender.)
