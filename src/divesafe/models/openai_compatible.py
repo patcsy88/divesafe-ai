@@ -40,10 +40,14 @@ from divesafe.models.limits import (
     check_output_tokens,
 )
 from divesafe.models.llm import (
+    PROVIDER_FAILURE_REASONS,
+    UNCLASSIFIED,
     LLMRequest,
     LLMResponse,
+    ProviderError,
     TokenLimitError,
     plain_count,
+    provider_failure_reason,
     register_provider,
 )
 from divesafe.models.loopback import (
@@ -93,41 +97,15 @@ def host_schema(schema: object) -> object:
 Transport = Callable[[str, bytes, float], bytes]
 
 
-FAILURE_REASONS: frozenset[str] = frozenset(
-    {
-        "unreachable",
-        "read_timeout",
-        "connection_error",
-        "http_error",
-        "deadline",
-        "too_large",
-        "slots_full",
-        "closed",
-        "bad_event_json",
-        "error_event",
-        "no_done_marker",
-        "data_after_done",
-        "event_line",
-        "tool_or_refusal",
-        "bad_shape",
-        "empty_stream",
-        "token_limit",
-        "unclassified",
-    }
-)
+# The labels now live beside `ProviderError` (vendor-neutral); the name is kept for callers.
+FAILURE_REASONS: frozenset[str] = PROVIDER_FAILURE_REASONS
 
 
-class OpenAICompatibleError(RuntimeError):
+class OpenAICompatibleError(ProviderError):
     """The server was unreachable or returned something unusable. Messages are fixed strings.
 
     `reason` is a fixed label from FAILURE_REASONS, for the recorder. It carries no message text.
     """
-
-    reason: str
-
-    def __init__(self, *args: object, reason: str = "unclassified") -> None:
-        super().__init__(*args)
-        self.reason = reason
 
 
 class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
@@ -150,12 +128,11 @@ class OpenAICompatibleTokenLimitError(OpenAICompatibleError, TokenLimitError):
 
 
 def failure_reason(exc: BaseException) -> str:
-    """The fixed failure label for `exc`, or "unclassified" if it has none."""
+    """The fixed failure label for `exc`, or "unclassified" if it has none. The same filter as
+    `provider_failure_reason`, narrowed to this adapter's errors."""
     if isinstance(exc, OpenAICompatibleError):
-        reason = vars(exc).get("reason", "unclassified")
-        if type(reason) is str and reason in FAILURE_REASONS:
-            return next(label for label in FAILURE_REASONS if label == reason)
-    return "unclassified"
+        return provider_failure_reason(exc)
+    return UNCLASSIFIED
 
 
 def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:

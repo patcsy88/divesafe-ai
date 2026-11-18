@@ -25,6 +25,7 @@ from divesafe.agents.runner import (
 from divesafe.agents.schemas import ProposalOutput
 from divesafe.config.logging import _SENSITIVE, JsonFormatter
 from divesafe.models import FakeProvider, LLMRequest, LLMResponse, TokenLimitError
+from divesafe.models.llm import PROVIDER_FAILURE_REASONS, ProviderError
 
 MESSAGE = "model call finished"
 # The attributes every LogRecord has; anything else on the record is an `extra` key.
@@ -117,6 +118,11 @@ def _one(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
     for name in ("output_limit", "output_chars", "output_used"):
         value = getattr(record, name)
         assert value is None or (type(value) is int and value >= 0), (name, value)
+    reason = record.provider_reason  # type: ignore[attr-defined]
+    if record.outcome == "provider_error":  # type: ignore[attr-defined]
+        assert type(reason) is str and reason in PROVIDER_FAILURE_REASONS, reason
+    else:
+        assert reason is None, reason
     return record
 
 
@@ -159,6 +165,7 @@ def test_the_outcome_labels_and_fields_are_fixed() -> None:
     assert {
         "task",
         "outcome",
+        "provider_reason",
         "output_limit",
         "output_chars",
         "output_used",
@@ -287,6 +294,99 @@ def test_a_failed_call_logs_its_outcome_and_raises_the_same_error(
     record = _one(caplog)
     assert record.outcome == outcome  # type: ignore[attr-defined]
     assert _counts(record) == (runner.MAX_OUTPUT_TOKENS, chars, used)
+
+
+@pytest.mark.parametrize("reason", sorted(PROVIDER_FAILURE_REASONS))
+def test_a_provider_error_logs_the_adapters_fixed_label(
+    caplog: pytest.LogCaptureFixture, reason: str
+) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="divesafe.agents.runner"),
+        pytest.raises(AgentError) as caught,
+    ):
+        _call(_Stub(raises=ProviderError("SECRET provider text", reason=reason)))
+    assert str(caught.value) == "t: provider error (ProviderError)"
+    record = _one(caplog)
+    assert record.outcome == "provider_error"  # type: ignore[attr-defined]
+    assert record.provider_reason == reason  # type: ignore[attr-defined]
+    assert "SECRET" not in json.dumps({k: str(v) for k, v in vars(record).items()})
+
+
+class _OddReason(str):
+    """A string subclass whose value is a real label: it must not reach the log line."""
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionError("SECRET provider text"),
+        ProviderError("SECRET", reason="SECRET-not-a-label"),
+        ProviderError("SECRET", reason=7),  # type: ignore[arg-type]
+        ProviderError("SECRET", reason=_OddReason("read_timeout")),
+    ],
+    ids=["plain_exception", "unknown_label", "not_a_string", "str_subclass"],
+)
+def test_a_provider_error_without_a_fixed_label_logs_unclassified(
+    caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="divesafe.agents.runner"),
+        pytest.raises(AgentError),
+    ):
+        _call(_Stub(raises=error))
+    record = _one(caplog)
+    assert record.provider_reason == "unclassified"  # type: ignore[attr-defined]
+    assert type(record.provider_reason) is str  # type: ignore[attr-defined]
+
+
+def test_a_provider_error_whose_reason_cannot_be_read_logs_unclassified(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _NoVars(ProviderError):
+        __slots__ = ()
+
+        def __getattribute__(self, name: str) -> Any:
+            if name == "__dict__":
+                raise RuntimeError("SECRET")
+            return super().__getattribute__(name)
+
+    with (
+        caplog.at_level(logging.INFO, logger="divesafe.agents.runner"),
+        pytest.raises(AgentError),
+    ):
+        _call(_Stub(raises=_NoVars("x", reason="read_timeout")))
+    assert _one(caplog).provider_reason == "unclassified"  # type: ignore[attr-defined]
+
+
+def test_only_a_provider_error_carries_a_label(caplog: pytest.LogCaptureFixture) -> None:
+    """A token-limit stop from an adapter error with a label is `token_limit`, not a
+    provider_error, so its line has no label."""
+
+    class _Both(ProviderError, TokenLimitError):
+        def __init__(self) -> None:
+            TokenLimitError.__init__(self, output_chars=1)
+            self.reason = "token_limit"
+
+    with (
+        caplog.at_level(logging.INFO, logger="divesafe.agents.runner"),
+        pytest.raises(AgentError),
+    ):
+        _call(_Stub(raises=_Both()))
+    record = _one(caplog)
+    assert record.outcome == "token_limit"  # type: ignore[attr-defined]
+    assert record.provider_reason is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "7", 10**10], ids=repr)
+def test_a_bad_output_count_from_an_adapter_never_refuses_the_reply(
+    caplog: pytest.LogCaptureFixture, bad: object
+) -> None:
+    with caplog.at_level(logging.INFO, logger="divesafe.agents.runner"):
+        result = _call(_Stub(output_tokens=bad))  # type: ignore[arg-type]
+    assert result.evidence_ids == ("ev-1",)
+    record = _one(caplog)
+    assert record.outcome == "ok"  # type: ignore[attr-defined]
+    assert record.output_used is None  # type: ignore[attr-defined]
 
 
 def test_too_long(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:

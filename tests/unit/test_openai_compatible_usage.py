@@ -155,9 +155,11 @@ def test_complete_without_usage_gives_none() -> None:
 
 
 @pytest.mark.parametrize("bad", [-1, True, False, 1.0, "3"], ids=repr)
-def test_the_response_field_is_a_strict_non_negative_int(bad: object) -> None:
-    with pytest.raises(ValueError):
-        LLMResponse(text="", provider="p", model="m", output_tokens=bad)  # type: ignore[arg-type]
+def test_the_response_field_drops_a_count_that_is_not_a_plain_int(bad: object) -> None:
+    # A count is logged only, so a bad one is dropped (None), never a refused reply (ADR 0018).
+    response = LLMResponse(text="t", provider="p", model="m", output_tokens=bad)
+    assert response.output_tokens is None
+    assert response.text == "t"
     assert LLMResponse(text="", provider="p", model="m").output_tokens is None
     assert LLMResponse(text="", provider="p", model="m", output_tokens=0).output_tokens == 0
 
@@ -358,11 +360,11 @@ def test_a_count_above_the_ceiling_at_a_length_stop_gives_none(
     assert (error.output_chars, error.output_tokens) == (3, expected)
 
 
-def test_the_response_field_refuses_a_count_above_the_ceiling() -> None:
+def test_the_response_field_drops_a_count_above_the_ceiling() -> None:
     assert LLMResponse(text="", provider="p", model="m", output_tokens=10**9).output_tokens == 10**9
     for bad in (10**9 + 1, 10**20):
-        with pytest.raises(ValueError):
-            LLMResponse(text="", provider="p", model="m", output_tokens=bad)
+        response = LLMResponse(text="", provider="p", model="m", output_tokens=bad)
+        assert response.output_tokens is None
 
 
 def test_the_token_limit_error_drops_a_count_above_the_ceiling() -> None:

@@ -2275,8 +2275,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       "output stopped at the token limit" for `specialist:weather`, `scenario:favourable` and
       `scenario:marginal`; `kb:tioman-site-guide:3:1` in the Reason stage's `evidence_ids`).
       Both INSUFFICIENT EVIDENCE.
-      - **Log lines:** 18, one per call; exactly the six fields, and no text, ids, hosts, model
-        names or URLs in any of them.
+      - **Log lines:** 18, one per call; exactly the six fields (at the time; seven
+        since 2026-11-18), and no text, ids, hosts, model names or URLs in any of them.
       - **Usage:** the server sends usage without `stream_options`, so `output_used` is filled in.
       - **Output tokens of the calls that finished:** tide_current 533 and 536; ocean_conditions
         776 and 774; site_intelligence 1171 and 707; risk_assessment 1477 and 1987; weather 1944;

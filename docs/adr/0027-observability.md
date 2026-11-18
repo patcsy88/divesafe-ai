@@ -142,6 +142,8 @@ plan fields leave the machine), and "no new dependency without an ADR".
      `divesafe_stage_duration_seconds{stage,outcome}`,
      `divesafe_connector_failures_total{connector,kind}`,
      `divesafe_knowledge_retrieval_total{outcome}`, `divesafe_model_calls_total{outcome}`,
+     `divesafe_model_call_provider_failures_total{reason}` (since 2026-11-18, ADR 0018 amendment:
+     counted only for `provider_error`; a label not in the set is `unclassified`),
      `divesafe_auth_failures_total`, `divesafe_runs_in_flight` and
      `divesafe_trace_dropped_total{reason}`.
    - Labels: a connector that is not configured is labelled `other`; model-call outcomes outside
@@ -162,8 +164,8 @@ plan fields leave the machine), and "no new dependency without an ADR".
    role is `metrics`. That image's compose file did not yet pass
    `DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE`, so the Settings default of 30 applied; the
    follow-up adds it to the compose file with the same default. Checked in production: a request
-   without a key gets 401 on `/metrics`, the scraper key gets 200 with all nine families and 403
-   on `/v1/sites`, and no `PROMETHEUS_*` variable is set.
+   without a key gets 401 on `/metrics`, the scraper key gets 200 with all nine families (at
+   the time; ten since 2026-11-18) and 403 on `/v1/sites`, and no `PROMETHEUS_*` variable is set.
 
    Run check (2026-11-17): one production assessment, scraped before and after its record was
    stored. Before: `created` 1, `runs_in_flight` 1, nothing finished. After:
@@ -460,9 +462,10 @@ section 9).
     clock when the collector appended the entry, and starts its duration earlier. An unknown
     stage name is dropped.
   - Model-call span attributes, exactly these and pinned by a test:
-    - `task`, `outcome` (one of the nine `CALL_OUTCOMES` labels), `output_limit`,
-      `output_chars` and `duration_ms`, taken from the same dict the "model call finished" line
-      uses; an unknown task is named `unlisted_task`;
+    - `task`, `outcome` (one of the nine `CALL_OUTCOMES` labels), `provider_reason` (the fixed
+      label from `PROVIDER_FAILURE_REASONS`, only for `provider_error`; ADR 0018 amendment
+      2026-11-18), `output_limit`, `output_chars` and `duration_ms`, taken from the same dict
+      the "model call finished" line uses; an unknown task is named `unlisted_task`;
     - span-only, under the Langfuse / OpenTelemetry GenAI names (owner, 2026-11-16):
       `gen_ai.usage.output_tokens` (the log line's `output_used`), `gen_ai.usage.input_tokens`
       (`input_used`, the server's `usage.prompt_tokens` through `plain_count`, filled since
@@ -470,8 +473,8 @@ section 9).
       `gen_ai.request.model` (`provider.model`, needed for Langfuse prices, only when it
       matches `[A-Za-z0-9._:/@-]{1,128}`, holds no `//`, a model host is recorded and the
       name does not contain it (case-insensitive); otherwise left out). The log line,
-      `CALL_LOG_FIELDS` and its log-leak test are unchanged. The prompt version is a run-span
-      attribute only.
+      `CALL_LOG_FIELDS` and its log-leak test are unchanged by this step. The prompt version is
+      a run-span attribute only.
   - The resource is built explicitly with `service.name` and the SDK's `telemetry.sdk.*` only:
     never `Resource.create()`, no resource detectors.
   - No events, links or baggage. No trace context is read from a request or sent to the model
@@ -787,6 +790,9 @@ runtime image. Licences to verify from package metadata at build.
 - With tracing off, `OTEL_*` variables have no effect only while no auto-configuration is
   installed and the SDK is not imported (both checked above); verify at build that importing
   the pinned SDK reads no `OTEL_*` variable that matters.
+- `test_domain_and_risk_never_import_tracing` reads direct imports only, including
+  `from .. import observability` (fixed in step 3, commit `b4ae4b4`). Imports through
+  `importlib`, `__import__` or a transitive import are not seen.
 - The evaluation script's AST import check sees direct imports only, not transitive or
   `importlib` ones; requiring `DIVESAFE_DATABASE_URL` to be unset is what stops
   `build_default_state` in practice.
@@ -874,7 +880,8 @@ Settled 2026-11-15, each as the recommended default:
   and, for exported traces, in Langfuse's model-call spans. Langfuse is best effort and not a
   monitor: nobody is notified.
 - Per-process counters reset on restart and do not sum across workers (same as rate limiting).
-- Metrics show failure counts, not causes; the cause stays in the logs and the record.
+- Metrics show failure counts, not causes, except the adapter's fixed failure label on provider
+  errors; the cause stays in the logs and the record.
 - Item 1 trusts the proxy addresses in `DIVESAFE_TRUSTED_PROXIES`; a misconfigured proxy that
   forwards a client's `X-Request-ID` lets a client choose ids, and behind a `127.0.0.1`-published
   port every local process looks like the proxy (log correlation only; no authority attaches to
@@ -920,5 +927,7 @@ Settled 2026-11-15, each as the recommended default:
 - The backup log (`~/Library/Logs/divesafe-backup.log`) grows by a few lines a day; the owner
   trims it.
 - Built ahead of this ADR (2026-11-15, ADR 0018 amendment): one "model call finished" log line
-  per model call, with task, outcome, output-token limit and use, characters and duration. It is
-  a log line, not a metric; this ADR's metrics may count its outcomes later.
+  per model call, with task, outcome, `provider_reason` (2026-11-18), output-token limit and
+  use, characters and duration. It is a log line, not a metric;
+  `divesafe_model_calls_total{outcome}` counts its outcomes, and
+  `divesafe_model_call_provider_failures_total{reason}` counts its provider failure labels.

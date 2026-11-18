@@ -104,7 +104,8 @@ sizes and not guessed. In production, 2 of about 72 calls stopped at the limit o
 one run (ADR 0024 A8), and nothing recorded how long the other replies were.
 
 - **What is logged:** `call_structured` (`agents/runner.py`) logs exactly one INFO line,
-  "model call finished", per model call, with only these `extra` fields:
+  "model call finished", per model call, with only these `extra` fields (since 2026-11-18 also
+  `provider_reason`; see the amendment of 2026-11-18 below):
   - `task`, the fixed task name, such as `specialist:weather`;
   - `outcome`, one of `ok`, `token_limit`, `timed_out`, `provider_error`, `too_long`, `schema`,
     `unknown_evidence_id`, `cancelled` (the call was cancelled, for example by the stage deadline
@@ -141,9 +142,9 @@ one run (ADR 0024 A8), and nothing recorded how long the other replies were.
 - **Input count (ADR 0027 amendment, step 4, 2026-11-16):** the adapter also reads
   `usage.prompt_tokens` from the same `usage` object, by the same rule, into
   `LLMResponse.input_tokens` (and `TokenLimitError.input_tokens` on a "length" stop). It goes to
-  the run's trace only, as `input_used`; it is never on the log line, and `CALL_LOG_FIELDS` is
-  unchanged. Unlike `output_tokens`, the field maps any value `plain_count` rejects to `null`, so
-  building a response never fails on it.
+  the run's trace only, as `input_used`; it is never on the log line, and `CALL_LOG_FIELDS` was
+  unchanged at that step. Like `output_tokens` (since 2026-11-18), the field maps any value
+  `plain_count` rejects to `null`, so building a response never fails on it.
 - **Logging cannot change a result:** a failure to read a count gives `null`, and a logging error
   is dropped. The line holds only counts: no reply, partial reply or error object is kept for
   it. Agent issues, records, error strings, `kind` and `label` are unchanged. One small
@@ -162,10 +163,6 @@ one run (ADR 0024 A8), and nothing recorded how long the other replies were.
 - **Production log level:** the line is INFO. Production compose sets `DIVESAFE_LOG_LEVEL: INFO`
   (the settings default too), so it is written. Raising the level to WARNING hides it.
 - **Known gaps (review nits, 2026-11-15):**
-  - `LLMResponse.output_tokens` is strict (`ge=0`, `le=MAX_LOGGED_COUNT`). An adapter must pass a
-    server count through `plain_count` first; the OpenAI-compatible adapter does. A future
-    adapter that passed a raw negative, bool or oversized count would raise, so a reply would be
-    refused over a number that is only logged. A `BeforeValidator` would close this.
   - `tests/safety/test_model_call_log_leaks.py` sets the mutant's `logger` again although the
     copy already names its own logger. This is harmless.
   - `output_used` is `null` unless the server sends usage without being asked (`stream_options`
@@ -200,3 +197,25 @@ same schema, so the deploy of that day was not the cause; the host changed.
   The run logs and the record do not show the adapter's `http_error` label or the host's
   message, which made this slow to diagnose (ADR 0027's observability work). A fix surfaces the
   fixed label only, never the host's error body, which can echo the request and so the prompt.
+  (Done: amendment 2026-11-18.)
+
+## Amendment (2026-11-18): failure label and lenient output count
+
+Owner decision (2026-11-18).
+
+- **Failure label:** `ProviderError` (`models/llm.py`) is a vendor-neutral base with a fixed
+  `reason` from `PROVIDER_FAILURE_REASONS`. `OpenAICompatibleError` now inherits from it, and its
+  labels are unchanged (`FAILURE_REASONS` is the same set). The runner reads the label only
+  through `provider_failure_reason`, so agents still never import the adapter. A label that is
+  not in the set, is not a plain `str`, or cannot be read becomes `unclassified`.
+- **Where it goes:** a new `provider_reason` field on the "model call finished" line
+  (`CALL_LOG_FIELDS` now has seven fields). It holds the label when `outcome` is
+  `provider_error` and `null` otherwise. The same field goes on the model-call span (ADR 0027),
+  and there is a new counter, `divesafe_model_call_provider_failures_total{reason}`. It is never
+  exception text or a class name. A safety test plants free text as `reason` and checks that it
+  never reaches the log, the span or `/metrics`. The label set is pinned as a literal in a
+  safety test. Each filter (the call site's `provider_failure_reason`, the log line's own check,
+  the span's and the metric's) has its own test and mutation check.
+- **Lenient output count:** `LLMResponse.output_tokens` is now `LenientCount`, like
+  `input_tokens`. An adapter that passes a bad count gets `null`, and the reply is no longer
+  refused. This closes the 2026-11-15 known gap.
