@@ -19,7 +19,12 @@ from pydantic import BaseModel, ValidationError
 from divesafe.agents.prompts import SYSTEM_PROMPT
 from divesafe.domain import MAX_EVIDENCE_ITEMS as _MAX_EVIDENCE_ITEMS
 from divesafe.models import ChatMessage, LLMProvider, LLMRequest
-from divesafe.models.llm import TokenLimitError, plain_count
+from divesafe.models.llm import (
+    PROVIDER_FAILURE_REASONS,
+    TokenLimitError,
+    plain_count,
+    provider_failure_reason,
+)
 from divesafe.observability import record_model_call
 
 logger = logging.getLogger(__name__)
@@ -130,8 +135,19 @@ CALL_OUTCOMES: frozenset[str] = frozenset(CallOutcome.__args__)  # type: ignore[
 # output-token limit sent with the request and `output_used` the server's reported output
 # tokens (`usage.completion_tokens`), both counted in tokens. The names avoid "token" because the
 # JSON formatter masks any field whose name matches `config.logging._SENSITIVE`.
+# `provider_reason` is the adapter's fixed failure label from `PROVIDER_FAILURE_REASONS` when the
+# outcome is `provider_error` (an adapter that gives none is `unclassified`), and None for every
+# other outcome (ADR 0018 amendment 2026-11-18). Never exception text or a class name.
 CALL_LOG_FIELDS: frozenset[str] = frozenset(
-    {"task", "outcome", "output_limit", "output_chars", "output_used", "duration_ms"}
+    {
+        "task",
+        "outcome",
+        "provider_reason",
+        "output_limit",
+        "output_chars",
+        "output_used",
+        "duration_ms",
+    }
 )
 
 
@@ -169,10 +185,21 @@ def _token_limit_counts(exc: BaseException) -> Counts:
         return NO_COUNTS
 
 
+def _provider_reason(outcome: object, reason: object) -> str | None:
+    """The label for the log line: a fixed `PROVIDER_FAILURE_REASONS` string for a
+    `provider_error`, None otherwise. Never raises."""
+    if outcome != "provider_error":
+        return None
+    if type(reason) is str and reason in PROVIDER_FAILURE_REASONS:
+        return next(label for label in PROVIDER_FAILURE_REASONS if label == reason)
+    return "unclassified"
+
+
 def _log_call(
     task: str,
     outcome: CallOutcome,
     *,
+    reason: str | None,
     output_limit: int | None,
     output_chars: int | None,
     output_used: int | None,
@@ -189,6 +216,7 @@ def _log_call(
         fields = {
             "task": task,
             "outcome": outcome,
+            "provider_reason": _provider_reason(outcome, reason),
             "output_limit": plain_count(output_limit),
             "output_chars": plain_count(output_chars),
             "output_used": plain_count(output_used),
@@ -226,6 +254,7 @@ async def call_structured(
     chars: int | None = None
     used: int | None = None
     used_in: int | None = None
+    reason: str | None = None
     error: AgentError | None = None
     started = time.monotonic()
     started_ns = time.time_ns()  # the span's wall-clock start only; never on the record
@@ -238,6 +267,7 @@ async def call_structured(
         except _Finished as finished:
             outcome = finished.outcome
             chars, used, used_in = finished.counts
+            reason = finished.reason
             error = finished.error
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -249,6 +279,7 @@ async def call_structured(
         _log_call(
             task,
             outcome,
+            reason=reason,
             output_limit=request.max_output_tokens,
             output_chars=chars,
             output_used=used,
@@ -271,10 +302,12 @@ class _Finished(Exception):
         outcome: CallOutcome,
         error: AgentError,
         counts: Counts = NO_COUNTS,
+        reason: str | None = None,
     ) -> None:
         super().__init__()
         self.outcome: CallOutcome = outcome
         self.counts = counts
+        self.reason = reason
         self.error = error
 
 
@@ -308,7 +341,9 @@ async def _call(
         )
     except Exception as exc:  # provider adapters may raise anything; never chain their text
         failure = _Finished(
-            "provider_error", AgentError(f"{task}: provider error ({type(exc).__name__})")
+            "provider_error",
+            AgentError(f"{task}: provider error ({type(exc).__name__})"),
+            reason=provider_failure_reason(exc),
         )
     if failure is not None:
         raise failure from None

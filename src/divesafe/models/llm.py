@@ -53,8 +53,9 @@ class LLMResponse(BaseModel):
     provider: str
     model: str
     # The server's own count of output tokens, when it sent one (ADR 0018 amendment 2026-11-15).
-    # Logged only; it never changes whether a reply is accepted. Strict: a bool is not a count.
-    output_tokens: int | None = Field(default=None, strict=True, ge=0, le=MAX_LOGGED_COUNT)
+    # Logged only; it never changes whether a reply is accepted, so a value `plain_count` rejects
+    # (a bool, a negative, a float, a string, above the ceiling) becomes None, never an error.
+    output_tokens: LenientCount = None
     # The server's own count of input tokens (`usage.prompt_tokens`), when it sent one (ADR 0027
     # amendment, step 4). For the trace only; never on the log line, never decides anything.
     input_tokens: LenientCount = None
@@ -102,6 +103,57 @@ class TokenLimitError(RuntimeError):
             "input_tokens": plain_count(vars(self).get("input_tokens")),
         }
         return (type(self), (), state)
+
+
+# The fixed failure labels an adapter may put on a `ProviderError` (ADR 0018 amendment
+# 2026-11-18). They go to the log line, the trace span and `/metrics` only; never decide anything.
+PROVIDER_FAILURE_REASONS: frozenset[str] = frozenset(
+    {
+        "unreachable",
+        "read_timeout",
+        "connection_error",
+        "http_error",
+        "deadline",
+        "too_large",
+        "slots_full",
+        "closed",
+        "bad_event_json",
+        "error_event",
+        "no_done_marker",
+        "data_after_done",
+        "event_line",
+        "tool_or_refusal",
+        "bad_shape",
+        "empty_stream",
+        "token_limit",
+        "unclassified",
+    }
+)
+UNCLASSIFIED = "unclassified"
+
+
+class ProviderError(RuntimeError):
+    """An adapter's failure, with a fixed `reason` label from `PROVIDER_FAILURE_REASONS`. The
+    label carries no message text. Agents read it only through `provider_failure_reason`."""
+
+    reason: str
+
+    def __init__(self, *args: object, reason: str = UNCLASSIFIED) -> None:
+        super().__init__(*args)
+        self.reason = reason
+
+
+def provider_failure_reason(exc: BaseException) -> str:
+    """The fixed failure label of `exc`, or "unclassified" if it has none. Returns the set's own
+    string, never the exception's object. Never raises."""
+    try:
+        if isinstance(exc, ProviderError):
+            reason = vars(exc).get("reason", UNCLASSIFIED)
+            if type(reason) is str and reason in PROVIDER_FAILURE_REASONS:
+                return next(label for label in PROVIDER_FAILURE_REASONS if label == reason)
+    except Exception:
+        pass
+    return UNCLASSIFIED
 
 
 class ProviderNotAvailableError(RuntimeError):

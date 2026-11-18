@@ -71,6 +71,7 @@ STAGE_KEYS = {"stage", "outcome", "duration_ms"}
 MODEL_KEYS = {
     "task",
     "outcome",
+    "provider_reason",
     "output_limit",
     "output_chars",
     "duration_ms",
@@ -166,6 +167,7 @@ def _planted() -> RunTrace:
             tw.call(
                 task=EVIDENCE_ID,
                 outcome=REPLY_MARKER,
+                provider_reason=EXCEPTION_MARKER,
                 output_limit=PROMPT_MARKER,
                 output_chars=True,
                 output_used=-1,
@@ -185,6 +187,20 @@ def _planted() -> RunTrace:
                 input_used=40,
                 duration_ms=5,
                 reply=REPLY_MARKER,
+            ),
+            # A provider error with free text as its label: only the label check stops it.
+            tw.call(
+                task="scenario:marginal",
+                outcome="provider_error",
+                provider_reason=EXCEPTION_MARKER,
+                duration_ms=7,
+            ),
+            # A provider error with a real label: exported, as the set's string.
+            tw.call(
+                task="scenario:favourable",
+                outcome="provider_error",
+                provider_reason="read_timeout",
+                duration_ms=8,
             ),
         ),
     )
@@ -273,9 +289,11 @@ def test_the_whole_export_holds_only_the_allow_list(wire: tw.Wire) -> None:
             assert attributes.get("gen_ai.request.model") == MODEL_MARKER
             assert all(
                 type(attributes[k]) is int
-                for k in MODEL_KEYS - {"task", "outcome", "gen_ai.request.model"}
+                for k in MODEL_KEYS - {"task", "outcome", "provider_reason", "gen_ai.request.model"}
                 if k in attributes
             )
+            if "provider_reason" in attributes:
+                assert type(attributes["provider_reason"]) is str
         if span.name != "run":
             parents = [r for r in runs if r.trace_id == span.trace_id]
             assert len(parents) == 1 and span.parent_span_id == parents[0].span_id
@@ -310,7 +328,28 @@ def test_the_real_run_and_the_planted_run_export_exactly_these_attributes(
     planted_run = tw.attributes(next(s for s in planted if s.name == "run"))
     assert planted_run == {"prompt_version": trace_export.PROMPT_VERSION}
     planted_by_name = {s.name: tw.attributes(s) for s in planted}
-    assert set(planted_by_name) == {"run", "observe", "reason", "unlisted_task", "risk_assessment"}
+    assert set(planted_by_name) == {
+        "run",
+        "observe",
+        "reason",
+        "unlisted_task",
+        "risk_assessment",
+        "scenario:marginal",
+        "scenario:favourable",
+    }
+    assert planted_by_name["scenario:marginal"] == {
+        "task": "scenario:marginal",
+        "outcome": "provider_error",
+        "duration_ms": 7,
+        "gen_ai.request.model": MODEL_MARKER,
+    }
+    assert planted_by_name["scenario:favourable"] == {
+        "task": "scenario:favourable",
+        "outcome": "provider_error",
+        "provider_reason": "read_timeout",
+        "duration_ms": 8,
+        "gen_ai.request.model": MODEL_MARKER,
+    }
     assert planted_by_name["reason"] == {"stage": "reason"}
     assert planted_by_name["unlisted_task"] == {
         "duration_ms": 3,
@@ -326,6 +365,58 @@ def test_the_real_run_and_the_planted_run_export_exactly_these_attributes(
         "gen_ai.usage.input_tokens": 40,
         "gen_ai.request.model": MODEL_MARKER,
     }
+
+
+def _reason_on_other_outcomes(module: Any) -> list[object]:
+    found: list[object] = []
+    for outcome in ("ok", "schema", "token_limit", EXCEPTION_MARKER, None):
+        entry = tw.call(task="risk_assessment", outcome=outcome, provider_reason="read_timeout")
+        if "provider_reason" in module.model_call_attributes(entry, None):
+            found.append(outcome)
+    return found
+
+
+def test_the_provider_reason_is_exported_only_for_a_provider_error() -> None:
+    assert _reason_on_other_outcomes(trace_export) == []
+
+
+def test_a_mutant_without_the_outcome_check_is_caught() -> None:
+    mutant = mutated_module(
+        trace_export, ('if outcome == "provider_error" and type(reason)', "if type(reason)")
+    )
+    assert _reason_on_other_outcomes(mutant) == [
+        "ok",
+        "schema",
+        "token_limit",
+        EXCEPTION_MARKER,
+        None,
+    ]
+
+
+class _OddReason(str):
+    """A string subclass with a real label's value: never exported as itself."""
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("read_timeout", "read_timeout"),
+        ("unclassified", "unclassified"),
+        (EXCEPTION_MARKER, None),
+        (7, None),
+        (None, None),
+        (_OddReason("http_error"), None),
+    ],
+    ids=["label", "unclassified", "marker", "int", "none", "str_subclass"],
+)
+def test_the_provider_reason_is_exported_only_as_a_fixed_label(
+    reason: object, expected: str | None
+) -> None:
+    entry = tw.call(task="risk_assessment", outcome="provider_error", provider_reason=reason)
+    attributes = trace_export.model_call_attributes(entry, None)
+    assert attributes.get("provider_reason") == expected
+    if expected is not None:
+        assert type(attributes["provider_reason"]) is str
 
 
 def test_the_code_allow_lists_equal_the_pinned_literals() -> None:
@@ -452,6 +543,25 @@ MUTANTS: dict[str, tuple[tuple[str, str], ...]] = {
         ),
     ),
     "any_model_name": (('_MODEL_NAME.fullmatch(model) is None or "//" in model', "False"),),
+    "any_provider_reason": (
+        (
+            '    if outcome == "provider_error" and type(reason) is str and reason in '
+            "PROVIDER_FAILURE_REASONS:\n"
+            '        attributes["provider_reason"] = next(r for r in PROVIDER_FAILURE_REASONS '
+            "if r == reason)\n",
+            '    if reason is not None:\n        attributes["provider_reason"] = str(reason)\n',
+        ),
+    ),
+    "any_provider_reason_label": (
+        (
+            '    if outcome == "provider_error" and type(reason) is str and reason in '
+            "PROVIDER_FAILURE_REASONS:\n"
+            '        attributes["provider_reason"] = next(r for r in PROVIDER_FAILURE_REASONS '
+            "if r == reason)\n",
+            '    if outcome == "provider_error" and reason is not None:\n'
+            '        attributes["provider_reason"] = str(reason)\n',
+        ),
+    ),
     "event_without_limit": (
         ("        max_events=0,\n", ""),
         (
@@ -475,6 +585,8 @@ EXPECTED = {
     "any_request_id": REQUEST_ID_MARKER,
     "any_task_name": EVIDENCE_ID,
     "any_model_name": URL_MODEL,
+    "any_provider_reason": EXCEPTION_MARKER,
+    "any_provider_reason_label": EXCEPTION_MARKER,
     "event_without_limit": "exception",
 }
 

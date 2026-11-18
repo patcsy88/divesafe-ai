@@ -3,7 +3,7 @@
 The only module in `src` that imports `prometheus_client`. A private `CollectorRegistry` holds
 exactly the metrics below; the global registry, its default process, platform and GC collectors,
 multiprocess mode, exemplars and the library's own HTTP servers are never used. Every label value
-comes from a code enum or a fixed set built here, never from a request, a record's free text, an
+comes from a code enum or a fixed set in code, never from a request, a record's free text, an
 exception or an id. Counts are per process.
 
 Run counts are taken after the run has stored its record or its failure code, from what the run
@@ -37,6 +37,7 @@ from prometheus_client.registry import Collector
 from divesafe.agents.runner import CALL_OUTCOMES
 from divesafe.domain import AssessmentRecord, Recommendation, StageName, StageOutcome
 from divesafe.domain.stages import QUALIFIER_PATTERN, UNNAMED_QUALIFIER
+from divesafe.models.llm import PROVIDER_FAILURE_REASONS
 from divesafe.observability import DROP_REASONS, RunTrace, drop_counts
 from divesafe.services.runs import FailureCode
 
@@ -148,6 +149,12 @@ class Metrics:
             ["outcome"],
             registry=registry,
         )
+        self._provider_failures = Counter(
+            "divesafe_model_call_provider_failures",
+            "Model calls with outcome provider_error, by the adapter's fixed failure label.",
+            ["reason"],
+            registry=registry,
+        )
         self._auth = Counter(
             "divesafe_auth_failures",
             "Failed authentications (401).",
@@ -164,6 +171,8 @@ class Metrics:
             self._knowledge.labels(outcome)
         for call in sorted(CALL_OUTCOMES):
             self._calls.labels(call)
+        for reason in sorted(PROVIDER_FAILURE_REASONS):
+            self._provider_failures.labels(reason)
         for name in sorted(self._connectors | {OTHER_CONNECTOR}):
             for kind in CONNECTOR_KINDS:
                 self._connector.labels(name, kind)
@@ -193,6 +202,11 @@ class Metrics:
                 outcome = call.fields.get("outcome")
                 if type(outcome) is str and outcome in CALL_OUTCOMES:
                     self._calls.labels(outcome).inc()
+                if type(outcome) is str and outcome == "provider_error":
+                    reason = call.fields.get("provider_reason")
+                    if type(reason) is not str or reason not in PROVIDER_FAILURE_REASONS:
+                        reason = "unclassified"
+                    self._provider_failures.labels(reason).inc()
         if failure is None and record is not None:
             self._stored(record)
 

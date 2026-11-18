@@ -41,6 +41,7 @@ from divesafe.api.auth import ApiKeyAuthenticator, Role, parse_api_key_hashes
 from divesafe.api.metrics import Metrics, check_metrics_startup
 from divesafe.api.state import default_limits
 from divesafe.domain import Recommendation, StageName, StageOutcome
+from divesafe.models.llm import PROVIDER_FAILURE_REASONS
 from divesafe.observability import DROP_REASONS, ModelCallEntry, RunTrace
 from divesafe.services import FailureCode, RunState
 
@@ -59,6 +60,7 @@ FAMILIES: dict[str, tuple[str, frozenset[str]]] = {
     "divesafe_connector_failures": ("counter", frozenset({"connector", "kind"})),
     "divesafe_knowledge_retrieval": ("counter", frozenset({"outcome"})),
     "divesafe_model_calls": ("counter", frozenset({"outcome"})),
+    "divesafe_model_call_provider_failures": ("counter", frozenset({"reason"})),
     "divesafe_auth_failures": ("counter", frozenset()),
     "divesafe_runs_in_flight": ("gauge", frozenset()),
     "divesafe_trace_dropped": ("counter", frozenset({"reason"})),
@@ -480,6 +482,7 @@ def _allowed_label_values(connectors: set[str]) -> dict[str, dict[str, set[str]]
             "outcome": {"ok", "not_configured", "failed", "timed_out", "issue"}
         },
         "divesafe_model_calls": {"outcome": set(CALL_OUTCOMES)},
+        "divesafe_model_call_provider_failures": {"reason": set(PROVIDER_FAILURE_REASONS)},
         "divesafe_stage_duration_seconds": {
             "stage": {s.value for s in StageName},
             "outcome": {o.value for o in StageOutcome},
@@ -567,6 +570,111 @@ def test_unknown_connector_names_and_unknown_call_outcomes_are_never_labels() ->
     )
     assert _value(text, "divesafe_model_calls") == 1
     assert _value(text, "divesafe_model_calls", outcome="ok") == 1
+
+
+class _OddReason(str):
+    """A string subclass with a real label's value: never a label value."""
+
+
+def test_provider_failures_are_counted_only_by_fixed_labels() -> None:
+    metrics = Metrics([], lambda: 0)
+    calls = (
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": "read_timeout"}, 0),
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": "http_error"}, 0),
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": "MARKER-reason"}, 0),
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": 7}, 0),
+        ModelCallEntry({"outcome": "provider_error"}, 0),
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": _OddReason("deadline")}, 0),
+        # Not a provider_error: never counted here, whatever label it carries.
+        ModelCallEntry({"outcome": "ok", "provider_reason": "read_timeout"}, 0),
+        ModelCallEntry({"outcome": "MARKERoutcome", "provider_reason": "read_timeout"}, 0),
+    )
+    trace = RunTrace(
+        assessment_id=AID,
+        run_outcome="stored",
+        started_ns=0,
+        finished_ns=1,
+        model_calls=calls,
+        stages=(),
+    )
+    metrics.run_finished(None, FailureCode.INTERNAL, trace)
+    text = metrics.render().decode()
+    assert "MARKER" not in text
+    name = "divesafe_model_call_provider_failures"
+    assert _value(text, name) == 6
+    assert _value(text, name, reason="read_timeout") == 1
+    assert _value(text, name, reason="http_error") == 1
+    assert _value(text, name, reason="unclassified") == 4
+    assert _value(text, name, reason="deadline") == 0
+    assert _value(text, "divesafe_model_calls", outcome="provider_error") == 6
+    labels = {
+        sample.labels["reason"]
+        for sample in _families(text)[name].samples
+        if sample.name == f"{name}_total"
+    }
+    assert labels == set(PROVIDER_FAILURE_REASONS)
+
+
+NAME = "divesafe_model_call_provider_failures"
+_REASON_CHECK = (
+    "                    if type(reason) is not str or reason not in PROVIDER_FAILURE_REASONS:\n"
+)
+
+
+def _provider_failure_text(metrics_class: Any) -> str:
+    """One free-text reason, one int reason and an `ok` call that carries a real label."""
+    metrics = metrics_class([], lambda: 0)
+    calls = (
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": "MARKER-reason"}, 0),
+        ModelCallEntry({"outcome": "provider_error", "provider_reason": 7}, 0),
+        ModelCallEntry({"outcome": "ok", "provider_reason": "read_timeout"}, 0),
+    )
+    trace = RunTrace(
+        assessment_id=AID,
+        run_outcome="stored",
+        started_ns=0,
+        finished_ns=1,
+        model_calls=calls,
+        stages=(),
+    )
+    metrics.run_finished(None, FailureCode.INTERNAL, trace)
+    return str(metrics.render().decode())
+
+
+def test_the_provider_failure_check_passes_on_the_real_module() -> None:
+    text = _provider_failure_text(Metrics)
+    assert "MARKER" not in text
+    assert _value(text, NAME) == 2
+    assert _value(text, NAME, reason="unclassified") == 2
+    assert _value(text, NAME, reason="read_timeout") == 0
+
+
+def test_mutation_counting_every_outcome_is_caught() -> None:
+    mutant = mutated_module(
+        metrics_module,
+        (
+            '                if type(outcome) is str and outcome == "provider_error":\n',
+            "                if True:\n",
+        ),
+    )
+    text = _provider_failure_text(mutant.Metrics)
+    # Caught by the `ok` call being counted under its label.
+    assert _value(text, NAME, reason="read_timeout") == 1
+    assert _value(text, NAME) == 3
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        "                    if reason is None:\n",
+        "                    if type(reason) is not str:\n",
+    ],
+    ids=["any_reason", "unlisted_string"],
+)
+def test_mutation_a_reason_outside_the_set_is_caught(new: str) -> None:
+    mutant = mutated_module(metrics_module, (_REASON_CHECK, new))
+    # Caught by the free-text marker reaching the scrape.
+    assert "MARKER-reason" in _provider_failure_text(mutant.Metrics)
 
 
 # ---- limits -----------------------------------------------------------------------------------

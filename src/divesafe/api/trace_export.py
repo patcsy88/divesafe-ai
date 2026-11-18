@@ -35,7 +35,7 @@ from divesafe.api.tracing import check_tracing_startup
 from divesafe.config import Settings
 from divesafe.config.logging import valid_request_id
 from divesafe.domain import ScenarioKind, StageName, StageOutcome
-from divesafe.models.llm import plain_count
+from divesafe.models.llm import PROVIDER_FAILURE_REASONS, plain_count
 from divesafe.observability import (
     DropReason,
     ModelCallEntry,
@@ -72,9 +72,11 @@ RUN_ATTRIBUTES = ("run_outcome", "prompt_version", "assessment_id", "request_id"
 STAGE_ATTRIBUTES = ("stage", "outcome", "duration_ms")
 # The log line's `CALL_LOG_FIELDS`, with `output_used` renamed on the span only so Langfuse reads
 # the count as usage (owner, 2026-11-16); `input_used` (step 4) likewise; and the model name.
+# `provider_reason` only from `PROVIDER_FAILURE_REASONS` (ADR 0018 amendment 2026-11-18).
 MODEL_CALL_ATTRIBUTES = (
     "task",
     "outcome",
+    "provider_reason",
     "output_limit",
     "output_chars",
     "duration_ms",
@@ -153,6 +155,9 @@ def model_call_attributes(entry: ModelCallEntry, model: str | None) -> dict[str,
     outcome = fields.get("outcome")
     if type(outcome) is str and outcome in CALL_OUTCOMES:
         attributes["outcome"] = outcome
+    reason = fields.get("provider_reason")
+    if outcome == "provider_error" and type(reason) is str and reason in PROVIDER_FAILURE_REASONS:
+        attributes["provider_reason"] = next(r for r in PROVIDER_FAILURE_REASONS if r == reason)
     for source, target in _MODEL_CALL_COUNTS:
         count = plain_count(fields.get(source))
         if count is not None:
