@@ -521,7 +521,11 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     port Langfuse's web service publishes (never `localhost`, `::1` or another port). This is
     plain http on loopback: the second, development-only exception to section 12's https rule;
   - no `LANGFUSE_*`, `OTEL_*` or proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
-    `NO_PROXY`, in any case) is set, `DIVESAFE_TRACING_ENABLED` is unset, and
+    `NO_PROXY`, in any case) is set when the check runs. This check has no exception and runs
+    before the sender sets anything. The sender itself then sets one variable,
+    `LANGFUSE_MEDIA_UPLOAD_ENABLED=false` (ADR 0030 decision 3), never reads it from the operator
+    and removes it when the run ends if it set it; a `LANGFUSE_MEDIA_UPLOAD_ENABLED` set by the
+    operator, even to `false`, refuses. `DIVESAFE_TRACING_ENABLED` is unset, and
     `urllib.request.getproxies()` is empty (which includes the macOS system proxy). The SDK gets
     an `httpx_client` with `trust_env=False` and no redirects; how its own OTLP session is built
     is verified at build;
@@ -532,6 +536,100 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
 - The prompts still go to the evaluation's model host under `egress_gate`; Langfuse only adds a
   local copy. Production assessments, records, knowledge extracts and human decisions are never
   sent.
+- **Build step 1 (ADR 0030 decision 3), `langfuse==5.2.0`, 2026-11-18, offline against a local
+  fake server with dummy keys:** the import origin matches the distribution. Importing the SDK
+  adds a stderr `StreamHandler` to `httpx` (removed by identity, ADR 0030 decision 3); building
+  the client, a send, a flush, a direct score call and shutdown add no other handler. The new
+  top-level loggers are those listed in ADR 0030 decision 3 (`py.warnings` is created by the
+  sender's own `captureWarnings`). The debug option or `LANGFUSE_DEBUG` prints whole spans and
+  the public key to stderr (refused). `flush()` returns `None`, a failed export is only logged,
+  the OTLP exporter treats any status 200-399 as success without reading `partial_success`, and
+  the SDK's queued `create_score` only logs failures; so delivery is confirmed by the sender's
+  own recording exporter and by the HTTP status of direct `client.api` calls. The dataset-run
+  link is carried as span attributes, so the span's confirmation covers it (to be confirmed at
+  the live check). The default client replaces the global OpenTelemetry provider, so the sender
+  passes its own. Media upload sends `data:` URIs to a URL the server chooses, so the sender
+  switches it off. After shutdown one daemon thread (`PromptCacheRefreshConsumer`) remains. The
+  evaluation environment at that check (`pip freeze --exclude-editable`, 38 packages) is below.
+  The live check against `divesafe-eval` is PENDING. It is run from the owner's shell with the
+  sender's code from the change under review (never an uncommitted probe; the record names the
+  commit it was run from, read with `git -C <repository root> rev-parse HEAD` (the root taken
+  from the sender module's own file path, never from the working directory or the environment)
+  with every `GIT_*` variable removed from that command's environment, and the live check refuses
+  unless `git status --porcelain --untracked-files=all --ignore-submodules=none`, run the same
+  way, is empty (a failing `git` command, or a `rev-parse` output that is not 40 hex characters,
+  also refuses); the offline tests that read this record are in that commit, failing until the
+  record is added in a docs-only change; and if any file outside `docs/` changes after that
+  commit before the change lands, the live check is run again and the record updated), with every
+  refusal in §2 and in ADR 0030 decision 3 in force. It is given `SCENARIOS` itself, so the
+  allow-list's identity check runs unchanged, with a case limit of one. The limit is an argument
+  of the sender, used only by the live-check test, never read from the environment or the command
+  line; it is either absent (a full run) or exactly `1`, and any other value (`0`, `2`, a
+  negative number, `True`) refuses before any network call. A limited run makes no judge call
+  because it is limited; there is no separate switch that skips the judge. The limit is applied
+  only after every start-up refusal has passed, the case it keeps goes through every check made
+  for each case, as in a full run, and it takes cases only from the front of the set, and never
+  adds or replaces a case. The first case goes through the sender's normal path: one dataset
+  item, that case's span and its code scores, computed from its record as in a judge run. No
+  judge call is made, and no other set or text is sent. The expected case count stays the length
+  of `SCENARIOS`, so the expected and confirmed-sent counts differ. No completion marker is sent
+  to Langfuse or written to the local file (ADR 0030 Known gaps, "complete only when ..."), so
+  the live-check run is incomplete in every report and is never cited. Its dataset run name is
+  built like every run's (ADR 0030 decision 3, "Run name"), so no later run adds to it. There is
+  no probe path that bypasses a refusal. It records: the project read (only `divesafe-eval`); the
+  OTLP reply status; whether the dataset-run link is carried as span attributes; and, for each
+  `client.api` call the sender makes, its method, path, status and return type, each equal to the
+  sender's constants (a mismatch fails the live check, and the sender is not ready); and that
+  every package in the freeze below is installed, at the same version, in the environment it ran
+  in (`pip freeze --exclude-editable`); any other package there (such as pytest and its plugins)
+  is listed in the record with its version and must be required only by `[dev]` (checked through
+  `importlib.metadata` requirements). A different version of a listed package, or any other extra
+  package, means the build-step-1 checks are repeated in that environment first and the freeze
+  below is replaced. Until that record is here, the sender is not ready: the sender, with
+  `LANGFUSE_VERIFIED_VERSION`, lands only in the change that adds the record, and an offline test
+  in that change checks that this bullet names the verified version and no longer says PENDING
+  (mutation: PENDING put back).
+
+  ```text
+  annotated-doc==0.0.7
+  annotated-types==0.8.0
+  anyio==4.16.0
+  backoff==2.2.1
+  certifi==2026.10.23
+  charset-normalizer==3.5.2
+  click==8.5.1
+  fastapi==0.163.2
+  googleapis-common-protos==1.76.0
+  h11==0.16.0
+  httpcore==1.0.9
+  httpx==0.28.1
+  idna==3.20
+  langfuse==5.2.0
+  opentelemetry-api==1.45.2
+  opentelemetry-exporter-http-transport==0.66b2
+  opentelemetry-exporter-otlp-common==0.66b2
+  opentelemetry-exporter-otlp-proto-common==1.45.2
+  opentelemetry-exporter-otlp-proto-http==1.45.2
+  opentelemetry-proto==1.45.2
+  opentelemetry-sdk==1.45.2
+  opentelemetry-semantic-conventions==0.66b2
+  packaging==26.3
+  prometheus_client==0.26.0
+  protobuf==7.36.2
+  psycopg==3.3.9
+  psycopg-binary==3.3.9
+  pydantic==2.14.3
+  pydantic-settings==2.16.3
+  pydantic_core==2.50.4
+  python-dotenv==1.2.4
+  requests==2.34.2
+  starlette==1.10.0
+  typing-inspection==0.4.5
+  typing_extensions==4.16.0
+  urllib3==2.8.0
+  uvicorn==0.54.0
+  wrapt==2.5.2
+  ```
 - **Testing.** The live run is marked `integration`. The refusal checks live in a module that
   does not import `langfuse`; the SDK is imported only after every check has passed, so their
   offline tests run under `.[dev]` in CI. Each refusal test has a mutation check, uses an
@@ -686,17 +784,20 @@ line, update the target; never loosen the check.
 ### Dependencies
 
 `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (runtime, bounded ranges,
-`pip-audit`); `requests` declared directly as `>=2.32.4,<3` (step 3: the trace session imports
-it and relies on its redirect, proxy and environment behaviour; 2.32.4 fixes the `.netrc`
-credential leak, CVE-2024-47081); `langfuse==5.2.0` in a new `[eval]` extra only, never in
-the runtime image (MIT, package metadata, checked 2026-11-18; the licences of its own
-dependencies are checked when §2's sender is built). CI audits the runtime dependencies together
-with `[eval]` with `pip-audit` (a test pins both audit steps). A local resolution on 2026-11-18
-(37 packages) held no `opentelemetry-instrumentation-*` or `opentelemetry-distro` package; CI
-does not check the resolved names, and the declared-name test cannot see transitive packages, so
-this is checked again with the build-step-1 `pip freeze` record (ADR 0030 Known gaps).
-ADR 0030's `LANGFUSE_VERIFIED_VERSION` will hold this version, and its build-step-1 checks are
-recorded against it.
+`pip-audit`); `requests` declared directly as `>=2.32.4,<3` (step 3: the trace session imports it
+and relies on its redirect, proxy and environment behaviour; 2.32.4 fixes the `.netrc` credential
+leak, CVE-2024-47081); `langfuse==5.2.0` in a new `[eval]` extra only, never in the runtime image
+(MIT, package metadata, checked 2026-11-18; the licences of its own dependencies are checked when
+§2's sender is built). CI audits the runtime dependencies together with `[eval]` with `pip-audit`
+(a test pins both audit steps). A local resolution on 2026-11-18 (37 packages) held no
+`opentelemetry-instrumentation-*` or `opentelemetry-distro` package; CI does not check the
+resolved names, and the declared-name test cannot see transitive packages, so this is checked
+again with the build-step-1 `pip freeze` record (ADR 0030 Known gaps). The build-step-1 record
+(`pip freeze --exclude-editable` in a fresh virtual environment, 2026-11-18, §2) lists 38
+packages, again with no `opentelemetry-instrumentation-*` or `opentelemetry-distro` package; the
+earlier count was made another way and is not compared with it. ADR 0030's
+`LANGFUSE_VERIFIED_VERSION` will hold this version, and its build-step-1 checks are recorded
+against it.
 
 ### Owner decisions (2026-11-15, each as the recommended default)
 

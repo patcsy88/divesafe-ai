@@ -54,9 +54,9 @@ because each is new egress.
    checks `code.false_go` and `code.under_severe` against the label, and `expected_rule` and
    `expected_trace`; never `expected_issue`. A final more severe than the label is reported as
    over-severe, never as a failure. Scripted `FakeProvider` replies are never judged.
-3. **In our code, not in Langfuse.** The judge lives in `tests/evaluation/` (never in `src`).
-   Its provider is built by the same builder as the agents' provider (at build, `_setup`'s
-   `make` is factored out to take the model id as its only varying argument), from the same
+3. **In our code, not in Langfuse.** The judge lives in `tests/evaluation/` (never in `src`). Its
+   provider is built by the same builder as the agents' provider (at build, `_setup`'s `make` is
+   factored out to take the model id as its only varying argument), from the same
    `DIVESAFE_EVAL_BASE_URL`, `DIVESAFE_EVAL_ALLOWED_HOSTS` and `DIVESAFE_EVAL_API_KEY`, changing
    only the model. That provider instance passes `egress_gate` itself, with no knowledge host,
    and the run refuses unless its basis equals the agents' basis. The agents' basis is
@@ -64,55 +64,119 @@ because each is new egress.
    `tide_check.run_tide_check` and the step-4 adversarial runner) passes `egress_basis` set to
    that value and `model_host` set to `divesafe.config.settings.base_url_host` of
    `DIVESAFE_EVAL_BASE_URL` (the function `check_egress` uses; never via `api.state`); with a
-   provider, a `None` host or a host the record refuses fails the run. After each run that
-   stores a record, the runner checks the record's `egress_basis` and `model_host` against the
-   expected values before anything for that case is sent or judged; if it fails, the run fails
-   and nothing from that case is sent or judged. With a provider, the expected values are the
-   ones the runner was given (in a live run, the gate's basis and host). With no provider, they
-   are `no_agent_stage` / `None`, whatever was passed in. A run Supervise refused
+   provider, a `None` host or a host the record refuses fails the run. After each run that stores
+   a record, the runner checks the record's `egress_basis` and `model_host` against the expected
+   values before anything for that case is sent or judged; if it fails, the run fails and nothing
+   from that case is sent or judged. With a provider, the expected values are the ones the runner
+   was given (in a live run, the gate's basis and host). With no provider, they are
+   `no_agent_stage` / `None`, whatever was passed in. A run Supervise refused
    (`SupervisorInvariantError`) has no record and is `code.refused`; any other exception while
-   building the record, including a host the record refuses (an unrecognised basis is recorded
-   as `none` and fails the post-run check instead), fails the whole run and is never counted as
+   building the record, including a host the record refuses (an unrecognised basis is recorded as
+   `none` and fails the post-run check instead), fails the whole run and is never counted as
    `code.refused`. `harness.run_case` and the adversarial runner pass these into `run_pipeline`,
    overriding `scripted_llm._egress`; `run_tide_check` calls `assess_dive` directly and takes
    `egress_basis` and `model_host` as required keyword parameters, replacing its hard-coded
-   `declared_local` / `localhost`. Its existing offline tests pass `declared_local` /
-   `localhost` explicitly (and `None` / `None` with no provider) and keep every assertion they
-   have today. `harness.run_case` and `harness.evaluate` likewise take `egress_basis` and
-   `model_host` as required keyword parameters, and their offline tests pass `declared_local` /
-   `localhost` explicitly (and `None` / `None` with no provider, as in `evaluate(lambda:
-   None)`), keeping every assertion. A factory that returns `None` for a case gets `None` /
-   `None` for that case only. In a live run, a factory that returns `None` refuses the run. The
-   step-4 adversarial runner is a new function. `adversarial.run_case`, `provider_for` and
-   `ablation.run_variant`, which the offline gate uses, are unchanged. The tide-check record
-   holds the PHN item, so it is never judged and never sent to Langfuse (ADR 0027 §2's
-   allow-list; "never sees" below). The live-runner record test pins the basis and host, and the
-   PHN refusal is tested separately (both under "Refusals"). The model key is never given to the
-   Langfuse SDK, never stored in Langfuse and never written to an output file;
-   `DIVESAFE_EVAL_SECRETS_DIR` still holds only the Langfuse keys. No Langfuse LLM connection is
-   configured; the Langfuse worker stays on its internal network. A judge run refuses to start
-   unless ADR 0027 §2's sender is ready (its checks passed), and a send that fails partway fails
-   the whole run before the next judge call (an `Exception` under the partial-run limits in
-   Known gaps) with only a fixed label (`send_failed`); the send error's message, `repr`,
-   traceback and `__context__` are never kept, logged or written to the output file, and the
-   run's own exception is raised outside the `except` block (as for a judge call). Judge calls
-   are made one at a time, in case order, and never while a send is pending, so "before the next
-   judge call" covers every judge call. A send counts as sent only once delivery is confirmed:
-   each case's sends are flushed and their result checked before the next judge call, so
-   "pending" ends at that flush, and a send that the SDK only logs, or reports after the flush,
-   counts as failed. Confirmation is a positive success result from the SDK for every item of
-   that case (a flush or ingestion result), never the absence of an exception or a log line and
-   never a read-back from Langfuse; if the pinned SDK gives no such result, §2's sender is not
-   ready and no judge run starts. This is verified at build step 1 against the pinned SDK,
-   recorded in ADR 0027 §2 with the SDK version, and verified again whenever that version
-   changes. To make that observable, `langfuse` is pinned exactly (`==`) in the `[eval]` extra,
-   and the sender refuses to start unless the installed version
-   (`importlib.metadata.version("langfuse")`, read before import) equals a constant in the
-   sender (`LANGFUSE_VERIFIED_VERSION`), which is the version recorded in ADR 0027 §2 and is
-   changed only in the same reviewed change that repeats the build-step-1 checks; `langfuse` not
-   being installed (`PackageNotFoundError`) also refuses and is never treated as a skip; before
-   import, the sender also refuses unless `importlib.util.find_spec("langfuse").origin` resolves
-   to the same file as
+   `declared_local` / `localhost`. Its existing offline tests pass `declared_local` / `localhost`
+   explicitly (and `None` / `None` with no provider) and keep every assertion they have today.
+   `harness.run_case` and `harness.evaluate` likewise take `egress_basis` and `model_host` as
+   required keyword parameters, and their offline tests pass `declared_local` / `localhost`
+   explicitly (and `None` / `None` with no provider, as in `evaluate(lambda: None)`), keeping
+   every assertion. A factory that returns `None` for a case gets `None` / `None` for that case
+   only. In a live run, a factory that returns `None` refuses the run. The step-4 adversarial
+   runner is a new function. `adversarial.run_case`, `provider_for` and `ablation.run_variant`,
+   which the offline gate uses, are unchanged. The tide-check record holds the PHN item, so it is
+   never judged and never sent to Langfuse (ADR 0027 §2's allow-list; "never sees" below). The
+   live-runner record test pins the basis and host, and the PHN refusal is tested separately
+   (both under "Refusals"). The model key is never given to the Langfuse SDK, never stored in
+   Langfuse and never written to an output file; `DIVESAFE_EVAL_SECRETS_DIR` still holds only the
+   Langfuse keys. No Langfuse LLM connection is configured; the Langfuse worker stays on its
+   internal network. A judge run refuses to start unless ADR 0027 §2's sender is ready (its
+   checks passed), and a send that fails partway fails the whole run before the next judge call
+   (an `Exception` under the partial-run limits in Known gaps) with only a fixed label
+   (`send_failed`); the send error's message, `repr`, traceback and `__context__` are never kept,
+   logged or written to the output file, and the run's own exception is raised outside the
+   `except` block (as for a judge call). Judge calls are made one at a time, in case order, and
+   never while a send is pending, so "before the next judge call" covers every judge call. A send
+   counts as sent only once delivery is confirmed: each case's sends are confirmed before the
+   next judge call, so "pending" ends there, and a send that the SDK only logs, or that reports
+   after that point, counts as failed. Confirmed means accepted by Langfuse's API (the HTTP
+   status below), not stored: Langfuse ingests asynchronously (Known gaps). Confirmation is a
+   positive success result for every item of that case, never the absence of an exception or a
+   log line and never a read-back from Langfuse. The pinned SDK's `flush()` returns `None` and a
+   failed export is only logged (build step 1, 2026-11-18), so the sender confirms delivery
+   itself:
+   - **Spans.** The client is built with the sender's own `TracerProvider` and `debug=False`
+     given explicitly; the set-up refuses if the global OpenTelemetry provider is different after
+     the build. The client's `span_exporter` is the sender's own, wrapping an `OTLPSpanExporter`
+     built in the sender with the endpoint (`<base_url>/api/public/otel/v1/traces`), headers
+     holding only the Basic authorisation from the two keys and the ingestion-version header, a
+     timeout, a compression setting and the session all given; the certificate arguments are
+     unused on plain http, and they, like any argument left `None`, would fall back to
+     `OTEL_EXPORTER_OTLP_*`, which ADR 0027 §2 refuses. The session is the sender's own
+     `requests` session (no environment, no redirect, the one origin; built in the sender, never
+     imported from `divesafe.api`), with a response hook that records each reply's HTTP status
+     (the hook keeps only that value, never the request, its headers or the body). For each
+     export call, under a lock held for the whole call (so each recorded status belongs to one
+     call), the wrapper first checks that every span id in the batch is one the sender started;
+     if not, it exports nothing and records `FAILURE` for every id in the batch. Otherwise it
+     records one result for each span id in the batch: `SUCCESS` only if the wrapped exporter
+     returned `SUCCESS` and the last status recorded during that call is exactly 200 (to be
+     confirmed against the real server at the live check, and changed only by a reviewed change);
+     otherwise, or if the wrapped exporter raised, `FAILURE` (the exception is dropped, never
+     kept, logged or re-raised, as for `send_failed`). The spans a case must confirm are the ids
+     of the spans the sender started for that case, recorded when started, never taken from what
+     the exporter saw. After the case's flush, each of those ids must have exactly one result and
+     it must be `SUCCESS`; an id with no result, or with more than one, counts as failed. The
+     sender starts a case's spans only after that case's last judge call; no span is started or
+     ended, and nothing is sent, while a judge call is in progress, and every span and score of
+     earlier cases is confirmed before each judge call, so the SDK's timed exports never overlap
+     a judge call.
+   - **Scores.** Code scores, judge scores and the completion marker's score are sent with
+     `client.api.scores.create` with `request_options={"max_retries": 0}`, never the SDK's queued
+     `create_score` or `run_experiment`. A response hook on the client's `httpx_client` records
+     each reply's method, path and status (the hook keeps only these values, never the request,
+     its headers or the body); a call is confirmed only if exactly one reply for `POST
+     /api/public/scores` was recorded during it, its status is 202 and the return value is a
+     `CreateScoreBatchResponse`. A 207 (`CreateScoreBatchResults`), any other status, a different
+     type, a different reply count or any exception counts as failed.
+   - **Other calls.** Any other API call the sender makes (such as creating the dataset or its
+     items) is a direct `client.api` call, never a queued SDK path, and is confirmed the same
+     way: exactly one reply, with the expected method, path and status, and the expected return
+     type. The expected values are constants in the sender. Method, path and return type are
+     taken offline from the pinned SDK's client code; paths are written with a leading `/`, as
+     the response hook records them. The status is the sender's stated expectation, because the
+     SDK's client code accepts any 2xx. The live check runs with them in force and confirms them
+     against the real server (ADR 0027 §2). A reply that does not match fails the live check like
+     any other send. The constants change only through a reviewed change that repeats the live
+     check, never by recording what the server returned.
+   - **Transport.** The `httpx_client` (`trust_env=False`, no redirects) and the OTLP session
+     each refuse, by raising before any connection, a request whose scheme, host or port differs
+     from `base_url`'s; that request's send counts as failed. The SDK's media upload is switched
+     off: after the `LANGFUSE_*` refusal (ADR 0027 §2) has passed, with no exception for this
+     variable, and before import, the sender sets `os.environ["LANGFUSE_MEDIA_UPLOAD_ENABLED"] =
+     "false"`. This is the only `LANGFUSE_*` variable it ever sets, it never reads it from the
+     operator, and, if it set the variable, it removes it when the run ends, however it ends.
+     After the build, it refuses unless that variable still holds exactly `false`, no other
+     `LANGFUSE_*`, `OTEL_*` or proxy variable is set, the client reports media upload off, and no
+     media upload thread was started. The client's async API is never used.
+   - **Run name.** The dataset run name is built by the sender at set-up from the commit, the UTC
+     start time and a fresh `uuid.uuid4()`; it is never taken from an argument, the environment
+     or the command line. It is written to the local output file and is the only run identifier
+     in span attributes. If it cannot be built, the set-up refuses before any network call. Every
+     run, the live check included, therefore has a run of its own in Langfuse, and no later run
+     adds to an earlier one.
+   - **Version changes.** If a later SDK version removes or changes any of these paths, §2's
+     sender is not ready and no judge run starts.
+
+   This is verified at build step 1 against the pinned SDK, recorded in ADR 0027 §2 with the SDK
+   version, and verified again whenever that version changes. To make that observable, `langfuse`
+   is pinned exactly (`==`) in the `[eval]` extra, and the sender refuses to start unless the
+   installed version (`importlib.metadata.version("langfuse")`, read before import) equals a
+   constant in the sender (`LANGFUSE_VERIFIED_VERSION`), which is the version recorded in ADR
+   0027 §2 and is changed only in the same reviewed change that repeats the build-step-1 checks;
+   `langfuse` not being installed (`PackageNotFoundError`) also refuses and is never treated as a
+   skip; before import, the sender also refuses unless
+   `importlib.util.find_spec("langfuse").origin` resolves to the same file as
    `importlib.metadata.distribution("langfuse").locate_file("langfuse/__init__.py")`, so the
    module imported is the one whose version was read (tested under "Refusals" with a
    `langfuse.py` placed earlier on `sys.path`, with a mutation check that skips it). An offline
@@ -120,22 +184,48 @@ because each is new egress.
    mutation check that changes the pin only; the refusal, for a different version and for no
    installed version, is tested under "Refusals", with a mutation check that skips it. The SDK's
    own loggers and its HTTP and OTLP client loggers (`langfuse`, `httpx`, `httpcore`,
-   `opentelemetry`, `urllib3`, `requests`, and any other the pinned SDK uses, fixed at build
-   step 1 and checked again whenever the SDK version changes) get `propagate=False` and a
-   `logging.NullHandler()` before the SDK is imported or its client built, as ADR 0027 does for
-   production tracing. The set-up refuses to start if any listed logger, or any existing child
-   of one (from `logging.Logger.manager.loggerDict`), already has a handler other than a
-   `NullHandler`, and at build step 1, against the pinned SDK, building the client, and a send
-   and flush through it, are shown to add no other handler to a listed logger or any child
-   logger (recorded in ADR 0027 §2 with the SDK version); the client is built during the set-up,
-   before the first case runs; after it is built and before any judge call or send, the set-up
-   checks again that no listed logger or existing child logger has a handler other than a
-   `NullHandler`, and refuses otherwise. The same check runs again after each case's flush; a
-   failure there fails the whole run before the next judge call with the fixed label
-   `logger_handler`, under the partial-run limits in Known gaps. The run refuses to start,
-   before the SDK is imported, when the SDK's debug option or `LANGFUSE_DEBUG` is set (to any
-   value). This list differs from production's `SILENCED_LOGGERS` (it holds all of production's
-   names and adds `langfuse`, `httpx` and `httpcore`), so it is its own constant.
+   `opentelemetry`, `urllib3`, `requests`, `backoff`, `charset_normalizer`, `asyncio`,
+   `concurrent` and `py.warnings`, the set fixed at build step 1 for the pinned SDK and checked
+   again whenever the SDK version changes; after the import, after the build and after each
+   case's flush, a top-level name in `logging.Logger.manager.loggerDict` (a logger or a
+   placeholder) that was not there at the start of the set-up and is not in this set refuses,
+   with the fixed label `logger_unlisted`) get `propagate=False` and a `logging.NullHandler()`
+   before the SDK is imported or its client built, as ADR 0027 does for production tracing.
+   Before the import, within the running test, the set-up calls `logging.captureWarnings(False)`
+   and then `logging.captureWarnings(True)` (so the capture takes effect again in each test,
+   since pytest restores `warnings.showwarning` when a test ends), and then runs the handler
+   check below, whose first clause refuses with `logger_handler` unless `warnings.showwarning` is
+   logging's own function. A Python warning therefore goes to the silenced `py.warnings` logger,
+   never to stderr or pytest's warnings summary. The pinned SDK adds a `StreamHandler`
+   (`console_handler`) to `httpx` when it is imported (build step 1). Right after the import,
+   before the client is built, the sender takes that object from
+   `sys.modules["langfuse.logger"].console_handler`, checks that it is a `logging.Handler`
+   attached to `httpx` exactly once and to no other logger, removes it by identity, and then runs
+   the handler check; a missing module or attribute, or any of those checks failing, refuses the
+   run with the fixed label `logger_handler`. During the rest of the SDK's import, after
+   `langfuse.logger` has added the handler, a line `httpx` logs at WARNING or above would reach
+   stderr before the removal; build step 1 saw none (the import makes no request). The handler
+   check runs at start-up (after those two calls and before the import), after the import, after
+   the build and after each case's flush. It refuses if `warnings.showwarning` is no longer
+   logging's own function; if a listed logger, or an existing child of one, has any handler other
+   than a `NullHandler`; if a listed logger's `propagate` is not `False`; or if the root logger's
+   handlers differ, compared by identity, from those recorded at the start of the set-up (for
+   example, after a `logging.basicConfig` call); the set-up and every check run within the test
+   body, never in a fixture. The root logger's start-up handlers (such as pytest's capture
+   handlers) never receive a listed logger's records, because none of them propagates. The set-up
+   refuses to start if any listed logger, or any existing child of one (from
+   `logging.Logger.manager.loggerDict`), already has a handler other than a `NullHandler`, and at
+   build step 1, against the pinned SDK, building the client, and a send and flush through it,
+   are shown to add no other handler to a listed logger or any child logger (recorded in ADR 0027
+   §2 with the SDK version); the client is built during the set-up, before the first case runs;
+   after it is built and before any judge call or send, the set-up checks again that no listed
+   logger or existing child logger has a handler other than a `NullHandler`, and refuses
+   otherwise. The same check runs again after each case's flush; a failure there fails the whole
+   run before the next judge call with the fixed label `logger_handler`, under the partial-run
+   limits in Known gaps. The run refuses to start, before the SDK is imported, when the SDK's
+   debug option or `LANGFUSE_DEBUG` is set (to any value). This list differs from production's
+   `SILENCED_LOGGERS` (it holds all of production's names and adds the others above), so it is
+   its own constant.
 4. **Judge model:** `claude-fable-5-1`, a different model from the agents', on the same host.
    This reduces self-grading bias; it does not remove it (same vendor family). The id is a
    constant in the judge module, not an environment value; the script refuses to start if it
@@ -405,13 +495,13 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
     `localhost` pair in place of the parameters.
   - **Partial run:** an in-memory sink stops a run partway after some cases, once with a
     `BaseException`, once with a refused host, once with a record that fails the post-run check,
-    once with a live factory that returns `None` for a later case and once with a send that
-    fails for a later case (once raised by the sink and once only reported at flush), whose
-    error message carries a marker, and shows that no judge call follows the failed send, that
-    the error's marker never reaches the output directory or a log line, that no completion
-    marker is sent, that no file in the output directory holds one, and that no case holds judge
-    scores without its code scores. The in-memory provider and sink also record that at most one
-    judge call or send is in progress at any time. Mutation checks: one sends the marker in a
+    once with a live factory that returns `None` for a later case and once with a send that fails
+    for a later case (once raised by the sink and once only reported at flush), whose error
+    message carries a marker, and shows that no judge call follows the failed send, that the
+    error's marker never reaches the output directory or a log line, that no completion marker is
+    sent, that no file in the output directory holds one, and that no case holds judge scores
+    without its code scores. The in-memory provider and sink also record that at most one judge
+    call or send is in progress at any time. Mutation checks: one sends the marker in a
     `finally`, one sends judge scores before code scores, one sends the failing case's code
     scores before the post-run check, one writes the local file's marker in a `finally`, one
     writes the local file with its marker before the Langfuse marker is sent, one catches a
@@ -419,24 +509,120 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
     count, one counts a send as sent when it is queued, against a sink that accepts a case and
     then fails its flush, one makes a case's judge calls concurrently, and one writes the local
     marker when the Langfuse marker is queued, against a sink that fails the marker's flush.
-    Separately, an offline test pins the eval logger constant to its exact literal value (as
-    `test_tracing_export.py` pins `SILENCED_LOGGERS`) and checks, without importing the SDK and
-    against its own literal list of the names (never the constant itself), that before the
-    sender's first SDK import (observed by a stub `langfuse` module, installed in `sys.modules`
-    by the test, that records the logger state when the sender imports it; the test also makes
-    the version read return `LANGFUSE_VERIFIED_VERSION`) each has `propagate=False` and only
-    `NullHandler`s, and that the constant contains every name in
-    `trace_export.SILENCED_LOGGERS`; mutation checks drop each name from the constant, one at a
-    time, skip the silencing for one name, move the silencing after the import, add a name to
-    `SILENCED_LOGGERS` only, remove the start-up handler check, which two tests catch (a
-    `StreamHandler` attached to one listed logger, and one attached to a child of one
-    (`urllib3.connectionpool`), before the set-up; each expects the refusal before the stub
-    `langfuse` module is imported), and remove the run-time re-check, which a third test catches
-    (a `StreamHandler` attached to a child of a listed logger by the stub SDK's client
+    Delivery confirmation (decision 3) is tested offline, with the real `httpx_client` on an
+    `httpx.MockTransport` and the real OTLP session with a mounted test adapter, so the response
+    hooks themselves are exercised: a span the sender started that the exporter never sees, a
+    batch holding a span id the sender did not start, a batch whose wrapped export raises, one
+    that returns `SUCCESS` with a last status of 302, a span id exported in two batches, a score
+    reply of 207, one of 200 whose body parses to `CreateScoreBatchResponse`, one of 202 whose
+    body parses to another type, and a score call for which the hook records two replies, and a
+    dataset or dataset-item call answered with a reply that differs from the sender's constants
+    for that call only in status, only in path, or only in return type, or answered twice, each
+    fail the case before the next judge call. Mutation checks: one takes the expected span ids
+    from the exporter's records, one exports a batch holding a span the sender did not start, one
+    records `SUCCESS` when the wrapped export raises, one ignores the recorded status, one drops
+    the exactly-one-result rule, one confirms a score by return type only (caught by the 200),
+    one by status only (caught by the 202 of another type), one drops the exactly-one-reply rule,
+    one ignores the status of other calls, one ignores their return type, one ignores their path,
+    one drops their exactly-one-reply rule, one sends a score with the queued `create_score`, one
+    drops the origin check from each transport (caught by a request to another host), and one
+    starts a case's span before its judge call (caught by the stub provider, which records that
+    no span is open or unconfirmed while a judge call runs). A positive run uses a stub client
+    that sets the global tracer provider only when built without `tracer_provider=`, reports
+    media upload on unless `LANGFUSE_MEDIA_UPLOAD_ENABLED` is exactly `false` when it is built,
+    and records any use of its queued `create_score`; with the mock transport answering 200 for
+    spans, 202 `Accepted` for scores and, for each other call, a reply built from the sender's
+    constants for that call (an offline test in the change that adds the live-check record checks
+    that those constants equal the record), the run completes with the completion marker in
+    Langfuse and in the local file. The mutants that send a score with the queued `create_score`,
+    build the client without `tracer_provider=`, or skip setting the variable each fail this run.
+    A run with a case limit of one sends that case only, makes no judge call, and sends no
+    completion marker and writes none locally (mutation: the expected count taken from the
+    limited cases). A limit of `0`, `2`, `-1` or `True` each refuses with no send (mutation: the
+    limit's value check removed). Two runs in one process, with the same commit, a fixed clock
+    and `uuid.uuid4` patched to return two known values, get exactly the names built from the
+    commit, the start time and each value; each name appears in its local file and spans, and no
+    other run identifier is set (mutation: the `uuid4` part dropped). An offline test pins the
+    parameter names of the sender's entry point (`inspect.signature`) to an exact list that holds
+    no run name (mutation: an optional run-name parameter that, when given, replaces the built
+    name). An AST test of the sender's modules shows that every use of `os.environ`, `os.getenv`,
+    `environ`, `getenv` or `sys.argv` (however imported) is in a fixed list of functions named in
+    the test: the `LANGFUSE_*` / `OTEL_*` / proxy refusal, the §2 unset-variable checks
+    (`DIVESAFE_TRACING_ENABLED`, `DIVESAFE_DATABASE_URL`, `DIVESAFE_ADMIN_DATABASE_URL`,
+    `DIVESAFE_EVAL_KNOWLEDGE_HOST`), the read of `DIVESAFE_EVAL_SECRETS_DIR`, the media
+    variable's set and removal, the post-build environment check, and the `git` calls'
+    environment (adding a function to the list is a reviewed change to this test); that the run
+    name is assigned in one place only, from the name builder's return value; and that the commit
+    passed to the builder comes only from the `git rev-parse HEAD` read (mutations: the name
+    taken from an environment variable when it is set, once in the builder and once in its
+    caller). With the `git` calls stubbed, a live-check run with a non-empty `git status
+    --porcelain --untracked-files=all --ignore-submodules=none`, a failing `git` command, or a
+    `rev-parse` output that is not a full commit id refuses before any network call, and with
+    `GIT_DIR` set in the test's environment the stub sees no `GIT_*` variable in either command's
+    environment, and, with the test's working directory set elsewhere, both commands get `-C`
+    with the root taken from the sender module's path (mutations: the clean-worktree check
+    removed; the commit format check removed; the environment passed to `git` unchanged; `-C`
+    dropped, or given the working directory; the `--untracked-files=all` flag dropped, caught by
+    a stub that returns an untracked file only when that flag is present). Separate offline
+    refusal tests, each with no judge call and no send: a stub client whose constructor sets a
+    global tracer provider (mutation: the global-provider check removed);
+    `LANGFUSE_MEDIA_UPLOAD_ENABLED` set before start-up, once to `true` and once to `false`
+    (mutation: that variable exempted from the `LANGFUSE_*` refusal); a stub client that reports
+    media upload on (mutation: the post-build check removed); a test that the variable is removed
+    after a run that fails partway (mutation: the removal skipped); and a stub client whose
+    constructor sets `LANGFUSE_MEDIA_UPLOAD_ENABLED` to `true` and still reports media upload off
+    and starts no upload thread, and one whose constructor sets
+    `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, each refused (mutation checks: the variable check
+    removed; the post-build environment check removed). Separately, an offline test pins the eval
+    logger constant to its exact literal value (as `test_tracing_export.py` pins
+    `SILENCED_LOGGERS`) and checks, without importing the SDK and against its own literal list of
+    the names (never the constant itself), that before the sender's first SDK import (observed by
+    a stub `langfuse` module, installed in `sys.modules` by the test, that records the logger
+    state when the sender imports it; the test also makes the version read return
+    `LANGFUSE_VERIFIED_VERSION`) each has `propagate=False` and only `NullHandler`s, and that the
+    constant contains every name in `trace_export.SILENCED_LOGGERS`; mutation checks drop each
+    name from the constant, one at a time, skip the silencing for one name, move the silencing
+    after the import, add a name to `SILENCED_LOGGERS` only, remove the start-up handler check,
+    which two tests catch (a `StreamHandler` attached to one listed logger, and one attached to a
+    child of one (`urllib3.connectionpool`), before the set-up; each expects the refusal before
+    the stub `langfuse` module is imported), and remove the run-time re-check, which a third test
+    catches (a `StreamHandler` attached to a child of a listed logger by the stub SDK's client
     constructor); each of the three expects a refusal with no judge call and no send; a fourth
     test, in which the stub SDK's flush attaches a `StreamHandler` to a new child of a listed
     logger, expects the run to fail with no further judge call and no completion marker; its
-    mutation check removes the per-flush check.
+    mutation check removes the per-flush check. A fifth test's stub SDK adds `console_handler` to
+    `httpx` exactly once, and the run starts (mutation: the removal skipped, which then refuses).
+    A sixth gives the stub no `console_handler`, a seventh attaches it to `httpx` twice, an
+    eighth also to `langfuse`, a ninth adds a second `StreamHandler` to `httpx`, a tenth sets
+    `propagate=True` on `httpx`, and an eleventh adds a handler to the root logger in the stub
+    client's constructor (`logging.getLogger().addHandler(logging.StreamHandler())`;
+    `logging.basicConfig()` does nothing under pytest, which already has handlers on the root);
+    each expects the `logger_handler` refusal with no judge call and no send; the seventh and
+    eighth also check that the refusal came before any removal (both copies are still on `httpx`,
+    and the copy on `httpx` is still there, respectively) (mutation checks: the refusal for a
+    missing attribute skipped; the exactly-once check skipped (caught by the seventh); the
+    no-other-logger check skipped (caught by the eighth); every `StreamHandler` removed from
+    `httpx`; the `propagate` check removed; the root comparison removed). A twelfth creates a new
+    top-level logger, and a thirteenth only `newname.child`, in the stub client's constructor;
+    each expects `logger_unlisted` (mutation checks: that check removed; the check limited to
+    `Logger` entries, which the thirteenth catches). A fourteenth test runs the sender's set-up
+    in two tests of one pytest process, each with `recwarn`, the second of which first calls
+    `logging.captureWarnings(True)` inside a `warnings.catch_warnings()` block that it then
+    leaves (as pytest does at the end of a test), so it reproduces the lost hook even when run
+    alone; it checks in each that `warnings.showwarning` is logging's function and that a
+    `warnings.warn` marker from the stub client's constructor is not recorded and reaches only
+    `NullHandler`s (mutation checks: `captureWarnings(True)` removed, caught by the first; the
+    `captureWarnings(False)` call removed, caught by the second). A fifteenth runs the set-up and
+    the stub client's build in a subprocess without pytest and checks that the subprocess reached
+    the end of the build (a fixed token on stdout and exit status 0) and that the marker is not
+    in its stderr (mutation: `captureWarnings(True)` removed, which the set-up's own refusal
+    turns into a missing token). A sixteenth makes `logging.captureWarnings` a no-op for the test
+    and expects the `logger_handler` refusal before the import, with no judge call and no send
+    (mutation: the `showwarning` clause removed from the handler check). A seventeenth's stub
+    client constructor replaces `warnings.showwarning` and expects the `logger_handler` refusal
+    after the build, with no judge call and no send (mutation: the handler check's run after the
+    build removed, which the per-flush check would otherwise catch only after a judge call and a
+    send).
 - **Langfuse dependency test (ADR 0027's decision, "Dependencies", not this ADR's):** build step
   1 deliberately relaxes one assertion of `test_src_and_the_dependencies_never_name_langfuse`,
   as ADR 0027 decided: `langfuse` may appear in the `eval` extra only. The test must still fail
@@ -507,14 +693,34 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   The sender also refuses to start if `langfuse` is already in `sys.modules` before its set-up,
   tested with a mutation check that skips it. All of this is decided and reviewed at build step
   1.
-- The logger checks (decision 3) look only for handlers other than a `NullHandler`: a listed
-  logger whose `propagate` is set back to `True`, or a child set to `propagate=False` with no
-  handler (which `logging.lastResort` prints to stderr at WARNING and above), is not detected at
-  run time. The per-flush check runs after the flush, so a handler the SDK adds during a flush
-  could receive that flush's log lines before the run fails with `logger_handler`; the
-  completion marker's flush and SDK shutdown are not checked. These rest on the build-step-1
-  record for the pinned SDK, checked again with each SDK version; the exposure stays in the
-  owner's shell, on synthetic-set data.
+- The logger checks (decision 3) do not see a child of a listed logger set to `propagate=False`
+  with no handler (which `logging.lastResort` prints to stderr at WARNING and above). The
+  per-flush check runs after the flush, so a handler the SDK adds during a flush could receive
+  that flush's log lines before the run fails with `logger_handler`; the logger checks do not run
+  after the completion marker's score call or SDK shutdown (the marker's delivery is still
+  confirmed). These rest on the build-step-1 record for the pinned SDK, checked again with each
+  SDK version; the exposure stays in the owner's shell, on synthetic-set data.
+- Confirmation (decision 3) means Langfuse's API accepted an item (HTTP 200 for spans, 202 for
+  scores), not that it was stored: ingestion is asynchronous, and a span batch that the server
+  partly rejects in OTLP `partial_success` is still counted as sent, because the exporter does
+  not read it. The removal of the SDK's `httpx` handler and the media-upload check rely on SDK
+  internals (`langfuse.logger.console_handler`, the client's media manager) of the pinned
+  version; a version without them refuses, never skips. The client also builds an
+  `AsyncLangfuseAPI` with a default `httpx` client, which the origin check does not cover; the
+  sender never uses it, and build step 1 saw no SDK path that does. After the client and its
+  provider are shut down, the pinned SDK leaves one daemon thread (`PromptCacheRefreshConsumer`)
+  until the process ends; the sender starts no span and makes no call after the completion
+  marker; a send by the SDK after it, or at interpreter exit, is not checked. `logger_unlisted`
+  sees only top-level logger names that are new since the set-up; an unlisted logger that already
+  existed (for example, from earlier tests in the same pytest session) and that the SDK logged to
+  is neither silenced nor refused, and its records reach the root logger's handlers, which under
+  pytest show WARNING and above in the report of a failed test. Build step 1 saw the SDK use only
+  the listed loggers. The silencing stays in place after the run (the SDK's daemon thread
+  outlives it), so later tests in the same process see those loggers silenced; pytest undoes the
+  warnings capture when each test ends, so a warning the SDK's daemon thread raises after the run
+  is not captured by the sender (it goes to pytest's or Python's default handling); each set-up
+  turns the capture on again. The live check's clean-worktree check does not see ignored files
+  (`.gitignore`, `.git/info/exclude` or a global excludes file).
 - `langfuse` is pinned exactly in `[eval]`, without hashes, and its own dependencies (`httpx`,
   `httpcore`, `backoff`, `wrapt`, `packaging`, `typing-extensions`, `pydantic`, and OpenTelemetry
   within the runtime's `<1.46`) are ranges. The sender's version check detects a different
