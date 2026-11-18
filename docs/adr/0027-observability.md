@@ -396,8 +396,13 @@ value lies in LangChain integration, which DiveSafe does not use (ADR 0025).
     `SALT`, `ENCRYPTION_KEY`, the PostgreSQL, ClickHouse, Redis and object-storage passwords).
     Langfuse reads these as env values in its own compose files; that is outside DiveSafe's
     secret-file rule and gets the same care.
-  - No LLM connections, playground, LLM-as-a-judge evaluators, Halo, SMTP, SSO, Slack, webhooks,
-    or blob-storage exports: each is new egress and needs a new ADR.
+  - No LLM connection or model-provider key in any Langfuse project (including `divesafe-eval`),
+    no playground, no prompt experiment run from Langfuse, no Langfuse-managed evaluator of any
+    kind, no Halo, SMTP, SSO, Slack, webhooks or blob-storage exports: each is new egress and
+    needs a new ADR. Langfuse never calls a model. (ADR 0030, accepted, calls its judge from
+    the evaluation script under `egress_gate`, never from Langfuse, and send only its prompt,
+    validated scores and flags, and screened `rationale`, plus a completion marker of case
+    counts, a code-set run id and the commit, to `divesafe-eval` through §2's sender.)
   - Only the web service publishes a port, on `127.0.0.1` only, with its own admin password. Its
     worker, PostgreSQL, ClickHouse, Redis and object storage are on an `internal: true` network
     with no published port.

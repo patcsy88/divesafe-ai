@@ -66,10 +66,13 @@ The final decision always belongs to the diver, dive master or dive leader.
 - Tests are offline and deterministic: fixed clocks, recorded real fixtures (`tests/fixtures`,
   labelled), `FakeProvider` for LLMs. Live calls only in tests marked `integration`.
 - Live evaluation runs (marked `integration`) may send prompts and the stored record's outputs
-  to the local Langfuse's evaluation project, for the allow-listed synthetic scenario sets only:
-  never production data, knowledge extracts, refused or partial reply text, the model's
-  confidence self-estimate, the PHN tide item (ADR 0021), the tides.today tide item (ADR 0029),
-  or the item-6 capture (ADR 0027 amendment). Their refusal checks are offline safety tests.
+  to the local Langfuse's evaluation project, for the allow-listed synthetic scenario sets only
+  (and, under ADR 0030, for the same sets, the judge prompt, judge scores and flags
+  (with their evidence ids), the screened rationale, and a completion marker holding only case
+  counts, a code-set run id and the commit): never production data, knowledge extracts,
+  refused or partial reply text, the model's confidence self-estimate, the PHN tide item
+  (ADR 0021), the tides.today tide item (ADR 0029), or the item-6 capture (ADR 0027
+  amendment). Their refusal checks are offline safety tests.
   Scores are advisory: they never change rules, prompts, thresholds, `confidence` or the corpus
   automatically, and a change they suggest goes through review like any other. The offline
   safety gates (`false_go = 0`) are not scores; they stay hard gates.

@@ -39,12 +39,17 @@ Status of each item is stated; "planned" means nothing builds or measures it yet
 - **Metrics:**
   - rule-outcome accuracy on the scenario set (deterministic; should be exact);
   - citation validity: today, whether every cited id exists in the record (built). Whether the
-    cited evidence supports the claim is not checked and needs a human-rated sample (planned);
+    cited evidence supports the claim is not checked and needs a human-rated sample (planned;
+    the judge's `evidence_grounding` does not replace this sample);
   - confidence calibration against outcomes (reliability curves) once data exists;
   - conservative-error rate: cases where the final recommendation was less severe than the reference;
   - abstention quality: correct use of `INSUFFICIENT EVIDENCE`;
   - retrieval recall/precision for RAG;
-  - explanation faithfulness (human-rated sample).
+  - explanation faithfulness (human-rated sample);
+  - judge scores (ADR 0030, accepted, not built): a separate model rates the specialist findings
+    and the risk proposal against a fixed rubric, on the allow-listed synthetic sets only, in
+    development, never on production data. The scores are uncalibrated; agreement with human
+    ratings will be recorded here and is never a measure of dive safety.
 - **Primary risk metric:** under-severe errors are weighted far above over-severe ones.
 
 ## Human-in-the-loop and learning
