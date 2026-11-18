@@ -2,7 +2,8 @@
 exceptions: a safety test that needs a test database skips without DIVESAFE_TEST_DATABASE_URL
 (never in CI, which has a database), and the case-only path check skips on a case-sensitive
 volume (always on Linux CI). CI fails on any other skip. These tests pin that CI step and run the
-step's own check against sample logs, so a weakened pattern is caught."""
+step's own check against sample logs, so a weakened pattern is caught. They also pin the two
+`pip-audit` steps (ADR 0027 "Dependencies": runtime, and runtime with the `[eval]` extra)."""
 
 from __future__ import annotations
 
@@ -104,3 +105,164 @@ def test_agents_md_section_4_states_the_rule_and_its_two_exceptions() -> None:
     assert "`pytest -m safety` MUST always pass and never skip." in section
     assert "Two documented exceptions" in section
     assert "fails on any skip except the case-sensitive check" in section
+
+
+AUDIT_RUNTIME = "- name: Known vulnerabilities in Python dependencies (pip-audit, CI only)"
+AUDIT_EVAL = (
+    "- name: Known vulnerabilities in the evaluation extra (pip-audit, CI only; never in the image)"
+)
+_EVAL_REQUIREMENTS = (
+    """/tmp/audit/bin/python -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))"""
+    """["project"]; print("\\n".join([*p["dependencies"], *p["optional-dependencies"]["eval"]]))'"""
+    " > /tmp/eval-requirements.txt"
+)
+# Each audit step, exactly: any change (a flag such as --ignore-vuln, a pipe, `set +e`, `exit 0`,
+# a `shell:`, `if:` or `continue-on-error` key) fails the test and needs a reviewed test change.
+AUDIT_STEPS = {
+    AUDIT_RUNTIME: (
+        "        run: |\n"
+        "          python -m venv --clear /tmp/audit\n"
+        '          /tmp/audit/bin/pip install --quiet "pip-audit==2.10.1"\n'
+        "          /tmp/audit/bin/pip-audit --progress-spinner off .\n"
+    ),
+    AUDIT_EVAL: (
+        "        run: |\n"
+        f"          {_EVAL_REQUIREMENTS}\n"
+        "          grep -qx 'langfuse==[0-9.]*' /tmp/eval-requirements.txt\n"
+        "          /tmp/audit/bin/pip-audit --progress-spinner off -r /tmp/eval-requirements.txt\n"
+    ),
+}
+# A pip setting, or an environment a step writes for later steps, could change what is audited.
+_PIP_SETTINGS = re.compile(
+    r"\bPIP_[A-Z0-9_]+\b|GITHUB_ENV|GITHUB_PATH|pip\.conf|pip\.ini|\bpip3? config\b"
+)
+# Job-level keys that could make the `test` job's steps non-blocking or change their shell.
+_JOB_KEYS = re.compile(r"^    (if|continue-on-error|defaults):", re.MULTILINE)
+
+
+def _step(ci: str, name: str) -> str:
+    """The step's body after its name line, up to the next step or the next job, with blank lines
+    dropped and YAML comment lines dropped (a key after either is still part of the step)."""
+    start = ci.index(name) + len(name) + 1
+    ends = [ci.find("\n      - ", start - 1)]
+    job = re.search(r"\n {0,2}[^\s#]", ci[start - 1 :])
+    if job is not None:
+        ends.append(start - 1 + job.start())
+    ends = [e for e in ends if e != -1]
+    body = ci[start : min(ends)] if ends else ci[start:]
+    kept = [
+        line for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    ]
+    return "".join(f"{line}\n" for line in kept)
+
+
+def _test_job(ci: str) -> str:
+    start = ci.index("\n  test:\n")
+    return ci[start : ci.index("\n  image:\n", start)]
+
+
+def _audit_failures(ci: str) -> list[str]:
+    """ADR 0027 "Dependencies": CI audits the runtime dependencies, and them together with the
+    `[eval]` extra. Neither step may be removed, changed or made unable to fail."""
+    problems = []
+    if "continue-on-error" in ci:
+        problems.append("continue-on-error in the workflow")
+    if _JOB_KEYS.search(_test_job(ci)):
+        problems.append("the test job has an if:, continue-on-error or defaults: key")
+    if re.search(r"^defaults:", ci, re.MULTILINE):
+        problems.append("the workflow has a defaults: key")
+    if _PIP_SETTINGS.search(ci):
+        problems.append("a pip setting or a step-written environment could change the audit")
+    for name, expected in AUDIT_STEPS.items():
+        if ci.count(name) != 1:
+            problems.append(f"missing or repeated: {name}")
+        elif ci.index(name) > ci.index("\n  image:\n"):
+            problems.append(f"not in the test job: {name}")
+        elif _step(ci, name) != expected:
+            problems.append(f"changed: {name}")
+    if AUDIT_RUNTIME in ci and AUDIT_EVAL in ci and ci.index(AUDIT_EVAL) < ci.index(AUDIT_RUNTIME):
+        problems.append("the eval audit runs before the runtime audit creates /tmp/audit")
+    if AUDIT_RUNTIME in ci and AUDIT_EVAL in ci:
+        runtime_end = ci.index(AUDIT_RUNTIME) + len(AUDIT_RUNTIME)
+        if ci.find("\n      - ", runtime_end) != ci.index("      " + AUDIT_EVAL) - 1:
+            problems.append("the eval audit does not directly follow the runtime audit")
+    return problems
+
+
+def test_ci_audits_the_runtime_and_the_eval_extra() -> None:
+    assert _audit_failures(_ci()) == []
+
+
+_EVAL_PIP = "/tmp/audit/bin/pip-audit --progress-spinner off -r /tmp/eval-requirements.txt"
+_RUN_PIP = "/tmp/audit/bin/pip-audit --progress-spinner off .\n"
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (AUDIT_EVAL, "- name: something else"),
+        (AUDIT_RUNTIME, "- name: something else"),
+        (_EVAL_PIP, _EVAL_PIP + " || true"),
+        (_RUN_PIP, _RUN_PIP.replace(" .\n", " . || true\n")),
+        (_EVAL_PIP, _EVAL_PIP + " | cat"),
+        (_EVAL_PIP, _EVAL_PIP + "; exit 0"),
+        (_RUN_PIP, _RUN_PIP.replace(" .\n", " . --ignore-vuln GHSA-0000-0000-0000\n")),
+        ("          grep -qx 'langfuse==[0-9.]*' /tmp/eval-requirements.txt\n", ""),
+        ('*p["optional-dependencies"]["eval"]', '*p["optional-dependencies"]["dev"]'),
+        (AUDIT_EVAL + "\n", AUDIT_EVAL + "\n        continue-on-error: true\n"),
+        (AUDIT_EVAL + "\n", AUDIT_EVAL + "\n        shell: bash {0}\n"),
+        (AUDIT_EVAL + "\n", AUDIT_EVAL + "\n        if: false\n"),
+        (AUDIT_EVAL + "\n        run: |\n", AUDIT_EVAL + "\n        run: |\n          set +e\n"),
+        ("    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    strategy:", None),
+        ("  web:\n    runs-on:", "  web:\n    continue-on-error: true\n    runs-on:"),
+        ("\n  test:\n", "\n  test:\n    if: false\n"),
+        (_RUN_PIP, _RUN_PIP + "\n        if: false\n"),
+        (_EVAL_PIP + "\n", _EVAL_PIP + "\n\n        if: false\n"),
+        (_EVAL_PIP + "\n", _EVAL_PIP + "\n\n        shell: bash {0}\n"),
+        ("\njobs:\n", "\ndefaults:\n  run:\n    shell: true {0}\n\njobs:\n"),
+        ("\njobs:\n", "\nenv:\n  PIP_INDEX_URL: https://example.invalid/simple\n\njobs:\n"),
+        (_RUN_PIP, _RUN_PIP + "# note\n        if: false\n"),
+        (
+            "      - run: ruff check .\n",
+            '      - run: echo "PIP_INDEX_URL=https://example.invalid/simple" >> "$GITHUB_ENV"\n'
+            "      - run: ruff check .\n",
+        ),
+        (
+            "      - run: ruff check .\n",
+            "      - run: printf '[global]\\nindex-url = x\\n' > ~/.config/pip/pip.conf\n"
+            "      - run: ruff check .\n",
+        ),
+        (
+            "      " + AUDIT_EVAL,
+            "      - run: cp /bin/true /tmp/audit/bin/pip-audit\n      " + AUDIT_EVAL,
+        ),
+        (
+            "      - run: ruff check .\n",
+            '      - run: echo "PYTHONPATH=/tmp/x" >> "$GITHUB_ENV"\n      - run: ruff check .\n',
+        ),
+        (
+            "      - run: ruff check .\n",
+            '      - run: echo /tmp/x >> "$GITHUB_PATH"\n      - run: ruff check .\n',
+        ),
+        ("python -m venv --clear /tmp/audit", "python -m venv /tmp/audit"),
+        ("\n  test:\n", "\n  test:\n    defaults:\n      run:\n        shell: bash {0}\n"),
+    ],
+)
+def test_mutation_a_removed_changed_or_ignorable_audit_is_caught(old: str, new: str | None) -> None:
+    ci = _ci()
+    assert ci.count(old) == 1, old
+    if new is None:  # a job-level continue-on-error
+        new = old.replace("    strategy:", "    continue-on-error: true\n    strategy:")
+    assert _audit_failures(ci.replace(old, new)) != []
+
+
+def test_mutation_the_eval_audit_moved_before_the_runtime_audit_is_caught() -> None:
+    ci = _ci()
+    runtime = AUDIT_RUNTIME + "\n" + AUDIT_STEPS[AUDIT_RUNTIME]
+    evaluation = "      " + AUDIT_EVAL + "\n" + AUDIT_STEPS[AUDIT_EVAL]
+    assert ci.count(runtime) == 1 and ci.count(evaluation) == 1
+    swapped = ci.replace(evaluation, "").replace(
+        "      " + runtime, evaluation + "      " + runtime
+    )
+    assert swapped != ci
+    assert _audit_failures(swapped) != []

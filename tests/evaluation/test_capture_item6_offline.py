@@ -283,7 +283,7 @@ def _case_insensitive_volume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     def samefile(a: object, b: object) -> bool:
         return str(Path(str(a)).resolve()).casefold() == str(Path(str(b)).resolve()).casefold()
 
-    monkeypatch.setattr(cap.os.path, "samefile", samefile)
+    monkeypatch.setattr(os.path, "samefile", samefile)
     return repo, upper / "out"
 
 
@@ -298,10 +298,11 @@ def test_the_case_only_check_compares_files_not_text(
 def test_mutation_a_text_comparison_misses_the_case_only_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.evaluation import output_dir
     from tests.safety.kb_fakes import mutated_module
 
     mutant = mutated_module(
-        cap,
+        output_dir,
         (
             "if candidate.exists() and os.path.samefile(candidate, root):",
             "if candidate.exists() and str(candidate) == str(root):",
@@ -309,6 +310,16 @@ def test_mutation_a_text_comparison_misses_the_case_only_path(
     )
     repo, inside = _case_insensitive_volume(tmp_path, monkeypatch)
     assert mutant.check_output_dir(inside, repo=repo) == inside.resolve()
+
+
+def test_the_capture_uses_the_neutral_output_dir_check() -> None:
+    """ADR 0030 "AST tests": the check lives in `output_dir`; the capture re-uses the same objects,
+    so the tests above exercise (and the mutation check above mutates) the neutral module."""
+    from tests.evaluation import output_dir
+
+    assert cap.check_output_dir is output_dir.check_output_dir
+    assert cap.CaptureRefused is output_dir.CaptureRefused
+    assert cap.REPO == output_dir.REPO
 
 
 def test_an_existing_file_as_the_output_directory_is_refused(tmp_path: Path) -> None:

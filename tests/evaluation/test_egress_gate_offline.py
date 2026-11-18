@@ -207,8 +207,8 @@ def test_an_output_path_never_replaces_an_existing_record(tmp_path: Path) -> Non
 def test_raw_evaluation_records_are_refused_inside_the_repository(tmp_path: Path) -> None:
     """The live evaluation writes full assessment records and raw model replies. `.gitignore` is
     only a backstop, so a directory inside the repository fails the run."""
-    from tests.evaluation.capture_item6 import REPO, CaptureRefused
     from tests.evaluation.egress_gate import eval_output_dir
+    from tests.evaluation.output_dir import REPO, CaptureRefused
 
     with pytest.raises(CaptureRefused, match="inside the repository"):
         eval_output_dir(str(REPO), tmp_path)
@@ -242,3 +242,82 @@ def test_a_missing_output_directory_is_created_privately_before_any_prompt(tmp_p
     assert eval_output_dir(str(target), tmp_path) == target.resolve()
     assert target.is_dir()
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+
+_NEUTRAL = ("egress_gate", "output_dir")
+_FORBIDDEN = ("tests.evaluation.capture_item6", "divesafe.api")
+
+
+def _forbidden_imports(source: str) -> list[str]:
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        found += [n for n in names if n.startswith(_FORBIDDEN) or n.endswith("capture_item6")]
+    return found
+
+
+@pytest.mark.parametrize("name", _NEUTRAL)
+def test_the_output_dir_path_never_imports_the_capture_or_the_api(name: str) -> None:
+    """ADR 0030 "AST tests": `eval_output_dir` loads neither `capture_item6` nor `api.state`."""
+    source = (Path(__file__).parent / f"{name}.py").read_text(encoding="utf-8")
+    assert _forbidden_imports(source) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from tests.evaluation.capture_item6 import check_output_dir",
+        "from tests.evaluation import capture_item6",
+        "import tests.evaluation.capture_item6",
+        "from divesafe.api.state import build_default_state",
+        "from divesafe.api import state",
+    ],
+)
+def test_mutation_a_capture_or_api_import_is_caught(line: str) -> None:
+    source = (Path(__file__).parent / "egress_gate.py").read_text(encoding="utf-8")
+    assert _forbidden_imports(f"{source}\n{line}\n") != []
+
+
+def _modules_loaded_by_eval_output_dir(tmp_path: Path, prefix: str = "") -> str:
+    """Run `eval_output_dir` in a fresh interpreter; print the capture or API modules it loaded."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, pathlib, tests.evaluation.egress_gate as g\n"
+        f"{prefix}"
+        "g.eval_output_dir(None, pathlib.Path(sys.argv[1]) / 'out')\n"
+        "bad = [m for m in sys.modules\n"
+        "       if m.endswith('capture_item6') or m.startswith('divesafe.api')]\n"
+        "print(bad)\n"
+    )
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run(
+        [sys.executable, "-c", probe, str(tmp_path)],
+        cwd=root,
+        env={"PYTHONPATH": f"{root / 'src'}:{root}", "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return done.stdout.strip()
+
+
+def test_using_eval_output_dir_loads_neither_the_capture_nor_the_api(tmp_path: Path) -> None:
+    assert _modules_loaded_by_eval_output_dir(tmp_path) == "[]"
+
+
+@pytest.mark.parametrize(
+    "prefix", ["import tests.evaluation.capture_item6\n", "import divesafe.api.state\n"]
+)
+def test_mutation_the_probe_sees_a_loaded_capture_or_api(tmp_path: Path, prefix: str) -> None:
+    assert _modules_loaded_by_eval_output_dir(tmp_path, prefix) != "[]"

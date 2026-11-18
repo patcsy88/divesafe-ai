@@ -1061,19 +1061,121 @@ def test_domain_and_risk_never_import_tracing(package: str) -> None:
             assert not name.startswith(("requests", "urllib3", "langfuse")), (path, name)
 
 
+_EVAL_LANGFUSE = re.compile(r"langfuse==\d+\.\d+\.\d+")
+
+
+def _langfuse_imports(source: str) -> list[str]:
+    return [name for _, name in _imports(ast.parse(source)) if name.startswith("langfuse")]
+
+
+def _normalise(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _dependency_violations(document: dict[str, Any]) -> list[str]:
+    """RELAXED (ADR 0027 "Dependencies", ADR 0030 "Testing"; owner-approved, not a strengthening):
+    `langfuse` may appear only in the `eval` extra, pinned with `==`. Anywhere else in
+    `pyproject.toml` (`dependencies`, `dev`, any other extra, a dependency group, the build
+    requirements) it is a violation, as is the project naming itself (`divesafe[eval]` would pull
+    the extra in), and an OpenTelemetry instrumentation or distro package anywhere, `eval`
+    included."""
+    project = document["project"]
+    own = _normalise(project["name"])
+    groups = {"dependencies": list(project["dependencies"])}
+    groups |= {f"extra:{k}": list(v) for k, v in project.get("optional-dependencies", {}).items()}
+    groups |= {
+        f"group:{k}": [r for r in v if isinstance(r, str)]
+        for k, v in document.get("dependency-groups", {}).items()
+    }
+    groups["build-system"] = list(document.get("build-system", {}).get("requires", []))
+    found = []
+    for group, declared in groups.items():
+        for requirement in declared:
+            spec = requirement.strip()
+            name = re.split(r"[\s<>=!~\[;@]", spec, maxsplit=1)[0].lower()
+            if _normalise(name) == own:
+                found.append(f"{group}: {spec} (the project names itself)")
+            if name.startswith(("opentelemetry-instrumentation", "opentelemetry-distro")):
+                found.append(f"{group}: {spec}")
+            allowed = group == "extra:eval" and _EVAL_LANGFUSE.fullmatch(spec)
+            if "langfuse" in spec.lower() and not allowed:
+                found.append(f"{group}: {spec}")
+    assert groups["dependencies"], "no runtime dependencies were read"
+    return found
+
+
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+
+def _eval_pin_ok(document: dict[str, Any]) -> bool:
+    pinned = [r for r in document["project"]["optional-dependencies"]["eval"] if "langfuse" in r]
+    return len(pinned) == 1 and _EVAL_LANGFUSE.fullmatch(pinned[0]) is not None
+
+
 def test_src_and_the_dependencies_never_name_langfuse() -> None:
     for path in _python():
-        for _, name in _imports(ast.parse(path.read_text())):
-            assert not name.startswith("langfuse"), (path, name)
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    declared = [*project["dependencies"]]
-    for extra in project.get("optional-dependencies", {}).values():
-        declared.extend(extra)
-    names = {re.split(r"[\s<>=!~\[;]", d.strip(), maxsplit=1)[0].lower() for d in declared}
-    assert names, "no dependencies were read"
-    for name in names:
-        assert "langfuse" not in name, name
-        assert not name.startswith(("opentelemetry-instrumentation", "opentelemetry-distro")), name
+        assert _langfuse_imports(path.read_text()) == [], path
+    assert _dependency_violations(_pyproject()) == []
+
+
+def test_langfuse_is_pinned_exactly_in_the_eval_extra() -> None:
+    assert _eval_pin_ok(_pyproject())
+
+
+def test_mutation_a_second_langfuse_pin_in_eval_is_caught() -> None:
+    document = _pyproject()
+    document["project"]["optional-dependencies"]["eval"] = ["langfuse==5.2.0", "langfuse==4.0.0"]
+    assert not _eval_pin_ok(document)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["import langfuse", "from langfuse import Langfuse", "import langfuse.otel as lf"],
+)
+def test_mutation_a_src_langfuse_import_is_caught(source: str) -> None:
+    assert _langfuse_imports(source) != []
+
+
+@pytest.mark.parametrize(
+    ("where", "requirement"),
+    [
+        ("dependencies", "langfuse==5.2.0"),
+        ("dependencies", "Langfuse>=5"),
+        ("dev", "langfuse==5.2.0"),
+        ("other", "langfuse==5.2.0"),
+        ("evaluation", "langfuse==5.2.0"),
+        ("eval", "langfuse>=5.2.0"),
+        ("eval", "langfuse"),
+        ("eval", "langfuse[openai]==5.2.0"),
+        ("eval", "langfuse @ https://example.invalid/langfuse.whl"),
+        ("eval", "langfuse==5.2.0; python_version >= '3.14'"),
+        ("eval", "Langfuse==5.2.0"),
+        ("eval", "langfuse===5.2.0"),
+        ("eval", "langfuse-langchain==1.0.0"),
+        ("eval", "opentelemetry-instrumentation-httpx==0.1"),
+        ("dev", "opentelemetry-distro"),
+        ("dev", "divesafe[eval]"),
+        ("dependencies", "DiveSafe[eval]"),
+        ("other", "divesafe[dev,eval]"),
+        ("group:dev", "langfuse==5.2.0"),
+        ("build-system", "langfuse==5.2.0"),
+    ],
+)
+def test_mutation_langfuse_outside_the_pinned_eval_extra_is_caught(
+    where: str, requirement: str
+) -> None:
+    document = _pyproject()  # a fresh parse: edits never reach the file
+    project = document["project"]
+    if where == "dependencies":
+        project["dependencies"].append(requirement)
+    elif where == "build-system":
+        document["build-system"]["requires"].append(requirement)
+    elif where.startswith("group:"):
+        document.setdefault("dependency-groups", {}).setdefault(where[6:], []).append(requirement)
+    else:
+        project["optional-dependencies"].setdefault(where, []).append(requirement)
+    assert _dependency_violations(document) != []
 
 
 _GLOBAL_SETTERS = {

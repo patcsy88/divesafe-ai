@@ -380,10 +380,13 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   - **AST tests:** no `src` file imports anything from `tests`;
     `tests/safety/test_adversarial_false_go.py` never imports the judge module; the judge module
     has no `langfuse` import of any kind and never imports `api.state` or `capture_item6` (the
-    judge module's own imports; at build, `check_output_dir` moves out of `capture_item6` into
-    `egress_gate` or a neutral module, so that using `eval_output_dir` loads neither
-    `capture_item6` nor `api.state`; its tests, including the case-only mutation check, move
-    with it and are no weaker; `capture_item6` imports it from its new place).
+    judge module's own imports; at build step 1, `check_output_dir` and `CaptureRefused` moved
+    out of `capture_item6` into the neutral module `tests/evaluation/output_dir.py`, so that
+    using `eval_output_dir` loads neither `capture_item6` nor `api.state` (an AST test and a
+    subprocess test that calls `eval_output_dir`, each mutation-checked); its tests, including
+    the case-only mutation check (which now mutates the new module), stay in
+    `test_capture_item6_offline.py` (owner, build step 1; the CI skip guard is unchanged), are
+    no weaker, and a test pins that `capture_item6` re-exports the same objects).
   - **Refusals:** each refusal in decisions 3 and 4 and in "never sees" (basis mismatch; judge
     model equal to an agent model; a `kb:` or KNOWLEDGE item present; each of the three
     environment variables set; a PHN or tides.today item, identified by source; §2's sender not
@@ -512,3 +515,11 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   completion marker's flush and SDK shutdown are not checked. These rest on the build-step-1
   record for the pinned SDK, checked again with each SDK version; the exposure stays in the
   owner's shell, on synthetic-set data.
+- `langfuse` is pinned exactly in `[eval]`, without hashes, and its own dependencies (`httpx`,
+  `httpcore`, `backoff`, `wrapt`, `packaging`, `typing-extensions`, `pydantic`, and OpenTelemetry
+  within the runtime's `<1.46`) are ranges. The sender's version check detects a different
+  `langfuse` version, not altered files, another index or a change in a dependency. Decision 3's
+  build-step-1 checks are therefore recorded with the resolved version of every package in the
+  evaluation environment (`pip freeze`), and repeated when any of them changes; the run-time
+  checks fail closed whatever those versions are. A hashed lock file for `[eval]` follows
+  ADR 0024's open lock-file item.
