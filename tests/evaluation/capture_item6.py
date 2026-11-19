@@ -55,8 +55,8 @@ CONFIRM_VALUE = "item6"
 DIR_ENV = "DIVESAFE_CAPTURE_DIR"
 # The only connectors the live run may call: the agreed sources from the production connector set
 # (api/state.py). An allow-list, not an exclusion, so a new connector is refused until it is added
-# here on purpose. PHN (ADR 0021) and tides.today (ADR 0029), no permission wording on file, are
-# not on it.
+# here on purpose. PHN (ADR 0021, no permission wording on file) and tides.today (ADR 0029, whose
+# permission does not cover evaluation runs) are not on it.
 ALLOWED_CONNECTORS = frozenset(
     {
         "open-meteo-marine",

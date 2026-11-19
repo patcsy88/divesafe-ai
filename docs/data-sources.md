@@ -390,8 +390,10 @@ phase per local day). Only chart datum and the `tpe` upstream are accepted; the 
 this point is not stated and the upstream is not verified. Spring/neap is not available (403 for
 this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is our assumption.
 The terms (§2, §6, §9) forbid use as a sole source for diving and need written permission for
-automated use in another application, so the connector `TidesTodayConnector` is **off by
-default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until that permission is on file. No tidal-stream data.
+automated use in another application. That permission is on file for the owner's deployment
+(2026-11-18; scope and limits in the ADR 0029 status). The connector `TidesTodayConnector` stays
+**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until the full copyright notice is shown in the
+user view and the owner decides to switch it on. No tidal-stream data.
 Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED; Amendment 1).
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
