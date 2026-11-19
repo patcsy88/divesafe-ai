@@ -299,7 +299,8 @@ cannot confirm the decision was saved.
   single missing high/low pair can pass. All of PHN's limits on currents apply unchanged:
   `tidal_current` stays unencodable, degraded data cannot support GO or CAUTION, and
   `degraded_may_support_go` must not be turned on for tides. With PHN also on, both items are
-  present and no check compares them. Off by default until the provider's permission is on file.
+  present and no check compares them. Off by default until the full copyright notice is shown in
+  the user view and the owner switches it on (ADR 0029 status).
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   corroboration logic must use `can_corroborate`
   ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an

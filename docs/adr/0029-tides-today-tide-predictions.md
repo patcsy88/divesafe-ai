@@ -1,11 +1,47 @@
 # ADR 0029: Tide predictions from the tides.today API
 
-Status: PROPOSED (2026-11-17). The connector is built **off by default**
-(`DIVESAFE_TIDES_TODAY_ENABLED=false`), like PHN (ADR 0021). The owner reports that written
-permission from the provider (Stephen Wright, trading as Tides Today) is being sought. **Until
-that wording is on file, the connector must not be switched on**, and nothing here makes the
-permission verified. Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no
-blockers; their should-fix findings and nits are fixed, and the final round was clean.
+Status: PROPOSED (2026-11-17). **Written permission on file (2026-11-18); the connector must still
+not be switched on (see Switch-on conditions below).** Stephen (Ste) Wright, trading as Tides Today,
+replied on 2026-11-18 to the owner's requests of 2026-11-17. The reply came from the provider's
+personal domain, not the tides.today address of earlier mails in the same thread, with the same
+signature; the owner accepted it as the provider (2026-11-19), and the identity was not otherwise
+checked. The reply: "Feel free to use the API key as you see fit, you have my full permission to use
+it as you describe." The use described: V1 tide, moon and meteorology data in a recreational-diving
+decision-support tool where a qualified human makes the final decision and the data is never the
+sole source (that the human is qualified is a condition of the deployment, through who is given a
+DiveSafe API key, and is not checked by the software); storing it in assessment records; sending it
+to a hosted model that writes the explanation for the human reviewer; and the provider's copyright
+notice shown with every item. The owner keeps the full thread, with headers, outside the repository.
+
+Scope, as read by the owner (2026-11-19): the reply covers API V2 (Amendment 1) with the same key.
+It covers the owner's own deployment with the owner's key, not anyone else running this code, and
+non-commercial use only; a commercial deployment must ask again. It does not cover evaluation
+exports to Langfuse, the item-6 capture, or committing recorded responses to this repository; those
+exclusions (decision 12, Fixture) stay. It does not lift §2 (never the sole source) or §9 (no key
+sharing, no bypassing rate limits, keep attribution), and it does not make the data validated or
+safe. The hosted model does more than write the explanation: the item is in the Reason-stage prompts
+that read tides, so the model also interprets it in specialist findings, the three scenarios and a
+risk proposal that `reconcile` can only tighten. The owner reads this as within the decision support
+described (2026-11-19). §9 also forbids emergency, navigational or safety-critical use, and the
+provider's own notice says the predictions should not be relied on for navigation or safety-critical
+decisions. The owner reads the permission as covering decision support as described: a human
+decides, the data is never the sole source, and DiveSafe is not a safety authority. That notice
+still applies, and every item's quality note keeps stating the terms. The reply did not answer the
+questions on units and vertical datum, meteorology units, rate limit and caching, or spring/neap
+access (403), so Known limits and Amendment 1 are unchanged and the call budget is still our
+assumption.
+
+**Switch-on conditions.** The connector stays built **off by default**
+(`DIVESAFE_TIDES_TODAY_ENABLED=false`). It may be switched on only after (1) the full copyright
+notice is shown with every item in the user view (a reviewed code change and an edit to decision 11;
+owner decision, 2026-11-19), and (2) a separate owner decision to switch it on, which has not been
+taken. The provider's mail of 2026-11-17 says the key is deactivated if it is not used for three
+months; a deactivated key makes the tides.today item fail (tides missing, so INSUFFICIENT EVIDENCE,
+when it is the only tide source), an availability issue, not a safety one.
+
+Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no blockers; their should-fix
+findings and nits are fixed, and the final round was clean.
+The permission text (2026-11-19) was reviewed by `security-reviewer` and `risk-reviewer`.
 Amended 2026-11-17 (Amendment 1, owner): the connector now uses API V2 with an `x-api-key` header;
 the application ID and spring/neap are removed. See Amendment 1 at the end. Amendment 1 was reviewed
 by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-18); no blockers remain.
@@ -165,7 +201,10 @@ dive window touches.
     and stored with the record. Because the user view cuts attributions at 300 characters, the
     `attribution` field is a fixed short text naming Tides Today, FES (CNES, CLS, LEGOS / AVISO+),
     ETOPO 2022 (NOAA NCEI) and PSMSL, with a pointer to the full text. **How attribution must be
-    shown is one of the questions to the provider**; its answer replaces this. The full notice
+    shown is one of the questions to the provider**; its answer replaces this. *(The provider did
+    not answer this. The owner's request promised the notice with every item, so the owner decided
+    on 2026-11-19 to show the full notice in the user view; this decision is edited with that code
+    change.)* The full notice
     is record-only: `agents.prompts.RECORD_ONLY_VALUE_KEYS` drops `provider_notice` from every
     prompt payload (security review 2026-11-17), so only the short `attribution` goes to the
     model host.
@@ -182,7 +221,8 @@ dive window touches.
     *(Superseded by Amendment 1: the V2 exclusions are in decision 2 there; spring/neap is
     no longer available.)*
 14. **Off by default.** `DIVESAFE_TIDES_TODAY_ENABLED` defaults to false. Enabling it is the
-    owner's decision after the permission wording is on file. Production compose passes it to the
+    owner's decision, taken only once both switch-on conditions in the status are met (the
+    permission is on file since 2026-11-18). Production compose passes it to the
     api only, as `${DIVESAFE_TIDES_TODAY_ENABLED:-false}`, and `production.env.example` sets it to
     `false` (owner, 2026-11-17); both are pinned by `tests/safety/test_production_compose.py`.
 
@@ -201,7 +241,8 @@ contradictory evidence). The model sees both; the engine treats both as present.
 - **Add the host to `ALLOWED_HOSTS`.** Rejected: every default-getter connector could call it
   with no credential, and a credential could leak to other hosts.
 - **Show the full copyright text in the user view.** Not done until the provider says how it
-  wants attribution shown; the record keeps it whole.
+  wants attribution shown; the record keeps it whole. *(Reversed by the owner, 2026-11-19; see
+  decision 11.)*
 
 ## Fixture
 

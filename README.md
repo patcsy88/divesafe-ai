@@ -28,8 +28,8 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
   - PHN e-Tide tide predictions, which are off by default and DEGRADED
     ([ADR 0021](docs/adr/0021-phn-etide-tide-predictions.md));
   - tides.today tide predictions (Teluk Tekek, 3.7 km from the Tioman reference point), which are
-    DEGRADED and stay off by default until the provider's written permission is on file
-    ([ADR 0029](docs/adr/0029-tides-today-tide-predictions.md)).
+    DEGRADED and stay off by default until the full copyright notice is shown and the owner
+    switches them on ([ADR 0029](docs/adr/0029-tides-today-tide-predictions.md)).
 - An evidence and provenance service.
 - The pipeline, as a plain-Python stage graph (Observe, Retrieve, Assess, Reason, Rejudge,
   Propose, Supervise, Gate). It has a code-only Supervise stage and a per-stage trace on the
