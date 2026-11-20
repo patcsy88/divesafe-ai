@@ -83,6 +83,11 @@ A `PhnEtideConnector` reads PHN's own high/low list for the days a dive window t
    predictions exist. **Turning on `degraded_may_support_go` is a separate risk decision, it is
    global (it would also admit MET daily ranges and coarse model currents), and it must not be
    taken for tides.** Making the degraded policy per category is a follow-up to ADR 0008.
+   **Superseded in part (owner, 2026-11-20, ADR 0008 Amendment 2):** with
+   `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on, a tide prediction satisfies the required `tides`
+   category for GO or CAUTION; no rule reads it. No other DEGRADED tide item can satisfy the
+   category, and the coarse-daily rule (`COARSE_SPAN`) still holds MET daily ranges and other daily
+   items.
 5. **Transport.** The endpoint needs a POST with a form body. A separate getter subclass
    (`UrllibFormPostJsonGetter`) with its own host list `PHN_HOSTS = {"etide.hydro.gov.my"}`,
    https only, standard port and no userinfo, no redirects followed, no cookies kept (so each call

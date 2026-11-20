@@ -68,15 +68,15 @@ reachable but not yet approved or implemented. Nothing here has been called from
   as Tioman. **Known gaps (ADR 0029 Amendment 2):** (1) Tiger Reef still cannot reach GO: tides are
   a required category; until tides.today was switched on in production (2026-11-20, 06:17 UTC) they
   were missing, and since then a Tiger Reef run gets the DEGRADED Teluk Tekek item, a proxy about
-  13.4 km away, which no rule reads and which never supports GO or CAUTION (ADR 0008 Amendment 1:
-  never for tides); factors without a deployed rule (four of which the rule format cannot hold) stay
-  at INSUFFICIENT EVIDENCE, and every other live value is DEGRADED too; NO-GO is still possible; (2)
-  the Tioman site guide is loaded only for `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves
-  no site knowledge and the site view says none is registered, although, by the owner's report from
-  the trial, the guide lists currents at Tiger Reef (ADR 0028); loading a reviewed Tiger Reef or
-  all-sites guide is the owner's decision. Open-Meteo marine has no site table, so it already
-  returns current for Tiger Reef from a grid point about 2.6 km away; this is model evidence only
-  (ADR 0029 Amendment 2).
+  13.4 km away, which no rule reads and which satisfies the required `tides` category for GO or
+  CAUTION only with `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 2); factors without a
+  deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE, and every
+  other live value is DEGRADED too; NO-GO is still possible; (2) the Tioman site guide is loaded
+  only for `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves no site knowledge and the site
+  view says none is registered, although, by the owner's report from the trial, the guide lists
+  currents at Tiger Reef (ADR 0028); loading a reviewed Tiger Reef or all-sites guide is the owner's
+  decision. Open-Meteo marine has no site table, so it already returns current for Tiger Reef from a
+  grid point about 2.6 km away; this is model evidence only (ADR 0029 Amendment 2).
 - **Marine connector:** all items are `is_forecast=True` and `data_type="model"`, even for hours already past, because they are model values, not observations. One `EvidenceItem` per category per UTC hour (`waves_swell`,
   `sea_surface_temperature` as `sea_temperature`, `currents`). It rejects, per category, any
   missing hour, null, unexpected unit or out-of-range value, reports it in `issues`, and

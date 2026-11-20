@@ -3,6 +3,9 @@
 - Status: Accepted (owner confirmed `degraded_may_support_go=False` on 2026-10-10)
 - Amended 2026-11-20 (Amendment 1, owner): degraded evidence may support GO and CAUTION when
   `DIVESAFE_DEGRADED_MAY_SUPPORT_GO=true`; see Amendment 1 at the end.
+- Amended again 2026-11-20 (Amendment 2, owner): with the setting on, tide predictions satisfy the
+  required `tides` category for GO and CAUTION; tides no longer need observations; no other DEGRADED
+  tide item can satisfy the category. See Amendment 2 at the end.
 - Date: 2026-10-09
 
 ## Context
@@ -159,7 +162,8 @@ height or time gives no current (ADR 0021, ADR 0029 decision 6). Tested in
 `tests/safety/test_degraded_support_policy.py` (section i), mutation-checked. The hold works
 through the required-category check, so it acts only while `tides` is a required category; a
 safety test pins `tides` in the production categories. While tides are required and no measured
-tide source exists, no site can reach GO or CAUTION, even with the setting on.
+tide source exists, no site can reach GO or CAUTION, even with the setting on. (Superseded by
+Amendment 2 for tide predictions.)
 
 Basis: written limits in the owner's signed-off ruleset (from a local dive professional's current
 bands and the owner's mapping of them). The basis covers only factors with signed-off rules; the
@@ -197,4 +201,53 @@ production. The sign-off covers the code and the stated controls in this change 
 planned relaxation of the tides hold for predictions, which needs its own review. It does not
 cover the owner's ruleset limits or the owner's judgement on the model current, which are recorded
 as the owner's.
-(Re-checked 2026-11-20 after the `EvidencePolicy` `KW_ONLY` change.)
+(Re-checked 2026-11-20 after the `EvidencePolicy` `KW_ONLY` change.) (The tides sentence is
+superseded by Amendment 2, 2026-11-20.)
+
+## Amendment 2: tide predictions may support GO and CAUTION (2026-11-20, owner)
+
+The owner decides that tides no longer need to be observed: a tide prediction is adequate. The owner
+narrows Amendment 1's per-category hold on tides to everything except predictions.
+`risk.DEGRADED_NEVER_SUPPORTS_GO` still names `tides`; the one way out is DEGRADED tide PREDICTIONs
+that cover the dive window on their own. No other DEGRADED tide item (model, forecast or a degraded
+gauge reading, however short its validity) can satisfy the category. A PREDICTION in
+`risk.TIME_RESOLVED_PREDICTIONS` (`tides` only) is also time-resolved, not coarse: a tide day lists
+every high and low water with its time, so the `COARSE_SPAN` rule does not hold it. The exemption
+checks the item's kind and category, not its content: the tides.today parser can accept a day with
+one high/low pair missing. A new tide PREDICTION source needs its own review before it relies on
+`TIME_RESOLVED_PREDICTIONS`. With `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on, a DEGRADED tide prediction
+that is fresh and covers the dive window therefore satisfies the required `tides` category for GO or
+CAUTION; no rule reads it. The result is marked for the human's fixed note. With the setting off,
+nothing changes. A daily prediction in any other category stays coarse.
+
+Unchanged: a tide prediction is for a reference point, not the dive site (tides.today's Teluk Tekek
+point is about 13.4 km from Tiger Reef), is astronomical only, and gives no current: `tidal_current`
+stays unencodable (`tests/safety/test_tide_is_not_a_current.py`), no rule reads tides, and the
+tides.today permission's conditions (never the sole source; a human decides) still apply. This
+change alone does not make GO reachable in production. The factors that cannot be encoded are now
+the only code barrier to GO, so any change that encodes or drops one of them needs a full risk
+review.
+
+Tested in section i of `tests/safety/test_degraded_support_policy.py` (replacing Amendment 1's
+tide-hold tests, with the owner's approval) and in the tides.today and PHN evidence tests;
+mutation-checked. Supersedes ADR 0021 decision 4 and ADR 0029 decision 6 where they say the setting
+must not be turned on for tides. Risk-reviewer sign-off: see below.
+
+risk-reviewer sign-off (2026-11-20): no blockers. Reviewed the narrowing of Amendment 1's tides
+hold, `risk.TIME_RESOLVED_PREDICTIONS`, `RiskRulesEngine._predictions_cover` and the exemption in
+`_fine_cover`, the guard rationale, and the replaced tests in section i of
+`tests/safety/test_degraded_support_policy.py` and in the PHN and tides.today evidence tests
+(mutation-checked as the author reports; the one surviving mutant, the kind check in `_fine_cover`,
+is equivalent while `TIME_RESOLVED_PREDICTIONS` is a subset of `DEGRADED_NEVER_SUPPORTS_GO`). This
+relaxation is the owner's decision. With `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on, DEGRADED tide
+PREDICTIONs that are fresh and cover the dive window on their own satisfy the required `tides`
+category for GO or CAUTION, and the result is marked for the human's fixed note; no other DEGRADED
+tide item (model, forecast or reading, however short) can satisfy the category. With the setting
+off, nothing changes. A daily prediction in any other category, and MET and other daily items, stay
+coarse. No rule reads tide values: a tide prediction is for a reference point, not the dive site,
+and gives no current. `tidal_current` and three other threshold factors still cannot be encoded
+(pinned by `tests/safety/test_tide_is_not_a_current.py`), so with the current code GO and CAUTION
+remain unreachable in production. That is now the only code barrier, so any change that encodes or
+drops one of those factors needs its own risk review. The sign-off covers this change only. It does
+not cover the owner's judgement that tide predictions are adequate, which is recorded as the
+owner's.
