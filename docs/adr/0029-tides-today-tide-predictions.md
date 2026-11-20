@@ -45,6 +45,9 @@ The permission text (2026-11-19) was reviewed by `security-reviewer` and `risk-r
 Amended 2026-11-17 (Amendment 1, owner): the connector now uses API V2 with an `x-api-key` header;
 the application ID and spring/neap are removed. See Amendment 1 at the end. Amendment 1 was reviewed
 by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-18); no blockers remain.
+Amended 2026-11-20 (Amendment 2, owner): the dive site `my-pahang-tiger-reef` is mapped to the same
+Teluk Tekek point as a proxy, 13.4 km from the Tiger Reef dive site (position as published by PADI). The written permission (on file since 2026-11-18) is
+read by the owner as covering it; see Amendment 2 at the end.
 
 ## Context
 
@@ -128,7 +131,10 @@ dive window touches.
 1. **Location (option A, accepted by the owner).** A fixed, reviewed table in code:
    `my-pahang-pulau-tioman` -> location 2960 "Teluk Tekek" (2.800000, 104.133003). The item's
    `location` is the tides.today point, not the dive site. It says the point is about 3.7 km from
-   the site's reference point and is a prediction for that point. No "Tioman" location exists in
+   the site's reference point and is a prediction for that point. (Amendment 2 adds
+   `my-pahang-tiger-reef` -> the same location 2960, "about 13.4 km from the Tiger Reef dive site
+   (position as published by PADI)"; the distance is stated per site, and no search was made around
+   the reef: see Amendment 2.) No "Tioman" location exists in
    tides.today search; 2960 is the only one within 25 km.
 2. **Evidence.** One item per **local day** (Asia/Kuala_Lumpur, +08:00, no daylight saving):
    category `tides`, `data_kind` PREDICTION, `source` `tides-today-prediction`, `source_version`
@@ -259,8 +265,9 @@ nothing from them is committed.
 
 - V1: units came from the owner's reading of the website and the datum was not stated. V2
   (Amendment 1): metres as named by the field `heightM`; datum CD as stated, its level unknown.
-- A prediction for Teluk Tekek, 3.7 km from the reference point, not for any reef. Astronomical
-  prediction only, with no weather or pressure effects.
+- A prediction for Teluk Tekek, 3.7 km from the Tioman reference point (13.4 km from the
+  Tiger Reef dive site, position as published by PADI; Amendment 2), not for any reef. Astronomical prediction only, with no weather or
+  pressure effects.
 - Which model produced the values: V2 names `tpe` (the provider's engine on FES); not verified.
 - `estimated: true` extremes are refused, so a change upstream could make the category fail.
 - The plausibility bound on the gap between extremes (18 h) could refuse a real long diurnal
@@ -347,3 +354,73 @@ is stated as CD, but its level is not; the stated upstream is unverified; the AP
 with no change notice; spring/neap is not available.
 
 Reviewed by `security-reviewer` and `risk-reviewer` (2026-11-18).
+
+## Amendment 2: Tiger Reef mapped to Teluk Tekek as a proxy (2026-11-20, owner)
+
+The owner ordered the dive site `my-pahang-tiger-reef` ("Tiger Reef (dive site)", 2.89302, 104.05593, the point published on PADI's "Tiger Reef"
+dive-site page, which matches the owner's boat GPS reading (undated; supplied 2026-11-20) exactly; see the
+position-source bullet)
+to be tide-mapped
+to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman entry.
+
+- **It is a proxy, not the reef.** The point is 13.4 km from the Tiger Reef dive site as registered (haversine; position as published by PADI), against
+  3.7 km for the Tioman reference point. The tide at the reef may differ in height and time from
+  the tide at Teluk Tekek; nothing here says by how much, and the data cannot say whether the
+  difference matters for any dive.
+- **The distance is per site.** `Location` carries a `distance_note`; the fixed `DISTANCE_NOTE`
+  is removed. Tioman keeps its wording ("about 3.7 km from the site's reference point") in
+  `location.description` and `spatial_scope`. Tiger Reef's items say "about 13.4 km from the
+  Tiger Reef dive site (position as published by PADI)". Both still say the item is a prediction for
+  the tides.today point, not for the dive site (item `location.description`, `spatial_scope` and
+  the quality notes). The one new quality note below is on every site's items, Tioman's included.
+- **Nothing else changes.** Evidence stays DEGRADED, upstream unknown, never corroborating, and
+  tides.today stays **off by default** (`DIVESAFE_TIDES_TODAY_ENABLED` is not touched). The
+  permission text is unchanged; whether it covers Tiger Reef is the owner's reading (below). Tiger Reef is not mapped for PHN
+  e-Tide (being removed), the data.gov.my forecast or the MET connectors (their zone tables are
+  not yet checked); those refuse it with their fixed "not registered" message.
+- **The distance wording for Tiger Reef** is "about 13.4 km from the Tiger Reef dive site
+  (position as published by PADI)", because the position is PADI's published one, which PADI does
+  not warrant, and no survey was made; the 13.4 km is only as good as that position. Every item, for
+  Tioman as well as Tiger Reef, also carries the quality note "the tide at the dive site may
+  differ in time and height from this point's by an unknown amount".
+- **No search was made around the reef.** Decision 1's "2960 is the only one within 25 km" was
+  centred on the Tioman reference point, which is 16.2 km from Tiger Reef. No tides.today search
+  was made around Tiger Reef itself, so a location closer than 13.4 km may exist. Finding out is
+  open work (it needs the provider's search, which is the owner's access).
+- **The owner's reading of the permission (2026-11-20).** The owner reads the provider's written
+  permission (on file since 2026-11-18, scope as read on 2026-11-19) as covering Tiger Reef as a
+  proxy through this same key and API. This is the owner's reading, not a confirmation from the
+  provider; the provider was not asked. The same scope points apply: the owner's own deployment,
+  non-commercial use, a qualified human deciding, the data never the sole source, and §2 and §9
+  not lifted.
+- **Known gap: the site guide is not retrieved for Tiger Reef.** The only loaded site document is
+  `tioman-site-guide`, for site `my-pahang-pulau-tioman` (ADR 0024: v1 loaded 2026-11-12; v2 the
+  same 1489-character text with a new section name, "Pulau Tioman site guide"; v3, loaded
+  2026-11-15 with the model-host attestation, again byte-identical to v2 and APPROVED, review by
+  2027-05-13, v1 and v2 WITHDRAWN). The text was not changed by any version and its content is not
+  restated in the repository; the only record of what it says about Tiger Reef is ADR 0028's note
+  that, in the owner's trial, the guide's hazards included currents at Chebeh and Tiger Reef, so
+  that is the owner's report, not something this change checked. Retrieval is
+  by the plan's `site_id` (or an all-sites document), so a Tiger Reef run retrieves nothing, the
+  site view says "No hazards, local rules or site knowledge are registered for this site", and the
+  human at the gate does not see the one reported Tiger Reef current hazard (owner's trial report, ADR 0028). Absence is not evidence
+  of no hazard. The owner decides whether a reviewed Tiger Reef (or all-sites) guide is loaded
+  through the knowledge loader; this change loads nothing.
+- **Known gap: Tiger Reef cannot reach GO.** The data.gov.my forecast connector (always built) and
+  the MET marine connector (built when its token is set, and live in production) refuse Tiger
+  Reef with their fixed "not registered" message, and so does PHN while it exists. Every Tiger Reef
+  run therefore records `evidence.connector_issues`, which makes it INSUFFICIENT EVIDENCE at
+  best (NO-GO is still possible), and each refusal adds to the `observe.connector_failed:<name>` counts (metric noise, ADR
+  0027). Tiger Reef can never reach GO, even with a future signed-off ruleset, until those
+  connectors are mapped for it (their zone tables are not yet checked). That is safe but is not
+  the same as a clean run.
+- **Tests:** `tests/unit/test_tiger_reef_site.py` (synthetic fixture only), including a table
+  test over every `LOCATIONS` entry, marked `safety`: the key is a registered site, the stated
+  kilometres equal the haversine distance from that site's own coordinates, the note is not
+  blank, and the item says "not for the dive site" and carries the "may differ" quality note.
+- **Position source (owner, 2026-11-20):** the coordinates are those published on PADI's "Tiger Reef" dive-site page (https://www.padi.com/dive-site/malaysia/tiger-reef-2/, read 2026-11-20; contributed by a PADI dive centre; PADI does not warrant accuracy), which match the owner's boat GPS reading (undated; supplied 2026-11-20) exactly. The exact match suggests a common origin rather than two independent fixes; no survey was made. The owner's earlier same-day decision to name the site "Tiger Reef (dive site; position unverified)" is superseded. PADI's terms of use were not checked; one coordinate pair was reused by hand, and PADI's stated depth and currents are cited, not copied; nothing is fetched from PADI.
+- S6 closed by the owner (2026-11-20): the position is cited to PADI with its disclaimer in `coordinate_source`; the assessment view still does not show `coordinate_source`.
+- **PADI also describes strong currents at the site** (a channel between Labas and Sepoi): a public statement of a current hazard, in addition to the owner's trial report (ADR 0028); nobody has checked that the two describe the same hazard. Neither reaches the human: the Tioman guide is not retrieved for Tiger Reef, and nothing from the PADI page is loaded. With two sources naming a strong-current hazard while the site view says no hazards are registered, this gap weighs more; loading a reviewed Tiger Reef guide is the owner's decision. The run still fails closed (never GO).
+- PADI's page also lists a maximum depth of 24 m; it is recorded here only as a citation and is not a `SiteConstraint`, rule value or plan default (AGENTS.md section 7).
+
+Reviewed 2026-11-20 by `security-reviewer` (no blockers, no should-fix) and `risk-reviewer` (no blockers), including the PADI position source; S6 closed by the owner (2026-11-20).

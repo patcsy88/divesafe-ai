@@ -502,7 +502,9 @@ def test_site_list_needs_a_viewer_and_lists_only_registered_sites() -> None:
     client, _, _ = _build()
     assert client.get("/v1/sites").status_code == 401
     body = client.get("/v1/sites", headers=AUTH_A).json()
-    assert [s["site"]["id"] for s in body["sites"]] == [SITE_ID]
+    # Exactly the registered sites, in registry order: nothing unregistered, nothing dropped.
+    assert [s["site"]["id"] for s in body["sites"]] == [SITE_ID, "my-pahang-tiger-reef"]
+    assert [s["site"]["id"] for s in body["sites"]] == list(SITES)
     assert all("does not mean there are none" in s["hazards_note"] for s in body["sites"])
     assert "Decision support only" in body["notice"]
 

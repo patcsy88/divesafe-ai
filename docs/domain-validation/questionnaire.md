@@ -206,7 +206,7 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** Only one reference point: Pulau Tioman, from a public geocoder. No dive sites are registered. There are no stored site descriptions, exposure, hazards, entry points or local rules.
+**Data we hold:** Only one reference point: Pulau Tioman, from a public geocoder. One dive site is registered, Tiger Reef (the point published on PADI's dive-site page, which PADI does not warrant, and matching the owner's boat GPS reading (undated; supplied 2026-11-20) exactly, probably a common origin; no survey). There are no stored site descriptions, exposure, hazards, entry points or local rules.
 
 **Questions:**
 

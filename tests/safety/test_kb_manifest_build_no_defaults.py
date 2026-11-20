@@ -24,7 +24,7 @@ from tests.safety.kb_build_draft import (
     outcome,
 )
 
-from divesafe.services import kb_manifest, kb_manifest_build
+from divesafe.services import kb_manifest_build
 from divesafe.services.kb_manifest_build import (
     DOCUMENT_KEYS,
     FAILED_DRAFT,
@@ -130,7 +130,7 @@ OTHER_VALUES: dict[str, Any] = {
     "licence": "Another synthetic licence",
     "licence_reference": "synthetic-licence-ref-2",
     "attribution": "Synthetic attribution",
-    "site_id": next(iter(kb_manifest.SITES)),
+    "site_id": "my-pahang-pulau-tioman",
     "all_sites": False,
     "display_permission_reference": "synthetic-permission-ref-2",
     "supersedes": 1,
