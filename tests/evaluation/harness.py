@@ -19,6 +19,7 @@ from tests.agent.scripted_llm import LIVE, WARNINGS, engine, run_pipeline
 
 from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import AssessmentRecord, DivePlan, EvidenceItem, Recommendation, RuleResult
+from divesafe.domain.models import RecordEgressBasis
 from divesafe.models import LLMProvider
 from divesafe.risk import EvidencePolicy, RiskRulesEngine, WarningNeedsHumanReadingRule
 from divesafe.risk.placeholders import placeholder_rules
@@ -184,10 +185,67 @@ def _free_text(record: AssessmentRecord) -> list[str]:
     return texts
 
 
-def run_case(scenario: Scenario, provider: LLMProvider | None) -> CaseResult:
-    record: AssessmentRecord = run_pipeline(
-        provider, warnings=scenario.warnings, risk_engine=scenario.make_engine()
+class RecordEgressMismatch(RuntimeError):
+    """The stored record's egress fields differ from what the runner expected (ADR 0030 decision
+    3). A fixed message: never the values."""
+
+    def __init__(self) -> None:
+        super().__init__("the record's egress basis or model host is not the expected one")
+
+
+def expected_record_egress(
+    provider: object, egress_basis: str | None, model_host: str | None
+) -> tuple[str, str | None]:
+    """What the record must hold (ADR 0030 decision 3): with a provider, the values the runner was
+    given; with none, `no_agent_stage` / None, whatever was passed in."""
+    if provider is None:
+        return RecordEgressBasis.NO_AGENT_STAGE.value, None
+    return str(egress_basis), model_host
+
+
+def check_record_egress(
+    record: AssessmentRecord,
+    provider: object,
+    *,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> None:
+    """The post-run check: run after a record is stored and before anything for the case is sent
+    or judged. A basis the pipeline could not use is recorded as `none`, so it fails here."""
+    basis, host = expected_record_egress(provider, egress_basis, model_host)
+    stored = None if record.egress_basis is None else record.egress_basis.value
+    if stored != basis or record.model_host != host:
+        raise RecordEgressMismatch()
+
+
+def run_record(
+    scenario: Scenario,
+    provider: LLMProvider | None,
+    *,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> AssessmentRecord:
+    """Run one scenario and return the stored record, passing the runner's egress basis and model
+    host to the pipeline (they replace `scripted_llm._egress`'s defaults). Raises what the pipeline
+    raises, including `SupervisorInvariantError`. The caller runs `check_record_egress`."""
+    return run_pipeline(
+        provider,
+        warnings=scenario.warnings,
+        risk_engine=scenario.make_engine(),
+        egress_basis=egress_basis,
+        model_host=model_host,
     )
+
+
+def run_case(
+    scenario: Scenario,
+    provider: LLMProvider | None,
+    *,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> CaseResult:
+    record = run_record(scenario, provider, egress_basis=egress_basis, model_host=model_host)
+    check_record_egress(record, provider, egress_basis=egress_basis, model_host=model_host)
     return CaseResult(
         scenario=scenario.name,
         injected=scenario.injected,
@@ -270,5 +328,24 @@ class Report:
         }
 
 
-def evaluate(provider_factory: Callable[[], LLMProvider | None]) -> Report:
-    return Report(tuple(run_case(s, provider_factory()) for s in SCENARIOS))
+def _run_with(
+    scenario: Scenario,
+    provider: LLMProvider | None,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> CaseResult:
+    # A factory that returns None for a case gets None / None for that case only.
+    if provider is None:
+        return run_case(scenario, None, egress_basis=None, model_host=None)
+    return run_case(scenario, provider, egress_basis=egress_basis, model_host=model_host)
+
+
+def evaluate(
+    provider_factory: Callable[[], LLMProvider | None],
+    *,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> Report:
+    return Report(
+        tuple(_run_with(s, provider_factory(), egress_basis, model_host) for s in SCENARIOS)
+    )

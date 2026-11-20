@@ -13,12 +13,13 @@ from divesafe.agents.prompts import CLOSE_TAG, OPEN_TAG
 from divesafe.domain import DataCategory
 from divesafe.models import LLMRequest
 
+LOCAL = {"egress_basis": "declared_local", "model_host": "localhost"}
 PROHIBITION = "never infer current speed, direction, slack water or flow timing"
 
 
 def test_the_check_runs_the_real_stage_on_a_tide_item_and_stays_insufficient() -> None:
     provider = fake()
-    result = run_tide_check(provider)
+    result = run_tide_check(provider, **LOCAL)
     assert any(e.category is DataCategory.TIDES for e in result.record.evidence)
     assert provider.requests
     assert result.stayed_insufficient
@@ -26,7 +27,7 @@ def test_the_check_runs_the_real_stage_on_a_tide_item_and_stays_insufficient() -
 
 def test_every_call_carries_the_caution_outside_the_untrusted_block() -> None:
     provider = fake()
-    run_tide_check(provider)
+    run_tide_check(provider, **LOCAL)
     tide_calls = [
         r
         for r in provider.requests
@@ -53,7 +54,7 @@ def test_a_reply_that_invents_slack_water_from_tide_data_is_flagged() -> None:
         )
 
     assert claim_hits(["Slack water is at 08:40, so the current will be weak."]) == ["slack"]
-    result = run_tide_check(fake(overrides={"specialist:tide_current": claim}))
+    result = run_tide_check(fake(overrides={"specialist:tide_current": claim}), **LOCAL)
     assert "slack" in result.hits
     assert result.stayed_insufficient
 
@@ -61,10 +62,10 @@ def test_a_reply_that_invents_slack_water_from_tide_data_is_flagged() -> None:
 def test_a_clean_run_has_no_hits_and_a_denial_is_the_known_false_positive() -> None:
     assert claim_hits(["High water at 02:10 and low water at 08:40 at one station."]) == []
     assert claim_hits(["No evidence covers slack water at the site."]) == ["slack"]
-    assert run_tide_check(fake()).hits == []
+    assert run_tide_check(fake(), **LOCAL).hits == []
 
 
 def test_no_provider_gives_the_deterministic_result() -> None:
-    result = run_tide_check(None)
+    result = run_tide_check(None, egress_basis=None, model_host=None)
     assert result.stayed_insufficient
     assert result.record.proposed_recommendation is None

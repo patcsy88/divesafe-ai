@@ -638,25 +638,163 @@ def test_the_allow_list_is_the_five_agreed_sources_and_excludes_phn() -> None:
     assert TIDES_TODAY_SOURCE not in cap.ALLOWED_CONNECTORS
 
 
-def test_no_evaluation_module_builds_or_reads_tides_today() -> None:
-    """AGENTS.md section 4 / ADR 0029: the tides.today item never goes to an evaluation run.
-    Today that holds by construction; this pins it. Only this test file may name it."""
+_TIDES_TODAY_PATTERN = re.compile(r"tides_today|TidesToday|tides-today", re.IGNORECASE)
+# The exempt files (besides this test file). `langfuse_checks.py` is exempt only under the strict
+# AST rule of `langfuse_checks_tides_today_violations`.
+_TIDES_TODAY_EXEMPT = frozenset({"capture_item6.py", "langfuse_checks.py"})
+
+
+def langfuse_checks_tides_today_violations(source: str) -> list[str]:
+    """The strict rule for `langfuse_checks.py` (owner, 2026-11-19, option A): the only tides.today
+    mention is exactly `from divesafe.data.tides_today import SOURCE as TIDES_TODAY_SOURCE`, and
+    the name `TIDES_TODAY_SOURCE` is used exactly once besides it, inside the `REFUSED_SOURCES`
+    frozenset assignment. Returns the violations found (empty when the rule holds)."""
+    import ast
+
+    tree = ast.parse(source)
+    problems: list[str] = []
+    imports = 0
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and _TIDES_TODAY_PATTERN.search(node.module)
+        ):
+            names = [(a.name, a.asname) for a in node.names]
+            if node.module == "divesafe.data.tides_today" and names == [
+                ("SOURCE", "TIDES_TODAY_SOURCE")
+            ]:
+                imports += 1
+            else:
+                problems.append("other import from the tides.today module")
+        elif isinstance(node, ast.ImportFrom) and any(
+            _TIDES_TODAY_PATTERN.search(a.name) or _TIDES_TODAY_PATTERN.search(a.asname or "")
+            for a in node.names
+        ):  # `from divesafe.data import tides_today` (risk N1)
+            problems.append("tides.today module imported from its package")
+        elif isinstance(node, ast.Import) and any(
+            _TIDES_TODAY_PATTERN.search(a.name) for a in node.names
+        ):
+            problems.append("module import of tides.today")
+    if imports != 1:
+        problems.append("the one allowed import is missing or repeated")
+    uses = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "TIDES_TODAY_SOURCE"]
+    in_refused = [
+        n
+        for stmt in tree.body
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(t, ast.Name) and t.id == "REFUSED_SOURCES"
+            for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
+        )
+        and isinstance(stmt.value, ast.Call)
+        and isinstance(stmt.value.func, ast.Name)
+        and stmt.value.func.id == "frozenset"
+        for n in ast.walk(stmt.value)
+        if isinstance(n, ast.Name) and n.id == "TIDES_TODAY_SOURCE"
+    ]
+    if len(uses) != 1 or len(in_refused) != 1:
+        problems.append("TIDES_TODAY_SOURCE used other than once in REFUSED_SOURCES")
+    # Any other mention in the text (strings, comments, attribute names, fixture names).
+    allowed_line = "from divesafe.data.tides_today import SOURCE as TIDES_TODAY_SOURCE"
+    for line in source.splitlines():
+        if line.strip() == allowed_line:
+            continue
+        # A reference to this pinning test by name is not a use of the module.
+        stripped = line.replace("TIDES_TODAY_SOURCE", "").replace(
+            "test_no_evaluation_module_builds_or_reads_tides_today", ""
+        )
+        if _TIDES_TODAY_PATTERN.search(stripped):
+            problems.append("other tides.today mention")
+    return problems
+
+
+def tides_today_named_files(files: dict[str, str], exempt: frozenset[str]) -> list[str]:
+    """The scanned files (name -> text) naming tides.today outside `exempt`, plus any exempt file
+    breaking its own rule."""
+    named = [n for n, t in files.items() if n not in exempt and _TIDES_TODAY_PATTERN.search(t)]
+    if exempt - _TIDES_TODAY_EXEMPT:
+        named += sorted(exempt - _TIDES_TODAY_EXEMPT)
+    if "capture_item6.py" in files:
+        text = files["capture_item6.py"]
+        if "TidesTodayConnector" in text or "tides_today_teluk_tekek" in text:
+            named.append("capture_item6.py")
+    if "langfuse_checks.py" in files and langfuse_checks_tides_today_violations(
+        files["langfuse_checks.py"]
+    ):
+        named.append("langfuse_checks.py")
+    return named
+
+
+def _scanned_files() -> dict[str, str]:
     here = Path(__file__).resolve()
     # The evaluation modules, and the scripted scenarios the harness builds its sets from.
     scanned = [*here.parent.rglob("*.py"), here.parent.parent / "agent" / "scripted_llm.py"]
     assert scanned[-1].is_file()
-    named = [
-        p.name
-        for p in scanned
-        if p != here
-        and re.search(
-            r"tides_today|TidesToday|tides-today", p.read_text(encoding="utf-8"), re.IGNORECASE
+    return {p.name: p.read_text(encoding="utf-8") for p in scanned if p != here}
+
+
+def test_no_evaluation_module_builds_or_reads_tides_today() -> None:
+    """AGENTS.md section 4 / ADR 0029: the tides.today item never goes to an evaluation run.
+    Today that holds by construction; this pins it. Only this test file may name it, plus
+    `capture_item6.py` and, under a strict AST rule, `langfuse_checks.py` (its `SOURCE` imported
+    once and used once, in `REFUSED_SOURCES`).
+    Owner-approved relaxation 2026-11-19 (option A), not a strengthening."""
+    files = _scanned_files()
+    assert "langfuse_checks.py" in files and "capture_item6.py" in files
+    assert tides_today_named_files(files, _TIDES_TODAY_EXEMPT) == []
+    assert langfuse_checks_tides_today_violations(files["langfuse_checks.py"]) == []
+
+
+def _mutate_checks(kind: str, source: str) -> tuple[str, frozenset[str]]:
+    exempt = _TIDES_TODAY_EXEMPT
+    if kind == "second_use":
+        source += "\nSECOND = TIDES_TODAY_SOURCE\n"
+    elif kind == "connector_import":
+        source += "\nfrom divesafe.data.tides_today import TidesTodayConnector\n"
+    elif kind == "module_import":
+        source += "\nimport divesafe.data.tides_today\n"
+    elif kind == "package_import":  # risk N1: the module imported from its package
+        source += "\nfrom divesafe.data import tides_today\n"
+    elif kind == "fixture_name":
+        source += '\n_FIXTURE = "tides_today_teluk_tekek.json"\n'
+    elif kind == "use_outside_refused":
+        source = source.replace(
+            "REFUSED_SOURCES: Final = frozenset({PHN_SOURCE, TIDES_TODAY_SOURCE})",
+            "REFUSED_SOURCES: Final = frozenset({PHN_SOURCE})\nOTHER = {TIDES_TODAY_SOURCE}",
         )
-        and p.name != "capture_item6.py"
-    ]
-    assert named == []
-    text = (here.parent / "capture_item6.py").read_text(encoding="utf-8")
-    assert "TidesTodayConnector" not in text and "tides_today_teluk_tekek" not in text
+    elif kind == "exempt_other_file":
+        exempt = exempt | {"harness.py"}
+    return source, exempt
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "second_use",
+        "connector_import",
+        "module_import",
+        "package_import",
+        "fixture_name",
+        "use_outside_refused",
+        "exempt_other_file",
+    ],
+)
+def test_the_tides_today_checker_catches_each_mutant(kind: str) -> None:
+    """Mutation checks for the owner-approved exemption: each mutant of `langfuse_checks.py`'s text
+    (or of the exemption list) is reported."""
+    files = _scanned_files()
+    source, exempt = _mutate_checks(kind, files["langfuse_checks.py"])
+    mutated = {**files, "langfuse_checks.py": source}
+    if kind == "exempt_other_file":
+        mutated["harness.py"] = files["harness.py"] + "\n# tides_today\n"
+    assert tides_today_named_files(mutated, exempt) != []
+
+
+def test_the_raw_text_check_still_applies_to_every_other_file() -> None:
+    files = _scanned_files()
+    mutated = {**files, "harness.py": files["harness.py"] + "\n# tides-today\n"}
+    assert tides_today_named_files(mutated, _TIDES_TODAY_EXEMPT) == ["harness.py"]
 
 
 # ---- F8 egress basis label, F9 provider settings (group C items 6 and 7) ---------------------
@@ -1104,3 +1242,26 @@ def test_a_non_utc_capture_time_is_refused_before_any_assessment(
     kuala_lumpur = datetime(2026, 10, 1, 20, 30, tzinfo=timezone(timedelta(hours=8)))
     with pytest.raises(cap.CaptureRefused, match="not a UTC datetime"):
         _run_with_injected_clock(monkeypatch, lambda: kuala_lumpur)
+
+
+def test_the_senders_refused_sources_are_exactly_the_two_tide_items() -> None:
+    """ADR 0027 §2 / ADR 0030: the sender refuses a record holding the PHN or the tides.today
+    item, by source. The sender tests take the second source from `REFUSED_SOURCES` (so they never
+    name it); this pins what it is."""
+    from tests.evaluation import langfuse_checks
+
+    assert frozenset({PHN_SOURCE, TIDES_TODAY_SOURCE}) == langfuse_checks.REFUSED_SOURCES
+
+
+def test_the_tides_today_exempt_files_are_pinned() -> None:
+    """Risk N1: adding a file to the exemption is a reviewed change to this test."""
+    assert frozenset({"capture_item6.py", "langfuse_checks.py"}) == _TIDES_TODAY_EXEMPT
+
+
+def test_the_package_import_mutant_is_caught_by_the_ast_rule_alone() -> None:
+    """Risk N1: `from divesafe.data import tides_today` is reported by the AST part of the rule,
+    not only by the raw-text scan (checked here with the text scan's line removed from view)."""
+    source = _scanned_files()["langfuse_checks.py"] + "\nfrom divesafe.data import tides_today\n"
+    problems = langfuse_checks_tides_today_violations(source)
+    assert "tides.today module imported from its package" in problems
+    assert "other tides.today mention" in problems
