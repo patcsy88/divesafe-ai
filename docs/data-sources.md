@@ -66,15 +66,16 @@ reachable but not yet approved or implemented. Nothing here has been called from
   "not registered" message. The data.gov.my **warnings** connector has no zone table: it matches by
   area name, so Tiger Reef (area names `("Pahang", "Tioman")`) gets the same informational matches
   as Tioman. **Known gaps (ADR 0029 Amendment 2):** (1) Tiger Reef still cannot reach GO: tides are
-  required and missing while no tide connector is on (none was on in production on 2026-11-20),
-  factors without a deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT
-  EVIDENCE, and every live value is DEGRADED, which cannot support GO or CAUTION (ADR 0008); NO-GO
-  is still possible; (2) the Tioman site guide is loaded only for `my-pahang-pulau-tioman`, so a
-  Tiger Reef run retrieves no site knowledge and the site view says none is registered, although, by
-  the owner's report from the trial, the guide lists currents at Tiger Reef (ADR 0028); loading a
-  reviewed Tiger Reef or all-sites guide is the owner's decision. Open-Meteo marine has no site
-  table, so it already returns current for Tiger Reef from a grid point about 2.6 km away; this is
-  model evidence only (ADR 0029 Amendment 2).
+  a required category; until tides.today was switched on in production (2026-11-20, 06:17 UTC) they
+  were missing, and since then a Tiger Reef run gets the DEGRADED Teluk Tekek item, a proxy about
+  13.4 km away, which no rule reads and which cannot support GO or CAUTION (ADR 0008); factors
+  without a deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE,
+  and every other live value is DEGRADED too; NO-GO is still possible; (2) the Tioman site guide is
+  loaded only for `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves no site knowledge and the
+  site view says none is registered, although, by the owner's report from the trial, the guide lists
+  currents at Tiger Reef (ADR 0028); loading a reviewed Tiger Reef or all-sites guide is the owner's
+  decision. Open-Meteo marine has no site table, so it already returns current for Tiger Reef from a
+  grid point about 2.6 km away; this is model evidence only (ADR 0029 Amendment 2).
 - **Marine connector:** all items are `is_forecast=True` and `data_type="model"`, even for hours already past, because they are model values, not observations. One `EvidenceItem` per category per UTC hour (`waves_swell`,
   `sea_surface_temperature` as `sea_temperature`, `currents`). It rejects, per category, any
   missing hour, null, unexpected unit or out-of-range value, reports it in `issues`, and
@@ -420,17 +421,18 @@ this point is not stated and the upstream is not verified. Spring/neap is not av
 this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is our assumption.
 The terms (§2, §6, §9) forbid use as a sole source for diving and need written permission for
 automated use in another application. That permission is on file for the owner's deployment
-(2026-11-18; scope and limits in the ADR 0029 status). The connector `TidesTodayConnector` stays
-**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until the owner decides to switch it on. The
+(2026-11-18; scope and limits in the ADR 0029 status). The connector `TidesTodayConnector` is **off
+by default** (`DIVESAFE_TIDES_TODAY_ENABLED`); switching it on is the owner's decision. The
 provider's full copyright notice is shown once with every assessment view that holds a tides.today
 item (evaluated or withheld), deduplicated (`provider_notices` and the fixed `provider_notice_note`
 in the assessment response, plain text, separate from `attributions`; at most 4 notices, then a
 count; `provider_notice_missing` is a separate flag, shown as a fixed sentence outside the provider
-text). Switch-on: (1) built, pending security and risk review, not yet rendered in a real browser
-(one manual render is needed before condition (1) counts as met), and it also needs the owner's
-answer to the OPEN QUESTION in ADR 0029 decision 11 (not yet given); (2) the owner's decision,
-not taken. It is never sent to the model or a trace. No tidal-stream data.
-Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED; Amendment 1).
+text). Switched on in production by the owner on 2026-11-20 (ADR 0029, "Switched on"); the
+permission covers only the owner's deployment. The full notice is never sent to the model or a
+trace; the tide item itself goes to the model host and the vendor behind it with every assessment
+while the model server is not declared local (ADR 0029 decision 12) and never to a trace. The items
+stay DEGRADED and cannot support GO or CAUTION. No tidal-stream data. Design in [ADR
+0029](adr/0029-tides-today-tide-predictions.md) (ACCEPTED 2026-11-20; Amendments 1 and 2).
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
 credential or licence was pursued. `tides` and `tidal_current` stay unevidenced, so any policy that
@@ -449,8 +451,9 @@ matters for Tioman, or if JUPEM data becomes available.
 - **Open-Meteo's free tier forbids commercial use.** Fine for a capstone or research; a
   commercial deployment would need a paid plan or a different source.
 - **No VALIDATED or documented source of tidal predictions.** The PHN e-Tide and tides.today
-  connectors (both off by default) supply DEGRADED predictions only, so a required-tides policy
-  still gives `INSUFFICIENT EVIDENCE` for GO or CAUTION.
+  connectors (both off by default; tides.today switched on in the owner's production on 2026-11-20)
+  supply DEGRADED predictions only, so a required-tides policy still gives `INSUFFICIENT EVIDENCE`
+  for GO or CAUTION.
 - data.gov.my text values are in Bahasa Melayu; a connector must map them explicitly and treat
   unmapped values as invalid, not guess.
 

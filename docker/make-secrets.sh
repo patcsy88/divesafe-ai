@@ -56,8 +56,8 @@ fi
 # An empty file means "not set" (the MET connector is then not used).
 [ -e "$dir/divesafe_met_api_token" ] || { : | write_new divesafe_met_api_token; }
 # tides.today (ADR 0029): empty means "not set"; the connector also needs
-# DIVESAFE_TIDES_TODAY_ENABLED, which stays off until the owner switches it on after the
-# full-notice display change (ADR 0029 status).
+# DIVESAFE_TIDES_TODAY_ENABLED (default false; the provider's permission covers only the
+# owner's deployment, ADR 0029 status).
 [ -e "$dir/divesafe_tides_today_api_key" ] || { : | write_new divesafe_tides_today_api_key; }
 # The Langfuse production project's keys (ADR 0027 amendment). Empty means "not set"; with
 # tracing on, start-up then refuses.

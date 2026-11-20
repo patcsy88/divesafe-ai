@@ -229,6 +229,10 @@ Keep the volume if this is your real deployment. If it was only a trial, `down -
 `docker/secrets/divesafe_api_key_hashes.old-20261112` (mode 400). Older records keep `first-run`
 as decider, correctly. One key holding all three roles is a recorded gap (ADR 0024 A8).
 
+Before the API is made reachable from off the machine (reverse proxy, tunnel, LAN binding), the
+owner must decide again on the `patcsy88` API key, which was sent to a third party on 2026-11-20 and
+kept by owner decision (ADR 0024 A8).
+
 Record in ADR 0024, condition 1, with the date: the host OS, whether the model host was reached,
 the final status, whether the agent stage ran or listed an issue (and how many calls stopped at
 the token limit or timed out), the token and time budgets in effect (the record does not show them), the 409 on the second decision,

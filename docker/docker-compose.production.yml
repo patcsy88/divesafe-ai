@@ -149,9 +149,9 @@ services:
       # any endpoint but http://<private IPv4>:<port>/api/public/otel/v1/traces, and OTEL_*.
       DIVESAFE_TRACING_ENABLED: ${DIVESAFE_TRACING_ENABLED:-false}
       DIVESAFE_TRACE_ENDPOINT: ${DIVESAFE_TRACE_ENDPOINT:-}
-      # ADR 0029: tides.today stays off until the owner switches it on after the full-notice
-      # display change (ADR 0029 status); on also needs the API key file filled in, or start-up
-      # refuses.
+      # ADR 0029: tides.today, default false. The provider's permission covers only the
+      # owner's deployment (ADR 0029 status); true also needs the API key file filled in, or
+      # start-up refuses.
       DIVESAFE_TIDES_TODAY_ENABLED: ${DIVESAFE_TIDES_TODAY_ENABLED:-false}
     secrets:
       - source: database_url

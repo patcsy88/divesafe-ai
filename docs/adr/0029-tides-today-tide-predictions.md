@@ -1,17 +1,18 @@
 # ADR 0029: Tide predictions from the tides.today API
 
-Status: PROPOSED (2026-11-17). **Written permission on file (2026-11-18); the connector must still
-not be switched on (see Switch-on conditions below).** Stephen (Ste) Wright, trading as Tides Today,
-replied on 2026-11-18 to the owner's requests of 2026-11-17. The reply came from the provider's
-personal domain, not the tides.today address of earlier mails in the same thread, with the same
-signature; the owner accepted it as the provider (2026-11-19), and the identity was not otherwise
-checked. The reply: "Feel free to use the API key as you see fit, you have my full permission to use
-it as you describe." The use described: V1 tide, moon and meteorology data in a recreational-diving
-decision-support tool where a qualified human makes the final decision and the data is never the
-sole source (that the human is qualified is a condition of the deployment, through who is given a
-DiveSafe API key, and is not checked by the software); storing it in assessment records; sending it
-to a hosted model that writes the explanation for the human reviewer; and the provider's copyright
-notice shown with every item. The owner keeps the full thread, with headers, outside the repository.
+Status: ACCEPTED (2026-11-20, owner; proposed 2026-11-17). **Written permission on file
+(2026-11-18); switched on in production by the owner on 2026-11-20 (see "Switched on" below).**
+Stephen (Ste) Wright, trading as Tides Today, replied on 2026-11-18 to the owner's requests of
+2026-11-17. The reply came from the provider's personal domain, not the tides.today address of
+earlier mails in the same thread, with the same signature; the owner accepted it as the provider
+(2026-11-19), and the identity was not otherwise checked. The reply: "Feel free to use the API key
+as you see fit, you have my full permission to use it as you describe." The use described: V1 tide,
+moon and meteorology data in a recreational-diving decision-support tool where a qualified human
+makes the final decision and the data is never the sole source (that the human is qualified is a
+condition of the deployment, through who is given a DiveSafe API key, and is not checked by the
+software); storing it in assessment records; sending it to a hosted model that writes the
+explanation for the human reviewer; and the provider's copyright notice shown with every item. The
+owner keeps the full thread, with headers, outside the repository.
 
 Scope, as read by the owner (2026-11-19): the reply covers API V2 (Amendment 1) with the same key.
 It covers the owner's own deployment with the owner's key, not anyone else running this code, and
@@ -36,25 +37,48 @@ assumption.
 notice is shown once with every assessment view that holds a tides.today item (evaluated or
 withheld), deduplicated (decision 11; owner decision, 2026-11-19) and (2) a separate owner decision
 to switch it on, and condition (1) also needs the owner to have answered the OPEN QUESTION in
-decision 11. State: (1) built, pending security and risk review, not yet rendered in a real
-browser (one manual render is needed before condition (1) counts as met), and the OPEN QUESTION
-in decision 11 (whether once per assessment meets the provider's "with every item") is not yet
-answered; (2) the owner's decision to switch it on, not taken. The provider's mail of 2026-11-17
-says the key is deactivated if it is not used for three months; a deactivated key makes the
-tides.today item fail (tides missing, so INSUFFICIENT EVIDENCE, when it is the only tide source),
-an availability issue, not a safety one.
+decision 11. State: both met; see "Switched on" below. The provider's mail of 2026-11-17 says the
+key is deactivated if it is not used for three months; a deactivated key makes the tides.today item
+fail (tides missing, so INSUFFICIENT EVIDENCE, when it is the only tide source), an availability
+issue, not a safety one.
+
+**Switched on (2026-11-20, owner).** Condition (1): the full-notice change was reviewed by
+`security-reviewer` and `risk-reviewer` (no blockers, no should-fix; PR #45, merged 2026-11-20), and
+the full notice was rendered in a real browser and displays correctly (owner, 2026-11-20). The OPEN
+QUESTION in decision 11 is answered by the owner's reading (the provider was not asked): showing the
+notice whole, once per assessment view, meets the permission's "with every item". The owner also
+accepted, the same day, that the tides.today item goes to the model host (`wall-e.ch30ng.org`) and
+the vendor behind it (ADR 0028) with every assessment that has one (a site in the connector's table;
+production's basis is `remote_knowledge_opt_in`, not declared local; decision 12's start-up warning
+says so). Condition (2): the owner decided to switch it on. The key is in
+`divesafe_tides_today_api_key` and `DIVESAFE_TIDES_TODAY_ENABLED=true` is set in `production.env`
+(image `c2ba9d25add8`, commit `39371b1`); after the API was recreated at 06:17:31 UTC the start-up
+log showed 6 connectors and both tides.today warnings. First successful run: `cf38becd…` (Tioman,
+2026-11-20 06:20 UTC): one tides.today `prediction` item (DEGRADED), in the Reason stage's evidence
+ids (so it went to the model host); no connector issue; the notice shown once, whole; deterministic
+and final recommendation INSUFFICIENT EVIDENCE (`policy.marine_warning_needs_human_reading`, the
+only rule that is not a placeholder, and 9 factors not evaluated). Having a `tides` item makes no
+factor evaluable: no rule reads it, `tidal_current` cannot be encoded, and DEGRADED evidence cannot
+support GO or CAUTION (decision 6; ADR 0008, `degraded_may_support_go=False` in production).
+Switching on lifts neither §2 nor §9 and does not make the data validated or safe. Tiger Reef runs
+get the same item, for the Teluk Tekek point 13.4 km away (Amendment 2); no Tiger Reef run with
+tides.today on has been checked yet. Two earlier runs, `d8e01656…` and `dddcf8cc…`, failed with HTTP
+401 because the wrong key was written; both failed closed (`evidence.required.tides`,
+`evidence.connector_issues`, INSUFFICIENT EVIDENCE; ADR 0024 A8, 2026-11-20).
 
 Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no blockers; their should-fix
-findings and nits are fixed, and the final round was clean.
-The permission text (2026-11-19) was reviewed by `security-reviewer` and `risk-reviewer`.
-Amended 2026-11-17 (Amendment 1, owner): the connector now uses API V2 with an `x-api-key` header;
-the application ID and spring/neap are removed. See Amendment 1 at the end. Amendment 1 was reviewed
-by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-18); no blockers remain.
-Amended 2026-11-20 (Amendment 2, owner): the dive site `my-pahang-tiger-reef` is mapped to the same
-Teluk Tekek point as a proxy, 13.4 km from the Tiger Reef dive site (position as published by PADI). The written permission (on file since 2026-11-18) is
-read by the owner as covering it; see Amendment 2 at the end. The same day (owner), Tiger Reef was
-also mapped to Tioman's data.gov.my forecast location and MET waters zone (Amendment 2, "Forecast
-and MET mapping").
+findings and nits are fixed, and the final round was clean. The switch-on record and the ADR 0024 A8
+wrong-key entry were reviewed by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-20);
+no blockers remain. The permission text (2026-11-19) was reviewed by `security-reviewer` and
+`risk-reviewer`. Amended 2026-11-17 (Amendment 1, owner): the connector now uses API V2 with an
+`x-api-key` header; the application ID and spring/neap are removed. See Amendment 1 at the end.
+Amendment 1 was reviewed by `security-reviewer` and `risk-reviewer` (three rounds, 2026-11-18); no
+blockers remain. Amended 2026-11-20 (Amendment 2, owner): the dive site `my-pahang-tiger-reef` is
+mapped to the same Teluk Tekek point as a proxy, 13.4 km from the Tiger Reef dive site (position as
+published by PADI). The written permission (on file since 2026-11-18) is read by the owner as
+covering it; see Amendment 2 at the end. The same day (owner), Tiger Reef was also mapped to
+Tioman's data.gov.my forecast location and MET waters zone (Amendment 2, "Forecast and MET
+mapping").
 
 ## Context
 
@@ -127,7 +151,7 @@ records; and how the attribution must be shown.
 - **Datum: not stated by the API.** The prediction-engine page suggests LAT. Items say exactly
   that and carry no depth, clearance or "water over the reef" logic (as ADR 0021 decision 8).
 
-## Decision (proposed)
+## Decision
 
 Decisions 2, 3, 4, 5, 8, 9 and 13 below describe V1. Where Amendment 1 differs, it governs; each
 affected decision is marked.
@@ -244,9 +268,10 @@ dive window touches.
     (security review 2026-11-17), so only the short `attribution` goes to the model host, and no
     span attribute carries it. Building the view logs nothing (tested).
 
-    **OPEN QUESTION (not settled):** whether showing the notice once per assessment view meets
-    the provider's permission wording "with every item" is the owner's call. Switch-on condition
-    (1) is not met until the owner has answered it.
+    **Answered (owner, 2026-11-20):** the owner reads showing the notice whole, once per assessment
+    view (one notice for all of that view's tides.today items), as meeting the provider's "with
+    every item". This is the owner's reading, not a confirmation from the provider; the provider was
+    not asked.
 12. **Egress.** When enabled and the model server is not declared local, start-up logs a warning
     that the tides.today item is sent to the model host with every assessment (as for PHN). The
     item is excluded from evaluation runs to Langfuse and from the item-6 capture, as the PHN
@@ -260,12 +285,11 @@ dive window touches.
     *(Superseded by Amendment 1: the V2 exclusions are in decision 2 there; spring/neap is
     no longer available.)*
 14. **Off by default.** `DIVESAFE_TIDES_TODAY_ENABLED` defaults to false. Enabling it is the
-    owner's decision, taken only once both switch-on conditions in the status are met (the
-    permission is on file since 2026-11-18; condition (1) is built, pending review and a manual
-    browser render, and needs the owner's answer to the OPEN QUESTION in decision 11; the owner's
-    decision to switch on is not taken). Production compose passes it to the
-    api only, as `${DIVESAFE_TIDES_TODAY_ENABLED:-false}`, and `production.env.example` sets it to
-    `false` (owner, 2026-11-17); both are pinned by `tests/safety/test_production_compose.py`.
+    owner's decision, taken only once both switch-on conditions in the status are met (both met;
+    switched on in production on 2026-11-20, see "Switched on" in the status). Production compose
+    passes it to the api only, as `${DIVESAFE_TIDES_TODAY_ENABLED:-false}`, and
+    `production.env.example` sets it to `false` (owner, 2026-11-17); both are pinned by
+    `tests/safety/test_production_compose.py`.
 
 ## With PHN also on
 
@@ -415,10 +439,11 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   the quality notes). The one new quality note below is on every site's items, Tioman's included.
 - **Nothing else changes in the tide mapping.** Evidence stays DEGRADED, upstream unknown, never
   corroborating, and tides.today stays **off by default** (`DIVESAFE_TIDES_TODAY_ENABLED` is not
-  touched). The permission text is unchanged; whether it covers Tiger Reef is the owner's reading
-  (below). Tiger Reef is not mapped for PHN e-Tide (being removed), which refuses it with its fixed
-  "not registered" message. The data.gov.my forecast and MET marine connectors were mapped later the
-  same day ("Forecast and MET mapping" below).
+  touched) by this amendment; the owner switched it on in production later the same day (see
+  "Switched on" in the status). The permission text is unchanged; whether it covers Tiger Reef is
+  the owner's reading (below). Tiger Reef is not mapped for PHN e-Tide (being removed), which
+  refuses it with its fixed "not registered" message. The data.gov.my forecast and MET marine
+  connectors were mapped later the same day ("Forecast and MET mapping" below).
 - **The distance wording for Tiger Reef** is "about 13.4 km from the Tiger Reef dive site
   (position as published by PADI)", because the position is PADI's published one, which PADI does
   not warrant, and no survey was made; the 13.4 km is only as good as that position. Every item, for
@@ -450,14 +475,16 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
 - **Known gap: Tiger Reef cannot reach GO.** Since the forecast and MET mapping (below), only PHN
   (off by default, being removed) refuses Tiger Reef; while it is on, every Tiger Reef run records
   `evidence.connector_issues` and adds to the `observe.connector_failed:<name>` counts (metric
-  noise, ADR 0027). Every run still stays below GO: tides are a required category and, while no tide
-  connector is on (none was on in production on 2026-11-20), they are missing; the factors without a
-  deployed rule stay at INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast
-  uncertainty, site constraint) cannot have one, because the rule format has no metric for them; and
-  every live value is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION
-  under ADR 0008's owner decision (`degraded_may_support_go=False`). NO-GO is still possible. That
-  is safe but is not the same as a clean run. These reasons now apply equally to Tioman; the only
-  difference left for Tiger Reef is that no site guide is retrieved for it (above).
+  noise, ADR 0027). Every run still stays below GO: tides are a required category; until tides.today
+  was switched on in production (2026-11-20, 06:17 UTC) they were missing, and since then a Tiger
+  Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which no rule reads and
+  which cannot support GO or CAUTION (ADR 0008); the factors without a deployed rule stay at
+  INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast uncertainty, site
+  constraint) cannot have one, because the rule format has no metric for them; and every live value
+  is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION under ADR 0008's
+  owner decision (`degraded_may_support_go=False`). NO-GO is still possible. That is safe but is not
+  the same as a clean run. These reasons now apply equally to Tioman; the only difference left for
+  Tiger Reef is that no site guide is retrieved for it (above).
 - **Forecast and MET mapping (owner, 2026-11-20):** Tiger Reef uses Tioman's entries exactly:
   data.gov.my forecast location `Rc024` "Pulau Tioman" and MET waters zone `LOCATION:499`
   "TIOMAN". Both are area forecasts, not forecasts for the reef: the data.gov.my item is an

@@ -155,7 +155,7 @@ questions. Add one rule form per limit you supply.
 
 **Status: REQUIRES DOMAIN VALIDATION.** The software has no limit for this factor and reports it as *not evaluated*.
 
-**Data we hold:** None. There is no verified tide or tidal-stream source. Official Malaysian tide predictions exist (printed tables, and a mobile app with a 7-day forecast) but we have found no licensed, machine-readable source. The model's sea-level value is relative to global mean sea level and is NOT a tide prediction, so the system does not use it.
+**Data we hold:** No tidal-stream data and no verified tide source. Since 2026-11-20: DEGRADED tide predictions (high and low water times and heights) from tides.today for Teluk Tekek, about 3.7 km from the Tioman reference point and 13.4 km from Tiger Reef, not at any dive site; no rule uses them. Official Malaysian tide predictions exist (printed tables, and a mobile app with a 7-day forecast) but we have found no licensed, machine-readable source. The model's sea-level value is relative to global mean sea level and is NOT a tide prediction, so the system does not use it.
 
 **Questions:**
 
