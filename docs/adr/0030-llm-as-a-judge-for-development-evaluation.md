@@ -763,3 +763,5 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   evaluation environment (`pip freeze`), and repeated when any of them changes; the run-time
   checks fail closed whatever those versions are. A hashed lock file for `[eval]` follows
   ADR 0024's open lock-file item.
+- On Langfuse 4.80.0 a "dataset run" in this ADR means the experiment stored on the spans
+  (`events_core`), not a `dataset_runs` row; see ADR 0027 §2.
