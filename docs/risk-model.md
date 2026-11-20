@@ -305,8 +305,12 @@ cannot confirm the decision was saved.
   single missing high/low pair can pass. All of PHN's limits on currents apply unchanged:
   `tidal_current` stays unencodable, degraded data cannot support GO or CAUTION, and
   `degraded_may_support_go` must not be turned on for tides. With PHN also on, both items are
-  present and no check compares them. Off by default until the full copyright notice is shown in
-  the user view and the owner switches it on (ADR 0029 status).
+  present and no check compares them. Off by default until the owner switches it on; the full
+  copyright notice is shown once with every assessment view that holds a tides.today item
+  (evaluated or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11).
+  Switch-on: (1) built, pending security and risk review, not yet rendered in a real browser (one
+  manual render is needed before condition (1) counts as met), and it also needs the owner's
+  answer to the OPEN QUESTION in decision 11 (not yet given); (2) the owner's decision, not taken.
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   corroboration logic must use `can_corroborate`
   ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an

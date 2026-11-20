@@ -12,6 +12,7 @@ import contextlib
 import copy
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -872,6 +873,17 @@ def _wiring_misses(module: Any) -> list[str]:
             break
     if not any("tides.today tide predictions are ON" in r.getMessage() for r in records):
         bad.append("no start-up warning when enabled")
+    # ADR 0029 decision 11: the warning states that the full notice is shown, as a fact.
+    wanted = (
+        "tides.today tide predictions are ON (DIVESAFE_TIDES_TODAY_ENABLED); the full "
+        "provider notice is returned with every assessment that holds a tides.today item "
+        "(provider_notices) and every client must show it; the provider's permission covers "
+        "only the owner's deployment (ADR 0029)"
+    )
+    if not any(wanted == r.getMessage() for r in records):
+        bad.append("the start-up warning does not state that the full notice is returned")
+    if any("must be on file" in r.getMessage() for r in records):
+        bad.append("the start-up warning still asks for a permission that is on file")
     return bad
 
 
@@ -907,8 +919,8 @@ STATE_EDITS = [
     pytest.param(
         [
             (
-                '            "written permission must be on file (ADR 0029)"\n        )\n',
-                '            "written permission must be on file (ADR 0029)",\n'
+                '            "only the owner\'s deployment (ADR 0029)"\n        )\n',
+                '            "only the owner\'s deployment (ADR 0029)",\n'
                 '            extra={"key": api_key_value(settings)},\n        )\n',
             ),
             (
@@ -918,6 +930,33 @@ STATE_EDITS = [
             ),
         ],
         id="key-logged",
+    ),
+    pytest.param(
+        [("every client must show it; ", "every client may show it; ")],
+        id="warning-without-full-notice-claim",
+    ),
+    pytest.param(
+        [
+            (
+                '            "only the owner\'s deployment (ADR 0029)"\n'
+                "        )\n        connectors.append(TidesToday",
+                '            "only the owner\'s deployment (ADR 0029); written permission "\n'
+                '            "must be on file"\n'
+                "        )\n        connectors.append(TidesToday",
+            )
+        ],
+        id="warning-asks-for-a-permission-on-file",
+    ),
+    pytest.param(
+        [
+            (
+                "        connectors.append(TidesTodayConnector(",
+                '        logger.warning("tides.today: written permission must be on file")\n'
+                "        connectors.append(TidesTodayConnector(",
+            )
+        ],
+        # The exact warning stays; only the negative check can catch the second line.
+        id="second-warning-asks-for-a-permission-on-file",
     ),
     pytest.param(
         [
@@ -950,16 +989,33 @@ STATE_EDITS = [
 ]
 
 
+# Only these mutants may be caught by the http constructor refusing them, and only with this
+# exact error; every other mutant must be caught by a reported miss, never by a crash.
+REFUSED_BY_THE_GETTER = frozenset(
+    {"wider-host-list", "another-credential-host-list", "authorization-header"}
+)
+GETTER_REFUSAL = "a getter with a credential needs its own host list, header name and prefix"
+
+
 @pytest.mark.parametrize("edits", STATE_EDITS)
-def test_every_mutation_of_the_wiring_is_caught(edits: list[tuple[str, str]]) -> None:
-    mutant = mutated_module(state_module, *edits)
+def test_every_mutation_of_the_wiring_is_caught(
+    edits: list[tuple[str, str]], request: pytest.FixtureRequest
+) -> None:
+    try:
+        mutant = mutated_module(state_module, *edits)
+    except (AssertionError, SyntaxError) as error:  # a stale edit target is a failure, not a pass
+        pytest.fail(f"the mutation does not apply: {error}")
     if "ALLOWED_HOSTS" not in vars(mutant):
         mutant.ALLOWED_HOSTS = http_module.ALLOWED_HOSTS
-    try:
-        found = _wiring_misses(mutant)
-    except (ValueError, ConnectorResponseError):
-        found = ["refused"]
-    assert found != []
+    if request.node.callspec.id in REFUSED_BY_THE_GETTER:
+        with pytest.raises(ValueError, match=re.escape(GETTER_REFUSAL)):
+            _wiring_misses(mutant)
+        return
+    assert _wiring_misses(mutant) != []
+
+
+def test_the_refused_mutant_ids_name_real_mutants() -> None:
+    assert REFUSED_BY_THE_GETTER.issubset({p.id for p in STATE_EDITS})
 
 
 # --- 5. attribution ---------------------------------------------------------------------------

@@ -506,7 +506,7 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
 def test_tides_today_defaults_off_in_compose_and_the_example(
     services: dict[str, list[str]],
 ) -> None:
-    """ADR 0029: off until the provider's written permission is on file; only the api gets it."""
+    """ADR 0029: off by default (the owner decides the switch-on); only the api gets it."""
     name = "DIVESAFE_TIDES_TODAY_ENABLED"
     assert _environment(services["api"])[name] == "${DIVESAFE_TIDES_TODAY_ENABLED:-false}"
     for service, block in services.items():

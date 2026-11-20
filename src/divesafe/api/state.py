@@ -379,8 +379,10 @@ def build_default_state(settings: Settings) -> AppState:
         )
     if settings.tides_today_enabled:
         logger.warning(
-            "tides.today tide predictions are ON (DIVESAFE_TIDES_TODAY_ENABLED); the provider's "
-            "written permission must be on file (ADR 0029)"
+            "tides.today tide predictions are ON (DIVESAFE_TIDES_TODAY_ENABLED); the full "
+            "provider notice is returned with every assessment that holds a tides.today item "
+            "(provider_notices) and every client must show it; the provider's permission covers "
+            "only the owner's deployment (ADR 0029)"
         )
         connectors.append(TidesTodayConnector(build_tides_today_getter(settings)))
     pool_size = http_pool_size(len(connectors), settings.max_runs_in_flight)

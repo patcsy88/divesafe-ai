@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import Banner from "../../../components/Banner.tsx";
 import ConditionsForm from "../../../components/ConditionsForm.tsx";
 import DecisionForm from "../../../components/DecisionForm.tsx";
+import ProviderNotices from "../../../components/ProviderNotices.ts";
 import RunProgress from "../../../components/RunProgress.tsx";
 import { ApiError, getAssessment } from "../../../lib/api.ts";
 import { requireKey } from "../../../lib/auth.ts";
@@ -349,6 +350,11 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       {view.attributions.length > 0 && (
         <p className="hint">Data: {plain(view.attributions.join("; "))}</p>
       )}
+      <ProviderNotices
+        notices={view.provider_notices}
+        notShown={view.provider_notices_not_shown}
+        missing={view.provider_notice_missing}
+      />
       <p className="hint">{plain(view.notice)}</p>
     </>
   );

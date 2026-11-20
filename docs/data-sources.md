@@ -416,8 +416,15 @@ this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is o
 The terms (§2, §6, §9) forbid use as a sole source for diving and need written permission for
 automated use in another application. That permission is on file for the owner's deployment
 (2026-11-18; scope and limits in the ADR 0029 status). The connector `TidesTodayConnector` stays
-**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until the full copyright notice is shown in the
-user view and the owner decides to switch it on. No tidal-stream data.
+**off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`) until the owner decides to switch it on. The
+provider's full copyright notice is shown once with every assessment view that holds a tides.today
+item (evaluated or withheld), deduplicated (`provider_notices` and the fixed `provider_notice_note`
+in the assessment response, plain text, separate from `attributions`; at most 4 notices, then a
+count; `provider_notice_missing` is a separate flag, shown as a fixed sentence outside the provider
+text). Switch-on: (1) built, pending security and risk review, not yet rendered in a real browser
+(one manual render is needed before condition (1) counts as met), and it also needs the owner's
+answer to the OPEN QUESTION in ADR 0029 decision 11 (not yet given); (2) the owner's decision,
+not taken. It is never sent to the model or a trace. No tidal-stream data.
 Design in [ADR 0029](adr/0029-tides-today-tide-predictions.md) (PROPOSED; Amendment 1).
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide
@@ -541,7 +548,12 @@ has no built-in default and must be chosen per category with a documented reason
   600 a minute, 5,000 an hour and 10,000 a day. A blocked call fails closed. Limits are per process
   and not shared across workers.
 - **Attribution display (API done):** every assessment response includes `attributions`; any UI
-  must show them.
+  must show them. A tides.today item also adds
+  `provider_notices` (the provider's full notice, untrusted plain text) and the fixed
+  `provider_notice_note` (ADR 0029 decision 11), the count `provider_notices_not_shown` (beyond
+  4 notices) and the boolean `provider_notice_missing` (a tides.today item without a usable
+  notice); a UI must show them as text, never HTML, with the data, and the missing flag as its own
+  fixed sentence outside the provider text.
 - **data.gov.my licence** is still unverified (Terms of Use page not retrievable).
 - **Typed `data_kind`:** `is_forecast` currently means "model or forecast output"; observations,
   predictions and notices are not yet distinguished by a typed field on `EvidenceItem`.
