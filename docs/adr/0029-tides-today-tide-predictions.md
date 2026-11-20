@@ -170,12 +170,15 @@ dive window touches.
     prompt payload (security review 2026-11-17), so only the short `attribution` goes to the
     model host.
 12. **Egress.** When enabled and the model server is not declared local, start-up logs a warning
-    that the tides.today item is sent to the model host with every assessment (as for PHN). The
-    item is excluded from evaluation runs to Langfuse and from the item-6 capture, as the PHN
-    item is (AGENTS.md section 4 gains it). Evaluation runs exclude it by construction (no
-    scenario builds the connector); `test_no_evaluation_module_builds_or_reads_tides_today` pins
-    that no evaluation module names it. When the Langfuse export's fixture allow-list is built,
-    it must refuse the tides.today fixture.
+    that the tides.today item is sent to the model host with every assessment (as for PHN). The item
+    is excluded from evaluation runs to Langfuse and from the item-6 capture, as the PHN item is
+    (AGENTS.md section 4 gains it). Evaluation runs exclude it by construction (no scenario builds
+    the connector); `test_no_evaluation_module_builds_or_reads_tides_today` pins that no evaluation
+    module names it, except `langfuse_checks.py`, which may import `SOURCE` from
+    `divesafe.data.tides_today` once and use it once, in `REFUSED_SOURCES`, under the AST rule in
+    `test_no_evaluation_module_builds_or_reads_tides_today`. This is an owner-approved relaxation
+    (option A, 2026-11-19), not a strengthening. When the Langfuse export's fixture allow-list is
+    built, it must refuse the tides.today fixture.
 13. **Not included.** `tides/now` (its height is estimated and only valid for "now"), the daily
     weather numbers (one value a day is too coarse for a dive window; may be revisited), and
     `/moon-phase` (spring/neap already carries the phase).

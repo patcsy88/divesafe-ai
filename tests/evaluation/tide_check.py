@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from tests.evaluation.harness import check_record_egress
+
 from divesafe.data import TIOMAN_ISLAND, PhnEtideConnector
 from divesafe.domain import AssessmentRecord, DataCategory, DivePlan, Recommendation
 from divesafe.models import LLMProvider
@@ -86,7 +88,14 @@ class TideCheck:
         return self.record.final_recommendation is Recommendation.INSUFFICIENT_EVIDENCE
 
 
-def run_tide_check(provider: LLMProvider | None) -> TideCheck:
+def run_tide_check(
+    provider: LLMProvider | None,
+    *,
+    egress_basis: str | None,
+    model_host: str | None,
+) -> TideCheck:
+    """ADR 0030 decision 3: the caller gives the egress basis and model host (in a live run, the
+    gate's basis and the base URL's host); the record is checked against them after the run."""
     record: AssessmentRecord = asyncio.run(
         assess_dive(
             assessment_id="tide-check-1",
@@ -96,9 +105,10 @@ def run_tide_check(provider: LLMProvider | None) -> TideCheck:
             engine=_engine(),
             now=NOW,
             provider=provider,
-            egress_basis=None if provider is None else "declared_local",
-            model_host=None if provider is None else "localhost",
+            egress_basis=egress_basis,
+            model_host=model_host,
             clock=lambda: NOW,
         )
     )
+    check_record_egress(record, provider, egress_basis=egress_basis, model_host=model_host)
     return TideCheck(record, claim_hits(free_text(record)))

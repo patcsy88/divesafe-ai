@@ -497,13 +497,20 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
 - **What is sent:**
   - **Prompts:** the full prompts, captured by the harness's sink from `LLMRequest.messages`.
   - **Outputs:** only what the stored record holds (findings, scenarios, the proposal and the
-    explanation), read from the record after the run, never from `LLMResponse`.
+    explanation), read from the record after the run, never from `LLMResponse`. A case the
+    Supervise stage refused is sent with no prompts and no outputs (the span's input and output
+    are both null).
   - **Never kept, so never sent:** the sink never keeps `LLMResponse.text`. That excludes a
     refused reply, a reply parsed and then refused (such as a second-round reply carrying risk
     factors), partial text before a token-limit stop, raw stream events and any reasoning field
     (AGENTS.md section 9; evaluation-strategy.md "no raw text is kept for a refused reply").
   - **Self-estimate:** the model's `confidence` self-estimate is removed before sending and is
     never a Langfuse score (section 11).
+  - Completion marker: a NUMERIC score `run.completion_marker`, attached to the dataset run by
+    its code-set run id (AGENTS.md section 4), holding only the expected and confirmed case
+    counts and the commit.
+  - Dataset item: the case name, its fixed description, the person-written label and the set
+    name.
   - **Route:** the harness sends through `LLMProvider` and its own sink, never through a
     Langfuse model-SDK wrapper.
 - **The cases are synthetic** (synthetic engines and plans over recorded public fixtures), not
@@ -531,6 +538,10 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     is verified at build;
   - the keys are read from files in `DIVESAFE_EVAL_SECRETS_DIR` (outside the repository and
     synced folders) and passed as `public_key=` and `secret_key=`;
+  - the sender's address is `http://127.0.0.1:3000`, the port the owner's self-hosted Langfuse
+    web service publishes on loopback (its compose file is outside this repository); a test pins
+    the constant, and the web UI's `next dev` and `next start` both run with `-H 127.0.0.1 -p
+    3100`, so neither holds that port;
   - an authenticated read with those keys shows the project `divesafe-eval` and only it. Another
     listener on that port then sees the development keys, never a prompt.
 - The prompts still go to the evaluation's model host under `egress_gate`; Langfuse only adds a
@@ -553,42 +564,100 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   evaluation environment at that check (`pip freeze --exclude-editable`, 38 packages) is below.
   The live check against `divesafe-eval` is PENDING. It is run from the owner's shell with the
   sender's code from the change under review (never an uncommitted probe; the record names the
-  commit it was run from, read with `git -C <repository root> rev-parse HEAD` (the root taken
-  from the sender module's own file path, never from the working directory or the environment)
-  with every `GIT_*` variable removed from that command's environment, and the live check refuses
-  unless `git status --porcelain --untracked-files=all --ignore-submodules=none`, run the same
-  way, is empty (a failing `git` command, or a `rev-parse` output that is not 40 hex characters,
-  also refuses); the offline tests that read this record are in that commit, failing until the
-  record is added in a docs-only change; and if any file outside `docs/` changes after that
-  commit before the change lands, the live check is run again and the record updated), with every
-  refusal in §2 and in ADR 0030 decision 3 in force. It is given `SCENARIOS` itself, so the
-  allow-list's identity check runs unchanged, with a case limit of one. The limit is an argument
-  of the sender, used only by the live-check test, never read from the environment or the command
-  line; it is either absent (a full run) or exactly `1`, and any other value (`0`, `2`, a
-  negative number, `True`) refuses before any network call. A limited run makes no judge call
-  because it is limited; there is no separate switch that skips the judge. The limit is applied
-  only after every start-up refusal has passed, the case it keeps goes through every check made
-  for each case, as in a full run, and it takes cases only from the front of the set, and never
-  adds or replaces a case. The first case goes through the sender's normal path: one dataset
-  item, that case's span and its code scores, computed from its record as in a judge run. No
-  judge call is made, and no other set or text is sent. The expected case count stays the length
-  of `SCENARIOS`, so the expected and confirmed-sent counts differ. No completion marker is sent
-  to Langfuse or written to the local file (ADR 0030 Known gaps, "complete only when ..."), so
-  the live-check run is incomplete in every report and is never cited. Its dataset run name is
-  built like every run's (ADR 0030 decision 3, "Run name"), so no later run adds to it. There is
-  no probe path that bypasses a refusal. It records: the project read (only `divesafe-eval`); the
-  OTLP reply status; whether the dataset-run link is carried as span attributes; and, for each
-  `client.api` call the sender makes, its method, path, status and return type, each equal to the
-  sender's constants (a mismatch fails the live check, and the sender is not ready); and that
-  every package in the freeze below is installed, at the same version, in the environment it ran
-  in (`pip freeze --exclude-editable`); any other package there (such as pytest and its plugins)
-  is listed in the record with its version and must be required only by `[dev]` (checked through
-  `importlib.metadata` requirements). A different version of a listed package, or any other extra
-  package, means the build-step-1 checks are repeated in that environment first and the freeze
-  below is replaced. Until that record is here, the sender is not ready: the sender, with
-  `LANGFUSE_VERIFIED_VERSION`, lands only in the change that adds the record, and an offline test
-  in that change checks that this bullet names the verified version and no longer says PENDING
-  (mutation: PENDING put back).
+  commit it was run from, as information only, read with `git -C <repository root> rev-parse
+  HEAD` (the root taken from the sender module's own file path, never from the working directory
+  or the environment) with every `GIT_*` variable removed from that command's environment. The
+  clean-worktree check runs on EVERY run of the sender, not only the live check: it refuses
+  unless `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks status
+  --porcelain --untracked-files=all --ignore-submodules=none`, run the same way, is empty (the
+  two `-c` flags switch off the file-system monitor and the untracked cache, so a stale cache
+  cannot report a clean tree; `--no-optional-locks` stops `status` taking the index lock; a
+  failing `git` command, or a `rev-parse` output that is not 40 hex characters, also refuses)).
+
+  **Freeze by file hashes (owner decision, 2026-11-20, on the risk-reviewer's finding):** the
+  record is frozen against the files it was made with, not against git history. An earlier
+  design compared `git diff --name-only <commit> HEAD` and required the recorded commit to be an
+  ancestor of `HEAD`; that fails for good after the merge on the first unrelated change, fails in
+  CI (shallow checkout, `fetch-depth: 1`) and after a squash or rebase merge. The record instead
+  carries `sender_sha256`, a JSON object mapping a repository-relative path to the lowercase
+  64-hex SHA-256 of that file's bytes, covering at least `tests/evaluation/langfuse_sender.py`,
+  `tests/evaluation/langfuse_checks.py`, `tests/evaluation/code_scores.py`,
+  `tests/evaluation/harness.py`, the pin of `langfuse` in the `eval` extra of `pyproject.toml`
+  (entry key `pyproject.toml#eval:langfuse`; its value is the SHA-256 of the UTF-8 bytes of the
+  one `langfuse` requirement string in that extra, read with `tomllib` exactly as written, for
+  example `langfuse==5.2.0` with no newline, so an unrelated edit elsewhere in `pyproject.toml`
+  does not change it) and `tests/fixtures/<name>` for each pinned fixture the sender reads.
+  Also hashed: `tests/evaluation/output_dir.py`, `tests/evaluation/egress_gate.py` and
+  `tests/evaluation/ablation.py`. An offline test recomputes
+  each hash and fails when any listed file differs or is missing, or when a required path is not
+  in the record. A change to any of those files therefore needs a new live check and a new
+  record; unrelated commits, CI checkout depth and the merge strategy no longer matter. `commit`
+  stays in the record as the commit the live check ran from, and is no longer used for ancestry.
+  The offline tests that read this record are in the change the live check runs from, failing
+  until the record is added; the record is added in a docs-only change, so no file the hashes
+  cover changes between the live check and the record.
+
+  **What the hash freeze does not cover:** files the sender imports that are not hashed
+  (`tests/agent/scripted_llm.py` and `tests/evaluation/adversarial.py`), the live-check entry
+  files (`tests/evaluation/test_langfuse_send_live.py` and
+  `tests/evaluation/test_evaluation_live.py`), `src/`, the ranged dependencies of `langfuse`
+  and the Langfuse server. What is sent is enforced by offline tests, not by the record. A
+  Langfuse server upgrade needs a new live check before a full run is cited: two recorded
+  facts, `dataset_run_link_as_span_attributes` and `experiment_id_equals_server_run_id`, are
+  not re-checked at run time.
+
+  The live check runs with every refusal in §2 and in ADR 0030 decision 3 in force. It is given
+  `SCENARIOS` itself, so the allow-list's identity check runs unchanged, with a case limit of
+  one. The limit is an argument of the sender, used only by the live-check test, never read from
+  the environment or the command line; it is either absent (a full run) or exactly `1`, and any
+  other value (`0`, `2`, a negative number, `True`) refuses before any network call. A limited
+  run makes no judge call because it is limited; there is no separate switch that skips the
+  judge. The limit is applied only after every start-up refusal has passed, the case it keeps
+  goes through every check made for each case, as in a full run, and it takes cases only from
+  the front of the set, and never adds or replaces a case. The first case goes through the
+  sender's normal path: one dataset item, that case's span and its code scores, computed from
+  its record as in a judge run. No judge call is made, and no other set or text is sent. The
+  expected case count stays the length of `SCENARIOS`, so the expected and confirmed-sent
+  counts differ. No completion marker is sent to Langfuse or written to the local file (ADR
+  0030 Known gaps, "complete only when ..."), so the live-check run is incomplete in every
+  report and is never cited. Its dataset run name is built like every run's (ADR 0030
+  decision 3, "Run name"), so no later run adds to it. There is no probe path that bypasses a
+  refusal. The record is one JSON object with exactly 14 keys. It records: the project read (only
+  `divesafe-eval`); the OTLP reply status; whether the dataset-run link is carried as span
+  attributes; `dataset_create_existing_status` (the HTTP status of creating a dataset whose name
+  already exists); `experiment_id_equals_server_run_id` (a bool: `false` means the completion
+  marker attaches to an id the server does not use, so Langfuse would never show the run as
+  complete, which fails toward "incomplete"; the marker's target must then be fixed before a full
+  run is cited); `langfuse_server_version` (the Langfuse server version string, read during the
+  live check as described below; record only, never compared); `sender_sha256` (above); and, for
+  each `client.api` call a full run makes (four), its method, path, status and return type, each
+  equal to the sender's constants (a mismatch fails the live check, and the sender is not ready);
+  and that every package in the freeze below is installed, at the same version, in the environment
+  it ran in (`pip freeze --exclude-editable`); any other package there (such as pytest and its
+  plugins) is listed in the record with its version and must be required only by `[dev]` (checked
+  through `importlib.metadata` requirements). A different version of a listed package, or any
+  other extra package, means the build-step-1 checks are repeated in that environment first and
+  the freeze below is replaced. Until that record is here, the sender is not ready: the sender,
+  with `LANGFUSE_VERIFIED_VERSION`, is not merged without the record, and an offline test in the
+  change checks that this bullet names the verified version and no longer says PENDING (mutation:
+  PENDING put back).
+
+  **The server version (live check only).** The live check, and never a full run, makes one
+  more `client.api` call, the pinned SDK's `client.api.health.health()` (`GET
+  /api/public/health`, expected status 200, return type `HealthResponse`), after the project
+  read and before the dataset create. It is confirmed like the other calls (exactly one recorded
+  reply with that method, path and status, the exact return type, no retries; anything else
+  fails with `send_failed`) but is not in `calls`, which holds the four calls a full run makes.
+  Only the reply's `version` is kept. It must be a `str` (not a subclass) matching, in full, the
+  version shape `v?[0-9]{1,4}(\.[0-9]{1,4}){1,3}([-+][0-9A-Za-z.]{1,20})?` (for example
+  `3.112.0` or `3.112.0-rc.1`), so a Langfuse key cannot match it. It must also not contain
+  either key value, `pk-lf` / `sk-lf`, ignoring case, or any run of 6 characters that also appears
+  in either key, ignoring case. Otherwise the run refuses with the fixed label `server_version`
+  and the value is not kept. The check deletes its own copies of the version and the keys before
+  it returns. The refusal is raised outside any `except` block, after the health reply and the
+  version are deleted, so no traceback frame holds the version or a key. The value is returned
+  to the live-check test only, which prints it once, JSON-quoted, for the owner to copy into the
+  record; it is never sent to Langfuse or written to the local file.
 
   ```text
   annotated-doc==0.0.7
@@ -936,6 +1005,11 @@ against it.
   environment key (such as `PYTHONPATH`, `REQUESTS_CA_BUNDLE` or a proxy) set in an `env:` block,
   or a job `container:` or a different `runs-on:` image. It is a tripwire against careless edits,
   not a control against a deliberate multi-step CI change; CI edits remain reviewed changes.
+- The live check's server-version check (§2) looks for a key only in runs of 6 or more characters.
+  The version's optional suffix may hold up to 20 letters, digits and dots, so key characters in
+  runs shorter than 6, or split by dots (such as `a.b.c.d.e.f`), pass the check. The version is
+  printed once to the owner's terminal and is never sent or written, so at most 20 characters could
+  reach the screen this way, never Langfuse or a file (owner-accepted, 2026-11-20).
 
 ## Consequences
 

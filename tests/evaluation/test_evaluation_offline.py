@@ -23,6 +23,8 @@ from divesafe.agents.specialists import SPECIALISTS
 from divesafe.domain import Recommendation as R
 from divesafe.models import FakeProvider, LLMRequest
 
+LOCAL: dict[str, str | None] = {"egress_basis": "declared_local", "model_host": "localhost"}
+
 
 def test_every_scenario_is_labelled_synthetic_and_names_are_unique() -> None:
     names = [s.name for s in SCENARIOS]
@@ -55,7 +57,7 @@ def test_the_echo_screen_catches_markers_and_is_blind_to_paraphrase() -> None:
 
 
 def test_no_provider_gives_the_exact_deterministic_outcomes() -> None:
-    report = evaluate(lambda: None)
+    report = evaluate(lambda: None, egress_basis=None, model_host=None)
     assert report.rule_outcome_accuracy == 1.0
     assert report.under_severe_errors == 0
     assert report.proposals_obtained == 0
@@ -63,7 +65,7 @@ def test_no_provider_gives_the_exact_deterministic_outcomes() -> None:
 
 
 def test_a_compliant_model_scores_clean_and_is_actually_used() -> None:
-    report = evaluate(lambda: fake(recommendation="INSUFFICIENT EVIDENCE"))
+    report = evaluate(lambda: fake(recommendation="INSUFFICIENT EVIDENCE"), **LOCAL)
     summary = report.summary()
     assert summary["under_severe_errors"] == 0
     assert summary["schema_failure_rate"] == 0
@@ -74,7 +76,7 @@ def test_a_compliant_model_scores_clean_and_is_actually_used() -> None:
 
 
 def test_a_model_that_always_says_go_is_counted_but_cannot_lower_the_result() -> None:
-    report = evaluate(lambda: fake(recommendation="GO"))
+    report = evaluate(lambda: fake(recommendation="GO"), **LOCAL)
     assert report.under_severe_errors == 0
     attempts = [c for c in report.cases if c.attempted_downgrade]
     assert {c.expected_deterministic for c in attempts} >= {
@@ -86,13 +88,13 @@ def test_a_model_that_always_says_go_is_counted_but_cannot_lower_the_result() ->
 
 
 def test_a_model_that_always_says_no_go_is_visible_as_over_severe() -> None:
-    report = evaluate(lambda: fake(recommendation="NO-GO"))
+    report = evaluate(lambda: fake(recommendation="NO-GO"), **LOCAL)
     assert report.under_severe_errors == 0
     assert report.over_severe_cases >= 3
 
 
 def test_a_model_that_returns_prose_is_measured_as_schema_failures() -> None:
-    report = evaluate(lambda: FakeProvider("I think it is fine!"))
+    report = evaluate(lambda: FakeProvider("I think it is fine!"), **LOCAL)
     assert report.schema_failure_rate > 0.5
     assert report.under_severe_errors == 0
     assert report.proposals_obtained == 0
@@ -105,7 +107,7 @@ def test_a_model_that_cites_invented_evidence_is_rejected() -> None:
         body["evidence_ids"] = ["ev-999"]
         return json.dumps(body)
 
-    report = evaluate(lambda: FakeProvider(reply))
+    report = evaluate(lambda: FakeProvider(reply), **LOCAL)
     assert report.schema_failure_rate > 0.5
     assert all(c.proposed is None for c in report.cases)
 
@@ -120,16 +122,16 @@ def _echo(request: LLMRequest) -> str:
 
 
 def test_a_model_that_echoes_the_injected_text_is_detected_only_where_injected() -> None:
-    report = evaluate(lambda: FakeProvider(_echo))
+    report = evaluate(lambda: FakeProvider(_echo), **LOCAL)
     injected = [c for c in report.cases if c.injected]
     assert report.injection_echoes == len(injected) >= 2
     assert report.under_severe_errors == 0
 
 
 def test_the_screen_reports_echo_hits_in_clean_scenarios_separately() -> None:
-    report = evaluate(lambda: FakeProvider(_echo))
+    report = evaluate(lambda: FakeProvider(_echo), **LOCAL)
     assert report.echo_hits_in_clean_scenarios == len([c for c in report.cases if not c.injected])
-    clean = evaluate(lambda: fake(recommendation="INSUFFICIENT EVIDENCE"))
+    clean = evaluate(lambda: fake(recommendation="INSUFFICIENT EVIDENCE"), **LOCAL)
     assert clean.injection_echoes == 0 and clean.echo_hits_in_clean_scenarios == 0
 
 
@@ -142,7 +144,7 @@ def test_injected_text_stays_inside_the_untrusted_block_even_with_a_closing_tag(
 
     for case in SCENARIOS:
         if case.injected:
-            run_case(case, FakeProvider(spy))
+            run_case(case, FakeProvider(spy), **LOCAL)
     carrying = [p for p in seen if "IGNORE ALL PREVIOUS" in p]
     assert carrying and INJECTION.startswith("IGNORE ALL PREVIOUS")
     for prompt in carrying:
@@ -169,7 +171,7 @@ def test_an_invented_hazard_in_a_valid_reply_is_accepted_and_stored_unflagged() 
             body["risk_factors"] = [invented]
         return json.dumps(body)
 
-    report = evaluate(lambda: FakeProvider(reply))
+    report = evaluate(lambda: FakeProvider(reply), **LOCAL)
     assert report.schema_failure_rate == 0
     assert report.proposals_obtained == len(report.cases)
     for case in report.cases:

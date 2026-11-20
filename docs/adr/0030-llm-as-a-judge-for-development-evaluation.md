@@ -187,9 +187,10 @@ because each is new egress.
    `opentelemetry`, `urllib3`, `requests`, `backoff`, `charset_normalizer`, `asyncio`,
    `concurrent` and `py.warnings`, the set fixed at build step 1 for the pinned SDK and checked
    again whenever the SDK version changes; after the import, after the build and after each
-   case's flush, a top-level name in `logging.Logger.manager.loggerDict` (a logger or a
-   placeholder) that was not there at the start of the set-up and is not in this set refuses,
-   with the fixed label `logger_unlisted`) get `propagate=False` and a `logging.NullHandler()`
+   case's flush, a name in `logging.Logger.manager.loggerDict` (a logger or a placeholder) that
+   was not there at the start of the set-up and is not in this set, a child of a name in it, or a
+   placeholder parent of one (such as `py` for `py.warnings`) refuses, with the fixed label
+   `logger_unlisted`) get `propagate=False` and a `logging.NullHandler()`
    before the SDK is imported or its client built, as ADR 0027 does for production tracing.
    Before the import, within the running test, the set-up calls `logging.captureWarnings(False)`
    and then `logging.captureWarnings(True)` (so the capture takes effect again in each test,
@@ -208,10 +209,14 @@ because each is new egress.
    check runs at start-up (after those two calls and before the import), after the import, after
    the build and after each case's flush. It refuses if `warnings.showwarning` is no longer
    logging's own function; if a listed logger, or an existing child of one, has any handler other
-   than a `NullHandler`; if a listed logger's `propagate` is not `False`; or if the root logger's
+   than a `NullHandler`; if a listed logger's `propagate` is not `False`; if the root logger's
    handlers differ, compared by identity, from those recorded at the start of the set-up (for
-   example, after a `logging.basicConfig` call); the set-up and every check run within the test
-   body, never in a fixture. The root logger's start-up handlers (such as pytest's capture
+   example, after a `logging.basicConfig` call); or, with the fixed label `logger_last_resort`
+   instead, if a listed logger, or an existing child of one, has `propagate=False` and no
+   handler at all (its records would reach `logging.lastResort`, which prints WARNING and above
+   to stderr; a listed logger itself always holds its `NullHandler`, so this concerns children
+   and a listed logger whose `NullHandler` was removed); the set-up and every check run within
+   the test body, never in a fixture. The root logger's start-up handlers (such as pytest's capture
    handlers) never receive a listed logger's records, because none of them propagates. The set-up
    refuses to start if any listed logger, or any existing child of one (from
    `logging.Logger.manager.loggerDict`), already has a handler other than a `NullHandler`, and at
@@ -225,7 +230,15 @@ because each is new egress.
    limits in Known gaps. The run refuses to start, before the SDK is imported, when the SDK's
    debug option or `LANGFUSE_DEBUG` is set (to any value). This list differs from production's
    `SILENCED_LOGGERS` (it holds all of production's names and adds the others above), so it is
-   its own constant.
+   its own constant. The fixed refusal labels of these checks are `logger_unlisted`,
+   `logger_handler` and `logger_last_resort`; `logger_last_resort` runs wherever the handler
+   check runs (start-up, after the import, after the build and after each case's flush), and a
+   failure after a flush fails the whole run before the next judge call, as for `logger_handler`.
+   **Supersession (2026-11-20):** the earlier owner decision of 2026-11-19
+   (a logger snapshot taken after the silencing, comparing top-level names) is SUPERSEDED by the
+   stricter full-name rule above, taken before the silencing (a name is listed, a child of a
+   listed name, or a placeholder ancestor of one); it is not in force and is not to be cited as
+   such.
 4. **Judge model:** `claude-fable-5-1`, a different model from the agents', on the same host.
    This reduces self-grading bias; it does not remove it (same vendor family). The id is a
    constant in the judge module, not an environment value; the script refuses to start if it
@@ -555,15 +568,16 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
     name is assigned in one place only, from the name builder's return value; and that the commit
     passed to the builder comes only from the `git rev-parse HEAD` read (mutations: the name
     taken from an environment variable when it is set, once in the builder and once in its
-    caller). With the `git` calls stubbed, a live-check run with a non-empty `git status
-    --porcelain --untracked-files=all --ignore-submodules=none`, a failing `git` command, or a
-    `rev-parse` output that is not a full commit id refuses before any network call, and with
-    `GIT_DIR` set in the test's environment the stub sees no `GIT_*` variable in either command's
-    environment, and, with the test's working directory set elsewhere, both commands get `-C`
-    with the root taken from the sender module's path (mutations: the clean-worktree check
-    removed; the commit format check removed; the environment passed to `git` unchanged; `-C`
-    dropped, or given the working directory; the `--untracked-files=all` flag dropped, caught by
-    a stub that returns an untracked file only when that flag is present). Separate offline
+    caller). With the `git` calls stubbed, any run (the live check or a full run) with a non-empty
+    `git status --porcelain --untracked-files=all --ignore-submodules=none`, a failing `git`
+    command, or a `rev-parse` output that is not a full commit id refuses before any network call,
+    and with `GIT_DIR` set in the test's environment the stub sees no `GIT_*` variable in either
+    command's environment, and, with the test's working directory set elsewhere, both commands get
+    `-C` with the root taken from the sender module's path (mutations: the clean-worktree check
+    removed; the check run only for the live check; the commit format check removed; the environment
+    passed to `git` unchanged; `-C` dropped, or given the working directory; the
+    `--untracked-files=all` flag dropped, caught by a stub that returns an untracked file only when
+    that flag is present). Separate offline
     refusal tests, each with no judge call and no send: a stub client whose constructor sets a
     global tracer provider (mutation: the global-provider check removed);
     `LANGFUSE_MEDIA_UPLOAD_ENABLED` set before start-up, once to `true` and once to `false`
@@ -622,7 +636,16 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
     client constructor replaces `warnings.showwarning` and expects the `logger_handler` refusal
     after the build, with no judge call and no send (mutation: the handler check's run after the
     build removed, which the per-flush check would otherwise catch only after a judge call and a
-    send).
+    send). An eighteenth, nineteenth and twentieth cover `logger_last_resort`: in the stub
+    client's constructor, a child of a listed logger (`httpx.stubchild`) with `propagate=False`
+    and no handler (eighteenth), and a listed logger (`requests`, and `httpx`) whose handlers are
+    cleared with `propagate=False` left set (nineteenth), each expecting the refusal after the
+    build with no judge call and no send; in the stub SDK's flush, a new child of a listed logger
+    with `propagate=False` and no handler (twentieth), expecting the run to fail with no further
+    judge call and no completion marker (mutation checks: the last-resort check removed; listed
+    loggers skipped by the check; the per-flush run of the check removed). Further tests: a
+    listed logger stripped during a flush fails the run partway; a `NullHandler` or a propagating
+    child passes; a stream handler still refuses with `logger_handler`.
 - **Langfuse dependency test (ADR 0027's decision, "Dependencies", not this ADR's):** build step
   1 deliberately relaxes one assertion of `test_src_and_the_dependencies_never_name_langfuse`,
   as ADR 0027 decided: `langfuse` may appear in the `eval` extra only. The test must still fail
@@ -634,6 +657,11 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   forbids weakening a safety test to make a change pass. This is a recorded owner decision about
   what the test protects, not a change made to pass it, and AGENTS.md section 4's "NEVER weaken"
   rule is unchanged.
+- **tides.today evaluation test (ADR 0029 decision 12):**
+  `test_no_evaluation_module_builds_or_reads_tides_today` exempts `langfuse_checks.py`, which may
+  import `SOURCE` from `divesafe.data.tides_today` once and use it once, in `REFUSED_SOURCES`, under
+  the AST rule in `test_no_evaluation_module_builds_or_reads_tides_today`. This is an owner-approved
+  relaxation (option A, 2026-11-19), not a strengthening.
 - The live judge run is marked `integration`.
 
 ## Build order
@@ -693,13 +721,15 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   The sender also refuses to start if `langfuse` is already in `sys.modules` before its set-up,
   tested with a mutation check that skips it. All of this is decided and reviewed at build step
   1.
-- The logger checks (decision 3) do not see a child of a listed logger set to `propagate=False`
-  with no handler (which `logging.lastResort` prints to stderr at WARNING and above). The
-  per-flush check runs after the flush, so a handler the SDK adds during a flush could receive
-  that flush's log lines before the run fails with `logger_handler`; the logger checks do not run
-  after the completion marker's score call or SDK shutdown (the marker's delivery is still
-  confirmed). These rest on the build-step-1 record for the pinned SDK, checked again with each
-  SDK version; the exposure stays in the owner's shell, on synthetic-set data.
+- The per-flush logger checks (`logger_handler`, `logger_last_resort`) run after the flush, so a
+  handler the SDK adds during a flush, or a child logger it creates with `propagate=False` and
+  no handler (which `logging.lastResort` would print to stderr at WARNING and above), could
+  receive that flush's log lines before the run fails; the logger checks do not run after the
+  completion marker's score call or SDK shutdown (the marker's delivery is still confirmed).
+  A child with `propagate=False` and no handler found at any other check is refused with
+  `logger_last_resort` (decision 3), so it is no longer an open gap. These rest on the
+  build-step-1 record for the pinned SDK, checked again with each SDK version; the exposure
+  stays in the owner's shell, on synthetic-set data.
 - Confirmation (decision 3) means Langfuse's API accepted an item (HTTP 200 for spans, 202 for
   scores), not that it was stored: ingestion is asynchronous, and a span batch that the server
   partly rejects in OTLP `partial_success` is still counted as sent, because the exporter does
@@ -711,7 +741,7 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   provider are shut down, the pinned SDK leaves one daemon thread (`PromptCacheRefreshConsumer`)
   until the process ends; the sender starts no span and makes no call after the completion
   marker; a send by the SDK after it, or at interpreter exit, is not checked. `logger_unlisted`
-  sees only top-level logger names that are new since the set-up; an unlisted logger that already
+  sees only logger names that are new since the set-up; an unlisted logger that already
   existed (for example, from earlier tests in the same pytest session) and that the SDK logged to
   is neither silenced nor refused, and its records reach the root logger's handlers, which under
   pytest show WARNING and above in the report of a failed test. Build step 1 saw the SDK use only
@@ -719,8 +749,12 @@ reviewed change. Agreement is recorded in `evaluation-strategy.md`.
   outlives it), so later tests in the same process see those loggers silenced; pytest undoes the
   warnings capture when each test ends, so a warning the SDK's daemon thread raises after the run
   is not captured by the sender (it goes to pytest's or Python's default handling); each set-up
-  turns the capture on again. The live check's clean-worktree check does not see ignored files
-  (`.gitignore`, `.git/info/exclude` or a global excludes file).
+  turns the capture on again. The clean-worktree check does not see ignored files
+  (`.gitignore`, `.git/info/exclude` or a global excludes file). If the shutdown fails after the
+  completion marker is confirmed (`shutdown_failed`), Langfuse shows a complete run while no
+  local file is written; a report must cite the local file, not the marker alone. After a failed
+  run the sender does not shut the client down, so a span that already ended can still be
+  exported by the SDK's background thread before the process ends.
 - `langfuse` is pinned exactly in `[eval]`, without hashes, and its own dependencies (`httpx`,
   `httpcore`, `backoff`, `wrapt`, `packaging`, `typing-extensions`, `pydantic`, and OpenTelemetry
   within the runtime's `<1.46`) are ranges. The sender's version check detects a different

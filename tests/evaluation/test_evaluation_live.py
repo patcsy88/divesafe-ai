@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 import pytest
 from pydantic import SecretStr
+from tests.evaluation import tide_check
 from tests.evaluation.egress_gate import (
     egress_gate,
     eval_output_dir,
@@ -35,10 +36,10 @@ from tests.evaluation.egress_gate import (
     write_private,
 )
 from tests.evaluation.harness import evaluate
-from tests.evaluation.tide_check import run_tide_check
 
 from divesafe.agents import PROMPT_VERSION
 from divesafe.config import Settings
+from divesafe.config.settings import base_url_host
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "openai_compatible")
@@ -72,9 +73,19 @@ def _host() -> str:
     return urlparse(url).hostname or "unknown"
 
 
-def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
-    assert MODEL is not None
-    assert PROVIDER == "openai_compatible", "DIVESAFE_EVAL_PROVIDER is not known"
+def eval_base_url() -> str:
+    return os.environ.get("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+
+
+def eval_model_host() -> str | None:
+    """ADR 0030 decision 3: the host every live runner passes as `model_host`, by the function
+    `check_egress` uses (never via `api.state`). None fails the run in the runner."""
+    return base_url_host(eval_base_url())
+
+
+def provider_builder() -> tuple[Settings, Callable[[str], OpenAICompatibleProvider]]:
+    """The one builder for every live provider (ADR 0030 decision 3): the evaluation's base URL,
+    allow-list, key and budgets, with the model id as the only varying argument."""
     env = os.environ.get
     budgets = Settings(
         _env_file=None,
@@ -93,22 +104,49 @@ def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
         "max_output_tokens": budgets.llm_max_output_tokens,
     }
     options["allowed_hosts"] = budgets.llm_allowed_host_set()
-    base = env("DIVESAFE_EVAL_BASE_URL", "http://localhost:8000/v1")
+    base = eval_base_url()
     key = env("DIVESAFE_EVAL_API_KEY")
     options["api_key"] = SecretStr(key) if key else None
 
-    def make() -> OpenAICompatibleProvider:
-        return OpenAICompatibleProvider(MODEL, base, **options)  # type: ignore[arg-type]
+    def make(model_id: str) -> OpenAICompatibleProvider:
+        return OpenAICompatibleProvider(model_id, base, **options)  # type: ignore[arg-type]
 
-    basis = egress_gate(
-        make(),
+    return budgets, make
+
+
+def gate(provider: OpenAICompatibleProvider) -> str:
+    """`egress_gate` for one provider instance, from the evaluation's settings."""
+    env = os.environ.get
+    return egress_gate(
+        provider,
         allow_external=ALLOW_EXTERNAL,
         server_is_local=SERVER_IS_LOCAL,
-        base_url=base,
+        base_url=eval_base_url(),
         allowed_hosts=env("DIVESAFE_EVAL_ALLOWED_HOSTS"),
         # ADR 0028: the evaluation's own knowledge host; unset keeps knowledge withheld.
         knowledge_host=env("DIVESAFE_EVAL_KNOWLEDGE_HOST"),
     )
+
+
+def run_tide_check(provider: OpenAICompatibleProvider) -> tide_check.TideCheck:
+    """ADR 0030 decision 3 for the tide check: this provider instance passes `egress_gate` itself,
+    and the runner gets the gate's basis and the base URL's host. One positional argument, so the
+    stubs in tests/safety/test_llm_egress_declaration.py still replace it."""
+    return tide_check.run_tide_check(
+        provider, egress_basis=gate(provider), model_host=eval_model_host()
+    )
+
+
+def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
+    assert MODEL is not None
+    assert PROVIDER == "openai_compatible", "DIVESAFE_EVAL_PROVIDER is not known"
+    model = MODEL
+    budgets, make_for = provider_builder()
+
+    def make() -> OpenAICompatibleProvider:
+        return make_for(model)
+
+    basis = gate(make())
     return budgets, make, basis
 
 
@@ -117,7 +155,7 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
 ) -> None:
     budgets, make, basis = _setup()
     out_dir = eval_output_dir(os.environ.get("DIVESAFE_EVAL_OUT"), tmp_path)
-    report = evaluate(make)
+    report = evaluate(make, egress_basis=basis, model_host=eval_model_host())
     out = output_path(out_dir, f"evaluation_{PROVIDER}.json")
     write_private(
         out,
