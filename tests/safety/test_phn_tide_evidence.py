@@ -133,15 +133,12 @@ def test_a_go_resting_on_a_tide_prediction_is_blocked_by_the_quality_guard_alone
     assert [r.rule_id for r in blocked.rule_results if r.outcome is not Recommendation.GO] == [
         "evidence.quality_insufficient_for_go"
     ]  # the guard alone stopped it
-    # ADR 0008 Amendment 1 (a tightening): DEGRADED tides never support GO, even with the
-    # policy on, and the tide hold is still the only thing that stops it.
-    held = _result([_GoRule()], may_support_go=True)
-    assert held.recommendation is Recommendation.INSUFFICIENT_EVIDENCE
-    assert [
-        (r.rule_id, r.rationale.rsplit(": ", 1)[-1])
-        for r in held.rule_results
-        if r.outcome is not Recommendation.GO
-    ] == [("evidence.quality_insufficient_for_go", "tides")]
+    # ADR 0008 Amendment 2 (owner, 2026-11-20): with the policy on, a tide prediction day is
+    # time-resolved and may support GO; the result is marked for the human's fixed note.
+    allowed = _result([_GoRule()], may_support_go=True)
+    assert allowed.recommendation is Recommendation.GO
+    assert allowed.rests_on_degraded_evidence is True
+    assert all(r.rule_id != "evidence.quality_insufficient_for_go" for r in allowed.rule_results)
 
 
 def test_a_tide_item_is_never_accepted_for_a_stale_or_future_clock() -> None:

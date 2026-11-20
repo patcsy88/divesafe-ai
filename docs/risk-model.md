@@ -263,13 +263,14 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
   Tioman's areas (owner decision), but it still cannot reach GO: tides are a required category;
   until tides.today was switched on in production (2026-11-20, 06:17 UTC) they were missing, and
   since then a Tiger Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which
-  no rule reads and which never supports GO or CAUTION (ADR 0008 Amendment 1: never for tides);
-  factors without a deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT
-  EVIDENCE, and every live value is DEGRADED (ADR 0008). No site guide is retrieved for it, although
-  two sources (the owner's trial report and PADI's page) name a current hazard there that the human
-  does not see. Its model current (Open-Meteo, a grid cell about 2.6 km away) is judged adequate for
-  the signed-off limits by the owner, from the owner's own logged dives (2026-11-20; a judgement,
-  not a measurement; see [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+  no rule reads and which satisfies the required `tides` category for GO or CAUTION only with
+  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 2); factors without a deployed rule
+  (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE, and every live value is
+  DEGRADED (ADR 0008). No site guide is retrieved for it, although two sources (the owner's trial
+  report and PADI's page) name a current hazard there that the human does not see. Its model current
+  (Open-Meteo, a grid cell about 2.6 km away) is judged adequate for the signed-off limits by the
+  owner, from the owner's own logged dives (2026-11-20; a judgement, not a measurement; see [ADR
+  0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
 
 **Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
 ignores intervals whose `valid_until` is before the window start, so such an interval no longer
@@ -310,14 +311,14 @@ cannot confirm the decision was saved.
   datum) under `value["tide"]`, for one PHN station (not named in the response) and today plus two
   days only. A tide height or time gives no current speed or slack-water time, so `tidal_current`
   stays unencodable and the `tides` category now being present does not make a tidal-current limit
-  evaluable. As with MET, the engine counts a +08:00 day as covering the dive window, and DEGRADED
-  tides never support GO or CAUTION, whatever `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` says (ADR 0008
-  Amendment 1, per category), so a tide prediction cannot stand in for a current. The +08:00 zone is
-  inferred and checked only against our clock; the permission to use the endpoint is the owner's
-  report and is not on file. The connector is off by default. GO stays unreachable because
-  `tidal_current` has no data source and `tides` is required; the per-category hold (ADR 0008
-  Amendment 1) keeps DEGRADED tides below GO even with the setting on. The `tidal_current`
-  placeholder no longer cites tide ids; the agent prompts say a tide is not a current.
+  evaluable. As with MET, the engine counts a +08:00 day as covering the dive window. DEGRADED tide
+  predictions satisfy the required `tides` category for GO or CAUTION only with the setting on; no
+  rule reads them (ADR 0008 Amendment 2); a tide prediction still cannot stand in for a current,
+  because `tidal_current` has no metric. The +08:00 zone is inferred and checked only against our
+  clock; the permission to use the endpoint is the owner's report and is not on file. The connector
+  is off by default. GO stays unreachable because `tidal_current` has no metric
+  (`tests/safety/test_tide_is_not_a_current.py:114`). The `tidal_current` placeholder no longer
+  cites tide ids; the agent prompts say a tide is not a current.
 - **tides.today tide predictions (2026-11-17, [ADR
   0029](adr/0029-tides-today-tide-predictions.md)):** `TidesTodayConnector` items are DEGRADED daily
   predictions under `value["tide"]` (high/low times and heights, and moon phase; no spring/neap) and
@@ -329,12 +330,13 @@ cannot confirm the decision was saved.
   lineage is unknown and it never corroborates PHN or anything else. The moon phase is context only:
   not a spring/neap classification and nothing about current strength. An estimated extreme is
   refused. The parser checks order, alternation and an 18 h gap, but a single missing high/low pair
-  can pass. All of PHN's limits on currents apply unchanged: `tidal_current` stays unencodable, and
-  DEGRADED tides never support GO or CAUTION (ADR 0008 Amendment 1). With PHN also on, both items
-  are present and no check compares them. Off by default (switching it on is the owner's decision);
-  the full copyright notice is shown once with every assessment view that holds a tides.today item
-  (evaluated or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11).
-  Switched on in production by the owner on 2026-11-20 (ADR 0029, "Switched on").
+  can pass. All of PHN's limits on currents apply unchanged: `tidal_current` stays unencodable;
+  DEGRADED tide predictions satisfy the required `tides` category for GO or CAUTION only with the
+  setting on; no rule reads them (ADR 0008 Amendment 2). With PHN also on, both items are present
+  and no check compares them. Off by default (switching it on is the owner's decision); the full
+  copyright notice is shown once with every assessment view that holds a tides.today item (evaluated
+  or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11). Switched on in
+  production by the owner on 2026-11-20 (ADR 0029, "Switched on").
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   corroboration logic must use `can_corroborate`
   ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an

@@ -41,6 +41,7 @@ from divesafe.orchestration import pipeline as pipeline_module
 from divesafe.risk import (
     COARSE_SPAN,
     DEGRADED_NEVER_SUPPORTS_GO,
+    TIME_RESOLVED_PREDICTIONS,
     EvidencePolicy,
     RiskRulesEngine,
 )
@@ -537,72 +538,147 @@ def test_the_view_shows_the_note_exactly_when_marked_and_go_or_caution(proposal:
     assert shown == (DEGRADED_EVIDENCE_NOTE if record.rests_on_degraded_evidence else "")
 
 
-# --- i. per-category policy: DEGRADED tides never support GO or CAUTION -----------------------
+# --- i. tide predictions (ADR 0008 Amendment 2, owner 2026-11-20) -----------------------------
+# Amendment 1 held DEGRADED tides; Amendment 2 exempts only tide PREDICTIONs that cover the
+# window on their own, and treats a tide PREDICTION day (every high and low water with its time)
+# as time-resolved. Every other DEGRADED tide item stays held, however short, and the setting off
+# still holds every DEGRADED tide item.
+
+DAY_I = timedelta(days=1)
 
 
-def test_tides_are_the_categories_degraded_evidence_never_lets_reach_go() -> None:
+def _tide(item_id: str = "t", *, kind: DataKind = DataKind.PREDICTION) -> EvidenceItem:
+    return _item(
+        category=C.TIDES,
+        kind=kind,
+        quality=DataQuality.DEGRADED,
+        item_id=item_id,
+        valid_at=START - H,
+        valid_until=START - H + DAY_I,
+    )
+
+
+def test_tides_stay_held_and_only_tide_predictions_are_time_resolved() -> None:
     assert frozenset({C.TIDES}) == DEGRADED_NEVER_SUPPORTS_GO
+    assert frozenset({C.TIDES}) == TIME_RESOLVED_PREDICTIONS
+    # The PREDICTION kind check in `_fine_cover` is an extra safeguard; its mutant is equivalent
+    # only while this holds (risk review, 2026-11-20).
+    assert TIME_RESOLVED_PREDICTIONS <= DEGRADED_NEVER_SUPPORTS_GO
     assert C.TIDES in INTERIM_REQUIRED_CATEGORIES  # production requires tides, so it is checked
 
 
 @pytest.mark.parametrize("outcome", [R.GO, R.CAUTION], ids=lambda r: r.name)
-@pytest.mark.parametrize("on", [True, False])
-def test_degraded_tides_hold_go_and_caution_with_the_policy_on_or_off(
-    outcome: Recommendation, on: bool
+def test_a_daily_tide_prediction_supports_go_and_caution_with_the_policy_on(
+    outcome: Recommendation,
 ) -> None:
-    items = [_item(quality=DataQuality.VALIDATED), _degraded("t", category=C.TIDES)]
+    items = [_item(quality=DataQuality.VALIDATED), _tide()]
     result = _engine(
-        {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(outcome)], degraded_may_support_go=on
+        {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(outcome)], degraded_may_support_go=True
     ).assess(PLAN, items, NOW)
+    assert QUALITY_GUARD not in _ids(result)
+    assert result.recommendation is outcome
+    assert result.rests_on_degraded_evidence is True  # the human sees the fixed note
 
-    guard = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
-    assert len(guard) == 1
-    assert guard[0].outcome is R.INSUFFICIENT_EVIDENCE
-    assert guard[0].rationale.endswith("missing for: tides")
+
+@pytest.mark.parametrize("outcome", [R.GO, R.CAUTION], ids=lambda r: r.name)
+def test_a_daily_tide_prediction_is_still_held_with_the_policy_off(
+    outcome: Recommendation,
+) -> None:
+    items = [_item(quality=DataQuality.VALIDATED), _tide()]
+    result = _engine(
+        {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(outcome)], degraded_may_support_go=False
+    ).assess(PLAN, items, NOW)
+    (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
+    assert guard.outcome is R.INSUFFICIENT_EVIDENCE
     assert result.recommendation is R.INSUFFICIENT_EVIDENCE
     assert result.rests_on_degraded_evidence is False
 
 
-def test_degraded_tides_name_only_tides_when_other_categories_are_degraded_too() -> None:
-    items = [_degraded("w"), _degraded("t", category=C.TIDES)]
+@pytest.mark.parametrize("kind", [DataKind.MODEL, DataKind.FORECAST], ids=lambda k: k.name)
+def test_a_daily_tide_item_that_is_not_a_prediction_is_still_coarse(kind: DataKind) -> None:
+    items = [_item(quality=DataQuality.VALIDATED), _tide(kind=kind)]
     result = _engine({C.WAVES_SWELL, C.TIDES}, degraded_may_support_go=True).assess(
         PLAN, items, NOW
     )
     (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
-    assert guard.rationale.endswith("missing for: tides")  # waves may still support GO
+    assert guard.rationale.endswith("missing for: tides")
     assert result.recommendation is R.INSUFFICIENT_EVIDENCE
 
 
-def test_validated_tides_let_other_degraded_categories_support_go() -> None:
-    """Control: the hold is per category; only DEGRADED tides are held."""
-    items = [_degraded("w"), _item(category=C.TIDES, item_id="t", quality=DataQuality.VALIDATED)]
-    result = _engine({C.WAVES_SWELL, C.TIDES}, degraded_may_support_go=True).assess(
-        PLAN, items, NOW
+def test_a_daily_prediction_in_another_category_is_still_coarse() -> None:
+    item = _item(
+        kind=DataKind.PREDICTION,
+        quality=DataQuality.DEGRADED,
+        valid_at=START - H,
+        valid_until=START - H + DAY_I,
     )
-    assert QUALITY_GUARD not in _ids(result)
-    assert result.recommendation is R.GO
-    assert result.rests_on_degraded_evidence is True
-
-
-def test_a_validated_tide_item_over_half_the_window_does_not_launder_a_degraded_one() -> None:
-    half = _item(
-        category=C.TIDES, item_id="t1", quality=DataQuality.VALIDATED, valid_until=START + H / 2
-    )
-    items = [_item(quality=DataQuality.VALIDATED), half, _degraded("t2", category=C.TIDES)]
-    result = _engine({C.WAVES_SWELL, C.TIDES}, degraded_may_support_go=True).assess(
-        PLAN, items, NOW
-    )
-    assert QUALITY_GUARD in _ids(result)
+    result = _engine(degraded_may_support_go=True).assess(PLAN, [item], NOW)
+    (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
+    assert guard.rationale.endswith("missing for: waves_swell")
     assert result.recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_tide_prediction_still_names_another_coarse_category() -> None:
+    items = [_daily("w", category=C.WIND), _tide()]
+    result = _engine({C.WIND, C.TIDES}, degraded_may_support_go=True).assess(PLAN, items, NOW)
+    (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
+    assert guard.rationale.endswith("missing for: wind")  # tides pass, wind does not
+    assert result.recommendation is R.INSUFFICIENT_EVIDENCE
+
+
+def test_a_tide_prediction_that_does_not_cover_the_window_is_not_usable() -> None:
+    late = _tide().model_copy(update={"valid_at": START + H / 2, "valid_until": START + DAY_I})
+    result = _engine({C.TIDES}, degraded_may_support_go=True).assess(PLAN, [late], NOW)
+    assert result.recommendation is R.INSUFFICIENT_EVIDENCE
+    assert result.rests_on_degraded_evidence is False
 
 
 @pytest.mark.parametrize("outcome", [R.NO_GO, R.INSUFFICIENT_EVIDENCE], ids=lambda r: r.name)
-def test_degraded_tides_never_relax_a_more_severe_result(outcome: Recommendation) -> None:
-    items = [_item(quality=DataQuality.VALIDATED), _degraded("t", category=C.TIDES)]
+def test_a_tide_prediction_never_relaxes_a_more_severe_result(outcome: Recommendation) -> None:
+    items = [_item(quality=DataQuality.VALIDATED), _tide()]
     result = _engine(
         {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(outcome)], degraded_may_support_go=True
     ).assess(PLAN, items, NOW)
     assert result.recommendation is outcome
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [DataKind.MODEL, DataKind.FORECAST, DataKind.OBSERVATION],
+    ids=lambda k: k.name,
+)
+def test_a_sub_daily_degraded_tide_item_that_is_not_a_prediction_is_still_held(
+    kind: DataKind,
+) -> None:
+    hourly = _item(category=C.TIDES, kind=kind, quality=DataQuality.DEGRADED, item_id="t")
+    items = [_item(quality=DataQuality.VALIDATED), hourly]
+    result = _engine(
+        {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(R.GO)], degraded_may_support_go=True
+    ).assess(PLAN, items, NOW)
+    (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
+    assert guard.rationale.endswith("missing for: tides")
+    assert result.recommendation is R.INSUFFICIENT_EVIDENCE
+    assert result.rests_on_degraded_evidence is False
+
+
+def test_a_tide_prediction_over_half_the_window_does_not_free_a_tide_model_over_the_rest() -> None:
+    half = START + H / 2
+    prediction = _tide("p").model_copy(update={"valid_at": START - H, "valid_until": half})
+    model = _item(
+        category=C.TIDES,
+        kind=DataKind.MODEL,
+        quality=DataQuality.DEGRADED,
+        item_id="m",
+        valid_at=half,
+        valid_until=START + H,
+    )
+    items = [_item(quality=DataQuality.VALIDATED), prediction, model]
+    result = _engine(
+        {C.WAVES_SWELL, C.TIDES}, rules=[_Fixed(R.GO)], degraded_may_support_go=True
+    ).assess(PLAN, items, NOW)
+    (guard,) = [r for r in result.rule_results if r.rule_id == QUALITY_GUARD]
+    assert guard.rationale.endswith("missing for: tides")
+    assert result.recommendation is R.INSUFFICIENT_EVIDENCE
 
 
 # --- j. a daily or longer item does not stand in for time-resolved evidence -------------------

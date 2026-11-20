@@ -215,7 +215,10 @@ dive window touches.
    date filters are inclusive.)*
 6. **No rule, no limit.** No tide threshold and no rule. `tidal_current` stays unencodable, and
    tide evidence never gives GO or CAUTION on its own. **`degraded_may_support_go` must not be
-   turned on for tides** (ADR 0021 decision 4 applies unchanged).
+   turned on for tides**. **Superseded in part (owner, 2026-11-20, ADR 0008 Amendment 2):** with
+   `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on, a tides.today prediction satisfies the required `tides`
+   category for GO or CAUTION; no rule reads it. No tide threshold, no tide rule, and
+   `tidal_current` stays unencodable.
 7. **Horizon.** The API states none. Our bound: today and the next six local days. This limits
    request size and calls; it is not a statement about prediction quality.
 8. **Transport.** `TIDES_TODAY_HOSTS = {"api.tidestoday.io"}`, kept **out of `ALLOWED_HOSTS`**,
@@ -479,14 +482,14 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   noise, ADR 0027). Every run still stays below GO: tides are a required category; until tides.today
   was switched on in production (2026-11-20, 06:17 UTC) they were missing, and since then a Tiger
   Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which no rule reads and
-  which never supports GO or CAUTION (ADR 0008 Amendment 1: never for tides); the factors without a
-  deployed rule stay at INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast
-  uncertainty, site constraint) cannot have one, because the rule format has no metric for them; and
-  every live value is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION
-  while `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off (its default; ADR 0008 Amendment 1). NO-GO is
-  still possible. That is safe but is not the same as a clean run. These reasons now apply equally
-  to Tioman; the only difference left for Tiger Reef is that no site guide is retrieved for it
-  (above).
+  which satisfies the required `tides` category for GO or CAUTION only with
+  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 2); the factors without a deployed rule
+  stay at INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast uncertainty,
+  site constraint) cannot have one, because the rule format has no metric for them; and every live
+  value is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION while
+  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off (its default; ADR 0008 Amendment 1). NO-GO is still
+  possible. That is safe but is not the same as a clean run. These reasons now apply equally to
+  Tioman; the only difference left for Tiger Reef is that no site guide is retrieved for it (above).
 - **Forecast and MET mapping (owner, 2026-11-20):** Tiger Reef uses Tioman's entries exactly:
   data.gov.my forecast location `Rc024` "Pulau Tioman" and MET waters zone `LOCATION:499`
   "TIOMAN". Both are area forecasts, not forecasts for the reef: the data.gov.my item is an

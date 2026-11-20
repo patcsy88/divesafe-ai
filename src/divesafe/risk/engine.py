@@ -47,6 +47,7 @@ __all__ = [
     "COARSE_SPAN",
     "DEGRADED_NEVER_SUPPORTS_GO",
     "EvidencePolicy",
+    "TIME_RESOLVED_PREDICTIONS",
     "Reconciliation",
     "RiskAssessment",
     "RiskRulesEngine",
@@ -58,9 +59,14 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # ADR 0008 Amendment 1 (owner, 2026-11-20): categories whose DEGRADED evidence never supports GO
-# or CAUTION, even with `degraded_may_support_go`. Tide predictions are for a reference port, not
-# the dive site (ADR 0029). A reviewed constant, not a policy knob.
+# or CAUTION, even with `degraded_may_support_go`. A reviewed constant, not a policy knob. Since
+# Amendment 2 (owner, 2026-11-20) the one exception is a PREDICTION in `TIME_RESOLVED_PREDICTIONS`
+# that covers the dive window on its own; every other DEGRADED tide item stays held.
 DEGRADED_NEVER_SUPPORTS_GO: Final[frozenset[DataCategory]] = frozenset({DataCategory.TIDES})
+# ADR 0008 Amendment 2 (owner, 2026-11-20): a PREDICTION in these categories lists each event with
+# its time (a tide day lists every high and low water), so a day of it is time-resolved, not
+# coarse. A reviewed constant, not a policy knob.
+TIME_RESOLVED_PREDICTIONS: Final[frozenset[DataCategory]] = frozenset({DataCategory.TIDES})
 # ADR 0008 Amendment 1 (owner, 2026-11-20): an item valid for this long or longer (a daily
 # forecast or range) is coarse and does not stand in for time-resolved evidence. A definition of
 # granularity, not a safety limit.
@@ -478,7 +484,8 @@ class RiskRulesEngine:
         """ADR 0008 Amendment 1: a coarse item (valid for `COARSE_SPAN` or longer, such as a daily
         forecast or range) does not stand in for time-resolved evidence. True when the items
         that are not coarse cover the window on their own. Exempt items (notices, knowledge) and
-        instants are never coarse; with no item left, nothing covers the window."""
+        instants are never coarse, nor (Amendment 2) a PREDICTION in `TIME_RESOLVED_PREDICTIONS`;
+        with no item left, nothing covers the window."""
         start, end = self._window(plan)
         fine = [
             e
@@ -486,8 +493,20 @@ class RiskRulesEngine:
             if _exempt(e, start, end)
             or e.valid_until is None
             or e.valid_until - e.valid_at < COARSE_SPAN
+            or (e.data_kind is DataKind.PREDICTION and e.category in TIME_RESOLVED_PREDICTIONS)
         ]
         return bool(fine) and _covers_window(fine, start, end)
+
+    def _predictions_cover(self, plan: DivePlan, items: Sequence[EvidenceItem]) -> bool:
+        """ADR 0008 Amendment 2: True when PREDICTIONs in `TIME_RESOLVED_PREDICTIONS` cover the
+        window on their own, the only way out of `DEGRADED_NEVER_SUPPORTS_GO`."""
+        start, end = self._window(plan)
+        predictions = [
+            e
+            for e in items
+            if e.data_kind is DataKind.PREDICTION and e.category in TIME_RESOLVED_PREDICTIONS
+        ]
+        return bool(predictions) and _covers_window(predictions, start, end)
 
     def _quality_guard(
         self, plan: DivePlan, usable: dict[DataCategory, list[EvidenceItem]]
@@ -496,7 +515,11 @@ class RiskRulesEngine:
         validated item elsewhere in time cannot launder a degraded one that covers the dive."""
         degraded = self._degraded_categories(plan, usable)
         if self._policy.degraded_may_support_go:
-            never = {c.value for c in DEGRADED_NEVER_SUPPORTS_GO}
+            never = {
+                c.value
+                for c, items in usable.items()
+                if c in DEGRADED_NEVER_SUPPORTS_GO and not self._predictions_cover(plan, items)
+            }
             coarse_only = {
                 c.value for c, items in usable.items() if not self._fine_cover(plan, items)
             }
@@ -507,8 +530,9 @@ class RiskRulesEngine:
                 rule_id=f"{EVIDENCE_QUALITY_PREFIX}_insufficient_for_go",
                 outcome=Recommendation.INSUFFICIENT_EVIDENCE,
                 rationale=(
-                    "DEGRADED evidence never supports GO or CAUTION for tides, nor when only "
-                    "daily or longer items cover the window (ADR 0008 Amendment 1); "
+                    "DEGRADED evidence never supports GO or CAUTION for tides unless tide "
+                    "predictions cover the window, nor when only daily or longer items cover it "
+                    "(ADR 0008 Amendments 1 and 2); "
                     "VALIDATED evidence covering the dive window is missing for: " + ", ".join(held)
                 ),
                 factor=RiskFactorKind.DATA_QUALITY,

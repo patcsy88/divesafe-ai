@@ -8,6 +8,7 @@ from divesafe.risk.definition_rules import (
 from divesafe.risk.engine import (
     COARSE_SPAN,
     DEGRADED_NEVER_SUPPORTS_GO,
+    TIME_RESOLVED_PREDICTIONS,
     EvidencePolicy,
     Reconciliation,
     RiskAssessment,
@@ -32,6 +33,7 @@ __all__ = [
     "RiskRulesEngine",
     "Rule",
     "ThresholdTbdRule",
+    "TIME_RESOLVED_PREDICTIONS",
     "WarningNeedsHumanReadingRule",
     "placeholder_rules",
     "reconcile",

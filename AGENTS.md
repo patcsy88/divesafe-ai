@@ -115,8 +115,9 @@ Severity order: `GO < CAUTION < INSUFFICIENT EVIDENCE < NO-GO`.
   test scans `risk/` for stray numeric literals.
 - Missing, stale, future-dated, out-of-window, unaccepted-quality or contradictory required evidence
   yields `INSUFFICIENT EVIDENCE`. The engine judges `effective_quality`, never a connector's claim;
-  degraded data cannot support `GO` or `CAUTION` unless the policy says so, and DEGRADED tides never
-  do (ADR 0008 Amendment 1).
+  degraded data cannot support `GO` or `CAUTION` unless the policy says so, and daily-only cover
+  never does, except tide predictions; DEGRADED tides count only through tide predictions that cover
+  the window (ADR 0008 Amendments 1 and 2).
 - The engine is pure and deterministic: no I/O, no LLM, no randomness.
 
 ## 8. RAG boundaries
