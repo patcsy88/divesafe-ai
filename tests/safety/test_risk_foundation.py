@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from tests.agent.scripted_llm import fake, run_pipeline
-from tests.conftest import NOW, make_evidence
+from tests.conftest import NOW, make_evidence, sub_daily
 
 from divesafe.domain import (
     THRESHOLD_FACTORS,
@@ -90,8 +90,8 @@ def _engine(*rules: object, required: set[DataCategory] | None = None) -> RiskRu
 
 
 def test_stale_required_evidence_is_detected(plan: DivePlan) -> None:
-    stale = [make_evidence(WAVES, age=timedelta(hours=1, seconds=1))]
-    fresh = [make_evidence(WAVES, age=timedelta(minutes=59))]
+    stale = [sub_daily(make_evidence(WAVES, age=timedelta(hours=1, seconds=1)))]
+    fresh = [sub_daily(make_evidence(WAVES, age=timedelta(minutes=59)))]
     engine = _engine(_Fixed("go", R.GO), required={WAVES})
     assert engine.assess(plan, stale, NOW).recommendation == R.INSUFFICIENT_EVIDENCE
     assert engine.assess(plan, fresh, NOW).recommendation == R.GO

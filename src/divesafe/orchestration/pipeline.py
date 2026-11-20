@@ -135,6 +135,7 @@ class _Run:
     rule_results: list[RuleResult] = field(default_factory=list)
     deterministic: Recommendation = Recommendation.INSUFFICIENT_EVIDENCE
     unevaluated: tuple[RiskFactorKind, ...] = ()
+    rests_on_degraded: bool = False
     ruleset_version: str = ""
     findings: tuple[Finding, ...] = ()
     agent_issues: tuple[str, ...] = ()
@@ -288,6 +289,7 @@ async def _assess(run: _Run) -> StageOutcome:
     )
     run.deterministic = most_severe(tuple(r.outcome for r in run.rule_results))
     run.unevaluated = assessment.unevaluated_factors
+    run.rests_on_degraded = assessment.rests_on_degraded_evidence
     run.ruleset_version = assessment.ruleset_version
     return StageOutcome.COMPLETED
 
@@ -403,6 +405,7 @@ async def _rejudge(run: _Run) -> StageOutcome:
         run.unevaluated = tuple(
             sorted(set(run.unevaluated) | set(later.unevaluated_factors), key=lambda f: f.value)
         )
+        run.rests_on_degraded = run.rests_on_degraded or later.rests_on_degraded_evidence
         run.rejudge_rules_added = len(run.rule_results) > before
         again = most_severe(tuple(r.outcome for r in run.rule_results))
         if again is not run.deterministic:
@@ -498,6 +501,9 @@ async def _gate(run: _Run) -> StageOutcome:
         confidence=None,
         evidence_issues=evidence.issues,
         unevaluated_factors=run.unevaluated,
+        # ADR 0008 Amendment 1: only meaningful while the final result is GO or CAUTION.
+        rests_on_degraded_evidence=run.rests_on_degraded
+        and reconciled.final in (Recommendation.GO, Recommendation.CAUTION),
         findings=run.findings,
         cross_examination_findings=run.cross_findings,
         proposal_evidence_ids=run.proposal_ids,

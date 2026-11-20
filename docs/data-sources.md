@@ -68,14 +68,15 @@ reachable but not yet approved or implemented. Nothing here has been called from
   as Tioman. **Known gaps (ADR 0029 Amendment 2):** (1) Tiger Reef still cannot reach GO: tides are
   a required category; until tides.today was switched on in production (2026-11-20, 06:17 UTC) they
   were missing, and since then a Tiger Reef run gets the DEGRADED Teluk Tekek item, a proxy about
-  13.4 km away, which no rule reads and which cannot support GO or CAUTION (ADR 0008); factors
-  without a deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE,
-  and every other live value is DEGRADED too; NO-GO is still possible; (2) the Tioman site guide is
-  loaded only for `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves no site knowledge and the
-  site view says none is registered, although, by the owner's report from the trial, the guide lists
-  currents at Tiger Reef (ADR 0028); loading a reviewed Tiger Reef or all-sites guide is the owner's
-  decision. Open-Meteo marine has no site table, so it already returns current for Tiger Reef from a
-  grid point about 2.6 km away; this is model evidence only (ADR 0029 Amendment 2).
+  13.4 km away, which no rule reads and which never supports GO or CAUTION (ADR 0008 Amendment 1:
+  never for tides); factors without a deployed rule (four of which the rule format cannot hold) stay
+  at INSUFFICIENT EVIDENCE, and every other live value is DEGRADED too; NO-GO is still possible; (2)
+  the Tioman site guide is loaded only for `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves
+  no site knowledge and the site view says none is registered, although, by the owner's report from
+  the trial, the guide lists currents at Tiger Reef (ADR 0028); loading a reviewed Tiger Reef or
+  all-sites guide is the owner's decision. Open-Meteo marine has no site table, so it already
+  returns current for Tiger Reef from a grid point about 2.6 km away; this is model evidence only
+  (ADR 0029 Amendment 2).
 - **Marine connector:** all items are `is_forecast=True` and `data_type="model"`, even for hours already past, because they are model values, not observations. One `EvidenceItem` per category per UTC hour (`waves_swell`,
   `sea_surface_temperature` as `sea_temperature`, `currents`). It rejects, per category, any
   missing hour, null, unexpected unit or out-of-range value, reports it in `issues`, and
@@ -406,32 +407,33 @@ from the national hydrographic office instead. Neither source gives tidal stream
 **tides.today API (2026-11-17; V2 since Amendment 1):** a documented, invite-only API
 (`api.tidestoday.io/v2`, an `x-api-key` header). The owner made one request per endpoint on
 2026-11-17; the responses are kept outside the repository and the test fixture is SYNTHETIC.
-Location 2960 "Teluk Tekek" is the only one within 25 km of the Tioman reference point (about
-3.7 km away). **Tiger Reef** (`my-pahang-tiger-reef`) is mapped to the same location 2960 as a
-proxy, on the owner's instruction (2026-11-20): the point is 13.4 km from the reef (haversine from
-2.89302, 104.05593 to 2.8, 104.133003), and each item says "about 13.4 km from the Tiger Reef dive
-site (position as published by PADI)", that it is not a prediction for the dive site, and that the tide
+Location 2960 "Teluk Tekek" is the only one within 25 km of the Tioman reference point (about 3.7 km
+away). **Tiger Reef** (`my-pahang-tiger-reef`) is mapped to the same location 2960 as a proxy, on
+the owner's instruction (2026-11-20): the point is 13.4 km from the reef (haversine from 2.89302,
+104.05593 to 2.8, 104.133003), and each item says "about 13.4 km from the Tiger Reef dive site
+(position as published by PADI)", that it is not a prediction for the dive site, and that the tide
 at the dive site may differ in time and height by an unknown amount. No search was made around the
-reef (the "only one within 25 km" finding is centred on the Tioman point, 16.2 km from the reef),
-so a closer location may exist. The owner reads the provider's written permission as covering this
-(2026-11-20); the provider was not asked. Three GET calls: the location (datum `CD`, upstream `tpe`, notice), the tide
-extremes (UTC times, heights in metres from `heightM`) and the ephemeris (sunrise, sunset and moon
-phase per local day). Only chart datum and the `tpe` upstream are accepted; the level of CD at
-this point is not stated and the upstream is not verified. Spring/neap is not available (403 for
-this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is our assumption.
-The terms (§2, §6, §9) forbid use as a sole source for diving and need written permission for
-automated use in another application. That permission is on file for the owner's deployment
-(2026-11-18; scope and limits in the ADR 0029 status). The connector `TidesTodayConnector` is **off
-by default** (`DIVESAFE_TIDES_TODAY_ENABLED`); switching it on is the owner's decision. The
-provider's full copyright notice is shown once with every assessment view that holds a tides.today
-item (evaluated or withheld), deduplicated (`provider_notices` and the fixed `provider_notice_note`
-in the assessment response, plain text, separate from `attributions`; at most 4 notices, then a
-count; `provider_notice_missing` is a separate flag, shown as a fixed sentence outside the provider
-text). Switched on in production by the owner on 2026-11-20 (ADR 0029, "Switched on"); the
-permission covers only the owner's deployment. The full notice is never sent to the model or a
-trace; the tide item itself goes to the model host and the vendor behind it with every assessment
-while the model server is not declared local (ADR 0029 decision 12) and never to a trace. The items
-stay DEGRADED and cannot support GO or CAUTION. No tidal-stream data. Design in [ADR
+reef (the "only one within 25 km" finding is centred on the Tioman point, 16.2 km from the reef), so
+a closer location may exist. The owner reads the provider's written permission as covering this
+(2026-11-20); the provider was not asked. Three GET calls: the location (datum `CD`, upstream `tpe`,
+notice), the tide extremes (UTC times, heights in metres from `heightM`) and the ephemeris (sunrise,
+sunset and moon phase per local day). Only chart datum and the `tpe` upstream are accepted; the
+level of CD at this point is not stated and the upstream is not verified. Spring/neap is not
+available (403 for this key). The rate limit is not stated; the budget (6 a minute, 300 a day) is
+our assumption. The terms (§2, §6, §9) forbid use as a sole source for diving and need written
+permission for automated use in another application. That permission is on file for the owner's
+deployment (2026-11-18; scope and limits in the ADR 0029 status). The connector
+`TidesTodayConnector` is **off by default** (`DIVESAFE_TIDES_TODAY_ENABLED`); switching it on is the
+owner's decision. The provider's full copyright notice is shown once with every assessment view that
+holds a tides.today item (evaluated or withheld), deduplicated (`provider_notices` and the fixed
+`provider_notice_note` in the assessment response, plain text, separate from `attributions`; at most
+4 notices, then a count; `provider_notice_missing` is a separate flag, shown as a fixed sentence
+outside the provider text). Switched on in production by the owner on 2026-11-20 (ADR 0029,
+"Switched on"); the permission covers only the owner's deployment. The full notice is never sent to
+the model or a trace; the tide item itself goes to the model host and the vendor behind it with
+every assessment while the model server is not declared local (ADR 0029 decision 12) and never to a
+trace. The items stay DEGRADED and never support GO or CAUTION, even with
+`DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 1). No tidal-stream data. Design in [ADR
 0029](adr/0029-tides-today-tide-predictions.md) (ACCEPTED 2026-11-20; Amendments 1 and 2).
 
 **Decided 2026-10-10 (owner): skip tide height for now.** *Superseded 2026-10-17 by the owner's PHN decision (see above).* At the time, no tide connector was built and no tide

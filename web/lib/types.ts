@@ -91,6 +91,8 @@ export interface AssessmentView {
   provider_notices_not_shown?: number;
   provider_notice_missing?: boolean;
   provider_notice_note?: string;
+  // ADR 0008 Amendment 1: fixed wording when a GO or CAUTION rests on DEGRADED evidence, else "".
+  degraded_evidence_note?: string;
   // True when this key may not see human decisions: then status says nothing about one.
   decision_withheld: boolean;
   notice: string;

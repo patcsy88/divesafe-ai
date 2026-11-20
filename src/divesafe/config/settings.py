@@ -49,6 +49,12 @@ def agent_stage_budget(
     return CROSS_EXAMINATION_CALL_CAP, stage
 
 
+_DEGRADED_NEEDS_RULESET = (
+    "DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a signed-off ruleset pinned with "
+    "DIVESAFE_RULESET_PATH and DIVESAFE_RULESET_SHA256"
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DIVESAFE_",
@@ -181,6 +187,9 @@ class Settings(BaseSettings):
     ruleset_path: Path | None = None
     # Optional pin: the app refuses to start if the ruleset file's SHA-256 differs from this.
     ruleset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # ADR 0008 Amendment 1 (owner): DEGRADED evidence may support GO and CAUTION. Needs a pinned
+    # signed-off ruleset in every environment.
+    degraded_may_support_go: bool = False
     decision_max_age_minutes: int | None = Field(default=None, gt=0)
 
     auth_mode: Literal["api_key", "dev"] = "api_key"
@@ -270,6 +279,10 @@ class Settings(BaseSettings):
             and self.ruleset_sha256 is None
         ):
             raise ValueError("a production ruleset must be pinned with DIVESAFE_RULESET_SHA256")
+        if self.degraded_may_support_go and (
+            self.ruleset_path is None or self.ruleset_sha256 is None
+        ):
+            raise ValueError(_DEGRADED_NEEDS_RULESET)
         return self
 
     def _check_knowledge_host(self) -> None:

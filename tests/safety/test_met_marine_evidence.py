@@ -156,13 +156,19 @@ def test_a_go_resting_on_met_daily_items_is_blocked_by_the_quality_guard_alone()
         r for r in blocked.rule_results if r.rule_id == "evidence.quality_insufficient_for_go"
     )
     assert "wind" in guard.rationale and "waves_swell" in guard.rationale
-    # Control, not an endorsement: with the guard switched off by policy the same rule gives GO, so
-    # the guard is what stopped it. When the rule that a coarse daily item cannot stand in for a
-    # time-resolved one lands (docs/risk-model.md, MET known gap), this control must become non-GO;
-    # changing it then is the intended tightening, not a weakening.
-    control = _go_result(may_support_go=True)
-    assert control.recommendation.value == "GO"
-    assert all(r.rule_id != "evidence.quality_insufficient_for_go" for r in control.rule_results)
+    assert [r.rule_id for r in blocked.rule_results if r.outcome.value != "GO"] == [
+        "evidence.quality_insufficient_for_go"
+    ]  # the guard alone stopped it
+    # ADR 0008 Amendment 1 (the intended tightening): a daily item does not stand in for a
+    # time-resolved one, so with the policy on the same rule is still held, by the guard alone,
+    # naming both MET categories.
+    held = _go_result(may_support_go=True)
+    assert held.recommendation.value == "INSUFFICIENT EVIDENCE"
+    assert [
+        (r.rule_id, r.rationale.rsplit(": ", 1)[-1])
+        for r in held.rule_results
+        if r.outcome.value != "GO"
+    ] == [("evidence.quality_insufficient_for_go", "waves_swell, wind")]
 
 
 def test_a_signed_wind_limit_cannot_be_evaluated_from_a_met_range() -> None:

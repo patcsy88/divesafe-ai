@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import Banner from "../../../components/Banner.tsx";
 import ConditionsForm from "../../../components/ConditionsForm.tsx";
+import DegradedEvidenceNote, { degradedContext } from "../../../components/DegradedEvidenceNote.ts";
 import DecisionForm from "../../../components/DecisionForm.tsx";
 import ProviderNotices from "../../../components/ProviderNotices.ts";
 import RunProgress from "../../../components/RunProgress.tsx";
@@ -84,6 +85,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       <section className="card">
         <p className="label">System recommendation</p>
         <p className={badgeClass(r.final_recommendation)}>{labelFor(r.final_recommendation)}</p>
+        <DegradedEvidenceNote note={view.degraded_evidence_note} />
         {pending && (
           <p className="pending" role="status">
             PENDING HUMAN DECISION. {plain(view.status_note)}
@@ -168,7 +170,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           <DecisionForm
             id={r.id}
             system={r.final_recommendation}
-            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.`}
+            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.${degradedContext(view.degraded_evidence_note)}`}
           />
         </>
       )}

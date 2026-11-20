@@ -67,3 +67,9 @@ def make_evidence(
         quality=DataQuality.DEGRADED,  # a forecast can never earn VALIDATED
         value=dict(value),
     )
+
+
+def sub_daily(item: EvidenceItem) -> EvidenceItem:
+    """The same synthetic item valid for 12 hours from its start: under `risk.COARSE_SPAN`, so a
+    DEGRADED one still counts as time-resolved cover (ADR 0008 Amendment 1). For GO controls."""
+    return item.model_copy(update={"valid_until": item.valid_at + timedelta(hours=12)})

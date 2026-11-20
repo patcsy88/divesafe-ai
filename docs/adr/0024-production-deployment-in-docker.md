@@ -2393,6 +2393,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     reopens this gap for the owner's decision. The guard against a repeat is the owner's prompt, not
     the software: a start-up refusal when the tides.today key's sha256 is a configured API key hash
     is not built. Fix in the procedure: "After changing a secret file the api mounts" (above).
+  - **Rollback after ADR 0008 Amendment 1.** Rolling back to an earlier image breaks reads of
+    records written after this deploy (`rests_on_degraded_evidence`, `extra="forbid"`): the API
+    returns 500 for them until it is rolled forward.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could

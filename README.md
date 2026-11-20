@@ -29,10 +29,11 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
     ([ADR 0021](docs/adr/0021-phn-etide-tide-predictions.md));
   - tides.today tide predictions (Teluk Tekek: 3.7 km from the Tioman reference point, 13.4 km from
     the Tiger Reef dive site, position as published by PADI, as an owner-ordered proxy), which are
-    DEGRADED (so they cannot support GO or CAUTION) and off by default; switched on in production by
-    the owner on 2026-11-20 (ADR 0029, "Switched on"), under a permission that covers only that
-    deployment; the full copyright notice is shown once with every assessment view that holds a
-    tides.today item (evaluated or withheld), deduplicated; at most 4 notices, then a count ([ADR
+    DEGRADED (so they never support GO or CAUTION, whatever `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` says;
+    ADR 0008 Amendment 1) and off by default; switched on in production by the owner on 2026-11-20
+    (ADR 0029, "Switched on"), under a permission that covers only that deployment; the full
+    copyright notice is shown once with every assessment view that holds a tides.today item
+    (evaluated or withheld), deduplicated; at most 4 notices, then a count ([ADR
     0029](docs/adr/0029-tides-today-tide-predictions.md)).
 - An evidence and provenance service.
 - The pipeline, as a plain-Python stage graph (Observe, Retrieve, Assess, Reason, Rejudge,

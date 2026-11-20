@@ -23,12 +23,19 @@ class RiskAssessment(Frozen):
     unevaluated_factors: tuple[RiskFactorKind, ...] = ()
     ruleset_version: str = Field(min_length=1)
     evaluated_at: AwareDatetime
+    # ADR 0008 Amendment 1: GO or CAUTION resting on DEGRADED evidence. A note, never a severity.
+    rests_on_degraded_evidence: bool = False
 
     @model_validator(mode="after")
     def _recommendation_is_the_most_severe_result(self) -> RiskAssessment:
         expected = most_severe(tuple(r.outcome for r in self.rule_results))
         if self.recommendation != expected:
             raise ValueError("recommendation does not match the most severe rule result")
+        if self.rests_on_degraded_evidence and self.recommendation not in (
+            Recommendation.GO,
+            Recommendation.CAUTION,
+        ):
+            raise ValueError("the degraded-evidence note applies only to GO or CAUTION")
         return self
 
 

@@ -58,13 +58,14 @@ log showed 6 connectors and both tides.today warnings. First successful run: `cf
 ids (so it went to the model host); no connector issue; the notice shown once, whole; deterministic
 and final recommendation INSUFFICIENT EVIDENCE (`policy.marine_warning_needs_human_reading`, the
 only rule that is not a placeholder, and 9 factors not evaluated). Having a `tides` item makes no
-factor evaluable: no rule reads it, `tidal_current` cannot be encoded, and DEGRADED evidence cannot
-support GO or CAUTION (decision 6; ADR 0008, `degraded_may_support_go=False` in production).
-Switching on lifts neither §2 nor §9 and does not make the data validated or safe. Tiger Reef runs
-get the same item, for the Teluk Tekek point 13.4 km away (Amendment 2); no Tiger Reef run with
-tides.today on has been checked yet. Two earlier runs, `d8e01656…` and `dddcf8cc…`, failed with HTTP
-401 because the wrong key was written; both failed closed (`evidence.required.tides`,
-`evidence.connector_issues`, INSUFFICIENT EVIDENCE; ADR 0024 A8, 2026-11-20).
+factor evaluable: no rule reads it, `tidal_current` cannot be encoded, and a DEGRADED tide item
+never supports GO or CAUTION (decision 6; ADR 0008 Amendment 1, whatever
+`DIVESAFE_DEGRADED_MAY_SUPPORT_GO` says). Switching on lifts neither §2 nor §9 and does not make
+the data validated or safe. Tiger Reef runs get the same item, for the Teluk Tekek point 13.4 km
+away (Amendment 2); no Tiger Reef run with tides.today on has been checked yet. Two earlier runs,
+`d8e01656…` and `dddcf8cc…`, failed with HTTP 401 because the wrong key was written; both failed
+closed (`evidence.required.tides`, `evidence.connector_issues`, INSUFFICIENT EVIDENCE; ADR 0024 A8,
+2026-11-20).
 
 Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no blockers; their should-fix
 findings and nits are fixed, and the final round was clean. The switch-on record and the ADR 0024 A8
@@ -478,13 +479,14 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   noise, ADR 0027). Every run still stays below GO: tides are a required category; until tides.today
   was switched on in production (2026-11-20, 06:17 UTC) they were missing, and since then a Tiger
   Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which no rule reads and
-  which cannot support GO or CAUTION (ADR 0008); the factors without a deployed rule stay at
-  INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast uncertainty, site
-  constraint) cannot have one, because the rule format has no metric for them; and every live value
-  is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION under ADR 0008's
-  owner decision (`degraded_may_support_go=False`). NO-GO is still possible. That is safe but is not
-  the same as a clean run. These reasons now apply equally to Tioman; the only difference left for
-  Tiger Reef is that no site guide is retrieved for it (above).
+  which never supports GO or CAUTION (ADR 0008 Amendment 1: never for tides); the factors without a
+  deployed rule stay at INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast
+  uncertainty, site constraint) cannot have one, because the rule format has no metric for them; and
+  every live value is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION
+  while `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off (its default; ADR 0008 Amendment 1). NO-GO is
+  still possible. That is safe but is not the same as a clean run. These reasons now apply equally
+  to Tioman; the only difference left for Tiger Reef is that no site guide is retrieved for it
+  (above).
 - **Forecast and MET mapping (owner, 2026-11-20):** Tiger Reef uses Tioman's entries exactly:
   data.gov.my forecast location `Rc024` "Pulau Tioman" and MET waters zone `LOCATION:499`
   "TIOMAN". Both are area forecasts, not forecasts for the reef: the data.gov.my item is an
@@ -500,17 +502,25 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   104.04167 (the SMOC grid point nearest the registered position, not read from a live response; the
   provider picks the cell on every request, and each item records its own cell and distance; no test
   pins it), about 2.6 km away. They are model values averaged over a grid cell of about 8 km, not
-  observations, and probably read lower than the Labas–Sepoi channel. They are evidence only and
-  capped at DEGRADED: under ADR 0008's owner decision (`degraded_may_support_go=False`) they cannot
-  support GO or CAUTION even once a signed-off current rule is deployed, and GO also needs a rule
-  for every threshold factor, which the rule format cannot yet hold. A deployed rule's NO-GO limit
-  would apply to the grid value, which probably understates the channel; a limit that is not reached
-  is no evidence that the channel's current is below it.
-- **Known gap: the model current probably understates the channel, and nothing at the gate
-  says so.** The items carry only the connector's generic notes (regional grid cell, limited
-  coastal accuracy), and no site guide is retrieved for Tiger Reef, so the human sees no
-  warning that the reported channel current may be stronger. Closing it is the owner's
-  decision: a site-specific quality note, or loading a reviewed Tiger Reef guide.
+  observations; the owner judges them adequate for Tiger Reef (see the owner's judgement below).
+  They are evidence only and capped at DEGRADED: while `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off
+  (its default; ADR 0008 Amendment 1) they cannot support GO or CAUTION even once a signed-off
+  current rule is deployed, and with it on a GO or CAUTION that rests on them is marked for the
+  human; and GO also needs a rule for every threshold factor, which the rule format cannot yet hold.
+  A deployed rule's NO-GO limit would apply to the grid value, which the owner judges adequate for
+  the signed-off limits (a judgement, not a measurement); a limit that is not reached shows only
+  that the model value is below it.
+- **Model current at Tiger Reef: owner's judgement (2026-11-20).** The owner judges the Open-Meteo
+  model current (grid cell about 2.6 km away) adequately accurate for Tiger Reef and fit for the
+  signed-off current limits, based on the owner's own dives at the site as recorded in the owner's
+  log books and dive computer. Dive computers do not measure current; the current strength in the
+  log books is the diver's own estimate. No numeric comparison of logged dives with model values was
+  made, and none is stored in this repository. This replaces the earlier assessment that the grid
+  value "probably understates the channel". The items stay DEGRADED: this judgement does not by
+  itself let them support GO or CAUTION (ADR 0008). The strong-current hazard named by the owner's
+  trial report and PADI's page still does not reach the human until a reviewed Tiger Reef guide is
+  loaded (note B).
+- **Known gap:** the strong-current hazard does not reach the human (note B not loaded).
 - **Tests:** `tests/unit/test_tiger_reef_site.py` (synthetic fixture only), including a table
   test over every `LOCATIONS` entry, marked `safety`: the key is a registered site, the stated
   kilometres equal the haversine distance from that site's own coordinates, the note is not

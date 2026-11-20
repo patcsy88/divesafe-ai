@@ -154,8 +154,15 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
     """
     if settings.evidence_max_age_minutes is None:
         return None
+    # `is True`: a `model_construct` string such as "false" must not count as on.
+    degraded_support = settings.degraded_may_support_go is True
+    if degraded_support and (settings.ruleset_path is None or settings.ruleset_sha256 is None):
+        # Repeats the Settings check: `model_copy` and `model_construct` skip validators.
+        raise RuntimeError("DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a pinned signed-off ruleset")
     policy = EvidencePolicy(
-        INTERIM_REQUIRED_CATEGORIES, timedelta(minutes=settings.evidence_max_age_minutes)
+        INTERIM_REQUIRED_CATEGORIES,
+        timedelta(minutes=settings.evidence_max_age_minutes),
+        degraded_may_support_go=degraded_support,
     )
     rules: list[Rule] = [WarningNeedsHumanReadingRule()]
     version = INTERIM_RULESET_VERSION
@@ -188,6 +195,14 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
             for f in sorted(covered, key=lambda k: k.value)
         )
         version = loaded.identity
+    if degraded_support and not covered:
+        raise RuntimeError("DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a ruleset with definitions")
+    if degraded_support:
+        logger.warning(
+            "DEGRADED evidence may support GO and CAUTION (DIVESAFE_DEGRADED_MAY_SUPPORT_GO); "
+            "model and forecast data can back a result, marked for the human (ADR 0008 "
+            "Amendment 1)"
+        )
     rules.extend(r for r in placeholder_rules() if r.factor not in covered)
     return RiskRulesEngine(rules, policy, version)
 

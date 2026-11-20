@@ -869,6 +869,8 @@ def _record_with_failed_check(check: C) -> AssessmentRecord:
             ),
             "deterministic_recommendation": R.INSUFFICIENT_EVIDENCE,
             "final_recommendation": R.INSUFFICIENT_EVIDENCE,
+            # ADR 0008 Amendment 1: the marker belongs only to a final GO or CAUTION.
+            "rests_on_degraded_evidence": False,
             "llm_attempted_downgrade": True,
             "supervisor_verdict": verdict,
             # The trace must agree: the check's tightened code, and the downgrade code on the
