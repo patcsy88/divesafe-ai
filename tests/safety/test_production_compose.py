@@ -461,8 +461,10 @@ def test_the_api_and_the_schema_job_do_not_run_as_root_or_write_to_the_image(
 ) -> None:
     for name in ("api", "db-init", *LOADERS):
         assert _value(services[name], "read_only") == "true", name
-    for name in ("api", "db-init", "kb_withdraw"):
+    for name in ("db-init", "kb_withdraw"):
         assert _value(services[name], "volumes") is None, name
+    # The api's one volume is the read-only ruleset file, pinned exactly below.
+    assert _ruleset_mount_problems(_list(services["api"], "volumes")) == []
 
 
 def test_the_api_has_resource_limits_and_a_non_executable_tmp(
@@ -470,7 +472,8 @@ def test_the_api_has_resource_limits_and_a_non_executable_tmp(
 ) -> None:
     assert _value(services["api"], "mem_limit")
     assert _value(services["api"], "pids_limit")
-    assert "noexec" in (_value(services["api"], "tmpfs") or "")
+    # Exact: a second tmpfs (for example over /app) would be a writable directory code loads from.
+    assert _value(services["api"], "tmpfs") == '["/tmp:size=16m,noexec,nosuid,nodev"]'
     for (
         name
     ) in LOADERS:  # ADR 0024 A3: "memory and process limits as api has" (Q10: the same values)
@@ -500,6 +503,8 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_TRACE_ENDPOINT",
         "DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE",
         "DIVESAFE_TIDES_TODAY_ENABLED",
+        "DIVESAFE_RULESET_PATH",
+        "DIVESAFE_RULESET_SHA256",
         "DIVESAFE_DEGRADED_MAY_SUPPORT_GO",
     }
 
@@ -517,6 +522,93 @@ def test_degraded_support_defaults_off_in_compose_and_the_example(
     lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
     assert [line for line in lines if "DEGRADED" in line and not line.startswith("#")] == [
         f"{name}=false"
+    ]
+
+
+# --- the signed-off ruleset (ADR 0009, ADR 0008 Amendment 1): required, read-only, pinned -------
+
+RULESET_SOURCE = "${DIVESAFE_RULESET_FILE:?set DIVESAFE_RULESET_FILE in docker/production.env}"
+RULESET_SHA = "${DIVESAFE_RULESET_SHA256:?set DIVESAFE_RULESET_SHA256 in docker/production.env}"
+RULESET_TARGET = "/ruleset/ruleset.json"
+
+
+def _ruleset_mount_problems(lines: list[str] | None) -> list[str]:
+    """The api's only volume: one file, long form, read-only, never creating the host path, the
+    source only from the required variable, at the fixed path the setting names."""
+    if lines is None:
+        return ["no volumes"]
+    expected = [
+        "      - type: bind",
+        f"        source: {RULESET_SOURCE}",
+        f"        target: {RULESET_TARGET}",
+        "        read_only: true",
+        "        bind:",
+        "          create_host_path: false",
+    ]
+    return [] if lines == expected else ["the ruleset mount is not exactly the long read-only bind"]
+
+
+def test_the_api_mounts_only_the_ruleset_read_only_in_the_long_form(
+    services: dict[str, list[str]],
+) -> None:
+    assert _ruleset_mount_problems(_list(services["api"], "volumes")) == []
+    # `_list` reads only the first key; a second `volumes:` must not hide behind it.
+    assert [line for line in services["api"] if line.startswith("    volumes")] == ["    volumes:"]
+
+
+def test_the_ruleset_mount_check_rejects_each_weaker_form() -> None:
+    """The pin sees the form, not the path: the host file is checked by start-up's SHA-256 pin."""
+    good = _list(_blocks(_strip_comments(COMPOSE.read_text()), "services")["api"], "volumes")
+    assert good is not None and _ruleset_mount_problems(good) == []
+    bad = {
+        "short syntax": [f"      - {RULESET_SOURCE}:{RULESET_TARGET}:ro"],
+        "no read_only": [x for x in good if "read_only" not in x],
+        "read_only false": [x.replace("true", "false") for x in good],
+        "creates the host path": [
+            x.replace("create_host_path: false", "create_host_path: true") for x in good
+        ],
+        "no bind options": good[:4],
+        "an SELinux relabel": [*good, "          selinux: z"],
+        "mount propagation": [*good, "          propagation: rshared"],
+        "a consistency option": [*good[:4], "        consistency: delegated", *good[4:]],
+        "a literal path": [x.replace(RULESET_SOURCE, "/srv/ruleset.json") for x in good],
+        "a relative path": [x.replace(RULESET_SOURCE, "./ruleset.json") for x in good],
+        "a default instead of :?": [x.replace(":?", ":-") for x in good],
+        "the corpus variable": [
+            x.replace("DIVESAFE_RULESET_FILE", "DIVESAFE_CORPUS_DIR") for x in good
+        ],
+        "a second volume": [*good, "      - /var/run/docker.sock:/var/run/docker.sock"],
+        "a writable second bind": [*good, "      - type: bind"],
+        "a directory target": [x.replace(RULESET_TARGET, "/ruleset") for x in good],
+        "a target in the app": [x.replace(RULESET_TARGET, "/app/ruleset.json") for x in good],
+        "a volume, not a bind": [x.replace("type: bind", "type: volume") for x in good],
+    }
+    for label, lines in bad.items():
+        assert _ruleset_mount_problems(lines), label
+
+
+def test_the_ruleset_path_is_fixed_and_the_pin_is_required(
+    services: dict[str, list[str]],
+) -> None:
+    """The setting names the mount target, never a variable; the SHA-256 has no default."""
+    env = _environment(services["api"])
+    assert env["DIVESAFE_RULESET_PATH"] == RULESET_TARGET
+    assert env["DIVESAFE_RULESET_SHA256"] == RULESET_SHA
+
+
+def test_only_the_api_names_the_ruleset(services: dict[str, list[str]]) -> None:
+    for service, block in services.items():
+        if service != "api":
+            assert "ruleset" not in "\n".join(block).lower(), service
+
+
+def test_the_example_ruleset_lines_are_obvious_placeholders() -> None:
+    """Fake on purpose: the bind refuses a missing host file and start-up refuses a pin that is
+    not 64 hex characters, so the example can never start with a ruleset by accident."""
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert [line for line in lines if "RULESET" in line and not line.startswith("#")] == [
+        "DIVESAFE_RULESET_FILE=/set/me/outside/the/repository/ruleset.json",
+        "DIVESAFE_RULESET_SHA256=set-me-to-the-sha256-of-the-ruleset-file",
     ]
 
 
@@ -555,8 +647,8 @@ def test_every_setting_in_the_env_example_reaches_the_compose_file() -> None:
     assert names
     compose = COMPOSE.read_text()
     passed = set(re.findall(r"(?m)^ +([A-Z][A-Z0-9_]*): \$\{\1:", compose))
-    # Used only to fill in compose itself (the corpus volume's host path), never an env setting.
-    interpolation_only = {"DIVESAFE_CORPUS_DIR"}
+    # Used only to fill in compose itself (the corpus and ruleset host paths), never a setting.
+    interpolation_only = {"DIVESAFE_CORPUS_DIR", "DIVESAFE_RULESET_FILE"}
     for name in interpolation_only:
         assert "${" + name + ":" in compose, name
     assert [name for name in names if name not in passed | interpolation_only] == []
@@ -808,7 +900,17 @@ def test_no_service_loosens_its_isolation_in_a_way_the_other_checks_do_not_see(
     services: dict[str, list[str]],
 ) -> None:
     for name, block in services.items():
-        for key in ("ipc", "userns_mode", "cgroup", "cgroup_parent", "devices", "uts", "sysctls"):
+        for key in (
+            "ipc",
+            "userns_mode",
+            "cgroup",
+            "cgroup_parent",
+            "devices",
+            "uts",
+            "sysctls",
+            "volumes_from",
+            "configs",
+        ):
             assert _value(block, key) is None, (name, key)
         assert _value(block, "security_opt") == '["no-new-privileges:true"]', name
         if name in ("api", "db-init", *LOADERS):

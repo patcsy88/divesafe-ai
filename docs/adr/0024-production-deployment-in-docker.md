@@ -204,11 +204,42 @@ the build and `up` steps below. `~/Desktop/DiveSafe AI` is development only.
 docker/make-secrets.sh docker/secrets            # creates the database secrets, never overwrites
 # add by hand: docker/secrets/divesafe_llm_api_key and docker/secrets/divesafe_api_key_hashes
 cp docker/production.env.example docker/production.env   # fill in the blanks, incl. DIVESAFE_CORPUS_DIR
+# ... and DIVESAFE_RULESET_FILE and DIVESAFE_RULESET_SHA256 (the ruleset, below)
 C() { docker compose -f docker/docker-compose.production.yml --env-file docker/production.env "$@"; }
 C up -d --wait db               # 1. the database only (C is a function: a string with $C runs nothing in zsh)
 # 2. the loader role script, exactly as in docs/knowledge-loader.md section 2 (A1)
 C up -d --build --wait api     # 3. db-init, then the API
 ```
+
+**The ruleset is required (owner, 2026-11-20).** The API mounts one signed-off ruleset file (ADR
+0009) read-only at the fixed path `/ruleset/ruleset.json` (`DIVESAFE_RULESET_PATH`). Its host path
+is `DIVESAFE_RULESET_FILE` and its pin `DIVESAFE_RULESET_SHA256` (`shasum -a 256 <file>`); both are
+required by every compose command on the production file. The file lives outside the repository and
+outside any cloud-synced folder, like the secrets, and is never committed. It is owned by the deploy
+user, readable by the API's uid 10001 (for example mode `0444`), in a directory only the deploy user
+can write to; an unreadable file stops start-up. Start-up refuses a missing file, a pin mismatch,
+and any refused or expired definition, so after a definition's expiry the API does not start again
+on any restart, including an automatic one (`restart: unless-stopped` after a crash, a memory kill,
+a Docker or host restart, or the restore runbook's `up`); Uptime Kuma's `/health` check then alerts.
+While it runs, the engine refuses an expired definition per assessment (INSUFFICIENT EVIDENCE). Set
+a reminder well before the earliest `expires_on`. Running without a ruleset needs a reviewed change
+to the compose file and its safety tests.
+
+Before this commit is deployed (its first deploy mounts the first ruleset), condition 4 below
+(`DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` recorded with its reason) must be closed (closed 2026-11-21,
+below). The reviewed file's full SHA-256 is written into its sign-off record. **Replacing the
+ruleset** (in a fresh shell, or after the deploy chain's `unset` line, so no exported `DIVESAFE_*`
+variable overrides `production.env`): keep the old file (archive every deployed file by its full
+hash beside the backups, outside the repository, so a past record's `label@hash12` can be traced to
+its limits); write the new file in place of the old path or at a new one; set
+`DIVESAFE_RULESET_FILE` and `DIVESAFE_RULESET_SHA256`; run `C up -d --no-build --wait api` (the
+changed setting recreates the container; an editor that saves by rename leaves a running container
+on the old file until then); check that the `ruleset_sha256` in the "ruleset loaded" start-up log
+line equals the sign-off record's hash, and record that in A8. A restart after the file changed but
+before the pin did refuses to start, which is the safe outcome. Rolling back is the same steps with
+the archived file. Every compose command on the production file needs both variables, even `down`,
+`stop` and `run kb_withdraw`: add both lines to `docker/production.env` before pulling the commit
+that requires them.
 
 Without step 2, `db-init` refuses with `LOADER_ROLE_MISSING` on a new volume (`risk-reviewer`
 should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` profile; build only
@@ -227,7 +258,8 @@ changes `src/divesafe/services/migrations.py` is refused unless `allow_migration
 same sha (the owner's decision: after it, rollback means a restore, below):
 
 ```
-unset old s i running GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+unset old s i running GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE \
+  $(env | sed -n 's/^\(DIVESAFE_[A-Z0-9_]*\)=.*/\1/p')
 cd /Users/patcsy88/DiveSafe/app \
   && : "${new:?}" "${tag:?}" \
   && { test "${#new}" -eq 40 || { echo "refused: new is not a full sha" >&2; false; }; } \
@@ -310,7 +342,11 @@ follow "Rotating the database passwords" instead.
   list of settings the API gets; production with the agent stage on and the opt-in stated; no
   default for the four required settings; the top-level secret-to-file map; the exact networks of
   each service; no published or exposed database port in any form; the exact capabilities; no
-  Docker socket, no volumes for the API and the schema job, and the unprivileged `USER` line in
+  Docker socket, no volumes for the schema job, the API's one volume pinned exactly (the ruleset
+  file: one long-form bind, `read_only: true`, `create_host_path: false`, the fixed target, the
+  source only from the required `DIVESAFE_RULESET_FILE`, with a test that rejects each weaker
+  form; 2026-11-20, owner-approved change of the earlier "no volumes for the API" pin), the
+  ruleset path fixed and its pin without a default, and the unprivileged `USER` line in
   the Dockerfile (neither service sets `user:`); resource limits and a
   `noexec` `/tmp`; `ssl=on` and the `hba_file` argument on the database; `pg_hba.conf` naming only
   the two roles, to one database, never `all`, never the bootstrap role; the role script making no
@@ -560,7 +596,18 @@ The status stays PROPOSED until all of these are done.
 4. A value for `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` is recorded with its reason before any ruleset
    is mounted. The setting accepts any positive integer. With no ruleset it changes nothing (every
    assessment is INSUFFICIENT EVIDENCE); once signed limits exist, it decides whether old evidence
-   can support GO or CAUTION, and it is a safety limit that no one has reviewed.
+   can support GO or CAUTION, and it is a safety limit that no one has reviewed. (As written
+   before 2026-11-21; see the record below.)
+   **Recorded (owner decision, 2026-11-21): 3600 minutes**, the value production has run with.
+   The limit is measured from when DiveSafe fetched an item (`retrieved_at`), not from when the
+   source issued it: it does not bound a forecast's age or lead time (no source gives an issue
+   time). Every assessment judges evidence fetched in the same run, at most the run deadline (120
+   minutes at most) earlier, so at 3600 minutes the limit does not take effect today. The owner's
+   reason: plans are made up to about two days ahead and the sources publish once or twice a day;
+   how far ahead a plan can be assessed is set by window coverage (a source must have published
+   items covering the dive), not by this limit. It is one limit for every category (the engine has
+   no per-category age); window-coverage and quality checks still apply. It is not reviewed by a
+   dive professional.
 
 ## Amendment 1 (2026-10-21): the knowledge loader
 
@@ -710,7 +757,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   it can read the 0444 secret files, which root could in any case). No `-e`, and psql is not run
   with `-a`/`ECHO` (a pin, below).
   A missing `DIVESAFE_CORPUS_DIR` also breaks this command: Compose interpolates the whole file
-  (A3). Only a plain `docker exec` avoids that.
+  (A3). Only a plain `docker exec` avoids that. Since 2026-11-20 the same holds for
+  `DIVESAFE_RULESET_FILE` and `DIVESAFE_RULESET_SHA256` ("How to run it").
 - **What the script does.** (a) `SET log_min_error_statement = panic`, as the existing script
   does. (b) Refuses (non-zero, nothing written) a name equal to `divesafe_bootstrap`,
   `divesafe_owner` or `divesafe_app` (the role name is a literal in the SQL, so this is a check on
@@ -1288,7 +1336,8 @@ Both reviewers have since accepted the sixth revision (committed as `4cb5bef`; n
   - **A missing `DIVESAFE_CORPUS_DIR` variable still blocks `compose run kb_withdraw`** and the
     role-script `exec`: Compose interpolates the whole file, so the missing *variable* stops every
     compose command, even though `kb_withdraw` mounts no directory. Only the `docker exec`
-    fallback avoids it.
+    fallback avoids it. Since 2026-11-20 a missing `DIVESAFE_RULESET_FILE` or
+    `DIVESAFE_RULESET_SHA256` does the same.
   - **Fallback when `withdraw` cannot run** (loader role damaged or missing, a compose or image
     fault, the variable missing): (a) as `divesafe_owner`, insert the WITHDRAWN event with `psql`
     in the `db` container using plain `docker exec` and the in-container password read (the shape
@@ -2557,8 +2606,34 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   survives a restore. The `ls` marker precedence on macOS was seen once; a directory swapped after
   the check is not detected.
 - **The reconcile list needs the API log**, which compose keeps only for the current container.
-- **A signed ruleset is not mounted**: `DIVESAFE_RULESET_PATH` is unset, so every assessment is
-  INSUFFICIENT EVIDENCE until a dive professional's limits are signed and mounted.
+- **The ruleset mount (2026-11-20).** The compose pins read the file's text, so they see the form of
+  the mount, not the host path's value or the file's contents; the SHA-256 pin and start-up's checks
+  are what tie the running API to the reviewed file. The pin is in `production.env`, beside the
+  file's path, so whoever can change one can change the other: the pin catches a changed or swapped
+  file, not a deliberate change of both. Anyone who can write `production.env` and the file's
+  directory can therefore load any well-formed ruleset, with made-up sign-off names. Today that can
+  turn a NO-GO into INSUFFICIENT EVIDENCE; once every required factor can be encoded it could make
+  GO reachable (more so with `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` in the same file). The checks after
+  the fact are the "ruleset loaded" log line and each record's `label@hash12`, compared at each
+  deploy with the hash in the sign-off record ("How to run it"). On this single-user host a hash
+  committed to git would not stop that user, who can run compose outside the deploy chain, and would
+  make every ruleset update a pull request. `production.env` is trusted like the compose file: a
+  source that is not a regular file (a directory, a device, or a socket such as
+  `/var/run/docker.sock`, which a read-only bind does not stop a client connecting to) is refused
+  only at start-up, by the regular-file check, before the API serves anything. The old "no volumes
+  for the API" pin kept the socket out in the compose file itself; that guarantee now rests on
+  start-up. If the host path is a symlink, the target's directory must meet the same write rule.
+  Owner-accepted, 2026-11-20. A ruleset whose definition expires stops the API at its next start,
+  including an automatic restart; while it runs, the engine refuses the expired definition per
+  assessment.
+- **The ruleset read checks `is_file()` and then opens the path**, so a FIFO swapped in between
+  could hang start-up (availability only; the pin still covers the bytes read). In production the
+  container sees a bind of one fixed file, so nothing inside it can swap the path. An open-then-
+  `fstat` check, as `secret_files.py` does, is a later change (2026-11-20).
+- **Quoted YAML keys are not seen by the compose scans** (for example `"cap_add": [...]`): the
+  text scan reads unquoted keys only. Compose's own parser still refuses a duplicate key, so the
+  exact pins hold for keys written once. A test refusing any quoted key is a later change
+  (security review, 2026-11-20).
 - **The app role's password is set once.** Changing a password secret later does not change the
   role. The owner has no CREATEROLE and cannot change the app role's password, so this needs the
   superuser (`divesafe_bootstrap`, inside the `db` container): use `psql -X` with only that

@@ -7,7 +7,10 @@ part of the result was seen (ADR 0024, condition 1), so ADR 0024 stays PROPOSED.
 capture each step's output, the time each model call takes, and the record after each restart.
 
 This is decision support. A successful run shows the plumbing works; it says nothing about dive
-safety. With no signed ruleset the result cannot be `GO`, and that is expected.
+safety. With no signed ruleset the result cannot be `GO`, and that is expected. Since 2026-11-20 the
+production compose file requires a signed ruleset (ADR 0024 "How to run it"); this run (2026-10-19)
+had none. Even with one, GO needs every required factor covered by a signed definition, and four
+cannot be encoded yet (docs/risk-model.md), so GO is not reachable (as of 2026-11-21).
 
 ## What leaves the machine
 
@@ -33,8 +36,8 @@ any secret into a chat, a ticket or a file inside the repository.
 
 ```sh
 cp docker/production.env.example docker/production.env
-# edit docker/production.env: set DIVESAFE_LLM_MODEL, DIVESAFE_EVIDENCE_MAX_AGE_MINUTES and
-# DIVESAFE_CORPUS_DIR
+# edit docker/production.env: set DIVESAFE_LLM_MODEL, DIVESAFE_EVIDENCE_MAX_AGE_MINUTES,
+# DIVESAFE_CORPUS_DIR, DIVESAFE_RULESET_FILE and DIVESAFE_RULESET_SHA256
 ```
 
 `DIVESAFE_CORPUS_DIR` is needed by **every** compose command on the production file, even `up` and

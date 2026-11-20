@@ -41,6 +41,8 @@ Every compose command on the production file needs `DIVESAFE_CORPUS_DIR` in
 `docker/production.env`, even `up` and `down` (ADR 0024 A3). Set it to an **absolute path** of a
 directory **outside the repository** (a relative path is resolved against `docker/`, and a
 directory inside the repository would put licensed text where `git` and the build can see it). The placeholder in the example file is refused by the loader (no manifest there).
+Since 2026-11-20 every compose command also needs `DIVESAFE_RULESET_FILE` and
+`DIVESAFE_RULESET_SHA256` (ADR 0024 "How to run it"), including `run kb_withdraw`.
 
 ## 1. Upgrade order on a host that already has a volume (ADR 0024 A6)
 
@@ -337,8 +339,8 @@ never skip the withdrawal. `make-secrets.sh` output already passes these rules, 
 
 ### When `withdraw` cannot run at all
 
-(The loader role is damaged or missing, a compose or image fault, or `DIVESAFE_CORPUS_DIR` is
-missing.) Either:
+(The loader role is damaged or missing, a compose or image fault, or `DIVESAFE_CORPUS_DIR`,
+`DIVESAFE_RULESET_FILE` or `DIVESAFE_RULESET_SHA256` is missing.) Either:
 
 (a) insert the WITHDRAWN event as `divesafe_owner`, with plain `docker exec` (no compose, so no
 variable is needed). Replace `<db container>`, `<document_id>` and `<version>`; the id must fit
