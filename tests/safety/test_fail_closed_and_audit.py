@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
-from tests.conftest import NOW, make_evidence
+from tests.conftest import NOW, make_evidence, sub_daily
 
 from divesafe.domain import (
     ActualConditions,
@@ -90,8 +90,8 @@ def test_evidence_exactly_at_max_age_is_fresh_and_one_second_older_is_not(
     plan: DivePlan, now: datetime
 ) -> None:
     engine = _engine(_Rule("a", R.GO), required=frozenset({WAVES}))
-    at_limit = [make_evidence(WAVES, age=timedelta(hours=1))]
-    over = [make_evidence(WAVES, age=timedelta(hours=1, seconds=1))]
+    at_limit = [sub_daily(make_evidence(WAVES, age=timedelta(hours=1)))]
+    over = [sub_daily(make_evidence(WAVES, age=timedelta(hours=1, seconds=1)))]
     assert engine.assess(plan, at_limit, now).recommendation == R.GO
     assert engine.assess(plan, over, now).recommendation == R.INSUFFICIENT_EVIDENCE
 

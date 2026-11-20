@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from tests.conftest import NOW, make_evidence
+from tests.conftest import NOW, make_evidence, sub_daily
 from tests.safety.kb_fakes import mutated_module
 
 from divesafe.data import TIOMAN_ISLAND, DiveSite, FetchResult
@@ -373,13 +373,13 @@ def _assess(connectors: Sequence[Any]) -> Any:
 
 
 def test_the_setup_is_go_capable_without_a_conflict() -> None:
-    record = _assess([_Source("a", waves(1), wind(1)), _Source("b", wind(1))])
+    record = _assess([_Source("a", sub_daily(waves(1)), wind(1)), _Source("b", wind(1))])
     assert record.final_recommendation == R.GO  # so the next test proves the conflict did it
     assert record.evidence_issues == ()
 
 
 def test_a_conflict_alone_stops_go_and_adds_the_connector_issues_rule() -> None:
-    record = _assess([_Source("a", waves(1), wind(1)), _Source("b", wind(2))])
+    record = _assess([_Source("a", sub_daily(waves(1)), wind(1)), _Source("b", wind(2))])
     rules = [r for r in record.rule_results if r.rule_id == "evidence.connector_issues"]
     assert record.final_recommendation != R.GO
     assert record.final_recommendation == R.INSUFFICIENT_EVIDENCE

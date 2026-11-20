@@ -500,7 +500,24 @@ def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> 
         "DIVESAFE_TRACE_ENDPOINT",
         "DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE",
         "DIVESAFE_TIDES_TODAY_ENABLED",
+        "DIVESAFE_DEGRADED_MAY_SUPPORT_GO",
     }
+
+
+def test_degraded_support_defaults_off_in_compose_and_the_example(
+    services: dict[str, list[str]],
+) -> None:
+    """ADR 0008 Amendment 1: off by default (the owner decides the switch-on); only the api gets
+    it, and the example file sets it to `false` exactly once."""
+    name = "DIVESAFE_DEGRADED_MAY_SUPPORT_GO"
+    assert _environment(services["api"])[name] == "${DIVESAFE_DEGRADED_MAY_SUPPORT_GO:-false}"
+    for service, block in services.items():
+        if service != "api":
+            assert "degraded_may_support_go" not in "\n".join(block).lower(), service
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert [line for line in lines if "DEGRADED" in line and not line.startswith("#")] == [
+        f"{name}=false"
+    ]
 
 
 def test_tides_today_defaults_off_in_compose_and_the_example(

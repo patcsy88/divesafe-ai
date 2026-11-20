@@ -424,6 +424,9 @@ def _provider_notices(record: AssessmentRecord) -> tuple[tuple[str, ...], int, b
     return tuple(shown), not_shown, missing
 
 
+DEGRADED_EVIDENCE_NOTE = "based on model and forecast data, not observations"
+
+
 class AssessmentView(BaseModel):
     record: AssessmentRecordView
     # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
@@ -448,6 +451,9 @@ class AssessmentView(BaseModel):
     # Fixed wording (ADR 0029 decision 11), no provider text: `PROVIDER_NOTICE_NOTE` on every view
     # that has a provider notice or the missing flag, and "" on a view with neither.
     provider_notice_note: str = ""
+    # ADR 0008 Amendment 1: `DEGRADED_EVIDENCE_NOTE` when the record's GO or CAUTION rests on
+    # model or forecast data; "" otherwise. Fixed wording only.
+    degraded_evidence_note: str = ""
     decision_withheld: bool = False
     # True when `record.model_host` is left out for this key (ADR 0022 decision 15).
     model_host_withheld: bool = False
@@ -573,6 +579,12 @@ class AssessmentView(BaseModel):
             provider_notices_not_shown=not_shown,
             provider_notice_missing=notice_missing,
             provider_notice_note=PROVIDER_NOTICE_NOTE if notices or notice_missing else "",
+            degraded_evidence_note=(
+                DEGRADED_EVIDENCE_NOTE
+                if record.rests_on_degraded_evidence
+                and record.final_recommendation in (Recommendation.GO, Recommendation.CAUTION)
+                else ""
+            ),
         )
 
 

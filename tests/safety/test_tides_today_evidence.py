@@ -177,9 +177,17 @@ def test_a_go_resting_on_a_tides_today_prediction_is_blocked_by_the_quality_guar
         r for r in blocked.rule_results if r.rule_id == "evidence.quality_insufficient_for_go"
     )
     assert "tides" in guard.rationale
-    # Control, not an endorsement: the guard is what stopped it (ADR 0029 decision 6).
-    control = _engine_result([_GoRule()], _items(), may_support_go=True)
-    assert control.recommendation is Recommendation.GO
+    assert [r.rule_id for r in blocked.rule_results if r.outcome is not Recommendation.GO] == [
+        "evidence.quality_insufficient_for_go"
+    ]  # the guard alone stopped it (ADR 0029 decision 6)
+    # ADR 0008 Amendment 1: DEGRADED tides never support GO, even with the policy on.
+    held = _engine_result([_GoRule()], _items(), may_support_go=True)
+    assert held.recommendation is Recommendation.INSUFFICIENT_EVIDENCE
+    assert [
+        (r.rule_id, r.rationale.rsplit(": ", 1)[-1])
+        for r in held.rule_results
+        if r.outcome is not Recommendation.GO
+    ] == [("evidence.quality_insufficient_for_go", "tides")]
 
 
 def test_a_tide_item_does_not_cover_a_dive_on_another_local_day() -> None:

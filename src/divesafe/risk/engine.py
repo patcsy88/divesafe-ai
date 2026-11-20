@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -44,6 +44,8 @@ from divesafe.domain.risk_types import THRESHOLD_FACTORS
 from divesafe.risk.interfaces import Rule
 
 __all__ = [
+    "COARSE_SPAN",
+    "DEGRADED_NEVER_SUPPORTS_GO",
     "EvidencePolicy",
     "Reconciliation",
     "RiskAssessment",
@@ -54,6 +56,15 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# ADR 0008 Amendment 1 (owner, 2026-11-20): categories whose DEGRADED evidence never supports GO
+# or CAUTION, even with `degraded_may_support_go`. Tide predictions are for a reference port, not
+# the dive site (ADR 0029). A reviewed constant, not a policy knob.
+DEGRADED_NEVER_SUPPORTS_GO: Final[frozenset[DataCategory]] = frozenset({DataCategory.TIDES})
+# ADR 0008 Amendment 1 (owner, 2026-11-20): an item valid for this long or longer (a daily
+# forecast or range) is coarse and does not stand in for time-resolved evidence. A definition of
+# granularity, not a safety limit.
+COARSE_SPAN: Final = timedelta(days=1)
 
 
 # (kind -> categories) whose existence matters whether or not they span the dive window: a
@@ -177,6 +188,8 @@ class EvidencePolicy:
 
     required_categories: frozenset[DataCategory]
     max_age: timedelta
+    # Keyword-only: a policy switch is never passed by position (security review, 2026-11-20).
+    _: KW_ONLY
     accepted_quality: frozenset[DataQuality] = DEFAULT_ACCEPTED_QUALITY
     require_window_coverage: bool = True
     degraded_may_support_go: bool = False
@@ -300,12 +313,19 @@ class RiskRulesEngine:
                 results.append(guard)
 
         recommendation = most_severe(tuple(r.outcome for r in results))
+        # ADR 0008 Amendment 1: a marker for the human, never a severity.
+        rests_on_degraded = (
+            self._policy.degraded_may_support_go
+            and recommendation in (Recommendation.GO, Recommendation.CAUTION)
+            and bool(self._degraded_categories(plan, usable))
+        )
         return RiskAssessment(
             recommendation=recommendation,
             rule_results=tuple(results),
             unevaluated_factors=uncovered,
             ruleset_version=self._ruleset_version,
             evaluated_at=now,
+            rests_on_degraded_evidence=rests_on_degraded,
         )
 
     @staticmethod
@@ -439,13 +459,10 @@ class RiskRulesEngine:
             )
         return results, usable
 
-    def _quality_guard(
+    def _degraded_categories(
         self, plan: DivePlan, usable: dict[DataCategory, list[EvidenceItem]]
-    ) -> RuleResult | None:
-        """GO and CAUTION need VALIDATED evidence, which must cover the window on its own, so a
-        validated item elsewhere in time cannot launder a degraded one that covers the dive."""
-        if self._policy.degraded_may_support_go:
-            return None
+    ) -> list[str]:
+        """Required categories without VALIDATED evidence that covers the window on its own."""
         window = self._window(plan)
         degraded: list[str] = []
         for category, items in sorted(usable.items(), key=lambda kv: kv[0].value):
@@ -455,6 +472,47 @@ class RiskRulesEngine:
             )
             if not covered:
                 degraded.append(category.value)
+        return degraded
+
+    def _fine_cover(self, plan: DivePlan, items: Sequence[EvidenceItem]) -> bool:
+        """ADR 0008 Amendment 1: a coarse item (valid for `COARSE_SPAN` or longer, such as a daily
+        forecast or range) does not stand in for time-resolved evidence. True when the items
+        that are not coarse cover the window on their own. Exempt items (notices, knowledge) and
+        instants are never coarse; with no item left, nothing covers the window."""
+        start, end = self._window(plan)
+        fine = [
+            e
+            for e in items
+            if _exempt(e, start, end)
+            or e.valid_until is None
+            or e.valid_until - e.valid_at < COARSE_SPAN
+        ]
+        return bool(fine) and _covers_window(fine, start, end)
+
+    def _quality_guard(
+        self, plan: DivePlan, usable: dict[DataCategory, list[EvidenceItem]]
+    ) -> RuleResult | None:
+        """GO and CAUTION need VALIDATED evidence, which must cover the window on its own, so a
+        validated item elsewhere in time cannot launder a degraded one that covers the dive."""
+        degraded = self._degraded_categories(plan, usable)
+        if self._policy.degraded_may_support_go:
+            never = {c.value for c in DEGRADED_NEVER_SUPPORTS_GO}
+            coarse_only = {
+                c.value for c, items in usable.items() if not self._fine_cover(plan, items)
+            }
+            held = [c for c in degraded if c in never or c in coarse_only]
+            if not held:
+                return None
+            return RuleResult(
+                rule_id=f"{EVIDENCE_QUALITY_PREFIX}_insufficient_for_go",
+                outcome=Recommendation.INSUFFICIENT_EVIDENCE,
+                rationale=(
+                    "DEGRADED evidence never supports GO or CAUTION for tides, nor when only "
+                    "daily or longer items cover the window (ADR 0008 Amendment 1); "
+                    "VALIDATED evidence covering the dive window is missing for: " + ", ".join(held)
+                ),
+                factor=RiskFactorKind.DATA_QUALITY,
+            )
         if not degraded:
             return None
         return RuleResult(

@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 from tests.agent import scripted_llm as sl
+from tests.conftest import sub_daily
 from tests.safety.test_evidence_conflict import _Source, waves, wind
 from tests.safety.test_evidence_withheld import fresh
 from tests.safety.test_supervisor import (
@@ -723,7 +724,7 @@ def test_supervise_has_no_code_when_every_check_passed() -> None:
 
 def test_rejudge_carries_window_started_when_the_start_passes_during_the_run() -> None:
     after_start = sl.START + timedelta(minutes=1)
-    clean = _Source("a", fresh(waves(1)))
+    clean = _Source("a", sub_daily(fresh(waves(1))))
     record = _assess([clean], sl.fake(), clock=lambda: after_start)
     rejudge = next(t for t in record.stages if t.name is N.REJUDGE)
     assert rejudge.issues == (

@@ -552,6 +552,13 @@ class AssessmentRecord(_Frozen):
         default=(),
         description="Threshold-dependent factors with no validated rule: NOT assessed.",
     )
+    rests_on_degraded_evidence: bool = Field(
+        default=False,
+        description=(
+            "ADR 0008 Amendment 1: the GO or CAUTION rests on model or forecast data, not "
+            "observations. A note for the human; never a severity. False on older records."
+        ),
+    )
     confidence_method: str | None = Field(
         default=None, description="How `confidence` was computed. Required whenever it is set."
     )
@@ -697,6 +704,11 @@ class AssessmentRecord(_Frozen):
     def _check_consistency(self) -> AssessmentRecord:
         if self.confidence is not None and not (self.confidence_method or "").strip():
             raise ValueError("a confidence value requires a documented method")
+        if self.rests_on_degraded_evidence and self.final_recommendation not in (
+            Recommendation.GO,
+            Recommendation.CAUTION,
+        ):
+            raise ValueError("the degraded-evidence note applies only to GO or CAUTION")
         ids = [e.id for e in self.evidence]
         if len(ids) != len(set(ids)):
             raise ValueError("evidence ids must be unique")

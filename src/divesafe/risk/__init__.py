@@ -6,6 +6,8 @@ from divesafe.risk.definition_rules import (
     FactorScopeRule,
 )
 from divesafe.risk.engine import (
+    COARSE_SPAN,
+    DEGRADED_NEVER_SUPPORTS_GO,
     EvidencePolicy,
     Reconciliation,
     RiskAssessment,
@@ -18,6 +20,8 @@ from divesafe.risk.placeholders import ThresholdTbdRule, placeholder_rules
 from divesafe.risk.rules import WarningNeedsHumanReadingRule
 
 __all__ = [
+    "COARSE_SPAN",
+    "DEGRADED_NEVER_SUPPORTS_GO",
     "NOT_EVALUATED_MARKER",
     "DefinitionRule",
     "FactorScopeRule",
