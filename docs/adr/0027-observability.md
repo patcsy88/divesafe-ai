@@ -1007,6 +1007,11 @@ Settled 2026-11-15, each as the recommended default:
   port every local process looks like the proxy (log correlation only; no authority attaches to
   the id).
 - No alert can be checked by a test in this repository; alerting is operator discipline.
+- Tiger Reef (registered 2026-11-20, ADR 0029 Amendment 2) is refused by the forecast connector,
+  by MET marine when its token is set (and PHN while it exists), so every Tiger Reef run adds
+  `observe.connector_failed:<name>` counts and ends INSUFFICIENT EVIDENCE at best (NO-GO is still possible). That is expected, not a
+  data-source outage: when reading connector-failure or INSUFFICIENT EVIDENCE alerts, separate
+  Tiger Reef runs from Tioman runs until those connectors are mapped for it.
 - Connector worker threads carry only the request id (a fresh context per job). The run's trace
   collector is not thread-safe, so any future `record_*` call from `data` needs a lock or must
   stay out of the worker.

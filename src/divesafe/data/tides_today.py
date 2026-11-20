@@ -74,13 +74,23 @@ class Location:
     name: str
     latitude: float
     longitude: float
+    distance_note: str  # true distance from the site, and which point it is measured to
 
 
 # site id -> tides.today location. A fixed, reviewed table (ADR 0029 decision 1, option A).
 LOCATIONS: dict[str, Location] = {
-    "my-pahang-pulau-tioman": Location(2960, "Teluk Tekek", 2.8, 104.133003),
+    "my-pahang-pulau-tioman": Location(
+        2960, "Teluk Tekek", 2.8, 104.133003, "about 3.7 km from the site's reference point"
+    ),
+    # Owner-ordered proxy (2026-11-20, ADR 0029 Amendment 2): 13.4 km, not a point at the reef.
+    "my-pahang-tiger-reef": Location(
+        2960,
+        "Teluk Tekek",
+        2.8,
+        104.133003,
+        "about 13.4 km from the Tiger Reef dive site (position as published by PADI)",
+    ),
 }
-DISTANCE_NOTE = "about 3.7 km from the site's reference point"
 
 ACCEPTED_DATUM = "CD"
 ACCEPTED_UPSTREAM = "tpe"
@@ -421,7 +431,7 @@ class TidesTodayConnector:
                         longitude=location.longitude,
                         description=(
                             f"tides.today location {location.id} '{location.name}', "
-                            f"{DISTANCE_NOTE}; not a dive site"
+                            f"{location.distance_note}; not a dive site"
                         ),
                     ),
                     upstream=(LINEAGE,),
@@ -431,11 +441,13 @@ class TidesTodayConnector:
                         "tide height and time of high and low water only: no current speed, "
                         "direction or slack-water time",
                         f"a prediction for tides.today's {location.name} point, "
-                        f"{DISTANCE_NOTE}, not for the dive site",
+                        f"{location.distance_note}, not for the dive site",
                         "the provider names its own prediction engine on the FES global models "
                         "(source tpe); this is not independently verified, so the lineage is "
                         "treated as unknown",
                         f"heights in {_UNIT_BASIS}; datum: {_DATUM}",
+                        "the tide at the dive site may differ in time and height from this "
+                        "point's by an unknown amount",
                         "astronomical prediction only: no weather or pressure effects",
                         "the moon phase is astronomical context as given; the API does not "
                         "document what its fraction measures; it is not a spring/neap "
@@ -477,7 +489,7 @@ class TidesTodayConnector:
                         "data_type": "prediction",
                         "spatial_scope": (
                             f"tides.today point {location.id} '{location.name}', "
-                            f"{DISTANCE_NOTE}; not the dive site"
+                            f"{location.distance_note}; not the dive site"
                         ),
                         "temporal_scope": "one local day (+08:00)",
                         "not_a_current": _NOT_A_CURRENT,

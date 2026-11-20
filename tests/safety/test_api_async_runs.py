@@ -251,7 +251,7 @@ def test_an_unfinished_connector_becomes_an_issue_not_a_hang() -> None:
         async def fetch(self, *args: object) -> Any:
             await asyncio.sleep(30)
 
-    site = next(iter(_build()[0].app.state.divesafe.sites.values()))
+    site = _build()[0].app.state.divesafe.sites["my-pahang-pulau-tioman"]
     assert isinstance(site, DiveSite)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     result = asyncio.run(
@@ -405,7 +405,9 @@ def test_a_wrong_site_is_an_internal_failure_not_a_start_that_passed() -> None:
 
     assert not issubclass(SiteMismatchError, StartPassedError)
     client, _, repo = _build()
-    other = next(iter(client.app.state.divesafe.sites.values())).model_copy(update={"id": "other"})
+    other = client.app.state.divesafe.sites["my-pahang-pulau-tioman"].model_copy(
+        update={"id": "other"}
+    )
     client.app.state.divesafe.sites = {PLAN["site_id"]: other}
     r = client.post("/v1/assessments", json=PLAN, headers=AUTH_A)
     body = poll(client, r.headers["location"], AUTH_A).json()
@@ -438,7 +440,7 @@ def test_the_pipeline_passes_its_connector_budget_on_to_the_gather() -> None:
             await asyncio.sleep(30)
 
     client, _, _ = _build()
-    site = next(iter(client.app.state.divesafe.sites.values()))
+    site = client.app.state.divesafe.sites["my-pahang-pulau-tioman"]
     now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
     run = assess_dive(
         assessment_id="a" * 32,
@@ -558,7 +560,7 @@ def test_a_connector_budget_that_is_not_positive_finite_and_within_the_ceiling_i
     from divesafe.services.evidence import gather_evidence
 
     client, _, _ = _build()
-    site = next(iter(client.app.state.divesafe.sites.values()))
+    site = client.app.state.divesafe.sites["my-pahang-pulau-tioman"]
     now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
     soon = now + timedelta(hours=1)
     with pytest.raises(ValueError, match="connector budget"):
@@ -586,7 +588,7 @@ def test_the_full_connector_budget_and_a_small_one_are_accepted() -> None:
     from divesafe.services.evidence import gather_evidence
 
     client, _, _ = _build()
-    site = next(iter(client.app.state.divesafe.sites.values()))
+    site = client.app.state.divesafe.sites["my-pahang-pulau-tioman"]
     now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
     for ok in (0.001, CONNECTOR_BUDGET_SECONDS):
         got = asyncio.run(gather_evidence([], site, now, now, now, timeout_seconds=ok))

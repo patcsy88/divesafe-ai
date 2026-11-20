@@ -11,7 +11,8 @@ from typing import Any
 
 from divesafe.data.sites import SITES
 
-SITE = next(iter(SITES))
+SITE = "my-pahang-pulau-tioman"
+assert SITE in SITES  # pinned by id: the Tioman reference point, not whichever site is first
 
 
 def sha(data: bytes) -> str:

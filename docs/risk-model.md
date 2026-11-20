@@ -242,6 +242,12 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 
 ## Known gaps (tracked, not yet implemented)
 
+- **Tiger Reef** (`my-pahang-tiger-reef`, 2026-11-20): it cannot reach GO until the forecast and
+  MET connectors are mapped for it (they refuse it, so every run records a connector issue), and
+  no site guide is retrieved for it, although two sources (the owner's trial report and PADI's
+  page) name a current hazard there that the human does not see (see
+  [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+
 **Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
 ignores intervals whose `valid_until` is before the window start, so such an interval no longer
 stops the chain), and a `GO` or `CAUTION` citing no evidence (now flagged `CITES_UNUSABLE`, so the
@@ -290,7 +296,7 @@ cannot confirm the decision was saved.
 - **tides.today tide predictions (2026-11-17, [ADR 0029](adr/0029-tides-today-tide-predictions.md)):**
   `TidesTodayConnector` items are DEGRADED daily predictions under `value["tide"]` (high/low times
   and heights, and moon phase; no spring/neap) and `value["daylight"]`, for tides.today's Teluk
-  Tekek point about 3.7 km from the reference point, today plus six days. Heights are taken as
+  Tekek point (about 3.7 km from the Tioman reference point, or about 13.4 km from the Tiger Reef dive site (position as published by PADI), a proxy; each item states its own distance), today plus six days. Heights are taken as
   metres from the API field name `heightM`; no unit is documented. Only chart datum (CD) is
   accepted, and its level at this point is not stated. The provider names its own engine (`tpe`),
   which is not verified, so lineage is unknown and it never corroborates PHN or anything else. The

@@ -51,10 +51,27 @@ reachable but not yet approved or implemented. Nothing here has been called from
 
 ### Implemented behaviour worth knowing
 
-- **Site registry** (`divesafe.data.sites`): only `my-pahang-pulau-tioman`, an island-level
+- **Site registry** (`divesafe.data.sites`): `my-pahang-pulau-tioman`, an island-level
   reference point (2.7972, 104.166, from Open-Meteo's geocoder, GeoNames id 1734910, queried
-  2026-10-10). No specific Tioman dive
-  sites are registered because none has a verified coordinate source.
+  2026-10-10), and `my-pahang-tiger-reef` "Tiger Reef (dive site)" (2.89302, 104.05593), added
+  2026-11-20 on the owner's word, with the point as published on PADI's "Tiger Reef" dive-site page
+  (padi.com, read 2026-11-20; contributed by a PADI dive centre; PADI does not warrant its
+  accuracy), which matches the owner's boat GPS reading (undated; supplied 2026-11-20) exactly (probably a
+  common origin, not an independent check; not surveyed). Only Tiger Reef is a dive site; no other Tioman dive site is registered.
+  Tiger Reef is mapped only for tides.today (a proxy, below) and Open-Meteo (which uses
+  coordinates); the data.gov.my forecast, MET Malaysia marine and PHN e-Tide tables have no entry
+  for it (their zone tables are not yet checked, or PHN is being removed), so those connectors
+  refuse it with their fixed "not registered" message. The data.gov.my **warnings** connector has
+  no zone table: it matches by area name, so Tiger Reef (area names `("Pahang", "Tioman")`) gets
+  the same informational matches as Tioman. **Known gaps (ADR 0029 Amendment 2):** (1) the forecast
+  connector (always built) and MET marine (built when its token is set; live in production) refuse
+  Tiger Reef, and PHN too while it exists, so every Tiger Reef run records
+  `evidence.connector_issues` (INSUFFICIENT EVIDENCE at best; NO-GO is still possible), adds to the
+  `observe.connector_failed:` counts, and can never reach GO, even with a future signed-off
+  ruleset, until those connectors are mapped; (2) the Tioman site guide is loaded only for
+  `my-pahang-pulau-tioman`, so a Tiger Reef run retrieves no site knowledge and the site view says
+  none is registered, although, by the owner's report from the trial, the guide lists currents at Tiger Reef (ADR 0028); loading a
+  reviewed Tiger Reef or all-sites guide is the owner's decision.
 - **Marine connector:** all items are `is_forecast=True` and `data_type="model"`, even for hours already past, because they are model values, not observations. One `EvidenceItem` per category per UTC hour (`waves_swell`,
   `sea_surface_temperature` as `sea_temperature`, `currents`). It rejects, per category, any
   missing hour, null, unexpected unit or out-of-range value, reports it in `issues`, and
@@ -384,7 +401,14 @@ from the national hydrographic office instead. Neither source gives tidal stream
 (`api.tidestoday.io/v2`, an `x-api-key` header). The owner made one request per endpoint on
 2026-11-17; the responses are kept outside the repository and the test fixture is SYNTHETIC.
 Location 2960 "Teluk Tekek" is the only one within 25 km of the Tioman reference point (about
-3.7 km away). Three GET calls: the location (datum `CD`, upstream `tpe`, notice), the tide
+3.7 km away). **Tiger Reef** (`my-pahang-tiger-reef`) is mapped to the same location 2960 as a
+proxy, on the owner's instruction (2026-11-20): the point is 13.4 km from the reef (haversine from
+2.89302, 104.05593 to 2.8, 104.133003), and each item says "about 13.4 km from the Tiger Reef dive
+site (position as published by PADI)", that it is not a prediction for the dive site, and that the tide
+at the dive site may differ in time and height by an unknown amount. No search was made around the
+reef (the "only one within 25 km" finding is centred on the Tioman point, 16.2 km from the reef),
+so a closer location may exist. The owner reads the provider's written permission as covering this
+(2026-11-20); the provider was not asked. Three GET calls: the location (datum `CD`, upstream `tpe`, notice), the tide
 extremes (UTC times, heights in metres from `heightM`) and the ephemeris (sunrise, sunset and moon
 phase per local day). Only chart datum and the `tpe` upstream are accepted; the level of CD at
 this point is not stated and the upstream is not verified. Spring/neap is not available (403 for
