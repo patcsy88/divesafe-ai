@@ -55,6 +55,8 @@ TEMP_RANGE = (-10, 60)
 # site id -> (location_id, location_name) in the Weather API.
 FORECAST_LOCATIONS: dict[str, tuple[str, str]] = {
     "my-pahang-pulau-tioman": ("Rc024", "Pulau Tioman"),
+    # Owner decision 2026-11-20 (ADR 0029 Amendment 2): an island-level forecast, not the reef.
+    "my-pahang-tiger-reef": ("Rc024", "Pulau Tioman"),
 }
 
 # Meanings from the docs' value table. "Jerebu" is the live spelling of "Berjerebu" (haze); that

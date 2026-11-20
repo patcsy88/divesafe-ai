@@ -24,9 +24,13 @@ from divesafe.data import (
     ConnectorResponseError,
     DataGovMyForecastConnector,
     MetApiMarineConnector,
+    OpenMeteoMarineConnector,
     PhnEtideConnector,
 )
+from divesafe.data import data_gov_my_forecast as dgm
+from divesafe.data import met_api_marine as met
 from divesafe.data import tides_today as tt
+from divesafe.domain import DataCategory, DataKind, DataQuality, effective_quality
 from divesafe.orchestration import load_ruleset
 
 SITE_ID = "my-pahang-tiger-reef"
@@ -160,9 +164,10 @@ def test_tides_today_still_has_no_mapping_for_an_unregistered_site() -> None:
 
 
 def test_unmapped_connectors_refuse_tiger_reef_before_any_request() -> None:
+    # Open-Meteo marine is deliberately not listed: it has no site table and requests the site's
+    # own point (pinned below, ADR 0029 Amendment 2). The data.gov.my forecast and MET marine are
+    # mapped to Tioman's areas by owner decision (2026-11-20), pinned below.
     cases: list[tuple[Any, str]] = [
-        (DataGovMyForecastConnector, "no forecast location is registered"),
-        (MetApiMarineConnector, "no waters zone is registered"),
         (PhnEtideConnector, "no tide location is registered"),
     ]
     for connector, message in cases:
@@ -170,6 +175,102 @@ def test_unmapped_connectors_refuse_tiger_reef_before_any_request() -> None:
         with pytest.raises(ConnectorResponseError, match=message):
             asyncio.run(connector(getter).fetch(TIGER_REEF, START, END, NOW))
         assert getter.calls == []
+
+
+def test_open_meteo_marine_requests_tiger_reefs_own_point_and_returns_forecast_currents() -> None:
+    """ADR 0029 Amendment 2, "Current forecast": no site table, so Tiger Reef is never refused.
+
+    The canned response is the recorded Tioman fixture (Open-Meteo marine, 2026-10-08); its grid
+    cell is not Tiger Reef's, which does not matter here: the test pins the request and the kind
+    of item, not the values. The window is moved inside the fixture's recorded hours.
+    """
+    payload = json.loads(
+        (
+            Path(__file__).parent.parent
+            / "fixtures/open_meteo_marine_tioman_recorded_2026-10-08.json"
+        ).read_text()
+    )
+    start = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
+    now = datetime(2026, 10, 8, 17, 11, tzinfo=UTC)
+    getter = _Getter(payload)
+    result = asyncio.run(
+        OpenMeteoMarineConnector(getter).fetch(TIGER_REEF, start, start + timedelta(hours=2), now)
+    )
+    assert len(getter.calls) == 1
+    url, params = getter.calls[0]
+    assert url == "https://marine-api.open-meteo.com/v1/marine"
+    assert (params["latitude"], params["longitude"]) == ("2.89302", "104.05593")
+    assert any(item.category is DataCategory.CURRENTS for item in result.items)
+    for item in result.items:
+        assert item.is_forecast is True
+        assert item.data_kind is not DataKind.OBSERVATION
+        assert effective_quality(item) is DataQuality.DEGRADED
+        assert f":{SITE_ID}:" in item.id
+
+
+def test_tiger_reef_uses_tiomans_forecast_location_and_waters_zone_by_owner_decision() -> None:
+    """Owner decision 2026-11-20 (ADR 0029 Amendment 2): the same area entries as Tioman, exactly,
+    and no other site is added to either table."""
+    assert dgm.FORECAST_LOCATIONS == {
+        TIOMAN_ID: ("Rc024", "Pulau Tioman"),
+        SITE_ID: ("Rc024", "Pulau Tioman"),
+    }
+    assert met.WATERS_ZONES == {
+        TIOMAN_ID: ("LOCATION:499", "TIOMAN"),
+        SITE_ID: ("LOCATION:499", "TIOMAN"),
+    }
+
+
+def test_the_forecast_connector_requests_pulau_tioman_for_tiger_reef_and_says_not_the_site() -> (
+    None
+):
+    payload = json.loads(
+        (
+            Path(__file__).parent.parent
+            / "fixtures/data_gov_my_forecast_tioman_recorded_2026-10-11.json"
+        ).read_text()
+    )
+    start = datetime(2026, 10, 12, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 10, 11, 1, 0, tzinfo=UTC)
+    getter = _Getter(payload)
+    result = asyncio.run(
+        DataGovMyForecastConnector(getter).fetch(TIGER_REEF, start, start + timedelta(hours=4), now)
+    )
+    assert [params["contains"] for _, params in getter.calls] == ["Rc024@location__location_id"]
+    assert result.items
+    for item in result.items:
+        assert item.category is DataCategory.WEATHER
+        assert item.is_forecast is True
+        assert item.quality is DataQuality.DEGRADED
+        assert item.id.startswith(f"{dgm.SOURCE}:{SITE_ID}:")
+        assert "not the dive site" in item.value["scope"]
+
+
+def test_met_marine_requests_the_tioman_zone_for_tiger_reef_and_says_not_the_site() -> None:
+    payload = json.loads(
+        (
+            Path(__file__).parent.parent / "fixtures/met_api_marine_tioman_recorded_2026-10-16.json"
+        ).read_text()
+    )
+    start = datetime(2026, 10, 16, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 10, 16, 1, 0, tzinfo=UTC)
+    getter = _Getter(payload)
+    result = asyncio.run(
+        MetApiMarineConnector(getter).fetch(TIGER_REEF, start, start + timedelta(hours=4), now)
+    )
+    assert [params["locationid"] for _, params in getter.calls] == ["LOCATION:499"]
+    assert {item.category for item in result.items} == {
+        DataCategory.WIND,
+        DataCategory.WAVES_SWELL,
+    }
+    for item in result.items:
+        assert item.is_forecast is True
+        assert item.quality is DataQuality.DEGRADED
+        assert f":{SITE_ID}:" in item.id
+        assert "variables" not in item.value
+        assert item.value["spatial_scope"] == (
+            "MET waters zone (extent not stated), not the dive site"
+        )
 
 
 def _person(name: str) -> dict[str, str]:

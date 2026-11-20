@@ -82,6 +82,22 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
+### Reporting actual current (2026-11-20, owner)
+
+Actual conditions are free-form `observations`, reported through `POST
+/v1/assessments/{assessment_id}/actual-conditions` by the assessment's assigned `decider` (ADR
+0013), and, once a decision is recorded, only after the planned start. For current at a site, report
+under `observations.current`: `observed_at` (ISO time with offset), `speed_kn` (a number, the
+diver's or crew's estimate), `band` (`none`/`mild`/`moderate`/`strong`), `direction_to_deg`
+(optional, where the water was going), `depth_m` (optional), `method` (`dive_guide_estimate`,
+`drift_gps` or `boat_crew`), and `phase` (optional, e.g. `near_high`, `ebbing`). Reports can be
+compared by hand with the stored model values for that hour (no code does this yet); they never
+change a result. The API does not check this format; it is a convention, so a report that does not
+follow it is stored as written. A report needs a recorded human decision and is written once only,
+so put every current reading into one submission. `band` labels have no numeric meaning here and
+must never become limits (AGENTS.md section 7). `speed_kn` is in knots and the model value is in
+km/h, so a comparison must state its conversion.
+
 ## Pipeline guarantees (`divesafe.orchestration`)
 
 - `assess_dive` refuses a policy with no required categories (`UnsafeConfigurationError`), so a
@@ -242,11 +258,15 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 
 ## Known gaps (tracked, not yet implemented)
 
-- **Tiger Reef** (`my-pahang-tiger-reef`, 2026-11-20): it cannot reach GO until the forecast and
-  MET connectors are mapped for it (they refuse it, so every run records a connector issue), and
-  no site guide is retrieved for it, although two sources (the owner's trial report and PADI's
-  page) name a current hazard there that the human does not see (see
-  [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+- **Tiger Reef** (`my-pahang-tiger-reef`, 2026-11-20): the forecast and MET connectors are mapped to
+  Tioman's areas (owner decision), but it still cannot reach GO: tides are required and missing
+  while no tide connector is on (none was on in production on 2026-11-20), factors without a
+  deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE, and every
+  live value is DEGRADED (ADR 0008). No site guide is retrieved for it, although two sources (the
+  owner's trial report and PADI's page) name a current hazard there that the human does not see. Its
+  model current (Open-Meteo, a grid cell about 2.6 km away) probably understates the channel
+  current, a deployed NO-GO current limit would be compared with that grid value, and nothing at the
+  gate says so (see [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
 
 **Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
 ignores intervals whose `valid_until` is before the window start, so such an interval no longer

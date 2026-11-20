@@ -51,6 +51,8 @@ MAX_RESULTS = 49  # the API pages at 50; a full page may be truncated
 # a fixed, reviewed table; the response is checked against it.
 WATERS_ZONES: dict[str, tuple[str, str]] = {
     "my-pahang-pulau-tioman": ("LOCATION:499", "TIOMAN"),
+    # Owner decision 2026-11-20 (ADR 0029 Amendment 2): the zone's extent is not stated by MET.
+    "my-pahang-tiger-reef": ("LOCATION:499", "TIOMAN"),
 }
 
 # datatype -> (category, name in `ranges`, expected unit)

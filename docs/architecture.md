@@ -189,10 +189,11 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 
 Tracked items not yet built (each needs an ADR or design before implementation):
 
-- **Tiger Reef** (2026-11-20): cannot reach GO until the forecast and MET connectors are mapped
-  for it, and no site guide is retrieved for it, although two sources (the owner's trial report
-  and PADI's page) name a current hazard there that the human does not see (see
-  [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+- **Tiger Reef** (2026-11-20): the forecast and MET connectors are mapped to Tioman's areas (owner
+  decision), but it still cannot reach GO (tides missing while no tide connector is on, factors
+  without a rule, DEGRADED data; ADR 0029 Amendment 2), and no site guide is retrieved for it,
+  although two sources (the owner's trial report and PADI's page) name a current hazard there that
+  the human does not see (see [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
 - **Evidence-id conflicts (closed by ADR 0026, 2026-11-05):** the most severe variant decides, by
   the deterministic engine (`orchestration/conflict_variants.py`). Left open: the capacity bounds
   (4 ids, 3 variants, 64 combinations) leave a larger conflict at INSUFFICIENT EVIDENCE
