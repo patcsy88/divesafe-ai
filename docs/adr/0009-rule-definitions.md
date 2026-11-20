@@ -109,7 +109,9 @@ settable by untrusted parties. A detached signature would be stronger and is not
   cites an unusable item and is downgraded to INSUFFICIENT EVIDENCE, hiding a NO-GO. Neither can
   produce GO.
 - **Symlinks are followed** when reading the ruleset path; the file is trusted configuration and
-  the pin covers its content.
+  the pin covers its content. In production (ADR 0024) the path is a read-only bind mount: Docker
+  resolves a symlink at the host path when the container starts, and the container sees a plain
+  file.
 - **No maximum validity period:** the expiry is whatever was signed; choosing a cap is a policy
   decision with a number that must come from the owner.
 - **One primary metric per factor:** secondary quantities (for example wind-wave height) cannot

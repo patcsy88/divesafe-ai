@@ -199,6 +199,9 @@ Then:
    it, put the line back first, or give it on the command line for this one command
    (`DIVESAFE_CORPUS_DIR=/an/absolute/dir/outside/the/repository docker compose ...`; a variable
    in the shell wins over `--env-file`; an empty directory is enough, no loader runs here).
+   Since 2026-11-20 every compose command also needs `DIVESAFE_RULESET_FILE` and
+   `DIVESAFE_RULESET_SHA256` (ADR 0024 "How to run it"); on the command line give all three. No
+   API starts in this step, so the ruleset is not read, but the variables must be set.
    While compose cannot read the file, use plain `docker` for what you must do anyway: `docker
    stop <name>` to stop a running API (`docker ps` shows the name).
 6. Create the loader role with the role script (`docs/knowledge-loader.md`), **before** the
@@ -478,7 +481,11 @@ project with `-p` and adds a test-only override that sets a **test image tag**; 
 tags or runs `divesafe-api:local`, and nothing touches a `divesafe-prod` project. Never add
 `--build` to a `C` command. The work directory is outside the repository and is **never** the
 production backup directory. Run the blocks in one shell session (bash or zsh; `C` is a function,
-because a string in `$C` does not word-split in zsh); `docker/production.env` needs `DIVESAFE_CORPUS_DIR` (an empty directory is enough).
+because a string in `$C` does not word-split in zsh); `docker/production.env` needs
+`DIVESAFE_CORPUS_DIR` (an empty directory is enough) and, since 2026-11-20, `DIVESAFE_RULESET_FILE`
+and `DIVESAFE_RULESET_SHA256` (the rehearsal starts no API, so the ruleset is never read: any
+existing file and any 64-character hex value will do; on the production host the existing lines
+already do, so do not change them for the rehearsal).
 
 ```sh
 # 0. A private work directory (mode 0700, outside the repository), a test image and its override.
