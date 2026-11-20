@@ -259,14 +259,16 @@ an identified decision-maker and a non-blank rationale. Less severe overrides ar
 ## Known gaps (tracked, not yet implemented)
 
 - **Tiger Reef** (`my-pahang-tiger-reef`, 2026-11-20): the forecast and MET connectors are mapped to
-  Tioman's areas (owner decision), but it still cannot reach GO: tides are required and missing
-  while no tide connector is on (none was on in production on 2026-11-20), factors without a
-  deployed rule (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE, and every
-  live value is DEGRADED (ADR 0008). No site guide is retrieved for it, although two sources (the
-  owner's trial report and PADI's page) name a current hazard there that the human does not see. Its
-  model current (Open-Meteo, a grid cell about 2.6 km away) probably understates the channel
-  current, a deployed NO-GO current limit would be compared with that grid value, and nothing at the
-  gate says so (see [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+  Tioman's areas (owner decision), but it still cannot reach GO: tides are a required category;
+  until tides.today was switched on in production (2026-11-20, 06:17 UTC) they were missing, and
+  since then a Tiger Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which
+  no rule reads and which cannot support GO or CAUTION (ADR 0008); factors without a deployed rule
+  (four of which the rule format cannot hold) stay at INSUFFICIENT EVIDENCE, and every live value is
+  DEGRADED (ADR 0008). No site guide is retrieved for it, although two sources (the owner's trial
+  report and PADI's page) name a current hazard there that the human does not see. Its model current
+  (Open-Meteo, a grid cell about 2.6 km away) probably understates the channel current, a deployed
+  NO-GO current limit would be compared with that grid value, and nothing at the gate says so (see
+  [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
 
 **Fixed from the 23 Oct 2026 Code Review (2026-10-26):** engine window coverage (`_covers` now
 ignores intervals whose `valid_until` is before the window start, so such an interval no longer
@@ -325,12 +327,10 @@ cannot confirm the decision was saved.
   single missing high/low pair can pass. All of PHN's limits on currents apply unchanged:
   `tidal_current` stays unencodable, degraded data cannot support GO or CAUTION, and
   `degraded_may_support_go` must not be turned on for tides. With PHN also on, both items are
-  present and no check compares them. Off by default until the owner switches it on; the full
-  copyright notice is shown once with every assessment view that holds a tides.today item
+  present and no check compares them. Off by default (switching it on is the owner's decision);
+  the full copyright notice is shown once with every assessment view that holds a tides.today item
   (evaluated or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11).
-  Switch-on: (1) built, pending security and risk review, not yet rendered in a real browser (one
-  manual render is needed before condition (1) counts as met), and it also needs the owner's
-  answer to the OPEN QUESTION in decision 11 (not yet given); (2) the owner's decision, not taken.
+  Switched on in production by the owner on 2026-11-20 (ADR 0029, "Switched on").
 - **Contradictory evidence:** the engine checks presence and freshness only. Any future
   corroboration logic must use `can_corroborate`
   ([ADR 0010](adr/0010-source-lineage-and-canonical-agent-input.md)), so sources that share an

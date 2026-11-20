@@ -170,14 +170,19 @@ results and the specialist findings** (the prompt layer's payload) to
   private entities; attribution wording is still open (data-sources.md, MET section).
 - PHN e-Tide data is **off** in this stack. If it is turned on, its terms are not on file and the
   start-up warning above says so, but nothing stops it (ADR 0021).
+- **tides.today** (ADR 0029, switched on 2026-11-20): each assessment for a site in the connector's
+  table (Tioman, Tiger Reef) makes up to three https requests (fewer when cached) to
+  `api.tidestoday.io` carrying the `x-api-key` header, the location id and the date range; the
+  resulting tide item, when there is one, goes to the model host and the vendor behind it with every
+  assessment. The provider's permission covers only this deployment.
 - **Site documents** (ADR 0028, accepted 2026-11-14): with `DIVESAFE_LLM_KNOWLEDGE_HOST` empty
   (the default) every knowledge extract is withheld from the model host. Set to the model host,
   the text of APPROVED site documents (text, section, document id, version, chunk; never licence,
   attribution or origin) goes to it and to the vendor behind it with every assessment; start-up
   logs "knowledge is sent to the model host" and refuses while any APPROVED, non-withdrawn version
   lacks the `attests_model_host_egress` attestation.
-- The host and the egress basis are in the start-up log. **They are not recorded on the assessment
-  record**, so a stored assessment does not say where its data went.
+- The host and the egress basis are in the start-up log and, since 2026-11-10, on every new
+  assessment record (`egress_basis`, `model_host`; ADR 0022 decision 15).
 - If the model host cannot be reached (DNS, trust store, certificate expiry on 2026-12-20, a path
   change), the agent stage fails for that assessment, is recorded as an agent issue, and the
   deterministic result stands. That is safe, but production would then be running without agent
@@ -210,19 +215,23 @@ should-fix S1, 2026-11-09). Never use `--build` or `build` with the `knowledge` 
 from the deploy commit.
 
 **Deploying a new commit to a running stack** (from `/Users/patcsy88/DiveSafe/app`, with the `C`
-function above). First take a backup: `sh docker/backup.sh /Users/patcsy88/DiveSafe/backups`,
-then copy both record CSVs beside it. Then set `new` to the approved full 40-character commit
-sha and `tag` to an unused name such as `divesafe-api:rollback-YYYYMMDD`, and run the chain; each
-step stops the rest if it fails, so nothing runs out of order. A deploy whose commit changes
-`src/divesafe/services/migrations.py` is refused unless `allow_migration` is set to that same sha
-(the owner's decision: after it, rollback means a restore, below):
+function above). First take a backup: `sh docker/backup.sh /Users/patcsy88/DiveSafe/backups`, then
+copy both record CSVs beside it. Then set `new` to the approved full 40-character commit sha (from
+git, not pasted: `new=$(git rev-parse --verify "<approved full sha>^{commit}")` after `git fetch`,
+quoted because zsh's `extendedglob` would treat `^` as a pattern; a pasted value can carry an
+invisible character the sha check refuses, 2026-11-20) and `tag` to an unused name such as
+`divesafe-api:rollback-YYYYMMDD`, and run the chain (`[^0-9a-f]`, not `[!...]`, which zsh's history
+expansion breaks; a shell that does not read `[^...]` as negation refuses every sha, which fails
+safe); each step stops the rest if it fails, so nothing runs out of order. A deploy whose commit
+changes `src/divesafe/services/migrations.py` is refused unless `allow_migration` is set to that
+same sha (the owner's decision: after it, rollback means a restore, below):
 
 ```
 unset old s i running GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 cd /Users/patcsy88/DiveSafe/app \
   && : "${new:?}" "${tag:?}" \
   && { test "${#new}" -eq 40 || { echo "refused: new is not a full sha" >&2; false; }; } \
-  && case $new in *[!0-9a-f]*) echo "refused: new is not a full sha" >&2; false;; esac \
+  && case $new in *[^0-9a-f]*) echo "refused: new is not a full sha" >&2; false;; esac \
   && s=$(git status --porcelain --untracked-files=all) \
   && i=$(git status --porcelain --untracked-files=all --ignored -- src) \
   && { test -z "$s$i" || { echo "refused: the checkout is not clean" >&2; false; }; } \
@@ -277,6 +286,13 @@ the schema, an app and a loader login; backup again; delete the old secrets dire
 is down from `stop` to `up`. The API key is rotated separately (`docs/first-run-on-the-real-host.md`).
 
 `docker/secrets/` and `docker/production.env` are git-ignored.
+
+**After changing a secret file the api mounts** (A8, 2026-11-20): the API reads its secret files
+only at start, and `C up -d` does not recreate a container when only a file in `docker/secrets/`
+changed. Use `C up -d --no-build --force-recreate --wait api`, then check that the container started
+after the change: `docker inspect -f '{{.State.StartedAt}}' "$(C ps -q api)"` (UTC) against `TZ=UTC
+stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' docker/secrets/<file>` (both in UTC). Database password files
+follow "Rotating the database passwords" instead.
 
 ## Tests
 
@@ -2116,20 +2132,20 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `~/Desktop/DiveSafe AI`; backup `divesafe-20261112T143255Z` (CSVs copied). API downtime
     about 2 minutes (14:31 to 14:33). **Not rotated:** the DiveSafe API key (only its hash was
     synced; not reversible). **Still open for the owner:** rotate the model-host key in
-    CLIProxyAPI (it was synced), replace `docker/secrets/divesafe_llm_api_key` and restart `api`;
-    empty iCloud "Recently Deleted"; turning iCloud Desktop & Documents sync off is the owner's
-    choice. From now on production commands run from `/Users/patcsy88/DiveSafe/app`;
-    `~/Desktop/DiveSafe AI` is development only; a deploy is `git pull` there, then the usual
-    build and `up` ("How to run it"). `.dockerignore` **and**
-    `.gitignore` do not exclude Finder/iCloud duplicates (`* 2.*`); a code change should add
-    the pattern to both (`.gitignore` matches `/docker/production.env` exactly, so a
-    `docker/production 2.env` copy would not be ignored). The old hash file
+    CLIProxyAPI (it was synced), replace `docker/secrets/divesafe_llm_api_key` and restart `api`
+    (see "After changing a secret file the api mounts"); empty iCloud "Recently Deleted"; turning
+    iCloud Desktop & Documents sync off is the owner's choice. From now on production commands run
+    from `/Users/patcsy88/DiveSafe/app`; `~/Desktop/DiveSafe AI` is development only; a deploy is
+    `git pull` there, then the usual build and `up` ("How to run it"). `.dockerignore` **and**
+    `.gitignore` do not exclude Finder/iCloud duplicates (`* 2.*`); a code change should add the
+    pattern to both (`.gitignore` matches `/docker/production.env` exactly, so a `docker/production
+    2.env` copy would not be ignored). The old hash file
     `docker/secrets/divesafe_api_key_hashes.old-20261112` should move out of `docker/secrets/`,
     which rules out mounting it by mistake (security N6). One API key holds all three roles
-    (assessor, decider, viewer), so the gate's two-person idea rests on one credential.
-    `kb_load`'s exit-11 message gives no hint that the version already exists (the runbook now
-    says so). The 8 failed model calls raised no alert (ADR 0027). The closing report was run as
-    the bootstrap user, not `divesafe_owner` (same read-only result).
+    (assessor, decider, viewer), so the gate's two-person idea rests on one credential. `kb_load`'s
+    exit-11 message gives no hint that the version already exists (the runbook now says so). The 8
+    failed model calls raised no alert (ADR 0027). The closing report was run as the bootstrap user,
+    not `divesafe_owner` (same read-only result).
   - **Deploy of `69c9fca` (2026-11-12 16:28 UTC, 2026-11-13 local; owner approved).** PR #5
     (host manifest builder, ADR 0027 accepted, docs); the only runtime-image change is the new
     `divesafe.services.kb_manifest_build` module, which the API does not import. The production
@@ -2334,6 +2350,49 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     value in 0 log lines; **no "connector HTTP socket not reachable" line** in the new
     process. Rollback: tag `rollback-20261117c` as `divesafe-api:local`, then `C up -d
     --no-build --wait api` (the key file is unchanged).
+  - **Deploy of `39371b1` (2026-11-20 05:42 UTC, owner).** PRs #36–#46 (tides.today connector, off;
+    Tiger Reef registered and mapped to Tioman's data.gov.my and MET areas; the full tides.today
+    notice on the view; ADR 0030 eval extra). No migration change. Backup
+    `divesafe-20261120T053408Z` with both record CSVs. The previous image `10ed1e547b23` was tagged
+    `divesafe-api:rollback-20261120` before the build. `docker/make-secrets.sh` created the new
+    empty `divesafe_tides_today_api_key` (the compose file now mounts it); `production.env` had no
+    `DIVESAFE_TIDES_TODAY_*` line, so tides.today stayed off. `C up -d --build --wait api`: new API
+    image `c2ba9d25add8`, healthy, 0 restarts; health 200, an unauthenticated read 401, 5
+    connectors, no start-up error, no tides.today line, the MET token in 0 log lines. First Tiger
+    Reef run `6205ac42…`: every stage completed, 2 MET items (waves, wind; zone 499) and the
+    data.gov.my forecast item, no connector issue, no site document (expected: the Tiger Reef note
+    is not loaded), final INSUFFICIENT EVIDENCE (tides missing, a marine warning, 9 factors without
+    a rule). `.venv-tools` rebuilt. Rollback: tag `rollback-20261120` as `divesafe-api:local`, then
+    `C up -d --no-build --wait api`.
+  - **Gap from this deploy (zsh):** pasted into zsh, the chain's `case $new in *[!0-9a-f]*)` failed
+    with "event not found" (history expansion of `!`), so nothing ran; the second attempt was
+    refused by the sha check, probably because of an invisible character pasted with `new`. Neither
+    changed anything. Fix in the procedure: write the class as `[^0-9a-f]` and set `new` from `git
+    rev-parse --verify "<approved full sha>^{commit}"` (quoted) rather than pasting.
+  - **tides.today switch-on: wrong key (2026-11-20, owner).** At the first switch-on (API recreated
+    05:59:42 UTC) the owner's DiveSafe API key (actor `patcsy88`, roles assessor, decider, viewer)
+    was written to `divesafe_tides_today_api_key` instead of the tides.today key; the key shape
+    check accepts both. The connector sent it as the `x-api-key` header over https to
+    `api.tidestoday.io` in run `d8e01656…` (06:04 UTC) and again in run `dddcf8cc…` (06:15 UTC),
+    HTTP 401 both times (tides missing, `evidence.connector_issues`, final INSUFFICIENT EVIDENCE).
+    The owner rewrote the key file at 06:12:45 UTC with a prompt that refuses an empty value or a
+    value whose sha256 is listed in `divesafe_api_key_hashes`. The second run came after that
+    rewrite: `C up -d --no-build --wait api` does not recreate a container when only a secret file
+    changed (compose sees no config change), so the API still held the old value. `--force-recreate`
+    (06:17:31 UTC) fixed it; run `cf38becd…` then succeeded. The key value was in 0 lines of the
+    DiveSafe API log; the stored connector issue holds only the status and host path, and spans
+    carry no headers (ADR 0027). What tides.today logged or keeps of the request headers is not
+    known and cannot be checked from here. **Accepted gap (owner, 2026-11-20):** the `patcsy88` key
+    is kept, not replaced. Anyone holding it who can reach the API could read every stored
+    assessment (the key has no `groups`, so it reads everything; ADR 0026), create assessments, and
+    record human decisions as `patcsy88` (accept, or override to a more severe outcome; the key has
+    no `overrider` role, so not a less severe one, ADR 0026); the record could not tell them from
+    the owner's. The acceptance rests on the API being published only on the host's `127.0.0.1:8000`
+    (reachable by processes on the host and by local containers through `host.docker.internal`); a
+    change that makes the API reachable from off the machine (reverse proxy, tunnel, LAN binding)
+    reopens this gap for the owner's decision. The guard against a repeat is the owner's prompt, not
+    the software: a start-up refusal when the tides.today key's sha256 is a configured API key hash
+    is not built. Fix in the procedure: "After changing a secret file the api mounts" (above).
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could

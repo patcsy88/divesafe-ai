@@ -190,10 +190,11 @@ expired by the engine and loaded from a reviewed file by `orchestration.load_rul
 Tracked items not yet built (each needs an ADR or design before implementation):
 
 - **Tiger Reef** (2026-11-20): the forecast and MET connectors are mapped to Tioman's areas (owner
-  decision), but it still cannot reach GO (tides missing while no tide connector is on, factors
-  without a rule, DEGRADED data; ADR 0029 Amendment 2), and no site guide is retrieved for it,
-  although two sources (the owner's trial report and PADI's page) name a current hazard there that
-  the human does not see (see [ADR 0029](adr/0029-tides-today-tide-predictions.md) Amendment 2).
+  decision), but it still cannot reach GO (the tides item, when present, is a DEGRADED proxy 13.4 km
+  away; factors without a rule; DEGRADED data; ADR 0029 Amendment 2), and no site guide is retrieved
+  for it, although two sources (the owner's trial report and PADI's page) name a current hazard
+  there that the human does not see (see [ADR 0029](adr/0029-tides-today-tide-predictions.md)
+  Amendment 2).
 - **Evidence-id conflicts (closed by ADR 0026, 2026-11-05):** the most severe variant decides, by
   the deterministic engine (`orchestration/conflict_variants.py`). Left open: the capacity bounds
   (4 ids, 3 variants, 64 combinations) leave a larger conflict at INSUFFICIENT EVIDENCE
@@ -237,8 +238,11 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   `decided_by_creator`. `admin` moves a pending assessment to another decider (ADR 0026, built,
   migration 5). `groups` scope what a viewer key may read (ADR 0026, built). Key rotation and revocation are manual (edit the
   configured hashes).
-- **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator.
-  No request-size or per-client rate limits beyond the provider-limit guard.
+- **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator. No
+  request-size or per-client rate limits beyond the provider-limit guard. Before the API is made
+  reachable from off the machine (reverse proxy, tunnel, LAN binding), the owner must decide again
+  on the `patcsy88` API key, which was sent to a third party on 2026-11-20 and kept by owner
+  decision (ADR 0024 A8).
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
   egress flag exist (ADR 0007). An offline-tested evaluation harness (ADR 0016) and an OpenAI-compatible
   adapter (ADR 0018) exist; the Ollama adapter was removed (ADR 0016 amendment). Small live runs on

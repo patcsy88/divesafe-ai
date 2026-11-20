@@ -64,9 +64,10 @@ from divesafe.services import (
     kb_attestation,
 )
 
-# Interim and unreviewed: tide predictions are DEGRADED (PHN e-Tide, ADR 0021, off by default) and
-# no limit is signed off yet, so assessments are always INSUFFICIENT EVIDENCE. This is the honest
-# state; see docs/data-sources.md. Replace through a reviewed ruleset, not at runtime.
+# Interim and unreviewed: tide predictions are DEGRADED (tides.today, ADR 0029, and PHN e-Tide,
+# ADR 0021, both off by default) and no limit is signed off yet, so assessments are always
+# INSUFFICIENT EVIDENCE. This is the honest state; see docs/data-sources.md. Replace through a
+# reviewed ruleset, not at runtime.
 INTERIM_REQUIRED_CATEGORIES: frozenset[DataCategory] = frozenset(
     {
         DataCategory.WAVES_SWELL,

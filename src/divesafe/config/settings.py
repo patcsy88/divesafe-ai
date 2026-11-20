@@ -154,12 +154,9 @@ class Settings(BaseSettings):
     # file: every enabled deployment sends POSTs to an undocumented government endpoint.
     phn_etide_enabled: bool = False
 
-    # tides.today tide predictions (ADR 0029). Off by default; the provider's permission is on
-    # file (2026-11-18). Switch-on: (1) built, pending security and risk review, not yet rendered
-    # in a real browser (one manual render is needed before condition (1) counts as met), and it
-    # also needs the owner's answer to the OPEN QUESTION in decision 11 (not yet given); (2) the
-    # owner's decision, not taken (ADR 0029). Enabling it needs the API key (header x-api-key;
-    # ADR 0029 Amendment 1).
+    # tides.today tide predictions (ADR 0029). Off by default; switching it on is the owner's
+    # decision (ADR 0029 status), and the provider's permission covers only the owner's
+    # deployment. Enabling it needs the API key (header x-api-key; ADR 0029 Amendment 1).
     tides_today_enabled: bool = False
     tides_today_api_key: SecretStr | None = None
 
