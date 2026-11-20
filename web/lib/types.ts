@@ -85,6 +85,12 @@ export interface AssessmentView {
   status_note: string;
   agent_note: string;
   attributions: string[];
+  // The tides.today provider's full notice (ADR 0029 decision 11): third-party text, plain only.
+  provider_notices?: string[];
+  // Distinct notices beyond the cap that are not listed, and the fixed note for the section.
+  provider_notices_not_shown?: number;
+  provider_notice_missing?: boolean;
+  provider_notice_note?: string;
   // True when this key may not see human decisions: then status says nothing about one.
   decision_withheld: boolean;
   notice: string;

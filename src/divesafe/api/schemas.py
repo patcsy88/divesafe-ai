@@ -21,9 +21,11 @@ from pydantic import (
 )
 
 from divesafe.agents.specialists import SPECIALISTS
+from divesafe.data import tides_today
 from divesafe.domain import (
     SUPERVISOR_RULE_PREFIX,
     AssessmentRecord,
+    DataCategory,
     DataQuality,
     DiveSite,
     EvidenceItem,
@@ -293,6 +295,23 @@ _WITHHELD_NOTE = (
 
 _MAX_ATTRIBUTION_CHARS = 300
 
+# ADR 0029 decision 11: the provider's full notice is shown whole, so it is cut at the same bound
+# the connector enforces (never shorter), not at the attribution bound.
+_PROVIDER_NOTICE_KEY = "provider_notice"
+_MAX_PROVIDER_NOTICE_CHARS = tides_today.MAX_NOTICE_CHARS
+# At most this many distinct notices are listed; `provider_notices_not_shown` counts the rest.
+MAX_PROVIDER_NOTICES_SHOWN = 4
+# `provider_notice_missing` (a flag, never text in `provider_notices`) is set when a tides.today
+# item's notice is missing, blank, not a string or not printable (the connector refuses those,
+# so this is a stored fault). The web app says it in its own fixed words, outside the provider text.
+PROVIDER_NOTICE_NOTE = (
+    "Text supplied by the data provider, shown as received. It is the provider's own copyright "
+    "and licence notice, shown because this assessment retrieved tides.today data (that data may "
+    "have been withheld; see Evidence, if your key can read it). DiveSafe has not checked it. "
+    "It does not validate the data, does not describe the tide at the dive site, and does not "
+    "change the result."
+)
+
 _SELF_ESTIMATE = (
     "The model's own uncalibrated guess about this item. It is NOT a confidence, is not "
     "calibrated and is not a measure of dive safety. Do not read it as how safe a dive is."
@@ -379,6 +398,32 @@ def _renamed(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _provider_notices(record: AssessmentRecord) -> tuple[tuple[str, ...], int, bool]:
+    """The tides.today provider's notice text, how many distinct notices were left out, and
+    whether a tides.today item had no usable notice.
+
+    Chosen by the item's source id and category (never by its wording), from evaluated and
+    withheld items alike. Strings only, stripped, printable (the connector's own rule, so ordinary
+    text passes and control or bidi characters do not), bounded at the stored bound, deduplicated,
+    sorted and at most `MAX_PROVIDER_NOTICES_SHOWN` long. The text list holds provider text only:
+    an item with no usable notice sets the returned flag instead.
+    """
+    found: set[str] = set()
+    missing = False
+    for item in (*record.evidence, *record.withheld_evidence):
+        if item.source != tides_today.SOURCE or item.category is not DataCategory.TIDES:
+            continue
+        notice = item.value.get(_PROVIDER_NOTICE_KEY)
+        if isinstance(notice, str) and notice.strip() and notice.isprintable():
+            found.add(notice.strip()[:_MAX_PROVIDER_NOTICE_CHARS])
+        else:
+            missing = True
+    ordered = sorted(found)
+    shown = ordered[:MAX_PROVIDER_NOTICES_SHOWN]
+    not_shown = max(0, len(ordered) - MAX_PROVIDER_NOTICES_SHOWN)
+    return tuple(shown), not_shown, missing
+
+
 class AssessmentView(BaseModel):
     record: AssessmentRecordView
     # DECISION_WITHHELD: this key may not see human decisions, so nothing is said about one.
@@ -392,6 +437,17 @@ class AssessmentView(BaseModel):
     # Fixed wording for the record's knowledge notes, superseded and withheld documents.
     knowledge_note: str = ""
     attributions: tuple[str, ...]
+    # The tides.today provider's own notice text, untrusted: plain text only, never prompted or
+    # logged. Selected by the item's source id (ADR 0029 decision 11); empty when there is none.
+    provider_notices: tuple[str, ...] = ()
+    # Distinct notices beyond `MAX_PROVIDER_NOTICES_SHOWN` that are not listed.
+    provider_notices_not_shown: int = 0
+    # True when a tides.today item (by source and category) has a notice that is missing, blank,
+    # not a string or not printable; the client says so in its own fixed words.
+    provider_notice_missing: bool = False
+    # Fixed wording (ADR 0029 decision 11), no provider text: `PROVIDER_NOTICE_NOTE` on every view
+    # that has a provider notice or the missing flag, and "" on a view with neither.
+    provider_notice_note: str = ""
     decision_withheld: bool = False
     # True when `record.model_host` is left out for this key (ADR 0022 decision 15).
     model_host_withheld: bool = False
@@ -490,6 +546,7 @@ class AssessmentView(BaseModel):
                 " The ruleset is interim and unreviewed: its limits are placeholders, so no dive "
                 "can currently return GO. More data alone will not change that."
             )
+        notices, not_shown, notice_missing = _provider_notices(record)
         return cls(
             record=AssessmentRecordView.of(record),
             outcome_note=outcome_note,
@@ -512,6 +569,10 @@ class AssessmentView(BaseModel):
                 else "Confidence describes the reliability of this assessment, not dive safety."
             ),
             attributions=tuple(attributions),
+            provider_notices=notices,
+            provider_notices_not_shown=not_shown,
+            provider_notice_missing=notice_missing,
+            provider_notice_note=PROVIDER_NOTICE_NOTE if notices or notice_missing else "",
         )
 
 

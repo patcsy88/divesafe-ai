@@ -64,7 +64,7 @@ _HEIGHT_MIN, _HEIGHT_MAX = -2.0, 15.0
 ATTRIBUTION = (
     "Tidal data from tides.today (Tides Today). Predictions use the FES2014/FES2022 tide models "
     "(CNES, CLS, LEGOS; AVISO+), ETOPO 2022 bathymetry (NOAA NCEI) and PSMSL sea level data; "
-    "these organisations do not endorse it. Full notice in the record (provider_notice)."
+    "these organisations do not endorse it. Provider notice shown on the assessment page."
 )
 
 

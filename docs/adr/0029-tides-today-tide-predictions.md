@@ -33,11 +33,16 @@ assumption.
 
 **Switch-on conditions.** The connector stays built **off by default**
 (`DIVESAFE_TIDES_TODAY_ENABLED=false`). It may be switched on only after (1) the full copyright
-notice is shown with every item in the user view (a reviewed code change and an edit to decision 11;
-owner decision, 2026-11-19), and (2) a separate owner decision to switch it on, which has not been
-taken. The provider's mail of 2026-11-17 says the key is deactivated if it is not used for three
-months; a deactivated key makes the tides.today item fail (tides missing, so INSUFFICIENT EVIDENCE,
-when it is the only tide source), an availability issue, not a safety one.
+notice is shown once with every assessment view that holds a tides.today item (evaluated or
+withheld), deduplicated (decision 11; owner decision, 2026-11-19) and (2) a separate owner decision
+to switch it on, and condition (1) also needs the owner to have answered the OPEN QUESTION in
+decision 11. State: (1) built, pending security and risk review, not yet rendered in a real
+browser (one manual render is needed before condition (1) counts as met), and the OPEN QUESTION
+in decision 11 (whether once per assessment meets the provider's "with every item") is not yet
+answered; (2) the owner's decision to switch it on, not taken. The provider's mail of 2026-11-17
+says the key is deactivated if it is not used for three months; a deactivated key makes the
+tides.today item fail (tides missing, so INSUFFICIENT EVIDENCE, when it is the only tide source),
+an availability issue, not a safety one.
 
 Reviewed by `security-reviewer` and `risk-reviewer` on 2026-11-17: no blockers; their should-fix
 findings and nits are fixed, and the final round was clean.
@@ -203,17 +208,43 @@ dive window touches.
 10. **Politeness.** No published limit. Our conservative assumption, recorded as such: 6 calls a
     minute and 300 a day per process (two assessments a minute, 100 a day at three calls each),
     with the usual 60 second response cache. Concurrent cache misses are not coalesced.
-11. **Attribution.** The full provider `copyright` text is kept on the item (bounded, printable)
-    and stored with the record. Because the user view cuts attributions at 300 characters, the
-    `attribution` field is a fixed short text naming Tides Today, FES (CNES, CLS, LEGOS / AVISO+),
-    ETOPO 2022 (NOAA NCEI) and PSMSL, with a pointer to the full text. **How attribution must be
-    shown is one of the questions to the provider**; its answer replaces this. *(The provider did
-    not answer this. The owner's request promised the notice with every item, so the owner decided
-    on 2026-11-19 to show the full notice in the user view; this decision is edited with that code
-    change.)* The full notice
-    is record-only: `agents.prompts.RECORD_ONLY_VALUE_KEYS` drops `provider_notice` from every
-    prompt payload (security review 2026-11-17), so only the short `attribution` goes to the
-    model host.
+11. **Attribution.** The full provider `copyright` text is kept on the item (bounded to
+    `MAX_NOTICE_CHARS` = 2000, printable) and stored with the record. The user view shows it
+    whole, shown once with every assessment view that holds a tides.today item (evaluated or
+    withheld), deduplicated (owner decision, 2026-11-19): `AssessmentView.provider_notices`, built
+    from evidence and withheld evidence whose source is `tides-today-prediction`, whose category
+    is `tides` and whose `provider_notice` value is a non-empty, printable string (the connector's
+    own rule: ordinary newlines are not allowed by it, so a notice that is not printable is not
+    shown and the missing flag is set instead; the view does not clean or drop characters);
+    stripped, deduplicated, sorted, cut only at `MAX_NOTICE_CHARS`; it is shown for a create-only
+    key too (it is not decision content). At most 4 distinct notices are listed; when there are
+    more, `provider_notices_not_shown` holds the count (a number, not text in the list) and the
+    web app says "n more provider notices not shown". `provider_notices` holds provider text only.
+    A tides.today item (by source and category) whose notice is missing, blank, not a string or
+    not printable sets the separate boolean `provider_notice_missing`; the web app then says, in
+    its own fixed words and outside the provider-text block, "provider notice missing for a
+    tides.today item", and when only the flag is set it shows only that sentence: no section,
+    heading, caption or provider text. A provider notice whose text equals that sentence stays
+    provider text and does not set the flag. The fixed field `provider_notice_note` ("Text supplied by the data provider,
+    shown as received. It is the provider's own copyright and licence notice, shown because this
+    assessment retrieved tides.today data (that data may have been withheld; see Evidence, if your
+    key can read it). DiveSafe has not checked it. It does not validate the data, does not
+    describe the tide at the dive site, and does not change the result.") is set when the view has
+    a provider notice or the missing flag, and is "" when there are no notices and the flag is
+    false; the web app shows it as a caption under the heading "Provider notice (tides.today)"
+    above the provider text only. The notice is the provider's text
+    only, separate from `attributions`, and untrusted: the API returns it as a plain string and
+    the web app renders it as text. Because the user view cuts attributions at 300 characters, the
+    `attribution` field stays a fixed short text naming Tides Today, FES (CNES, CLS, LEGOS /
+    AVISO+), ETOPO 2022 (NOAA NCEI) and PSMSL, with a pointer ("Provider notice shown on the
+    assessment page."). The full notice is record-only for prompts and traces:
+    `agents.prompts.RECORD_ONLY_VALUE_KEYS` drops `provider_notice` from every prompt payload
+    (security review 2026-11-17), so only the short `attribution` goes to the model host, and no
+    span attribute carries it. Building the view logs nothing (tested).
+
+    **OPEN QUESTION (not settled):** whether showing the notice once per assessment view meets
+    the provider's permission wording "with every item" is the owner's call. Switch-on condition
+    (1) is not met until the owner has answered it.
 12. **Egress.** When enabled and the model server is not declared local, start-up logs a warning
     that the tides.today item is sent to the model host with every assessment (as for PHN). The
     item is excluded from evaluation runs to Langfuse and from the item-6 capture, as the PHN
@@ -228,7 +259,9 @@ dive window touches.
     no longer available.)*
 14. **Off by default.** `DIVESAFE_TIDES_TODAY_ENABLED` defaults to false. Enabling it is the
     owner's decision, taken only once both switch-on conditions in the status are met (the
-    permission is on file since 2026-11-18). Production compose passes it to the
+    permission is on file since 2026-11-18; condition (1) is built, pending review and a manual
+    browser render, and needs the owner's answer to the OPEN QUESTION in decision 11; the owner's
+    decision to switch on is not taken). Production compose passes it to the
     api only, as `${DIVESAFE_TIDES_TODAY_ENABLED:-false}`, and `production.env.example` sets it to
     `false` (owner, 2026-11-17); both are pinned by `tests/safety/test_production_compose.py`.
 
@@ -246,9 +279,9 @@ contradictory evidence). The model sees both; the engine treats both as present.
 - **Use `tides/now`.** Rejected (decision 13).
 - **Add the host to `ALLOWED_HOSTS`.** Rejected: every default-getter connector could call it
   with no credential, and a credential could leak to other hosts.
-- **Show the full copyright text in the user view.** Not done until the provider says how it
-  wants attribution shown; the record keeps it whole. *(Reversed by the owner, 2026-11-19; see
-  decision 11.)*
+- **Show only the short attribution in the user view.** Rejected (owner, 2026-11-19): the
+  provider's permission is for the notice shown with every item; decision 11 shows it whole, once per
+  assessment view.
 
 ## Fixture
 
@@ -283,6 +316,10 @@ nothing from them is committed.
   fail.
 - The sole-source clause (§2) is met by the human gate and by official sources the diver checks;
   the software cannot check that.
+- The web page (`web/components/ProviderNotices.ts`) relies on the API for the cap of 4 provider
+  notices and for the string check: it does not cut the list itself (no `slice(0, 4)`) and does
+  not check that each entry is a string. If the API sent more, the page would be longer; React
+  still renders every entry as escaped plain text (security review, optional nit).
 
 ## Acceptance tests
 
@@ -300,7 +337,8 @@ and echoed-dates checks, the ephemeris checks (day count and coverage, location,
 range, sunrise and sunset within their day), the datum (CD only), the `source` block and the
 upstream (`tpe`), the host separation (shared list, merged or overlapping credential lists, the
 exact header name (not case-folded), the value prefix, a second scheme for either host, and a blank
-or line-breaking key value), the record-only filter for `provider_notice`, the fixed text of a
+or line-breaking key value), the record-only filter for `provider_notice`, the full notice in every user view
+(`tests/safety/test_tides_today_full_notice.py`), the fixed text of a
 validation error, the wiring, the egress warning, and a swallowed failure of each of the three
 calls. `test_known_gap_a_single_missing_high_low_pair_is_not_detected` pins the gap listed under
 Known limits.
