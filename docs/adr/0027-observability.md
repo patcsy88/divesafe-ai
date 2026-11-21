@@ -564,12 +564,17 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   upload sends `data:` URIs to a URL the server chooses, so the sender switches it off. After
   shutdown one daemon thread (`PromptCacheRefreshConsumer`) remains. The evaluation environment at
   that check (`pip freeze --exclude-editable`, 38 packages) is below. The live check against
-  `divesafe-eval` was run on 2026-11-20 from commit `731498a`, twice, against Langfuse server 4.80.0
-  (record below). The agents' egress basis was `loopback_external_opt_in`: the first scenario's
-  prompts went through a forwarding proxy on the owner's machine to the hosted evaluation model;
-  Langfuse was reached directly on `127.0.0.1:3000`. Earlier attempts with a key pair of another
-  project were refused at the project check before any dataset, item, span or score was sent, and
-  that pair was deleted. On that server the dataset-run link is stored only as the span's
+  `divesafe-eval` was run on 2026-11-20 from commit `731498a`, twice, against Langfuse server
+  4.80.0. It was run again once on 2026-11-22 (+08:00) from commit `54931e7`, because the PHN
+  removal changed `egress_gate.py` and `langfuse_checks.py`. The rerun used the same server, SDK and
+  evaluation environment and the same egress basis, and it passed (record below, updated for that
+  rerun). The two server facts (`dataset_run_link_as_span_attributes`,
+  `experiment_id_equals_server_run_id`) were observed on 2026-11-20 and not queried again, since the
+  server version is unchanged. The agents' egress basis was `loopback_external_opt_in`: the first
+  scenario's prompts went through a forwarding proxy on the owner's machine to the hosted evaluation
+  model; Langfuse was reached directly on `127.0.0.1:3000`. Earlier attempts with a key pair of
+  another project were refused at the project check before any dataset, item, span or score was
+  sent, and that pair was deleted. On that server the dataset-run link is stored only as the span's
   `experiment_*` fields: no `dataset_runs` row and no dataset-run item is written, so the public
   dataset-runs API lists no run, and "dataset run" in this section means that experiment. On both
   runs the experiment id stored on the span equalled the sender's derived id; the server stores the
@@ -722,7 +727,7 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   #### Live check record
   ```json
   {
-    "commit": "731498a467d14b10f45b249fdcdda6bcec9e5db2",
+    "commit": "54931e7a2e59f24c2585450ea51f0ab9be6081c4",
     "langfuse_version": "5.2.0",
     "base_url": "http://127.0.0.1:3000",
     "projects_read": ["divesafe-eval"],
@@ -753,11 +758,11 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     "langfuse_server_version": "4.80.0",
     "sender_sha256": {
       "tests/evaluation/langfuse_sender.py": "a5ede1e45eecce57d1d84d8bd975ccb3aec23b1df073d4cf4799633e3d246312",
-      "tests/evaluation/langfuse_checks.py": "9db1ebb8899a18ef0028fe8904930e28aea644fa30a815125ff8406440cecc91",
+      "tests/evaluation/langfuse_checks.py": "fc02d84be6e310ec5cd8ab8598b1096ace6a52629f1b0857b49969c8f3f8d3c2",
       "tests/evaluation/code_scores.py": "3439787db4fc137779b048727094832698494f553b0728b9252423165ded002c",
       "tests/evaluation/harness.py": "3d86a041e52de75f28bc0d986b59fcbe5b8db81771c3fab454b21ab1a7d18e81",
       "tests/evaluation/output_dir.py": "1e2b117489e7c6ffcaad25fda2761514ff3221441724d0332b542659bd75ace8",
-      "tests/evaluation/egress_gate.py": "801c43b9d8d030f019ea0ce92f048026d1ded972e50e8acffe4061b3aebb47d0",
+      "tests/evaluation/egress_gate.py": "4625b0827bcdd8d56972bb0202545b0968bdeb16ce35c1df1c893d26ec925ba8",
       "tests/evaluation/ablation.py": "7f7597034e516e7fc742a8b04bc60a5634397ba70851e7f42fc6f9bb7672d55a",
       "pyproject.toml#eval:langfuse": "b46857790273351e62e80fcc787ccc70ed67caa138e05289784ebf35508a0fa0",
       "tests/fixtures/open_meteo_marine_tioman_recorded_2026-10-08.json": "405af6b665f67800053459634cb35cf72281f47acdacca6e8a25f9fe0eed496e",
