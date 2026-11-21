@@ -199,6 +199,13 @@ have no encodable metric, and a ruleset with a GO band for every encodable facto
 INSUFFICIENT EVIDENCE on VALIDATED evidence. A change it cannot see (for example a new kind of
 rule) rests on review (architecture.md Known gaps).
 
+**Update 2026-11-21 (ADR 0031):** MET's tighten-only role is built (`risk/met_ranges.py`) and
+`MET_TIGHTEN_ONLY_ROLE_BUILT` is `True`. Start-up refuses `true` without the MET token, and accepts
+it with a pinned ruleset that has definitions and with the token. The owner's separate decision to
+switch it on is not enforced in code. The setting stays `false` in production until that decision.
+The condition's other half is unchanged and still pinned: GO and CAUTION stay unreachable while
+four factors cannot be encoded.
+
 Consequence: switching the setting on alone does not make GO reachable. Factors without a deployed
 rule, a missing required category and any marine warning still give INSUFFICIENT EVIDENCE.
 

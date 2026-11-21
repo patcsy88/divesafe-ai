@@ -82,9 +82,9 @@ PROD_PLAN = DivePlan(
 
 @pytest.fixture
 def met_role_built(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Opens the owner's gate (ADR 0008 Amendment 1, 2026-11-21) for the tests that prove what
-    still holds once MET's tighten-only role is built. The refusal while it is closed is in
-    test_degraded_needs_met_role.py."""
+    """Pins the owner's gate open (ADR 0008 Amendment 1, 2026-11-21; built by ADR 0031) for the
+    tests that prove what still holds once MET's tighten-only role is built. The refusal while it
+    is closed is in test_degraded_needs_met_role.py."""
     monkeypatch.setattr(settings_module, "MET_TIGHTEN_ONLY_ROLE_BUILT", True)
 
 
@@ -117,13 +117,18 @@ def _pinned_ruleset(tmp_path: Path, *definitions: dict[str, Any]) -> tuple[Path,
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _settings(path: Path, sha: str, *, on: bool) -> Settings:
+# SYNTHETIC: the flag needs a MET token (ADR 0031 item 6); no MET call is made in these tests.
+MET_TOKEN = "synthetic-met-token"
+
+
+def _settings(path: Path, sha: str, *, on: bool, met_token: bool | None = None) -> Settings:
     return Settings(
         _env_file=None,
         evidence_max_age_minutes=60,
         ruleset_path=path,
         ruleset_sha256=sha,
         degraded_may_support_go=on,
+        met_api_token=MET_TOKEN if (on if met_token is None else met_token) else None,
     )
 
 
@@ -265,6 +270,7 @@ def test_settings_accept_degraded_support_with_a_pinned_ruleset(env: dict[str, A
         degraded_may_support_go=True,
         ruleset_path=MARK_PATH,
         ruleset_sha256=MARK_SHA,
+        met_api_token=MET_TOKEN,
         **env,
     )
     assert settings.degraded_may_support_go is True  # control for the refusals above

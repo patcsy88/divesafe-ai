@@ -219,9 +219,11 @@ call made.
   `degraded` forecasts, `upstream_known=False`, one per day for wind (`FMWS`, with `FMWD`) and
   waves (`FMWH`). The whole range is kept under `ranges` (never `variables`, so no hourly rule
   reads it) and `upper` is the top of MET's stated range (not a site maximum: no gusts, can be exceeded). The quota is 3 a minute and 1,000 a day. The
-  credentialed getter refuses redirects and has its own host list. No rule uses these values yet,
-  and the engine does count a daily +08:00 range as covering the dive window (known gap,
-  risk-model.md). Wave statistic and zone extent stay unknown; the terms of use are below.
+  credentialed getter refuses redirects and has its own host list. Since ADR 0031 (2026-11-21) the
+  ranges are read only by MET's tighten-only check (`risk/met_ranges.py`): wind and wave height, for
+  an approved site where a paired definition applies, never toward GO. The engine does count a daily
+  +08:00 range as covering the dive window (known gap, risk-model.md). Wave statistic and zone
+  extent stay unknown; the terms of use are below.
   **Live in production (2026-11-17, owner).** The owner wrote `divesafe_met_api_token`, and it
   took effect when the API was recreated at 08:36 UTC (5 connectors). First production run,
   assessment `0ab20d5b…` (Tioman, window 2026-11-18): two `degraded` items for zone

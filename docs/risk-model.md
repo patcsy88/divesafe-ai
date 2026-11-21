@@ -321,6 +321,14 @@ cannot confirm the decision was saved.
   superseding the earlier acceptance: the role is built and reviewed before
   `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is switched on, or before any other change that could let GO
   or CAUTION be the result for any site (ADR 0008 Amendment 1).
+  **Update 2026-11-21 (ADR 0031): the tighten-only role is built.** One `MetRangeTightenRule` per
+  wind or wave-height definition tests the top of MET's day range across the dive's +08:00 days,
+  plus the definition's margin, against that definition's NO-GO and CAUTION limits. It gives NO-GO
+  or CAUTION, or nothing, never GO, and never covers a factor. It applies only for an approved site
+  where a paired definition applies; with the deployed ruleset that is Tiger Reef within the
+  definitions' depth, and Tioman stays open. There, missing or unusable MET data gives INSUFFICIENT
+  EVIDENCE. It is always on. Still open: the check does not see the item's age, and gusts,
+  direction, swell and the zone's extent are not covered (ADR 0031 Known gaps).
 - **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md)):**
   `PhnEtideConnector` items are DEGRADED daily predictions (high/low times and heights above chart
   datum) under `value["tide"]`, for one PHN station (not named in the response) and today plus two

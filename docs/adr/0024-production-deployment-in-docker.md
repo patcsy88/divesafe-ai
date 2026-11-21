@@ -2523,6 +2523,18 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
         taken before it, does not refuse `true`. That entry also records updating the host's
         `production.env` comment to the example's wording. The rest of the condition rests on
         review (architecture.md Known gaps).
+        **Update 2026-11-21 (ADR 0031):** in an image that includes it, MET's wind and wave-height
+        ranges tighten the result wherever a signed wind or wave-height definition applies to the
+        plan (site and depth). With `tiger-reef-2026-11-20` that is Tiger Reef within the
+        definitions' depth only. For Tioman, which has no definition, the gap stays open until a
+        Tioman definition is signed. Until that deploy, production runs without it. The flag stays
+        `false` until a separate owner decision. From that image, start-up accepts `true` in
+        production (pin, definitions and token are present); only the owner decision and review hold
+        it. An image without ADR 0031 has no MET check, and one older than the PR #53 refusal (such
+        as `d981a6a`) starts with `true`. Set the flag to `false` before rolling back to any image
+        older than ADR 0031. The rollback tag taken at the ADR 0031 deploy is the image running
+        then; if that is still `d981a6a`, it starts with `true` and has no MET check. Record that
+        tag's commit in this entry.
       - An unexpected unit or a non-numeric value gives INSUFFICIENT EVIDENCE, even when another
         item is in a NO-GO band (connectors check units, so only malformed data reaches this).
       - A conflict beyond the variant-search bounds (4 ids, 3 variants, 64 combinations) gives
