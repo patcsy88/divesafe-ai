@@ -20,10 +20,13 @@ Two distinct mechanisms, ordered by authority.
 
 The engine must eventually evaluate (`RiskFactorKind`): wind, wave height, swell, swell period,
 current, tidal current, weather, marine warnings, forecast uncertainty, data freshness and
-site-specific constraints. Today only two are evaluated, and neither needs a number:
-marine warnings (`WarningNeedsHumanReadingRule`) and data freshness (the engine's evidence
-policy). Every threshold-dependent factor has a **placeholder** (`ThresholdTbdRule`): its limit
-is `TBD - REQUIRES DOMAIN VALIDATION`, it reports that the factor is NOT evaluated and returns
+site-specific constraints. Without a ruleset only two are evaluated, and neither needs a number:
+marine warnings (`WarningNeedsHumanReadingRule`) and data freshness (the engine's evidence policy).
+Since 2026-11-21 production loads signed definitions for `wave_height`, `current`, `wind` and
+`swell_period` at one site (ADR 0024 A8, "Deploy of `d981a6a`"); a definition whose signed bands
+include a NO-GO range can return NO-GO, and GO and CAUTION stay unreachable. Every
+threshold-dependent factor has a **placeholder** (`ThresholdTbdRule`): its limit is
+`TBD - REQUIRES DOMAIN VALIDATION`, it reports that the factor is NOT evaluated and returns
 `INSUFFICIENT EVIDENCE`. `RuleResult` refuses `GO` or `CAUTION` for a `TBD` or
 `REQUIRES DOMAIN VALIDATION` threshold, and `RiskAssessment.unevaluated_factors` (stored on the
 record and shown by the API) lists every factor with no `VALIDATED` rule.
@@ -111,8 +114,10 @@ km/h, so a comparison must state its conversion.
   id, every item with that id is dropped before the rules run and an `evidence.conflict` issue is
   recorded, which then yields `evidence.connector_issues`. **A conflict can hide a more severe
   result:** a dropped item that would have crossed a signed-off limit, or a marine warning, never
-  reaches the rules, so the result is `INSUFFICIENT EVIDENCE` instead of `NO-GO`. This is latent
-  while the repository ships no validated ruleset. A human can override `INSUFFICIENT EVIDENCE`, so
+  reaches the rules, so the result is `INSUFFICIENT EVIDENCE` instead of `NO-GO`. This was latent
+  while no validated ruleset was loaded. Since 2026-11-21 production loads a signed ruleset
+  (ADR 0024 A8), so it is live for conflicts beyond the ADR 0026 capacity bounds (see the variant
+  search below; accepted by the owner, 2026-11-21). A human can override `INSUFFICIENT EVIDENCE`, so
   the dropped items are kept in the audit record as **withheld evidence**: not cited, not
   evaluated, and not passed to the engine, the agents or the prompts. They are shown, clearly
   labelled, to the human. The conflict issue names the category and says the withheld evidence was
@@ -278,11 +283,15 @@ stops the chain), and a `GO` or `CAUTION` citing no evidence (now flagged `CITES
 result is `INSUFFICIENT EVIDENCE` with the rationale "The rule cites no evidence."). A `GO` or
 `CAUTION` citing a knowledge item is not yet flagged (ADR 0022 decision 8).
 
-**Reported by the 23 Oct 2026 Code Review, still open (not yet verified or fixed):**
+**Reported by the 23 Oct 2026 Code Review, still open (not yet verified or fixed, except where
+marked):**
 
 - The `kb_privileges` sequence check passes when the object is missing (`kb_privileges.py` ~277,
   `COALESCE` gives false); a live test is needed first.
-- The GO explanation is shown only for the interim ruleset (`api/schemas.py` ~241).
+- **Verified 2026-11-21, still open:** the GO explanation is shown only for the interim ruleset
+  (`api/schemas.py` ~550). Confirmed in `d981a6a`, and live in production since 2026-11-21, when
+  the first signed ruleset was deployed: the outcome note no longer says that no dive can return
+  GO (ADR 0024 A8, "Deploy of `d981a6a`").
 - No connection pooling for PostgreSQL (`postgres.py` ~297).
 
 **Known gap (not owner-approved): a recorded decision can be reported as an error.** On
@@ -306,6 +315,12 @@ cannot confirm the decision was saved.
   for a time-resolved one is built (ADR 0008 Amendment 1, `COARSE_SPAN`). A coarse item can still
   hide a hole in a partial hourly series (dormant, as connectors reject partial data). Wind is
   km/h; limits stated in knots need an explicit, read-back conversion.
+  **Update 2026-11-21 (owner):** wind and wave-height definitions were accepted and deployed
+  without the tighten-only role (ADR 0024 A8, "Deploy of `d981a6a`"). This is accepted while GO
+  and CAUTION are unreachable; a MET range in a NO-GO band gives no NO-GO. Owner condition,
+  superseding the earlier acceptance: the role is built and reviewed before
+  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is switched on, or before any other change that could let GO
+  or CAUTION be the result for any site (ADR 0008 Amendment 1).
 - **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md)):**
   `PhnEtideConnector` items are DEGRADED daily predictions (high/low times and heights above chart
   datum) under `value["tide"]`, for one PHN station (not named in the response) and today plus two

@@ -294,6 +294,15 @@ same day needs a new name. The checkout must be clean (untracked files and ignor
 `new` must be on `origin/main`, so only a commit that passed the required checks is deployed.
 Record `old`, `new` and the literal rollback tag and image id in A8.
 
+If the chain refuses with "the checkout is not clean", run `git status --porcelain
+--untracked-files=all --ignored -- src` and remove only the `__pycache__` folders and `.DS_Store`
+files it lists, after recording in A8 what is removed, its modification time and its SHA-256
+(`shasum -a 256`); stop and investigate anything else. Never run Python, pytest or other tools from
+the production checkout except the documented `.venv-tools` commands. The ones that can import
+`src` use `-B`; the setup block's `-I -c 'import sysconfig…'` and `pip` lines run before the `.pth`
+file exists, so they cannot. One run without `-B` compiles `src/**/__pycache__`, and the chain then
+refuses (A8, 2026-11-21). `PYTHONDONTWRITEBYTECODE=1` does not apply under `-I` or `-E`.
+
 Rollback, with the literal tag from A8 (not a shell variable, which a new shell will not have):
 `docker tag divesafe-api:rollback-YYYYMMDD divesafe-api:local && C up -d --no-build --wait api`
 (`--no-build` matters: without it a missing tag would make compose build the commit being rolled
@@ -2442,6 +2451,120 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     reopens this gap for the owner's decision. The guard against a repeat is the owner's prompt, not
     the software: a start-up refusal when the tides.today key's sha256 is a configured API key hash
     is not built. Fix in the procedure: "After changing a secret file the api mounts" (above).
+  - **Deploy of `d981a6a` (2026-11-21 00:40 +08:00, 2026-11-20 16:40 UTC, owner).** PRs #47–#51
+    (ADR 0008 Amendments 1 and 2, the Langfuse sender, the ruleset mount; 11 commits over
+    `39371b1`). No migration change. The first signed ruleset was placed before the deploy:
+    `~/DiveSafe/ruleset/ruleset-96561f5aeb8d.json` (mode 0444, folder 0755), an archive copy named
+    by its full hash in `~/DiveSafe/ruleset-archive/` (folder 0700, beside `backups/`, not in it,
+    so `backup.sh` never meets an unexpected file; not covered by any backup until an off-machine
+    copy exists, condition 3), the full hash in `~/DiveSafe/records/ruleset-signoff.txt`, and both
+    `DIVESAFE_RULESET_*` lines in `production.env` (the old compose file ignored them). The signed
+    file is unchanged: its dates stay 2026-11-20 (the sign-off day; preparer and reviewers as in
+    the signed document; the loader checks the sign-off fields, not who signed); the deploy day
+    appears only here. Its definitions expire on 2027-12-31 23:59:59 +08:00. In a process already
+    running then, each yields `rule.expired.*` (INSUFFICIENT EVIDENCE, never GO; a NO-GO it would
+    have given is lost). Any start or restart after that is refused, because the loader refuses
+    expired definitions, so the API (and the rollback image) stays down until a re-reviewed
+    ruleset and its new pin are in place. Reminder not yet set (owner): the re-review and the new
+    pin must be in place before 2027-12-31 23:59:59 +08:00, or the API stops for every site. Backup
+    `divesafe-20261120T163453Z`. The previous image `c2ba9d25add8` was tagged
+    `divesafe-api:rollback-20261121` before the build; new API image `ffdb352af25d`, healthy.
+    Checks after start: the "ruleset loaded" line shows `tiger-reef-2026-11-20`, 4 definitions,
+    `ruleset_sha256` `96561f5aeb8de477265a5485b534c2ddaf410c4fc9c552a14c9de0ea8c2b7a29`, equal to
+    the pin and to the sign-off record (**not solved:** that record's line was written on
+    2026-11-21 at placement, from the placed file, not at sign-off on 2026-11-20, so these checks
+    show that the deployed file is the placed file, not that the placed file is the signed
+    document; for the next ruleset, record the full hash when the signed document is read
+    back and confirmed, before placement, and compare it at placement); in the container
+    `/ruleset/ruleset.json` is a regular file, mode 0444, read by uid 10001 with the same hash;
+    opening it for writing and creating a file in `/ruleset/` both fail with EROFS; besides the
+    `/tmp` tmpfs and Docker's own `/etc/hosts`, `/etc/hostname` and `/etc/resolv.conf`, the only
+    mounts are that read-only bind and the read-only secrets; `DIVESAFE_DEGRADED_MAY_SUPPORT_GO`
+    is `false`; health `ok`/`durable`; 0 ERROR or CRITICAL log lines. `.venv-tools` rebuilt.
+    - **What the ruleset changes.** Tiger Reef assessments within the definitions' scope (site
+      `my-pahang-tiger-reef`, and depth where a definition limits it) are evaluated against the 4
+      signed definitions. A definition whose signed bands include a NO-GO range can now return
+      NO-GO, and a NO-GO stands as the result. A definition's CAUTION or GO is kept in the rule
+      results but cannot be the result. The factors no definition covers (tidal current, weather,
+      forecast uncertainty and site constraints, which cannot be encoded yet) keep their
+      placeholders, and each returns INSUFFICIENT EVIDENCE on every assessment, so the result is
+      at least INSUFFICIENT EVIDENCE. For that reason `ruleset.threshold_factors_uncovered` and
+      `evidence.quality_insufficient_for_go` are not added and do not appear on these records.
+      They are the backstop: without the placeholders, the coverage guard would add the first,
+      and with `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` false the quality guard would add the second,
+      because no required category can have VALIDATED evidence covering a future dive window
+      (ADR 0008). A Tiger Reef assessment therefore returns NO-GO or INSUFFICIENT EVIDENCE only; GO
+      and CAUTION are both unreachable. For other sites (and Tiger Reef plans outside the depth of
+      every definition for that factor), the factors these definitions cover now report "No
+      signed-off rule for <factor> applies to this site or depth" (INSUFFICIENT EVIDENCE) instead of
+      a placeholder; the outcome is unchanged. Naming the ruleset's site and label here:
+      owner-approved, 2026-11-21 (no limit values and no rule file are in the repository).
+    - **Gap made live by this deploy:** the outcome note's sentence that no dive can currently
+      return GO is tied to an `interim` ruleset version (risk-model.md Known gaps, "The GO
+      explanation is shown only for the interim ruleset"), so since this deploy it is shown for no
+      site. The not-evaluated factors are still listed in the note.
+    - **NO-GO gaps made live by this deploy** (latent until a definition could return NO-GO;
+      all four accepted by the owner, 2026-11-21, because GO and CAUTION are unreachable):
+      - A nearer bracketing sample that the engine judges unusable can push out a valid, higher
+        one. The definition then gives CAUTION or GO, which is turned into INSUFFICIENT EVIDENCE,
+        so a NO-GO is shown as INSUFFICIENT EVIDENCE (ADR 0009 "Not solved").
+      - No definition reads MET's daily ranges (`value["ranges"]`), so a MET range in a NO-GO
+        band does not give NO-GO. The ruleset has wind and wave-height definitions, and
+        risk-model.md asks for a tighten-only role for MET's range before such a definition is
+        accepted; that role is not built. Owner condition (2026-11-21), superseding the earlier
+        acceptance in ADR 0008 Amendment 1: the role is built and reviewed before any change
+        that could let GO or CAUTION be the result for any site, including switching on
+        `DIVESAFE_DEGRADED_MAY_SUPPORT_GO`. The condition is also stated beside the flag in
+        `docker/production.env.example` and was added by hand above the flag in the host's
+        `docker/production.env` on 2026-11-21 (a copy of the example does not update an existing
+        file). Nothing enforces it (architecture.md Known gaps).
+      - An unexpected unit or a non-numeric value gives INSUFFICIENT EVIDENCE, even when another
+        item is in a NO-GO band (connectors check units, so only malformed data reaches this).
+      - A conflict beyond the variant-search bounds (4 ids, 3 variants, 64 combinations) gives
+        `evidence.conflict_unbounded` (INSUFFICIENT EVIDENCE). A variant in a NO-GO band then
+        shows as INSUFFICIENT EVIDENCE; the withheld items are shown to the human (risk-model.md,
+        "Evidence id conflicts").
+
+      Separately, after expiry a running process loses a definition's NO-GO (`rule.expired.*`); a
+      restart is refused. Recorded above, not one of the four.
+
+      None of these gaps can produce GO or CAUTION. INSUFFICIENT EVIDENCE is not a green light.
+    - **Rollback:** tag `rollback-20261121` as `divesafe-api:local` and run `C up -d --no-build
+      --wait api`, **keeping** both `DIVESAFE_RULESET_*` lines: the checkout and its compose file
+      stay at `d981a6a`, which requires them, so the old image is given the same ruleset and pin.
+      Checked 2026-11-21 in a throwaway container (`--network none --read-only --cap-drop ALL
+      --security-opt no-new-privileges`, the file mounted read-only): the loader of
+      `divesafe-api:rollback-20261121` (`c2ba9d25add8`), `load_ruleset_bytes` with that image's
+      site list, accepts the file (4 rules, 0 refused, same hash); the old image's start-up with
+      `DIVESAFE_RULESET_PATH` and the pin was not run. Records written since this deploy (the
+      first with ADR 0008 Amendment 1) return 500 on the old image ("Rollback after ADR 0008
+      Amendment 1", below).
+  - **Gap from this deploy (`__pycache__`):** the first run of the chain was refused ("the checkout
+    is not clean") by `src/divesafe/__pycache__/__init__.cpython-314.pyc`, written on 2026-11-20
+    about 12 minutes after the previous image was built, most likely by a Python process run on
+    the host against the production checkout (only the package `__init__` was compiled, which
+    suggests a bare `import divesafe`). Git and `.dockerignore` ignore it; the
+    chain's check of ignored files under `src` refused it as designed, before anything was fetched
+    or tagged. The owner removed that directory and ran the chain again. Fix in the procedure
+    ("How to run it", after the chain, and docs/knowledge-loader.md): any Python that can import
+    the checkout's `src` runs with `-B`; `PYTHONDONTWRITEBYTECODE=1` alone is not enough, because
+    `-I` and `-E` ignore `PYTHON*` variables. After the Tiger Reef manifest build `git status
+    --porcelain --untracked-files=all --ignored -- src` printed nothing.
+  - **Tiger Reef note loaded (2026-11-21, owner).** `tiger-reef-currents` v1 (site
+    `my-pahang-tiger-reef`, 1 chunk, all three attestations, text checked for third-party content
+    beforehand), manifest `8b11ba8f…d7be0` built with `d981a6a` (the host hash equal to the
+    `--check` output). Owner approval recorded at 01:17:05 UTC, before the load; loaded as DRAFT
+    01:19:21 UTC; APPROVED 01:19:31 UTC with `hash_checked = true`; `tioman-site-guide` v3
+    APPROVED and v1, v2 WITHDRAWN unchanged. The earlier draft and manifest in the corpus folder
+    were moved to `~/DiveSafe/corpus-archive/` first. Backup `divesafe-20261121T012045Z` (scratch
+    restore equal: 25 assessments, 8 decided) with both record CSVs. The egress basis is not
+    `declared_local` and `DIVESAFE_LLM_KNOWLEDGE_HOST` is empty, so the item is withheld from the
+    model host; it is expected to appear as `kb:` evidence on Tiger Reef assessment records,
+    readable by keys that can read those records. Not yet checked on a real assessment record.
+  - **Test runs of 2026-11-20 left pending.** The four test runs of 2026-11-20 (`6205ac42…`,
+    `d8e01656…`, `dddcf8cc…`, `cf38becd…`) stay `PENDING_HUMAN`: they were not decided within the
+    180-minute decision window, and a decision attempt at about 10:30 UTC was refused with 409 as
+    designed. They were deploy and switch-on tests, not planned dives.
   - **Rollback after ADR 0008 Amendment 1.** Rolling back to an earlier image breaks reads of
     records written after this deploy (`rests_on_degraded_evidence`, `extra="forbid"`): the API
     returns 500 for them until it is rolled forward.
