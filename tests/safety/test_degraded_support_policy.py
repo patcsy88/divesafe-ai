@@ -24,6 +24,7 @@ from tests.unit.test_ruleset_loader import tioman
 from divesafe.api.schemas import DEGRADED_EVIDENCE_NOTE, AssessmentView
 from divesafe.api.state import INTERIM_REQUIRED_CATEGORIES, build_engine
 from divesafe.config import Settings
+from divesafe.config import settings as settings_module
 from divesafe.data import TIOMAN_ISLAND
 from divesafe.domain import (
     AssessmentRecord,
@@ -77,6 +78,14 @@ ENVIRONMENTS = pytest.mark.parametrize(
 PROD_PLAN = DivePlan(
     site_id=TIOMAN_ISLAND.id, planned_start=NOW + H, planned_duration_minutes=30, max_depth_m=10
 )
+
+
+@pytest.fixture
+def met_role_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opens the owner's gate (ADR 0008 Amendment 1, 2026-11-21) for the tests that prove what
+    still holds once MET's tighten-only role is built. The refusal while it is closed is in
+    test_degraded_needs_met_role.py."""
+    monkeypatch.setattr(settings_module, "MET_TIGHTEN_ONLY_ROLE_BUILT", True)
 
 
 class _Fixed:
@@ -248,6 +257,7 @@ def test_the_web_copy_of_the_note_equals_the_api_constant() -> None:
     assert json.dumps(DEGRADED_EVIDENCE_NOTE, ensure_ascii=False) in web.read_text("utf8")
 
 
+@pytest.mark.usefixtures("met_role_built")
 @ENVIRONMENTS
 def test_settings_accept_degraded_support_with_a_pinned_ruleset(env: dict[str, Any]) -> None:
     settings = Settings(
@@ -287,6 +297,7 @@ def test_build_engine_refuses_degraded_support_that_bypassed_the_settings_check(
     assert WARNING_TEXT not in [r.getMessage() for r in caplog.records]
 
 
+@pytest.mark.usefixtures("met_role_built")
 def test_build_engine_refuses_degraded_support_with_a_ruleset_without_definitions(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -300,6 +311,7 @@ def test_build_engine_refuses_degraded_support_with_a_ruleset_without_definition
     assert off is not None and off.policy.degraded_may_support_go is False
 
 
+@pytest.mark.usefixtures("met_role_built")
 def test_build_engine_passes_the_setting_to_the_policy(tmp_path: Path) -> None:
     on = _production_engine(tmp_path, on=True)
     off = _production_engine(tmp_path, on=False)
@@ -310,6 +322,7 @@ def test_build_engine_passes_the_setting_to_the_policy(tmp_path: Path) -> None:
 # --- c. the start-up warning -----------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("met_role_built")
 @pytest.mark.parametrize("on", [True, False])
 def test_the_start_up_warning_is_logged_exactly_when_on(
     on: bool, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -382,6 +395,7 @@ def test_a_required_category_without_validated_cover_sets_the_marker() -> None:
 # --- e. placeholders and signed limits still decide ------------------------------------------
 
 
+@pytest.mark.usefixtures("met_role_built")
 @pytest.mark.parametrize("on", [True, False])
 def test_placeholders_still_block_go_on_degraded_evidence(on: bool, tmp_path: Path) -> None:
     result = _production_engine(tmp_path, on=on).assess(PROD_PLAN, _all_degraded(1.0), NOW)
@@ -395,6 +409,7 @@ def test_placeholders_still_block_go_on_degraded_evidence(on: bool, tmp_path: Pa
     assert result.rests_on_degraded_evidence is False
 
 
+@pytest.mark.usefixtures("met_role_built")
 @pytest.mark.parametrize("on", [True, False])
 def test_a_no_go_limit_still_gives_no_go_on_degraded_evidence(on: bool, tmp_path: Path) -> None:
     result = _production_engine(tmp_path, on=on).assess(PROD_PLAN, _all_degraded(4.0), NOW)

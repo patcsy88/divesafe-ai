@@ -16,6 +16,7 @@ from divesafe.api.auth import Authenticator, build_authenticator
 from divesafe.api.ratelimit import Limit, RateLimiter
 from divesafe.api.tracing import check_tracing_startup
 from divesafe.config import Settings
+from divesafe.config import settings as settings_module
 from divesafe.config.loader_settings import LOADER_FIELD, LOADER_URL_KEY, SECRETS_DIR_KEY
 from divesafe.config.secret_files import secret_file_name
 from divesafe.data import (
@@ -64,10 +65,12 @@ from divesafe.services import (
     kb_attestation,
 )
 
-# Interim and unreviewed: tide predictions are DEGRADED (tides.today, ADR 0029, and PHN e-Tide,
-# ADR 0021, both off by default) and no limit is signed off yet, so assessments are always
-# INSUFFICIENT EVIDENCE. This is the honest state; see docs/data-sources.md. Replace through a
-# reviewed ruleset, not at runtime.
+# The required categories. Tide predictions are DEGRADED (tides.today, ADR 0029, and PHN e-Tide,
+# ADR 0021, both off by default). Signed-off definitions come only from a reviewed ruleset file
+# (ADR 0009); factors without one keep their placeholders, so GO and CAUTION stay unreachable
+# while tidal current, weather, forecast uncertainty and site constraints cannot be encoded
+# (pinned by tests/safety/test_degraded_needs_met_role.py, section d). See docs/data-sources.md.
+# Change through review, not at runtime.
 INTERIM_REQUIRED_CATEGORIES: frozenset[DataCategory] = frozenset(
     {
         DataCategory.WAVES_SWELL,
@@ -159,6 +162,9 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
     if degraded_support and (settings.ruleset_path is None or settings.ruleset_sha256 is None):
         # Repeats the Settings check: `model_copy` and `model_construct` skip validators.
         raise RuntimeError("DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a pinned signed-off ruleset")
+    if degraded_support and not settings_module.MET_TIGHTEN_ONLY_ROLE_BUILT:
+        # Repeats the Settings check, for the same reason (owner condition, 2026-11-21).
+        raise RuntimeError(settings_module.DEGRADED_NEEDS_MET_ROLE)
     policy = EvidencePolicy(
         INTERIM_REQUIRED_CATEGORIES,
         timedelta(minutes=settings.evidence_max_age_minutes),

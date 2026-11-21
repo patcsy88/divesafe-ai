@@ -6,7 +6,7 @@ import ipaddress
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,6 +52,14 @@ def agent_stage_budget(
 _DEGRADED_NEEDS_RULESET = (
     "DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a signed-off ruleset pinned with "
     "DIVESAFE_RULESET_PATH and DIVESAFE_RULESET_SHA256"
+)
+# Owner condition (2026-11-21, ADR 0008 Amendment 1): DIVESAFE_DEGRADED_MAY_SUPPORT_GO is refused
+# until MET's tighten-only role for its daily ranges is built and reviewed. Only the PR that builds
+# that role sets this to True. Read at call time (`Settings` and `build_engine`).
+MET_TIGHTEN_ONLY_ROLE_BUILT: Final = False
+DEGRADED_NEEDS_MET_ROLE = (
+    "DIVESAFE_DEGRADED_MAY_SUPPORT_GO is refused until MET's tighten-only role is built and "
+    "reviewed (ADR 0008 Amendment 1, owner 2026-11-21)"
 )
 
 
@@ -188,7 +196,8 @@ class Settings(BaseSettings):
     # Optional pin: the app refuses to start if the ruleset file's SHA-256 differs from this.
     ruleset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     # ADR 0008 Amendment 1 (owner): DEGRADED evidence may support GO and CAUTION. Needs a pinned
-    # signed-off ruleset in every environment.
+    # signed-off ruleset in every environment, and is refused until MET's tighten-only role is
+    # built (`MET_TIGHTEN_ONLY_ROLE_BUILT`, owner 2026-11-21).
     degraded_may_support_go: bool = False
     decision_max_age_minutes: int | None = Field(default=None, gt=0)
 
@@ -283,6 +292,8 @@ class Settings(BaseSettings):
             self.ruleset_path is None or self.ruleset_sha256 is None
         ):
             raise ValueError(_DEGRADED_NEEDS_RULESET)
+        if self.degraded_may_support_go and not MET_TIGHTEN_ONLY_ROLE_BUILT:
+            raise ValueError(DEGRADED_NEEDS_MET_ROLE)
         return self
 
     def _check_knowledge_host(self) -> None:
