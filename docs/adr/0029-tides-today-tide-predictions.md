@@ -525,8 +525,17 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   value "probably understates the channel". The items stay DEGRADED: this judgement does not by
   itself let them support GO or CAUTION (ADR 0008). The strong-current hazard named by the owner's
   trial report and PADI's page still does not reach the human until a reviewed Tiger Reef guide is
-  loaded (note B).
-- **Known gap:** the strong-current hazard does not reach the human (note B not loaded).
+  loaded (note B; loaded 2026-11-21, not yet seen on a record; see the Known gap).
+- **Known gap:** the strong-current hazard does not reach the human (note B loaded 2026-11-21 but
+  not yet seen on a record; see the update below).
+  **Update 2026-11-21:** note B (`tiger-reef-currents` v1) is loaded and APPROVED (ADR 0024 A8
+  "Tiger Reef note loaded"). With `DIVESAFE_LLM_KNOWLEDGE_HOST` empty it is withheld from the model
+  host. It is expected to appear as `kb:` evidence on Tiger Reef assessment records. That has not
+  been seen on a real record, so the gap stays open. Close it when a Tiger Reef record created
+  after 2026-11-21 01:19:31 UTC holds `kb:tiger-reef-currents:1:1` in its evidence,
+  `withheld_knowledge` lists `tiger-reef-currents` version 1 chunk 1, and the human view shows its
+  text. Even then no rule reads it: it informs the human, it changes no outcome, and
+  `tidal_current` stays not evaluated.
 - **Tests:** `tests/unit/test_tiger_reef_site.py` (synthetic fixture only), including a table
   test over every `LOCATIONS` entry, marked `safety`: the key is a registered site, the stated
   kilometres equal the haversine distance from that site's own coordinates, the note is not

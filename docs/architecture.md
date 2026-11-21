@@ -228,9 +228,15 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   `local_guidance` meaning scope, the prompt cap for non-ASCII corpora, the shared thread pool
   for `retrieve`, and the `_retrieve` crash contract; see ADR 0022 Known gaps 1-30 (production
   refuses to start without the knowledge connector since 2026-11-12).
-- **Code Review PDF (23 Oct 2026), reported, not yet verified:** only the GO explanation shown for
-  interim rulesets, the `kb_privileges` sequence check and PostgreSQL connection pooling remain;
-  see [risk-model.md](risk-model.md) Known gaps.
+- **DEGRADED-flag condition not enforced** (owner, 2026-11-21): MET's tighten-only role for its
+  daily ranges must be built and reviewed before `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is switched
+  on, or before any other change that could let GO or CAUTION be the result for any site (ADR 0008
+  Amendment 1). Start-up checks only that a pinned ruleset is loaded; nothing refuses `true`
+  without the role, and the second half rests on review alone.
+- **Code Review PDF (23 Oct 2026):** three items remain. The GO explanation shown only for
+  interim rulesets is verified (2026-11-21) and live in production since the first signed ruleset
+  was deployed. The `kb_privileges` sequence check and PostgreSQL connection pooling are reported,
+  not yet verified. See [risk-model.md](risk-model.md) Known gaps.
 - **Durable storage:** PostgreSQL adapter built and tested ([ADR 0012](adr/0012-postgresql-assessment-repository.md)).
   Still open: a migration tool, record hashing for tamper evidence, connection pooling.
 - **Roles and authorization:** keys carry explicit roles (ADR 0013); a less severe human outcome

@@ -93,7 +93,9 @@ and recorded in this ADR, together with the compensating controls.
   `evidence.conflict` issue is recorded, then `evidence.connector_issues`, so the result is
   INSUFFICIENT EVIDENCE. **A conflict can hide a more severe result** (an item that would have
   crossed a signed-off limit, or a marine warning): the result is INSUFFICIENT EVIDENCE instead of
-  NO-GO. This is latent while the repository ships no validated ruleset. A human can override
+  NO-GO. This was latent while no validated ruleset was loaded. Since 2026-11-21 production loads
+  a signed ruleset (ADR 0024 A8), so it is live for conflicts beyond the ADR 0026 capacity bounds
+  (see the variant search below; accepted by the owner, 2026-11-21). A human can override
   INSUFFICIENT EVIDENCE, so the dropped items are kept in the audit record as withheld evidence
   (not cited, not evaluated, not passed to the engine, agents or prompts) and shown clearly
   labelled to the human; the conflict issue names the category and says the withheld evidence was
@@ -181,8 +183,18 @@ factors cannot be encoded and GO and CAUTION are unreachable in production. What
 acceptance. `COARSE_SPAN` passes the numeric-literal scan only because small integers are allowed;
 `test_the_coarse_span_is_one_day` is what protects its value.
 
-Consequence: this alone does not make GO reachable. Factors without a deployed rule, a missing
-required category and any marine warning still give INSUFFICIENT EVIDENCE.
+**Owner condition (2026-11-21), superseding the acceptance above for switching the setting on:**
+MET's tighten-only role must be built and reviewed before `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is
+switched on, or before any other change that could let GO or CAUTION be the result for any site. The
+first signed ruleset (deployed 2026-11-21, ADR 0024 A8 "Deploy of `d981a6a`") has wind and
+wave-height definitions, and none reads MET's daily ranges. The gap stays accepted only while GO and
+CAUTION are unreachable. Not enforced: start-up refuses the setting only without a pinned ruleset,
+so with today's ruleset `true` would start (GO and CAUTION would still be unreachable; see
+"Consequence" below). The condition rests on the owner and on review; a start-up refusal or safety
+test that ties the setting to the built role is a follow-up (architecture.md Known gaps).
+
+Consequence: switching the setting on alone does not make GO reachable. Factors without a deployed
+rule, a missing required category and any marine warning still give INSUFFICIENT EVIDENCE.
 
 risk-reviewer sign-off (2026-11-20): no blockers. Reviewed the setting, the Settings and
 `build_engine` refusals, the per-category `tides` hold, the coarse-daily hold, the

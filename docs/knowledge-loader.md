@@ -190,6 +190,11 @@ cd /Users/patcsy88/DiveSafe/app && rm -rf .venv-tools && c=$(mktemp) \
 rm -f "${c:-}"
 ```
 
+Once the setup block has written `divesafe-src.pth`, do not run `.venv-tools/bin/python` without
+`-B` (for example to check that `divesafe` imports): importing writes `src/**/__pycache__`, and the
+deploy chain and the manifest build then refuse (ADR 0024 A8, 2026-11-21).
+`PYTHONDONTWRITEBYTECODE=1` does not help under `-I`.
+
 Then run the block (it changes to `/Users/patcsy88/DiveSafe/app` itself, so the checked tree and
 the venv are the same). It stops if `git` fails, if the checkout has any tracked or untracked
 change, or if `src` holds an ignored file (a stray `.pyc` or `__pycache__` could be imported; `-B`

@@ -1,7 +1,7 @@
 # ADR 0009: Signed-off rule definitions
 
-- Status: Accepted. No definition exists yet; nothing is active until a qualified person
-  supplies and signs one (docs/domain-validation/).
+- Status: Accepted. The repository ships no definition. Production has loaded one signed
+  ruleset since 2026-11-21 (ADR 0024 A8, "Deploy of `d981a6a`").
 - Date: 2026-10-09
 
 ## Context
@@ -107,7 +107,7 @@ settable by untrusted parties. A detached signature would be stronger and is not
   sample can force NO-GO (conservative, but it costs availability), and a nearer low-value sample
   that the engine judges unusable can displace an older valid high one, in which case the result
   cites an unusable item and is downgraded to INSUFFICIENT EVIDENCE, hiding a NO-GO. Neither can
-  produce GO.
+  produce GO. Live since 2026-11-21 (ADR 0024 A8); accepted by the owner.
 - **Symlinks are followed** when reading the ruleset path; the file is trusted configuration and
   the pin covers its content. In production (ADR 0024) the path is a read-only bind mount: Docker
   resolves a symlink at the host path when the container starts, and the container sees a plain
@@ -131,3 +131,4 @@ settable by untrusted parties. A detached signature would be stronger and is not
 ## Open question: expired rules
 
 An expired rule is reported (`rule.expired.*`) and not run, so a NO-GO it would have given is lost. Option: run it and keep only a NO-GO. This needs the risk owner's decision before any change.
+Live since 2026-11-21 for the deployed ruleset (expiry 2027-12-31 23:59:59 +08:00, ADR 0024 A8).

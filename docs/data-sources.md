@@ -269,6 +269,27 @@ call made.
     model, no validity window** (`valid_from` and `valid_to` are null). The date is a calendar day
     at +08:00. Wave height does not say which statistic it is (significant height or maximum).
   - `start_date` must be today or later: no history.
+  **Findings 2026-11-20 (probe with the production token; no connector added or changed).** The
+  token was read from `docker/secrets/divesafe_met_api_token` into an unexported variable of the
+  probe script (`TOK=$(tr -d '\r\n' < …)`), written by the shell builtin `printf` to `curl`'s stdin
+  as the `Authorization: METToken` header only (`-H @-`), and unset afterwards; it was never on a
+  command line, in the environment or in shell history. https only, no redirects. At most 10 GET
+  requests, 21 s apart: at most 3 in any 60 s, the public page's limit, so any production call in
+  the same minute would have exceeded it (not checked). The requests shared the token's quota
+  with production, whose rate limiter does not see them; a 429 to the API would have made the
+  affected assessments INSUFFICIENT EVIDENCE (fails closed). The responses were read and then
+  deleted; none is a fixture.
+  - `/locations` with `locationcategoryid` `TOURISTDEST` and `TOWN` includes `LOCATION:329`
+    `PULAU TIOMAN`, `LOCATION:131` `MERSING` and `LOCATION:195` `KUALA ROMPIN`. They are named
+    places; whether any has a weather station behind it is not stated.
+  - Requests for hourly observations (`/data?datasetid=OBSERVATION&datacategoryid=HOURLY`, for
+    today, with and without `locationid`) returned HTTP 403 with this token. The reason is not on
+    file (the responses were deleted). MET also returned 403 on 2026-10-16 for a wrong
+    `locationcategoryid` (findings above), so a 403 shows only that a request was refused, not
+    why: a separate grant for observations is one reading, a wrong parameter another. MET has not
+    been asked. Until a request with this token succeeds, no MET observation connector is built.
+    An observation cannot cover a future dive window (ADR 0008), so it could not by itself make
+    GO or CAUTION reachable.
 - **Not verified:** GEBCO, EMODnet, Meteomatics.
 - **Open-Meteo `visibility` is atmospheric**, not underwater: its docs describe viewing distance
   influenced by cloud, humidity and aerosols. It must never stand in for dive visibility.
