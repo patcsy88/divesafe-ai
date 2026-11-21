@@ -228,11 +228,15 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   `local_guidance` meaning scope, the prompt cap for non-ASCII corpora, the shared thread pool
   for `retrieve`, and the `_retrieve` crash contract; see ADR 0022 Known gaps 1-30 (production
   refuses to start without the knowledge connector since 2026-11-12).
-- **DEGRADED-flag condition not enforced** (owner, 2026-11-21): MET's tighten-only role for its
-  daily ranges must be built and reviewed before `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is switched
-  on, or before any other change that could let GO or CAUTION be the result for any site (ADR 0008
-  Amendment 1). Start-up checks only that a pinned ruleset is loaded; nothing refuses `true`
-  without the role, and the second half rests on review alone.
+- **DEGRADED-flag condition, enforced for the flag only** (owner, 2026-11-21): MET's
+  tighten-only role for its daily ranges must be built and reviewed before
+  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is switched on, or before any other change that could let GO
+  or CAUTION be the result for any site (ADR 0008 Amendment 1). Start-up refuses `true` while
+  `MET_TIGHTEN_ONLY_ROLE_BUILT` is `False`. For other changes,
+  `tests/safety/test_degraded_needs_met_role.py` pins that four factors have no encodable metric
+  and that a ruleset with a GO band for every encodable factor, on VALIDATED evidence covering
+  the window, still gives INSUFFICIENT EVIDENCE; anything that test cannot see rests on review.
+  In production only from the deploy that includes the refusal.
 - **Code Review PDF (23 Oct 2026):** three items remain. The GO explanation shown only for
   interim rulesets is verified (2026-11-21) and live in production since the first signed ruleset
   was deployed. The `kb_privileges` sequence check and PostgreSQL connection pooling are reported,

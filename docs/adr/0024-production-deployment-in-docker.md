@@ -2517,7 +2517,12 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
         `DIVESAFE_DEGRADED_MAY_SUPPORT_GO`. The condition is also stated beside the flag in
         `docker/production.env.example` and was added by hand above the flag in the host's
         `docker/production.env` on 2026-11-21 (a copy of the example does not update an existing
-        file). Nothing enforces it (architecture.md Known gaps).
+        file). Nothing enforces it in `d981a6a`. The start-up refusal
+        (`MET_TIGHTEN_ONLY_ROLE_BUILT`, ADR 0008 Amendment 1) applies in production only from
+        the deploy that ships it (its own entry here); an older image, including any rollback tag
+        taken before it, does not refuse `true`. That entry also records updating the host's
+        `production.env` comment to the example's wording. The rest of the condition rests on
+        review (architecture.md Known gaps).
       - An unexpected unit or a non-numeric value gives INSUFFICIENT EVIDENCE, even when another
         item is in a NO-GO band (connectors check units, so only malformed data reaches this).
       - A conflict beyond the variant-search bounds (4 ids, 3 variants, 64 combinations) gives

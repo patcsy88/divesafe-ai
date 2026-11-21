@@ -188,10 +188,16 @@ MET's tighten-only role must be built and reviewed before `DIVESAFE_DEGRADED_MAY
 switched on, or before any other change that could let GO or CAUTION be the result for any site. The
 first signed ruleset (deployed 2026-11-21, ADR 0024 A8 "Deploy of `d981a6a`") has wind and
 wave-height definitions, and none reads MET's daily ranges. The gap stays accepted only while GO and
-CAUTION are unreachable. Not enforced: start-up refuses the setting only without a pinned ruleset,
-so with today's ruleset `true` would start (GO and CAUTION would still be unreachable; see
-"Consequence" below). The condition rests on the owner and on review; a start-up refusal or safety
-test that ties the setting to the built role is a follow-up (architecture.md Known gaps).
+CAUTION are unreachable. Enforced in code for the setting (2026-11-21; in production from the
+deploy that includes it): start-up refuses `true`, even with a pinned ruleset, while
+`MET_TIGHTEN_ONLY_ROLE_BUILT` in `config/settings.py` is `False` (`Settings` and again in
+`build_engine`; `tests/safety/test_degraded_needs_met_role.py`). Only the PR that builds and
+reviews the role sets it to `True`, and it must change that safety test with it, so risk-reviewer
+reviews that PR (AGENTS.md section 13). Other changes are pinned by a safety test
+as far as it can see: `tidal_current`, `weather`, `forecast_uncertainty` and `site_constraint`
+have no encodable metric, and a ruleset with a GO band for every encodable factor still gives
+INSUFFICIENT EVIDENCE on VALIDATED evidence. A change it cannot see (for example a new kind of
+rule) rests on review (architecture.md Known gaps).
 
 Consequence: switching the setting on alone does not make GO reachable. Factors without a deployed
 rule, a missing required category and any marine warning still give INSUFFICIENT EVIDENCE.
