@@ -568,8 +568,11 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   4.80.0. It was run again once on 2026-11-22 (+08:00) from commit `54931e7`, because the PHN
   removal changed `egress_gate.py` and `langfuse_checks.py`. The rerun used the same server, SDK and
   evaluation environment and the same egress basis, and it passed (record below, updated for that
-  rerun). The rerun observed again the commit, `langfuse_server_version`, the four `calls`,
-  `otlp_status` and `dataset_create_existing_status` (the sender refuses unless each matches);
+  rerun). The rerun observed again the commit (read by the sender from the clean tree), the four
+  `calls` and `otlp_status` (the sender refuses unless each equals its constant),
+  `dataset_create_existing_status` (recorded only; the dataset already existed, and `DATASET_CALL`
+  requires the 200 it returned) and `langfuse_server_version` (from the health call; the sender
+  checks only its shape, and the value is the one the live check printed);
   `dataset_run_link_as_span_attributes` and `experiment_id_equals_server_run_id` were observed on
   2026-11-20 and carried over, since the server version is unchanged. The agents' egress basis was
   `loopback_external_opt_in`: the first scenario's prompts went through a forwarding proxy on the
