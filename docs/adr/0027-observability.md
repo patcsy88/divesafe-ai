@@ -568,35 +568,36 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   4.80.0. It was run again once on 2026-11-22 (+08:00) from commit `54931e7`, because the PHN
   removal changed `egress_gate.py` and `langfuse_checks.py`. The rerun used the same server, SDK and
   evaluation environment and the same egress basis, and it passed (record below, updated for that
-  rerun). The two server facts (`dataset_run_link_as_span_attributes`,
-  `experiment_id_equals_server_run_id`) were observed on 2026-11-20 and not queried again, since the
-  server version is unchanged. The agents' egress basis was `loopback_external_opt_in`: the first
-  scenario's prompts went through a forwarding proxy on the owner's machine to the hosted evaluation
-  model; Langfuse was reached directly on `127.0.0.1:3000`. Earlier attempts with a key pair of
-  another project were refused at the project check before any dataset, item, span or score was
-  sent, and that pair was deleted. On that server the dataset-run link is stored only as the span's
-  `experiment_*` fields: no `dataset_runs` row and no dataset-run item is written, so the public
-  dataset-runs API lists no run, and "dataset run" in this section means that experiment. On both
-  runs the experiment id stored on the span equalled the sender's derived id; the server stores the
-  id the sender sends rather than deriving its own, so on this server
-  `experiment_id_equals_server_run_id` compares with the span's stored experiment id. That the
-  server finds run-level scores by `dataset_run_id` equal to that id rests on its code (write mode
-  `events_only`), not on an observed marker: the live check sends none. Before the first full run is
-  cited, a read-only query confirms that its `run.completion_marker` score is stored with
-  `dataset_run_id` equal to that run's experiment id; until then, only the local file is cited. This
-  gate is a manual step, not enforced by code or a test; its result is noted in ADR 0030 with the
-  date and no ids, and the query output (which holds score, run and project ids) is never put in
-  git. The live check is run from the owner's shell with the sender's code from the change under
-  review (never an uncommitted probe; the record names the commit it was run from, as information
-  only, read with `git -C <repository root> rev-parse HEAD` (the root taken from the sender module's
-  own file path, never from the working directory or the environment) with every `GIT_*` variable
-  removed from that command's environment. The clean-worktree check runs on EVERY run of the sender,
-  not only the live check: it refuses unless `git -c core.fsmonitor=false -c
-  core.untrackedCache=false --no-optional-locks status --porcelain --untracked-files=all
-  --ignore-submodules=none`, run the same way, is empty (the two `-c` flags switch off the
-  file-system monitor and the untracked cache, so a stale cache cannot report a clean tree;
-  `--no-optional-locks` stops `status` taking the index lock; a failing `git` command, or a
-  `rev-parse` output that is not 40 hex characters, also refuses)).
+  rerun). The rerun observed again the commit, `langfuse_server_version`, the four `calls`,
+  `otlp_status` and `dataset_create_existing_status` (the sender refuses unless each matches);
+  `dataset_run_link_as_span_attributes` and `experiment_id_equals_server_run_id` were observed on
+  2026-11-20 and carried over, since the server version is unchanged. The agents' egress basis was
+  `loopback_external_opt_in`: the first scenario's prompts went through a forwarding proxy on the
+  owner's machine to the hosted evaluation model; Langfuse was reached directly on `127.0.0.1:3000`.
+  Earlier attempts with a key pair of another project were refused at the project check before any
+  dataset, item, span or score was sent, and that pair was deleted. On that server the dataset-run
+  link is stored only as the span's `experiment_*` fields: no `dataset_runs` row and no dataset-run
+  item is written, so the public dataset-runs API lists no run, and "dataset run" in this section
+  means that experiment. On both 2026-11-20 runs the experiment id stored on the span equalled the
+  sender's derived id (it was not queried again on 2026-11-22); the server stores the id the sender
+  sends rather than deriving its own, so on this server `experiment_id_equals_server_run_id`
+  compares with the span's stored experiment id. That the server finds run-level scores by
+  `dataset_run_id` equal to that id rests on its code (write mode `events_only`), not on an observed
+  marker: the live check sends none. Before the first full run is cited, a read-only query confirms
+  that its `run.completion_marker` score is stored with `dataset_run_id` equal to that run's
+  experiment id; until then, only the local file is cited. This gate is a manual step, not enforced
+  by code or a test; its result is noted in ADR 0030 with the date and no ids, and the query output
+  (which holds score, run and project ids) is never put in git. The live check is run from the
+  owner's shell with the sender's code from the change under review (never an uncommitted probe; the
+  record names the commit it was run from, as information only, read with `git -C <repository root>
+  rev-parse HEAD` (the root taken from the sender module's own file path, never from the working
+  directory or the environment) with every `GIT_*` variable removed from that command's environment.
+  The clean-worktree check runs on EVERY run of the sender, not only the live check: it refuses
+  unless `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks status
+  --porcelain --untracked-files=all --ignore-submodules=none`, run the same way, is empty (the two
+  `-c` flags switch off the file-system monitor and the untracked cache, so a stale cache cannot
+  report a clean tree; `--no-optional-locks` stops `status` taking the index lock; a failing `git`
+  command, or a `rev-parse` output that is not 40 hex characters, also refuses)).
 
   **Freeze by file hashes (owner decision, 2026-11-20, on the risk-reviewer's finding):** the
   record is frozen against the files it was made with, not against git history. An earlier
@@ -723,6 +724,9 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   uvicorn==0.54.0
   wrapt==2.5.2
   ```
+
+  The record's `commit` is the 2026-11-22 rerun's; its `dataset_run_link_as_span_attributes` and
+  `experiment_id_equals_server_run_id` values are from the 2026-11-20 runs (commit `731498a`).
 
   #### Live check record
   ```json
