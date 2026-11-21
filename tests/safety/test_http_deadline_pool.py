@@ -1,5 +1,6 @@
 """Total deadline, bounded worker pool and cancellation of `divesafe.data.http` (Code Review
-finding 4), for BOTH getters (GET `UrllibJsonGetter`, POST `UrllibFormPostJsonGetter`).
+finding 4), for the GET getter `UrllibJsonGetter` (the PHN POST getter was removed with ADR 0021;
+the `kind` parameter is kept so a second getter can be added back to `KINDS`).
 
 Offline: `urllib.request.build_opener` is patched with a fake opener and responses are fake
 objects; no socket is opened. Each scenario takes a module (the real one or a mutated COPY made
@@ -43,12 +44,9 @@ from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
 
 pytestmark = pytest.mark.safety
 
-KINDS = ("get", "post")
-URL = {
-    "get": "https://api.data.gov.my/weather/warning",
-    "post": "https://etide.hydro.gov.my/api/tide",
-}
-LABEL = {"get": "api.data.gov.my/weather/warning", "post": "etide.hydro.gov.my/api/tide"}
+KINDS = ("get",)
+URL = {"get": "https://api.data.gov.my/weather/warning"}
+LABEL = {"get": "api.data.gov.my/weather/warning"}
 SECRET = "TOPSECRETQUERY"
 PARAMS = {"q": SECRET}
 
@@ -114,8 +112,10 @@ def json_once() -> Callable[[int], bytes]:
 
 
 def make(mod: Any, kind: str, timeout: float, deadline: float, max_bytes: int = 1000) -> Any:
-    cls = mod.UrllibJsonGetter if kind == "get" else mod.UrllibFormPostJsonGetter
-    return cls(timeout_seconds=timeout, deadline_seconds=deadline, max_bytes=max_bytes)
+    assert kind == "get"
+    return mod.UrllibJsonGetter(
+        timeout_seconds=timeout, deadline_seconds=deadline, max_bytes=max_bytes
+    )
 
 
 def run(getter: Any, kind: str) -> tuple[Exception | None, Any]:
@@ -239,7 +239,7 @@ def s_late(mod: Any, kind: str) -> list[str]:
     """(c)(e): an expired deadline opens nothing; a late error is a timeout, an early one not."""
     bad: list[str] = []
     url = URL[kind]
-    request = urllib.request.Request(url, data=b"a=1" if kind == "post" else None)
+    request = urllib.request.Request(url)
 
     def attempt(seconds: float, delay: float, error: BaseException) -> tuple[str, Opener]:
         def behave(r: Any, t: float) -> Any:

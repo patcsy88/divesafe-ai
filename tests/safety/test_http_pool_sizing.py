@@ -295,16 +295,14 @@ def test_a_saturated_sized_pool_still_fails_at_the_deadline_and_spares_the_defau
 
 # --- (c) wiring in build_default_state ----------------------------------------------------------
 
-BOTH = {"phn_etide_enabled": True, "met_api_token": TOKEN}
+MET = {"met_api_token": TOKEN}
 TIDES = {"tides_today_enabled": True, "tides_today_api_key": TT_KEY}
 CASES: list[tuple[dict[str, Any], int, int]] = [
     ({}, 4, 16),
-    ({"phn_etide_enabled": True}, 5, 20),
-    ({"met_api_token": TOKEN}, 5, 20),
+    (MET, 5, 20),
     (TIDES, 5, 20),
-    (BOTH, 6, 24),
-    ({**BOTH, **TIDES}, 7, 28),
-    ({**BOTH, "max_runs_in_flight": 64}, 6, 64),
+    ({**MET, **TIDES}, 6, 24),
+    ({**MET, **TIDES, "max_runs_in_flight": 64}, 6, 64),
     ({"max_runs_in_flight": 2}, 4, 8),
     ({"max_runs_in_flight": 1, "max_runs_per_actor": 1}, 4, 4),
 ]
@@ -332,7 +330,6 @@ def state_misses(mod: Any) -> list[str]:
             with pytest.MonkeyPatch.context() as m:
                 for name in (
                     "DIVESAFE_MET_API_TOKEN",
-                    "DIVESAFE_PHN_ETIDE_ENABLED",
                     "DIVESAFE_TIDES_TODAY_ENABLED",
                     "DIVESAFE_TIDES_TODAY_API_KEY",
                 ):

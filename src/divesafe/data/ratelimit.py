@@ -67,13 +67,6 @@ MET_API_QUOTA = QuotaGroup(
     hosts=frozenset({"api.met.gov.my"}),
     limits=((60.0, 3), (86400.0, 1000)),
 )
-# PHN publishes no limits (ADR 0021). These figures are OUR conservative assumption, not the
-# provider's.
-PHN_ETIDE_QUOTA = QuotaGroup(
-    name="phn-etide",
-    hosts=frozenset({"etide.hydro.gov.my"}),
-    limits=((60.0, 2), (86400.0, 200)),
-)
 # tides.today publishes no limits (ADR 0029). OUR conservative assumption, not the provider's:
 # three calls per assessment, so two assessments a minute and 100 a day.
 TIDES_TODAY_QUOTA = QuotaGroup(
@@ -86,7 +79,6 @@ DEFAULT_QUOTAS: tuple[QuotaGroup, ...] = (
     DATA_GOV_MY_QUOTA,
     DATA_GOV_MY_FORECAST_QUOTA,
     MET_API_QUOTA,
-    PHN_ETIDE_QUOTA,
     TIDES_TODAY_QUOTA,
 )
 

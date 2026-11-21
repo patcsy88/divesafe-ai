@@ -6,9 +6,7 @@ It uses the OpenAI-compatible adapter (ADR 0018) with DIVESAFE_EVAL_MODEL,
 DIVESAFE_EVAL_BASE_URL (for example http://localhost:8000/v1), and for a remote server
 DIVESAFE_EVAL_ALLOWED_HOSTS and DIVESAFE_EVAL_API_KEY (https only). Set
 DIVESAFE_EVAL_OUT to a directory outside the repository: it holds raw model replies, and
-.gitignore covers the default file names only as a backstop. The tide check also needs
-DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true unless the server is declared local; when it is skipped
-for that reason it still writes a record saying so.
+.gitignore covers the default file names only as a backstop.
 
 It reports metrics and writes raw records (ADR 0016). Hard assertions: the model produced at least
 one usable proposal (otherwise nothing was measured), no under-severe result, and exact rules.
@@ -27,12 +25,10 @@ from urllib.parse import urlparse
 
 import pytest
 from pydantic import SecretStr
-from tests.evaluation import tide_check
 from tests.evaluation.egress_gate import (
     egress_gate,
     eval_output_dir,
     output_path,
-    tide_check_allowed,
     write_private,
 )
 from tests.evaluation.harness import evaluate
@@ -46,10 +42,6 @@ PROVIDER = os.environ.get("DIVESAFE_EVAL_PROVIDER", "openai_compatible")
 # Read at import, before the per-test environment isolation in tests/conftest.py removes it.
 ALLOW_EXTERNAL = os.environ.get("DIVESAFE_ALLOW_EXTERNAL_LLM") or "false"
 SERVER_IS_LOCAL = os.environ.get("DIVESAFE_LLM_SERVER_IS_LOCAL") or "false"
-# The recorded PHN tide item goes to the model in the tide check. PHN's terms are not on file
-# (ADR 0021), so the check runs only against a server declared local, or with this acknowledgement.
-# Deliberately strict: only the exact text "true" counts, so any other value leaves it off.
-ACCEPT_PHN_TERMS_OPEN = os.environ.get("DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN") == "true"
 MODEL = os.environ.get("DIVESAFE_EVAL_MODEL")
 pytestmark = [
     pytest.mark.integration,
@@ -128,15 +120,6 @@ def gate(provider: OpenAICompatibleProvider) -> str:
     )
 
 
-def run_tide_check(provider: OpenAICompatibleProvider) -> tide_check.TideCheck:
-    """ADR 0030 decision 3 for the tide check: this provider instance passes `egress_gate` itself,
-    and the runner gets the gate's basis and the base URL's host. One positional argument, so the
-    stubs in tests/safety/test_llm_egress_declaration.py still replace it."""
-    return tide_check.run_tide_check(
-        provider, egress_basis=gate(provider), model_host=eval_model_host()
-    )
-
-
 def _setup() -> tuple[Settings, Callable[[], OpenAICompatibleProvider], str]:
     assert MODEL is not None
     assert PROVIDER == "openai_compatible", "DIVESAFE_EVAL_PROVIDER is not known"
@@ -187,61 +170,3 @@ def test_a_local_model_cannot_lower_the_result_and_its_quality_is_reported(
     assert report.proposals_obtained >= 1, "model unusable: no case produced a valid proposal"
     assert report.under_severe_errors == 0
     assert report.rule_outcome_accuracy == 1.0
-
-
-def test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path: Path) -> None:
-    """Sends one synthetic case holding the recorded PHN tide item through the real agent stage.
-    Hard assertions: at least one reply obtained and the result stays INSUFFICIENT EVIDENCE.
-    Hits on slack-water or current phrases are reported for a human to read, not gated (a denial
-    matches too)."""
-    _, make, basis = _setup()
-    out_dir = eval_output_dir(os.environ.get("DIVESAFE_EVAL_OUT"), tmp_path)
-    if not tide_check_allowed(basis, phn_terms_acknowledged=ACCEPT_PHN_TERMS_OPEN):
-        reason = (
-            "the tide item would leave the machine while PHN's terms are not on file (ADR 0021); "
-            "set DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true to accept that"
-        )
-        skipped = output_path(out_dir, f"tide_check_{PROVIDER}.json")
-        write_private(
-            skipped,
-            json.dumps(
-                {
-                    "status": "skipped",
-                    "reason": reason,
-                    "provider": PROVIDER,
-                    "model": MODEL,
-                    "host": _host(),
-                    "egress_basis": basis,
-                    "run_at": datetime.now(UTC).isoformat(),
-                    "code_sha": _sha(),
-                },
-                indent=1,
-            ),
-        )
-        pytest.skip(reason)
-    result = run_tide_check(make())
-    out = output_path(out_dir, f"tide_check_{PROVIDER}.json")
-    write_private(
-        out,
-        json.dumps(
-            {
-                "provider": PROVIDER,
-                "status": "ran",
-                "model": MODEL,
-                "host": _host(),
-                "egress_basis": basis,
-                "phn_terms_acknowledged": ACCEPT_PHN_TERMS_OPEN,
-                "run_at": datetime.now(UTC).isoformat(),
-                "code_sha": _sha(),
-                "prompt_version": PROMPT_VERSION,
-                "marker_hits": result.hits,
-                "record": json.loads(result.record.model_dump_json()),
-            },
-            indent=1,
-        ),
-    )
-    print("\nTIDE CHECK", MODEL, "marker hits:", result.hits, "raw record:", out)
-    assert (
-        result.record.findings or result.record.scenarios or result.record.proposed_recommendation
-    )
-    assert result.stayed_insufficient

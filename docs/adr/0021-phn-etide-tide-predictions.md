@@ -1,12 +1,23 @@
 # ADR 0021: Tide predictions from the PHN e-Tide endpoint
 
-Status: ACCEPTED by the owner (2026-10-20); the design and the connector are accepted. **PHN's
-wording (or a dated record of the permission) is still not on file**, so the connector stays
-**off by default** and nothing here makes the permission verified. Originally PROPOSED
-(2026-10-17). Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and
-`risk-reviewer` on 2026-10-17, then re-reviewed against the fixes (commit `3e239e3`): no blockers
-and no Major findings; the minor findings are folded in below. The connector stays **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED=false`) until the owner puts
-PHN's wording (or a dated record of the permission) on file; acceptance does not change that.
+Status: **WITHDRAWN (2026-11-21, owner).** The connector, its POST getter, its quota, the
+`DIVESAFE_PHN_ETIDE_ENABLED` setting and the recorded fixture were removed. PHN's permission wording
+never came on file. Start-up refuses to run while `DIVESAFE_PHN_ETIDE_ENABLED` is in the process
+environment, whatever its value (`tests/safety/test_phn_removed.py`). A line in a `.env` file is
+ignored like any unknown setting and has no effect. A file of that name in the secrets directory is
+never read, because only the listed secret files are read. The source name `phn-etide-prediction`
+stays a screened knowledge-id prefix and a refused evaluation source, and every getter refuses the
+host `etide.hydro.gov.my`. Tide predictions come from tides.today (ADR 0029). Do not build from this
+ADR. The text below is kept only as a record, and the files it names no longer exist.
+
+Before withdrawal: ACCEPTED by the owner (2026-10-20); the design and the connector are accepted.
+**PHN's wording (or a dated record of the permission) is still not on file**, so the connector stays
+**off by default** and nothing here makes the permission verified. Originally PROPOSED (2026-10-17).
+Replaces the withdrawn ADR 0020. Reviewed by `security-reviewer` and `risk-reviewer` on 2026-10-17,
+then re-reviewed against the fixes (commit `3e239e3`): no blockers and no Major findings; the minor
+findings are folded in below. The connector stays **off by default**
+(`DIVESAFE_PHN_ETIDE_ENABLED=false`) until the owner puts PHN's wording (or a dated record of the
+permission) on file; acceptance does not change that.
 
 ## Context
 

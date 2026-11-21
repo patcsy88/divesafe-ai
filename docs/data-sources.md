@@ -24,7 +24,7 @@ source is verified and recorded here.
 | `weather`, `wind` | Forecast + observation | Surface conditions, trend |
 | `waves_swell` | Forecast + observation | Entry/exit and surface safety |
 | `currents` | Forecast + observation | Drift and exertion risk |
-| `tides` | Prediction (+ observed level) | Timing of high and low water (PHN and tides.today give heights and times only, not slack windows) |
+| `tides` | Prediction (+ observed level) | Timing of high and low water (tides.today gives heights and times only, not slack windows) |
 | `sea_temperature` | Forecast + observation | Thermal protection |
 | `marine_warnings` | Official notices | Hard constraints |
 | `historical_observations` | Archive | Prediction, calibration |
@@ -62,8 +62,7 @@ reachable but not yet approved or implemented. Nothing here has been called from
   coordinates), and, by owner decision (2026-11-20), the data.gov.my forecast (`Rc024` "Pulau
   Tioman") and MET Malaysia marine (zone `LOCATION:499` "TIOMAN"), the same area entries as Tioman:
   area forecasts, not for the reef, whose items say "not the dive site"; nobody checked that either
-  area covers the reef. Only PHN e-Tide (being removed) has no entry and refuses it with its fixed
-  "not registered" message. The data.gov.my **warnings** connector has no zone table: it matches by
+  area covers the reef. The data.gov.my **warnings** connector has no zone table: it matches by
   area name, so Tiger Reef (area names `("Pahang", "Tioman")`) gets the same informational matches
   as Tioman. **Known gaps (ADR 0029 Amendment 2):** (1) Tiger Reef still cannot reach GO: tides are
   a required category; until tides.today was switched on in production (2026-11-20, 06:17 UTC) they
@@ -110,18 +109,19 @@ reachable but not yet approved or implemented. Nothing here has been called from
   deadline is monotonic and enforced inside the worker thread. Body reads in the deadline path use
   `response.read1` (one receive per call, up to 16 KiB, bounded by the time left); the size cap is
   unchanged. The socket timeout is only ever lowered, to `min(current, remaining)` with a 1 ms
-  floor, and no connection is opened if the deadline has already passed. Each call has a `_Job`
-  that holds the open socket. When the caller times out or is cancelled, `abort()` sets the
-  `cancelled` flag and then shuts down and closes the socket from the event-loop side, so a worker
-  blocked in a read ends. The socket is registered only after connect and headers, so connect, DNS,
-  TLS and header stalls still rely on the socket timeout, capped at the remaining deadline.
-  `job.cancelled` is checked before connecting and on every read pass. Connector HTTP calls run on
-  a dedicated `ThreadPoolExecutor` (thread prefix `divesafe-http`), not asyncio's default pool.
-  Queued work whose caller gave up never opens a connection. Pool size is connectors x `DIVESAFE_MAX_RUNS_IN_FLIGHT`, floor
-  1, ceiling `HTTP_POOL_CEILING` = 64 (the maximum of that setting); by default 4 x 4 = 16 (20 with
-  MET, PHN or tides.today; one more connector for each opt-in, up to 28 with all three). It is built at start-up in `api/state.py` and shut down in the app
-  lifespan with `wait=False, cancel_futures=True`. Code that builds getters without the app uses a
-  default 8-worker pool. Gaps are listed in "Not yet done (connectors)".
+  floor, and no connection is opened if the deadline has already passed. Each call has a `_Job` that
+  holds the open socket. When the caller times out or is cancelled, `abort()` sets the `cancelled`
+  flag and then shuts down and closes the socket from the event-loop side, so a worker blocked in a
+  read ends. The socket is registered only after connect and headers, so connect, DNS, TLS and
+  header stalls still rely on the socket timeout, capped at the remaining deadline. `job.cancelled`
+  is checked before connecting and on every read pass. Connector HTTP calls run on a dedicated
+  `ThreadPoolExecutor` (thread prefix `divesafe-http`), not asyncio's default pool. Queued work
+  whose caller gave up never opens a connection. Pool size is connectors x
+  `DIVESAFE_MAX_RUNS_IN_FLIGHT`, floor 1, ceiling `HTTP_POOL_CEILING` = 64 (the maximum of that
+  setting); by default 4 x 4 = 16 (20 with MET or tides.today, 24 with both). It is built at
+  start-up in `api/state.py` and shut down in the app lifespan with `wait=False,
+  cancel_futures=True`. Code that builds getters without the app uses a default 8-worker pool. Gaps
+  are listed in "Not yet done (connectors)".
 - **Tests** use recorded real responses in `tests/fixtures` (see its README) and no live calls.
 
 ### Wind connector behaviour (verified 2026-10-09)
@@ -425,7 +425,7 @@ route would be scraping. Its predictions blend several national and global model
 so no source or station can be traced, and its methodology page says to use official tide tables
 from the national hydrographic office instead. Neither source gives tidal streams.
 
-**PHN e-Tide endpoint (2026-10-17):** the owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector is **off by default** (`DIVESAFE_PHN_ETIDE_ENABLED`); both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording is still not on file.
+**PHN e-Tide endpoint (2026-10-17; removed 2026-11-21, ADR 0021 WITHDRAWN):** Kept as a record. The owner reported PHN's permission to use the e-Tide endpoint (the wording is not on file). One POST for `pulau_tioman` was made with the owner's go-ahead. It returns today plus the next two days (blocks named `current_day`, `prev_day`, `prev_1_day`, whose dates must be read, not the names), each with 144 ten-minute heights in metres above LAT/chart datum (per a page note) and PHN's own list of highs and lows. The body is JSON labelled `text/html`; the time zone (+08:00) is inferred from the server clock. Rate limits, refresh cadence and the method behind the numbers are unknown, so the local budget (2 a minute, 200 a day) is our assumption. Connector `PhnEtideConnector`, design and open items in [ADR 0021](adr/0021-phn-etide-tide-predictions.md) (accepted 2026-10-20; permission wording still not on file). No tidal-stream data. The response names no station, so `pulau_tioman` is assumed from the request. The connector was removed on 2026-11-21 (ADR 0021, WITHDRAWN). Before that, both reviewers reviewed it on 2026-10-17 (commit `3e239e3`) with no blockers, and ADR 0021 was accepted by the owner on 2026-10-20, but the permission wording never came on file.
 
 **tides.today API (2026-11-17; V2 since Amendment 1):** a documented, invite-only API
 (`api.tidestoday.io/v2`, an `x-api-key` header). The owner made one request per endpoint on
@@ -475,9 +475,9 @@ matters for Tioman, or if JUPEM data becomes available.
   and tidal-stream conditions at a dive site are not resolved.
 - **Open-Meteo's free tier forbids commercial use.** Fine for a capstone or research; a
   commercial deployment would need a paid plan or a different source.
-- **No VALIDATED or documented source of tidal predictions.** The PHN e-Tide and tides.today
-  connectors (both off by default; tides.today switched on in the owner's production on 2026-11-20)
-  supply DEGRADED predictions only, so a required-tides policy still gives `INSUFFICIENT EVIDENCE`
+- **No VALIDATED or documented source of tidal predictions.** The tides.today
+  connector (off by default; switched on in the owner's production on 2026-11-20)
+  supplies DEGRADED predictions only, so a required-tides policy still gives `INSUFFICIENT EVIDENCE`
   for GO or CAUTION.
 - data.gov.my text values are in Bahasa Melayu; a connector must map them explicitly and treat
   unmapped values as invalid, not guess.

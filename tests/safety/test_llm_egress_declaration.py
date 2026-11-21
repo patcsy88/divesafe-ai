@@ -207,34 +207,7 @@ def test_the_start_up_log_scan_catches_a_logged_port_or_url(
     assert _start_up_log_leaks(mutant, monkeypatch, caplog) == found
 
 
-@pytest.mark.parametrize(
-    ("flags", "external", "warned"),
-    [
-        ({"allow_external_llm": True}, False, True),
-        ({"allow_external_llm": True}, True, True),
-        ({"llm_server_is_local": True}, False, False),
-    ],
-)
-def test_phn_data_with_a_model_server_not_declared_local_is_warned_about_at_start_up(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    flags: dict[str, bool],
-    external: bool,
-    warned: bool,
-) -> None:
-    """The PHN tide item goes to the model with every assessment (PHN's wording is not on file)."""
-    _with_stub(monkeypatch, external=external)
-    with caplog.at_level("WARNING"):
-        build_provider(_settings(llm_provider="openai", phn_etide_enabled=True, **flags))
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("PHN e-Tide data is ON" in m for m in messages) is warned
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        build_provider(_settings(llm_provider="openai", phn_etide_enabled=False, **flags))
-    assert not any("PHN e-Tide data is ON" in r.getMessage() for r in caplog.records)
-
-
-# ADR 0028 decision 9: the knowledge basis does not cover PHN data. Literal settings, real adapter.
+# Literal knowledge-basis settings, real adapter (ADR 0028).
 _KNOWLEDGE_SETTINGS: dict[str, object] = {
     "llm_provider": "openai_compatible",
     "llm_model": "m",
@@ -243,39 +216,6 @@ _KNOWLEDGE_SETTINGS: dict[str, object] = {
     "allow_external_llm": True,
     "llm_knowledge_host": "llm.example.org",
 }
-
-
-def _phn_warned(caplog: pytest.LogCaptureFixture, build: object, phn: bool) -> bool:
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        provider, basis = build(_settings(**_KNOWLEDGE_SETTINGS, phn_etide_enabled=phn))  # type: ignore[operator]
-    provider.close()
-    assert basis == "remote_knowledge_opt_in"
-    return any("PHN e-Tide data is ON" in r.getMessage() for r in caplog.records)
-
-
-def test_phn_data_under_the_knowledge_basis_is_still_warned_about_at_start_up(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    assert _phn_warned(caplog, build_provider, phn=True) is True
-    assert _phn_warned(caplog, build_provider, phn=False) is False
-
-
-def test_mutation_widening_the_phn_warning_to_the_knowledge_basis_is_caught(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    from tests.safety.kb_fakes import mutated_module
-
-    from divesafe.api import state as state_module
-
-    mutant = mutated_module(
-        state_module,
-        (
-            'if settings.phn_etide_enabled and basis != "declared_local":',
-            'if settings.phn_etide_enabled and basis not in ("declared_local", "remote_knowledge_opt_in"):',  # noqa: E501
-        ),
-    )
-    assert _phn_warned(caplog, mutant.build_provider, phn=True) is False
 
 
 # ADR 0029 decision 12: the same warning for the tides.today item, under every basis not local.
@@ -366,7 +306,6 @@ def test_only_the_start_up_path_builds_a_real_provider() -> None:
     `build_provider` or call `check_egress`. A text scan per file under `src/divesafe`: a mention in
     a comment fails it too (safe), and an `as` alias, `getattr`, `functools.partial`, a second
     function in an allowed file, or code outside `src/divesafe` passes."""
-    from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / "src" / "divesafe"
     found: dict[str, set[str]] = {name: set() for name in _CALLERS}
@@ -488,99 +427,6 @@ def test_the_live_evaluation_setup_runs_the_gate(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("DIVESAFE_EVAL_KNOWLEDGE_HOST", "other.example.org")
     with pytest.raises(ValidationError, match="must be the host of DIVESAFE_LLM_BASE_URL"):
         live._setup()  # a mismatch fails the run, never a skip
-
-
-_PLACEHOLDER_KEY = "placeholder-not-a-real-key-7f3a9c"
-
-
-def _live_tide_setup(
-    monkeypatch: pytest.MonkeyPatch, out: Path, *, basis_flags: tuple[str, str], acknowledged: bool
-) -> object:
-    import os
-
-    from tests.evaluation import test_evaluation_live as live
-
-    for name in [n for n in os.environ if n.startswith("DIVESAFE_EVAL_")]:
-        monkeypatch.delenv(name)
-    monkeypatch.setenv("DIVESAFE_EVAL_OUT", str(out))
-    monkeypatch.setenv("DIVESAFE_EVAL_BASE_URL", LOOPBACK_URL)
-    monkeypatch.setenv("DIVESAFE_EVAL_API_KEY", _PLACEHOLDER_KEY)
-    monkeypatch.setattr(live, "MODEL", "m")
-    monkeypatch.setattr(live, "PROVIDER", "openai_compatible")
-    monkeypatch.setattr(live, "ALLOW_EXTERNAL", basis_flags[0])
-    monkeypatch.setattr(live, "SERVER_IS_LOCAL", basis_flags[1])
-    monkeypatch.setattr(live, "ACCEPT_PHN_TERMS_OPEN", acknowledged)
-    monkeypatch.setattr(live, "_sha", lambda: "test-sha")  # no subprocess in a safety test
-    return live
-
-
-def test_the_live_tide_check_sends_nothing_without_the_acknowledgement(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The recorded PHN item must not reach a model that is not declared local unless the
-    acknowledgement is set (PHN's terms are not on file, ADR 0021). The skip leaves a record, and
-    it never replaces an earlier record."""
-    import json
-
-    live = _live_tide_setup(
-        monkeypatch, tmp_path, basis_flags=("true", "false"), acknowledged=False
-    )
-
-    def must_not_be_called(_provider: object) -> None:
-        raise AssertionError("the tide item was sent")
-
-    monkeypatch.setattr(live, "run_tide_check", must_not_be_called)  # type: ignore[attr-defined]
-    earlier = tmp_path / "tide_check_openai_compatible.json"
-    earlier.write_text("an earlier raw record")
-    test = live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current  # type: ignore[attr-defined]
-    with pytest.raises(pytest.skip.Exception, match="PHN"):
-        test(tmp_path)
-    assert earlier.read_text() == "an earlier raw record"
-    (skip_file,) = [p for p in tmp_path.glob("tide_check_openai_compatible_*.json")]
-    record = json.loads(skip_file.read_text())
-    assert record["status"] == "skipped"
-    assert record["egress_basis"] == "loopback_external_opt_in"
-    assert record["host"] == "127.0.0.1"
-    assert _PLACEHOLDER_KEY not in skip_file.read_text()
-
-
-@pytest.mark.parametrize(
-    ("flags", "acknowledged"),
-    [(("false", "true"), False), (("true", "false"), True)],
-)
-def test_the_live_tide_check_runs_when_declared_local_or_acknowledged_and_says_so(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    flags: tuple[str, str],
-    acknowledged: bool,
-) -> None:
-    import json
-    from types import SimpleNamespace
-
-    live = _live_tide_setup(monkeypatch, tmp_path, basis_flags=flags, acknowledged=acknowledged)
-    sent: list[object] = []
-
-    def stub(provider: object) -> SimpleNamespace:
-        sent.append(provider)  # the provider object only; nothing is sent by this stub
-        record = SimpleNamespace(
-            findings=("f",),
-            scenarios=(),
-            proposed_recommendation=None,
-            model_dump_json=lambda: "{}",
-        )
-        return SimpleNamespace(hits=[], record=record, stayed_insufficient=True)
-
-    monkeypatch.setattr(live, "run_tide_check", stub)  # type: ignore[attr-defined]
-    live.test_a_real_model_given_a_tide_item_is_not_told_it_may_read_a_current(tmp_path)  # type: ignore[attr-defined]
-    assert len(sent) == 1
-    (written,) = list(tmp_path.glob("tide_check_openai_compatible*.json"))
-    record = json.loads(written.read_text())
-    assert record["status"] == "ran"
-    assert record["phn_terms_acknowledged"] is acknowledged
-    assert record["egress_basis"] == (
-        "loopback_external_opt_in" if acknowledged else "declared_local"
-    )
-    assert _PLACEHOLDER_KEY not in written.read_text()
 
 
 @pytest.mark.parametrize("extra", [{}, {"llm_provider": "fake"}])

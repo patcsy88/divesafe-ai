@@ -520,6 +520,8 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     the adversarial set), checked by identity, never by a `synthetic` flag, and the fixture
     payloads they use match pinned SHA-256 values;
   - the tide check is not included while PHN's terms are not on file (ADR 0021);
+    *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the tide check no longer
+    exists.*
   - the sending script never imports `api.state` or `capture_item6` (an AST test), so it
     cannot use the item-6 capture, its replays or `build_default_state`;
   - no knowledge connector is built, and `DIVESAFE_EVAL_KNOWLEDGE_HOST`, `DIVESAFE_DATABASE_URL`
@@ -1155,8 +1157,8 @@ Settled 2026-11-15, each as the recommended default:
   the id).
 - No alert can be checked by a test in this repository; alerting is operator discipline.
 - Tiger Reef (registered 2026-11-20, ADR 0029 Amendment 2): the forecast and MET marine
-  connectors are mapped to Tioman's areas (owner, 2026-11-20), so only PHN, while it exists and
-  is on, refuses it and adds `observe.connector_failed:<name>` counts. Every Tiger Reef run still
+  connectors are mapped to Tioman's areas (owner, 2026-11-20), and PHN e-Tide was removed
+  (2026-11-21, ADR 0021 WITHDRAWN), so no connector refuses it. Every Tiger Reef run still
   ends below GO (INSUFFICIENT EVIDENCE at best; NO-GO is still possible; see ADR 0029 Amendment
   2). That is expected, not a data-source outage: when reading connector-failure or INSUFFICIENT
   EVIDENCE alerts, separate Tiger Reef runs from Tioman runs. Runs whose forecast requests are

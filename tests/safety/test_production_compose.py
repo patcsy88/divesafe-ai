@@ -482,7 +482,7 @@ def test_the_api_has_resource_limits_and_a_non_executable_tmp(
 
 
 def test_the_api_gets_exactly_these_settings(services: dict[str, list[str]]) -> None:
-    """No other setting (for example the PHN connector or a declaration) may be added silently."""
+    """No other setting (for example a declaration or a connector switch) may be added silently."""
     assert set(_environment(services["api"])) == {
         "DIVESAFE_ENVIRONMENT",
         "DIVESAFE_LOG_LEVEL",

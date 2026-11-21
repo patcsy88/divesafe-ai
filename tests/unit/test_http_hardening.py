@@ -8,6 +8,7 @@ import pytest
 
 from divesafe.data import ConnectorResponseError, ConnectorTransportError, UrllibJsonGetter
 from divesafe.data.http import ALLOWED_HOSTS, _SafeRedirect, read_limited
+from divesafe.data.ratelimit import DATA_GOV_MY_QUOTA, CachingRateLimitedGetter
 
 
 def _redirect(newurl: str):  # type: ignore[no-untyped-def]
@@ -98,3 +99,62 @@ def test_every_recorded_fixture_is_within_the_depth_bound() -> None:
     for path in fixtures:
         assert not _depth_exceeds(json.loads(path.read_text()), MAX_JSON_DEPTH), path.name
     assert _depth_exceeds([[[0]]], 2) and not _depth_exceeds([[[0]]], 3)
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "body", [b"[" * 100 + b"]" * 100, b'{"a":' * 100 + b"1" + b"}" * 100], ids=["list", "object"]
+)
+def test_json_nested_past_the_depth_bound_is_a_response_error(
+    body: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Parses fine (unlike the 200 000-deep body above), so only the depth check can refuse it.
+    class _Opener:
+        def open(self, request: object, timeout: float) -> _Response:
+            return _Response(body)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: _Opener())
+    with pytest.raises(ConnectorResponseError, match="nested too deeply"):
+        asyncio.run(UrllibJsonGetter().get_json("https://api.data.gov.my/weather/forecast/", {}))
+
+
+@pytest.mark.safety
+def test_a_payload_too_deep_to_copy_becomes_a_response_error_through_the_cache() -> None:
+    deep: object = []
+    for _ in range(5000):
+        deep = [deep]
+
+    class _Plain:
+        async def get_json(self, url: str, params: object) -> object:
+            return deep
+
+    getter = CachingRateLimitedGetter(
+        _Plain(), min_interval_seconds={"api.data.gov.my": 0.0}, quotas=(DATA_GOV_MY_QUOTA,)
+    )
+    with pytest.raises(ConnectorResponseError, match="too deeply to keep"):
+        asyncio.run(getter.get_json("https://api.data.gov.my/weather/warning/", {}))
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://api.data.gov.my:8443/weather/warning/",
+        "https://user:pw@api.data.gov.my/weather/warning/",
+        "https://api.data.gov.my:notaport/x",
+    ],
+)
+def test_a_port_or_userinfo_in_the_initial_url_is_refused(
+    url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[object] = []
+
+    class _Opener:  # never reaches the network, even if the check is broken
+        def open(self, request: object, timeout: float) -> _Response:
+            opened.append(request)
+            return _Response(b"{}")
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *a, **k: _Opener())
+    with pytest.raises(ConnectorTransportError, match="port or userinfo"):
+        asyncio.run(UrllibJsonGetter().get_json(url, {}))
+    assert opened == []

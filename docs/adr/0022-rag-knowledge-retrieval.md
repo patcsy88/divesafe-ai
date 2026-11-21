@@ -545,6 +545,8 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
        `test_rule_problems_in_outcome.py` and `test_phn_tide_evidence.py`; the full list is
        enumerated when the code is written. Plus a new test that the uncited GO becomes
        INSUFFICIENT EVIDENCE.
+       *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); `test_phn_tide_evidence.py`
+       no longer exists.*
      - `test_evidence_usability.py` cases that build KNOWLEDGE items in live categories now assert
        construction is refused, and use `model_construct` to prove `_usable` ignores them.
      - The case that makes `local_guidance` required and expects GO now asserts `EvidencePolicy`
@@ -1112,6 +1114,9 @@ accepted by the owner on 2026-10-21, and only the owner changes them.
     - **The live evaluation path applies the same basis filter**, as `tide_check_allowed` does for
       tides (ADR 0023 decision 7): it must not put corpus text in a prompt unless its basis is
       `declared_local`.
+      *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); `tide_check_allowed` and the
+      evaluation tide check no longer exist. The rule for the live evaluation path above still
+      applies.*
     - **Record fields, in the same stage as the filter.** `egress_basis` and `model_host` become
       **typed `AssessmentRecord` fields** (not only a string in `model_version`). `model_host` is
       the host name only: no scheme, port, path or userinfo, matching ADR 0023. They ship in the

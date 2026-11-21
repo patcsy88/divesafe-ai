@@ -352,7 +352,8 @@ cannot confirm the decision was saved.
   definitions' depth, and Tioman stays open. There, missing or unusable MET data gives INSUFFICIENT
   EVIDENCE. It is always on. Still open: the check does not see the item's age, and gusts,
   direction, swell and the zone's extent are not covered (ADR 0031 Known gaps).
-- **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md)):**
+- **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md); removed
+  2026-11-21, WITHDRAWN):** Kept as a record of what applied.
   `PhnEtideConnector` items are DEGRADED daily predictions (high/low times and heights above chart
   datum) under `value["tide"]`, for one PHN station (not named in the response) and today plus two
   days only. A tide height or time gives no current speed or slack-water time, so `tidal_current`
@@ -363,7 +364,8 @@ cannot confirm the decision was saved.
   because `tidal_current` has no metric. The +08:00 zone is inferred and checked only against our
   clock; the permission to use the endpoint is the owner's report and is not on file. The connector
   is off by default. GO stays unreachable because `tidal_current` has no metric
-  (`tests/safety/test_tide_is_not_a_current.py:114`). The `tidal_current` placeholder no longer
+  (`tests/safety/test_tide_is_not_a_current.py::test_no_signed_limit_can_ever_be_expressed_on_a_tide_metric`).
+  The `tidal_current` placeholder no longer
   cites tide ids; the agent prompts say a tide is not a current.
 - **tides.today tide predictions (2026-11-17, [ADR
   0029](adr/0029-tides-today-tide-predictions.md)):** `TidesTodayConnector` items are DEGRADED daily
@@ -373,13 +375,13 @@ cannot confirm the decision was saved.
   each item states its own distance), today plus six days. Heights are taken as metres from the API
   field name `heightM`; no unit is documented. Only chart datum (CD) is accepted, and its level at
   this point is not stated. The provider names its own engine (`tpe`), which is not verified, so
-  lineage is unknown and it never corroborates PHN or anything else. The moon phase is context only:
-  not a spring/neap classification and nothing about current strength. An estimated extreme is
-  refused. The parser checks order, alternation and an 18 h gap, but a single missing high/low pair
-  can pass. All of PHN's limits on currents apply unchanged: `tidal_current` stays unencodable;
-  DEGRADED tide predictions satisfy the required `tides` category for GO or CAUTION only with the
-  setting on; no rule reads them (ADR 0008 Amendment 2). With PHN also on, both items are present
-  and no check compares them. Off by default (switching it on is the owner's decision); the full
+  lineage is unknown and it never corroborates any other source (PHN, the only other tide source,
+  was removed 2026-11-21). The moon phase is context only: not a spring/neap classification and
+  nothing about current strength. An estimated extreme is refused. The parser checks order,
+  alternation and an 18 h gap, but a single missing high/low pair can pass. The limits on currents
+  listed for PHN above apply unchanged: `tidal_current` stays unencodable; DEGRADED tide predictions
+  satisfy the required `tides` category for GO or CAUTION only with the setting on; no rule reads
+  them (ADR 0008 Amendment 2). Off by default (switching it on is the owner's decision); the full
   copyright notice is shown once with every assessment view that holds a tides.today item (evaluated
   or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11). Switched on in
   production by the owner on 2026-11-20 (ADR 0029, "Switched on").

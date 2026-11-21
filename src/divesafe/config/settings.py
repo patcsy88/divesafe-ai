@@ -169,10 +169,6 @@ class Settings(BaseSettings):
             raise ValueError("DIVESAFE_MET_API_TOKEN has an unexpected shape")
         return value
 
-    # PHN e-Tide tide predictions (ADR 0021). Off until the ADR is accepted and PHN's wording is on
-    # file: every enabled deployment sends POSTs to an undocumented government endpoint.
-    phn_etide_enabled: bool = False
-
     # tides.today tide predictions (ADR 0029). Off by default; switching it on is the owner's
     # decision (ADR 0029 status), and the provider's permission covers only the owner's
     # deployment. Enabling it needs the API key (header x-api-key; ADR 0029 Amendment 1).

@@ -1,8 +1,11 @@
-"""A tide prediction is never evidence of a current, slack water or flow timing (ADR 0021)."""
+"""A tide prediction is never evidence of a current, slack water or flow timing (ADR 0021, now
+WITHDRAWN, and ADR 0029). The items come from the SYNTHETIC tides.today fixture
+(tests/fixtures/README.md); the rule holds for any tide source."""
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,7 +18,8 @@ from divesafe.agents.risk_agent import propose
 from divesafe.agents.specialists import SPECIALISTS, run_specialist
 from divesafe.agents.tot import KINDS, _one
 from divesafe.api.schemas import AssessmentView
-from divesafe.data import TIOMAN_ISLAND, PhnEtideConnector
+from divesafe.data import TIOMAN_ISLAND
+from divesafe.data import tides_today as tt
 from divesafe.domain import (
     FACTOR_METRICS,
     SUPPORTED_METRICS,
@@ -30,12 +34,10 @@ from divesafe.risk import placeholder_rules
 pytestmark = pytest.mark.safety
 
 FIXTURE = json.loads(
-    (
-        Path(__file__).parent.parent / "fixtures/phn_etide_tioman_recorded_2026-10-17.json"
-    ).read_text()
+    (Path(__file__).parent.parent / "fixtures/tides_today_teluk_tekek_synthetic.json").read_text()
 )
-NOW = datetime(2026, 10, 17, 8, 2, tzinfo=UTC)
-START = datetime(2026, 10, 17, 1, 0, tzinfo=UTC)
+NOW = datetime(2026, 11, 17, 1, 0, tzinfo=UTC)
+START = datetime(2026, 11, 18, 0, 0, tzinfo=UTC)
 PLAN = DivePlan(
     site_id=TIOMAN_ISLAND.id, planned_start=START, planned_duration_minutes=60, max_depth_m=18
 )
@@ -43,12 +45,19 @@ PROHIBITION = "never infer current speed, direction, slack water or flow timing"
 
 
 class _Getter:
+    """Answers the connector's three calls in order with the fixture's three payloads."""
+
+    def __init__(self) -> None:
+        self.n = 0
+
     async def get_json(self, url: str, params: object) -> object:
-        return FIXTURE
+        self.n += 1
+        key = ("location", "tide_extremes", "ephemeris")[self.n - 1]
+        return copy.deepcopy(FIXTURE[key])
 
 
 def _items():  # type: ignore[no-untyped-def]
-    connector = PhnEtideConnector(_Getter())
+    connector = tt.TidesTodayConnector(_Getter())
     return list(
         asyncio.run(connector.fetch(TIOMAN_ISLAND, START, START + timedelta(hours=2), NOW)).items
     )
@@ -122,7 +131,7 @@ def test_the_tidal_current_placeholder_does_not_cite_tide_predictions() -> None:
     assert result.evidence_ids == ()
 
 
-def test_the_user_view_credits_phn() -> None:
+def test_the_user_view_credits_the_tide_source() -> None:
     from divesafe.orchestration import assess_dive
     from divesafe.risk import EvidencePolicy, RiskRulesEngine
 
@@ -131,18 +140,12 @@ def test_the_user_view_credits_phn() -> None:
         EvidencePolicy(frozenset({DataCategory.TIDES}), timedelta(hours=1)),
         "synthetic",
     )
-    later = DivePlan(
-        site_id=TIOMAN_ISLAND.id,
-        planned_start=NOW + timedelta(hours=1),
-        planned_duration_minutes=60,
-        max_depth_m=18,
-    )
     record: AssessmentRecord = asyncio.run(
         assess_dive(
             assessment_id="a-1",
-            plan=later,
+            plan=PLAN,
             site=TIOMAN_ISLAND,
-            connectors=[PhnEtideConnector(_Getter())],
+            connectors=[tt.TidesTodayConnector(_Getter())],
             engine=engine,
             now=NOW,
             egress_basis=None,
@@ -150,51 +153,5 @@ def test_the_user_view_credits_phn() -> None:
         )
     )
     assert record.evidence
-    assert "Pusat Hidrografi Nasional (e-Tide)" in AssessmentView.of(record).attributions
-
-
-def _redated(day: int, *, invert: bool = False) -> dict:  # type: ignore[type-arg]
-    """SYNTHETIC: the recorded day moved to another date (optionally upside down)."""
-    block = json.loads(json.dumps(FIXTURE["current_day"]))
-    label = f"{day:02d}-Oct-26"
-    block["date"] = f"{day} October 2026"
-    for row in block["data"]:
-        row["date"] = label
-        if invert:
-            row["height"] = round(3.0 - row["height"], 2)
-    for entry in block["MAX_LOW_Tide"]["HL"]:
-        entry["date"] = label
-        if invert:
-            entry["height"] = round(3.0 - entry["height"], 2)
-            entry["stat"] = 1 - entry["stat"]
-    return block
-
-
-def _fetch(payload: object, hours: int = 2, days: int = 0):  # type: ignore[no-untyped-def]
-    class _G:
-        async def get_json(self, url: str, params: object) -> object:
-            return payload
-
-    end = START + timedelta(days=days, hours=hours)
-    return asyncio.run(PhnEtideConnector(_G()).fetch(TIOMAN_ISLAND, START, end, NOW))
-
-
-def test_a_list_missing_a_high_or_low_is_never_passed_as_a_complete_day() -> None:
-    from divesafe.data import ConnectorResponseError
-
-    for keep in ([0, 3], [1, 2, 3], [0, 1, 2]):
-        payload = json.loads(json.dumps(FIXTURE))
-        hl = payload["current_day"]["MAX_LOW_Tide"]["HL"]
-        payload["current_day"]["MAX_LOW_Tide"]["HL"] = [hl[i] for i in keep]
-        with pytest.raises(ConnectorResponseError):
-            _fetch(payload)
-    assert _fetch(FIXTURE).items
-
-
-def test_highs_and_lows_that_do_not_alternate_across_midnight_are_refused() -> None:
-    from divesafe.data import ConnectorResponseError
-
-    payload = json.loads(json.dumps(FIXTURE))
-    payload["prev_day"] = _redated(18, invert=True)
-    with pytest.raises(ConnectorResponseError, match="across midnight"):
-        _fetch(payload, hours=0, days=1)
+    assert tt.ATTRIBUTION in AssessmentView.of(record).attributions
+    assert record.final_recommendation not in (Recommendation.GO, Recommendation.CAUTION)

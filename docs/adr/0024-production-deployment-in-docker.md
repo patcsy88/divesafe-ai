@@ -148,6 +148,9 @@ server), because the PHN item then goes to the model host with every assessment 
 are not on file (ADR 0021). The PHN connector is off in this compose file and the test pins that
 the API gets no setting that is not listed in the compose file (the Dockerfile sets no `DIVESAFE_*` setting, only two Python variables).
 
+*Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the PHN start-up warning no longer
+exists. Setting `DIVESAFE_PHN_ETIDE_ENABLED` now stops start-up.*
+
 **Database URLs** made by `docker/make-secrets.sh` carry `sslmode=require&channel_binding=require`.
 With SCRAM over TLS, channel binding ties the login to the server's own certificate, so a
 man-in-the-middle that relays the exchange fails even though the self-signed certificate is not
@@ -170,6 +173,8 @@ results and the specialist findings** (the prompt layer's payload) to
   private entities; attribution wording is still open (data-sources.md, MET section).
 - PHN e-Tide data is **off** in this stack. If it is turned on, its terms are not on file and the
   start-up warning above says so, but nothing stops it (ADR 0021).
+  *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); this bullet no longer applies.
+  PHN cannot be turned on, and setting `DIVESAFE_PHN_ETIDE_ENABLED` stops start-up.*
 - **tides.today** (ADR 0029, switched on 2026-11-20): each assessment for a site in the connector's
   table (Tioman, Tiger Reef) makes up to three https requests (fewer when cached) to
   `api.tidestoday.io` carrying the `x-api-key` header, the location id and the date range; the

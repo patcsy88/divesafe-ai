@@ -473,8 +473,8 @@ def test_max_connectors_covers_every_connector_registrable_today() -> None:
 
     source = inspect.getsource(state_module.build_default_state)
     registrable = source.count("Connector(")
-    # the four always-on plus MET, PHN and tides.today (opt-in); update with the code
-    assert registrable == 7
+    # the four always-on plus MET and tides.today (opt-in); update with the code
+    assert registrable == 6
     assert registrable <= MAX_CONNECTORS
 
 
@@ -1109,7 +1109,8 @@ def test_every_registered_connector_name_matches_the_qualifier_pattern(
     from divesafe.config import Settings
 
     monkeypatch.setenv("DIVESAFE_MET_API_TOKEN", "tok-synthetic-not-a-real-token")
-    monkeypatch.setenv("DIVESAFE_PHN_ETIDE_ENABLED", "true")
+    monkeypatch.setenv("DIVESAFE_TIDES_TODAY_ENABLED", "true")
+    monkeypatch.setenv("DIVESAFE_TIDES_TODAY_API_KEY", "tt-synthetic-not-a-real-key")
     monkeypatch.delenv("DIVESAFE_ENVIRONMENT", raising=False)
     state = build_default_state(Settings(_env_file=None))  # type: ignore[call-arg]
     names = [c.name for c in state.connectors]

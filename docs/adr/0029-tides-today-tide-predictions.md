@@ -87,6 +87,7 @@ mapping").
 e-Tide (ADR 0021), is off because PHN's wording is not on file, so the category is always missing
 in production. The owner asked on 2026-11-17 to add tides.today, which offers a documented,
 authenticated API with a location 3.7 km from the Pulau Tioman reference point.
+(ADR 0021 was withdrawn on 2026-11-21 and the PHN connector removed.)
 
 The owner holds an application ID and an API key. With them, the owner made one request to each
 endpoint below on 2026-11-17 from his own shell; the responses are kept outside the repository
@@ -277,12 +278,13 @@ dive window touches.
     every item". This is the owner's reading, not a confirmation from the provider; the provider was
     not asked.
 12. **Egress.** When enabled and the model server is not declared local, start-up logs a warning
-    that the tides.today item is sent to the model host with every assessment (as for PHN). The item
-    is excluded from evaluation runs to Langfuse and from the item-6 capture, as the PHN item is
-    (AGENTS.md section 4 gains it). Evaluation runs exclude it by construction (no scenario builds
-    the connector); `test_no_evaluation_module_builds_or_reads_tides_today` pins that no evaluation
-    module names it, except `langfuse_checks.py`, which may import `SOURCE` from
-    `divesafe.data.tides_today` once and use it once, in `REFUSED_SOURCES`, under the AST rule in
+    that the tides.today item is sent to the model host with every assessment (as was done for PHN
+    until its removal, ADR 0021 WITHDRAWN). The item is excluded from evaluation runs to Langfuse
+    and from the item-6 capture, as the PHN item is (AGENTS.md section 4 gains it). Evaluation runs
+    exclude it by construction (no scenario builds the connector);
+    `test_no_evaluation_module_builds_or_reads_tides_today` pins that no evaluation module names it,
+    except `langfuse_checks.py`, which may import `SOURCE` from `divesafe.data.tides_today` once and
+    use it once, in `REFUSED_SOURCES`, under the AST rule in
     `test_no_evaluation_module_builds_or_reads_tides_today`. This is an owner-approved relaxation
     (option A, 2026-11-19), not a strengthening. When the Langfuse export's fixture allow-list is
     built, it must refuse the tides.today fixture.
@@ -298,11 +300,11 @@ dive window touches.
     `production.env.example` sets it to `false` (owner, 2026-11-17); both are pinned by
     `tests/safety/test_production_compose.py`.
 
-## With PHN also on
+## With PHN also on (no longer possible)
 
-Both sources could give `tides` items. Both are DEGRADED with unknown lineage, neither
-corroborates the other, and no contradiction check compares them (see `docs/risk-model.md`,
-contradictory evidence). The model sees both; the engine treats both as present.
+PHN e-Tide was removed on 2026-11-21 (ADR 0021 WITHDRAWN), so tides.today is the only tide source.
+While both existed, both were DEGRADED with unknown lineage, neither corroborated the other, and no
+contradiction check compared them.
 
 ## Options not taken
 
@@ -448,8 +450,8 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   corroborating, and tides.today stays **off by default** (`DIVESAFE_TIDES_TODAY_ENABLED` is not
   touched) by this amendment; the owner switched it on in production later the same day (see
   "Switched on" in the status). The permission text is unchanged; whether it covers Tiger Reef is
-  the owner's reading (below). Tiger Reef is not mapped for PHN e-Tide (being removed), which
-  refuses it with its fixed "not registered" message. The data.gov.my forecast and MET marine
+  the owner's reading (below). PHN e-Tide, which refused Tiger Reef with its fixed "not registered"
+  message, was removed on 2026-11-21 (ADR 0021 WITHDRAWN). The data.gov.my forecast and MET marine
   connectors were mapped later the same day ("Forecast and MET mapping" below).
 - **The distance wording for Tiger Reef** is "about 13.4 km from the Tiger Reef dive site
   (position as published by PADI)", because the position is PADI's published one, which PADI does
@@ -479,20 +481,19 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   human at the gate does not see the one reported Tiger Reef current hazard (owner's trial report, ADR 0028). Absence is not evidence
   of no hazard. The owner decides whether a reviewed Tiger Reef (or all-sites) guide is loaded
   through the knowledge loader; this change loads nothing.
-- **Known gap: Tiger Reef cannot reach GO.** Since the forecast and MET mapping (below), only PHN
-  (off by default, being removed) refuses Tiger Reef; while it is on, every Tiger Reef run records
-  `evidence.connector_issues` and adds to the `observe.connector_failed:<name>` counts (metric
-  noise, ADR 0027). Every run still stays below GO: tides are a required category; until tides.today
-  was switched on in production (2026-11-20, 06:17 UTC) they were missing, and since then a Tiger
-  Reef run gets the DEGRADED Teluk Tekek item, a proxy about 13.4 km away, which no rule reads and
-  which satisfies the required `tides` category for GO or CAUTION only with
-  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 2); the factors without a deployed rule
-  stay at INSUFFICIENT EVIDENCE, and four of them (tidal current, weather, forecast uncertainty,
-  site constraint) cannot have one, because the rule format has no metric for them; and every live
-  value is a model or forecast capped at DEGRADED, which cannot support GO or CAUTION while
-  `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off (its default; ADR 0008 Amendment 1). NO-GO is still
-  possible. That is safe but is not the same as a clean run. These reasons now apply equally to
-  Tioman; the only difference left for Tiger Reef is that no site guide is retrieved for it (above).
+- **Known gap: Tiger Reef cannot reach GO.** Since the forecast and MET mapping (below) and the
+  removal of PHN e-Tide (2026-11-21), no connector refuses Tiger Reef. Every run still stays below
+  GO: tides are a required category; until tides.today was switched on in production (2026-11-20,
+  06:17 UTC) they were missing, and since then a Tiger Reef run gets the DEGRADED Teluk Tekek item,
+  a proxy about 13.4 km away, which no rule reads and which satisfies the required `tides` category
+  for GO or CAUTION only with `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` on (ADR 0008 Amendment 2); the
+  factors without a deployed rule stay at INSUFFICIENT EVIDENCE, and four of them (tidal current,
+  weather, forecast uncertainty, site constraint) cannot have one, because the rule format has no
+  metric for them; and every live value is a model or forecast capped at DEGRADED, which cannot
+  support GO or CAUTION while `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is off (its default; ADR 0008
+  Amendment 1). NO-GO is still possible. That is safe but is not the same as a clean run. These
+  reasons now apply equally to Tioman; the only difference left for Tiger Reef is that no site guide
+  is retrieved for it (above).
 - **Forecast and MET mapping (owner, 2026-11-20):** Tiger Reef uses Tioman's entries exactly:
   data.gov.my forecast location `Rc024` "Pulau Tioman" and MET waters zone `LOCATION:499`
   "TIOMAN". Both are area forecasts, not forecasts for the reef: the data.gov.my item is an

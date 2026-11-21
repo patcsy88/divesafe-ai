@@ -154,6 +154,10 @@ ADR 0021.
    are**: under `remote_knowledge_opt_in` the warning still fires when PHN is on, and the evaluation
    tide check still needs the explicit acknowledgement, because PHN's terms are not on file and the
    knowledge attestation does not cover PHN data. PHN stays off in production (ADR 0021).
+   *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the PHN start-up warning, the
+   evaluation tide check, `tide_check_allowed` and `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN` no longer
+   exist, and setting `DIVESAFE_PHN_ETIDE_ENABLED` stops start-up. This also applies to the later
+   PHN mentions in this ADR.*
    - **Evaluation gate.** `egress_gate` gains a `knowledge_host` argument and builds its `Settings`
      with `llm_provider="openai_compatible"`, `llm_base_url` set to the evaluation URL,
      `llm_allowed_hosts` and the knowledge host (no `model_construct`), so every Settings and
