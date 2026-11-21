@@ -85,21 +85,44 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
-### Reporting actual current (2026-11-20, owner)
+### Reporting actual current (2026-11-20, owner; list form 2026-11-21)
 
 Actual conditions are free-form `observations`, reported through `POST
 /v1/assessments/{assessment_id}/actual-conditions` by the assessment's assigned `decider` (ADR
 0013), and, once a decision is recorded, only after the planned start. For current at a site, report
-under `observations.current`: `observed_at` (ISO time with offset), `speed_kn` (a number, the
-diver's or crew's estimate), `band` (`none`/`mild`/`moderate`/`strong`), `direction_to_deg`
-(optional, where the water was going), `depth_m` (optional), `method` (`dive_guide_estimate`,
-`drift_gps` or `boat_crew`), and `phase` (optional, e.g. `near_high`, `ebbing`). Reports can be
-compared by hand with the stored model values for that hour (no code does this yet); they never
-change a result. The API does not check this format; it is a convention, so a report that does not
-follow it is stored as written. A report needs a recorded human decision and is written once only,
-so put every current reading into one submission. `band` labels have no numeric meaning here and
-must never become limits (AGENTS.md section 7). `speed_kn` is in knots and the model value is in
-km/h, so a comparison must state its conversion.
+`observations.current` as a list of readings, one per observation (for example at descent, mid-dive
+and ascent, or one per diver or boat). Each reading has: `observed_at` (ISO time with offset),
+`speed_kn` (a non-negative number, the diver's or crew's estimate), `band`
+(`none`/`mild`/`moderate`/`strong`), `direction_to_deg` (optional, degrees 0-359 clockwise from
+north, where the water was going; whether true or magnetic north is not yet fixed, so a comparison
+must state which it assumed), `depth_m` (optional), `method` (`dive_guide_estimate`,
+`drift_gps` or `boat_crew`), and `phase` (optional, e.g. `near_high`, `ebbing`). A single reading
+is still a list of one. Reports can be compared by hand with the stored model values nearest each
+reading's `observed_at` (no code does this yet); they never change a result. The API does not check
+this format; it is a convention, so a report that does not follow it (including an older
+single-object report) is stored as written. When reading reports, an object under `current` (the
+form before 2026-11-21) is one reading. The API refuses a report nested more than 6 levels deep
+(the `observations` object is level 1), with more than 500 entries in total (every object, list
+and value counts) or longer than 20,000 characters, so keep each reading to the fields above. A
+report needs a recorded human decision and is written once only. That covers the whole
+`observations` object, not only `current`, so put every reading and every other observation into
+one submission; a wrong reading cannot be corrected later. `band` labels have no numeric meaning.
+Neither the labels nor the reported speeds are limits, and neither may become one: a current limit
+still needs a cited, reviewed, `VALIDATED` rule definition (AGENTS.md section 7). `speed_kn` is in
+knots and the model value is in km/h (1 kn = 1.852 km/h), so a comparison must state its
+conversion.
+
+Example (synthetic: invented values, not a real report or site. The speeds and bands are paired
+arbitrarily and define no band; `band` is the reporter's own judgement):
+
+```json
+{"observations": {"current": [
+  {"observed_at": "2026-01-15T09:10:00+08:00", "speed_kn": 0.5, "band": "mild",
+   "method": "dive_guide_estimate", "depth_m": 12},
+  {"observed_at": "2026-01-15T09:40:00+08:00", "speed_kn": 1.0, "band": "moderate",
+   "direction_to_deg": 220, "method": "dive_guide_estimate", "phase": "ebbing"}
+]}}
+```
 
 ## Pipeline guarantees (`divesafe.orchestration`)
 
