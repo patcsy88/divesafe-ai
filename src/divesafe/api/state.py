@@ -51,8 +51,10 @@ from divesafe.orchestration import (
 from divesafe.rag.connector import KnowledgeConnector
 from divesafe.rag.store import PostgresKnowledgeStore
 from divesafe.risk import (
+    MET_PAIRED_METRICS,
     EvidencePolicy,
     FactorScopeRule,
+    MetRangeTightenRule,
     RiskRulesEngine,
     Rule,
     WarningNeedsHumanReadingRule,
@@ -165,6 +167,9 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
     if degraded_support and not settings_module.MET_TIGHTEN_ONLY_ROLE_BUILT:
         # Repeats the Settings check, for the same reason (owner condition, 2026-11-21).
         raise RuntimeError(settings_module.DEGRADED_NEEDS_MET_ROLE)
+    if degraded_support and settings.met_api_token is None:
+        # Repeats the Settings check, for the same reason (ADR 0031 item 6).
+        raise RuntimeError(settings_module.DEGRADED_NEEDS_MET_TOKEN)
     policy = EvidencePolicy(
         INTERIM_REQUIRED_CATEGORIES,
         timedelta(minutes=settings.evidence_max_age_minutes),
@@ -200,6 +205,9 @@ def build_engine(settings: Settings, now: datetime | None = None) -> RiskRulesEn
             FactorScopeRule(f, [r for r in loaded.rules if r.factor == f])
             for f in sorted(covered, key=lambda k: k.value)
         )
+        # ADR 0031: one MET check per paired definition, whether the DEGRADED flag is on or off.
+        paired = [r for r in loaded.rules if r.definition.metric in MET_PAIRED_METRICS]
+        rules.extend(MetRangeTightenRule(r) for r in paired)
         version = loaded.identity
     if degraded_support and not covered:
         raise RuntimeError("DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs a ruleset with definitions")

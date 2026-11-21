@@ -166,7 +166,10 @@ class RuleResult(_Frozen):
     factor: RiskFactorKind | None = None
     threshold_status: ThresholdStatus | None = Field(
         default=None,
-        description="None when the rule needs no numeric limit; otherwise where the limit stands.",
+        description=(
+            "None when the rule needs no numeric limit, or only tightens against a signed-off "
+            "definition's limits (ADR 0031); otherwise where the limit stands."
+        ),
     )
 
     @model_validator(mode="after")

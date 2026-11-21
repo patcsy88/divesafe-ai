@@ -43,7 +43,7 @@ _COMPARE = {
 }
 
 
-def _matches(limit: Limit | None, value: float) -> bool:
+def limit_matches(limit: Limit | None, value: float) -> bool:
     return limit is not None and _COMPARE[limit.comparison](value, limit.value)
 
 
@@ -61,6 +61,10 @@ class DefinitionRule:
             f"{source.document}, {source.version_or_date}, {source.location_in_document}; "
             f"signed-off document version {definition.document_version}"
         )
+
+    @property
+    def definition(self) -> RuleDefinition:
+        return self._d
 
     def _result(
         self, outcome: Recommendation, rationale: str, ids: Sequence[str] = ()
@@ -139,13 +143,13 @@ class DefinitionRule:
             f"{adjusted:g} {metric.unit} after the signed-off forecast margin of "
             f"{d.forecast_margin:g} {metric.unit}"
         )
-        if _matches(d.no_go_when, adjusted):
+        if limit_matches(d.no_go_when, adjusted):
             return self._result(Recommendation.NO_GO, f"Rule {label}: {detail}: NO-GO range.", ids)
-        if _matches(d.caution_when, adjusted):
+        if limit_matches(d.caution_when, adjusted):
             return self._result(
                 Recommendation.CAUTION, f"Rule {label}: {detail}: CAUTION range.", ids
             )
-        if _matches(d.go_when, adjusted):
+        if limit_matches(d.go_when, adjusted):
             return self._result(
                 Recommendation.GO, f"Rule {label}: {detail}: inside the signed-off GO range.", ids
             )

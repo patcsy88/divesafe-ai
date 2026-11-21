@@ -17,15 +17,25 @@ from divesafe.risk.engine import (
     severity,
 )
 from divesafe.risk.interfaces import RiskEngine, Rule
+from divesafe.risk.met_ranges import (
+    MET_PAIRED_METRICS,
+    MET_RANGE_RULE_PREFIX,
+    MET_TIGHTEN_ZONES,
+    MetRangeTightenRule,
+)
 from divesafe.risk.placeholders import ThresholdTbdRule, placeholder_rules
 from divesafe.risk.rules import WarningNeedsHumanReadingRule
 
 __all__ = [
     "COARSE_SPAN",
     "DEGRADED_NEVER_SUPPORTS_GO",
+    "MET_PAIRED_METRICS",
+    "MET_RANGE_RULE_PREFIX",
+    "MET_TIGHTEN_ZONES",
     "NOT_EVALUATED_MARKER",
     "DefinitionRule",
     "FactorScopeRule",
+    "MetRangeTightenRule",
     "EvidencePolicy",
     "Reconciliation",
     "RiskAssessment",

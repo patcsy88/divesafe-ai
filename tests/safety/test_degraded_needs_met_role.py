@@ -1,6 +1,8 @@
 """Owner condition (2026-11-21, ADR 0008 Amendment 1): `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is
 refused until MET's tighten-only role is built and reviewed, and GO and CAUTION stay unreachable
-until a change that makes them reachable is reviewed. All values are SYNTHETIC."""
+until a change that makes them reachable is reviewed. The role is built (ADR 0031), so the gate is
+open in src; the refusal is still proved with the gate pinned closed, and the flag also needs the
+MET token (ADR 0031 item 6). All values are SYNTHETIC."""
 
 from __future__ import annotations
 
@@ -17,12 +19,14 @@ from tests.safety.test_degraded_support_policy import (
     ENVIRONMENTS,
     MARK_PATH,
     MARK_SHA,
+    MET_TOKEN,
     PROD_PLAN,
     STATE_LOGGER,
     WARNING_TEXT,
     _pinned_ruleset,
     _settings,
 )
+from tests.safety.test_met_tighten import met_items
 from tests.unit.test_ruleset_loader import tioman
 
 from divesafe.api.state import build_engine
@@ -57,11 +61,21 @@ PAST_START = NOW - 3 * timedelta(hours=1)
 PAST_PLAN = DivePlan(
     site_id=PROD_PLAN.site_id, planned_start=PAST_START, planned_duration_minutes=30, max_depth_m=10
 )
+MET_TOKEN_NEEDED = (
+    "DIVESAFE_DEGRADED_MAY_SUPPORT_GO needs the MET API token (DIVESAFE_MET_API_TOKEN or its "
+    "secret file), so that MET's daily ranges can tighten the result (ADR 0031)"
+)
 NAME = "MET_TIGHTEN_ONLY_ROLE_BUILT"
 UNENCODABLE = {K.TIDAL_CURRENT, K.WEATHER, K.FORECAST_UNCERTAINTY, K.SITE_CONSTRAINT}
 
 
-# --- a. the gate is closed in src --------------------------------------------------------------
+@pytest.fixture
+def met_role_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate as it was before ADR 0031, so the refusal itself stays proved."""
+    monkeypatch.setattr(settings_module, "MET_TIGHTEN_ONLY_ROLE_BUILT", False)
+
+
+# --- a. the gate is open in src, set once ------------------------------------------------------
 
 
 def _bound(target: ast.expr) -> list[str]:
@@ -77,13 +91,14 @@ def _bound(target: ast.expr) -> list[str]:
     return [target.attr] if isinstance(target, ast.Attribute) else []
 
 
-def test_the_gate_is_closed_in_src_and_assigned_only_once() -> None:
-    """Only the PR that builds and reviews MET's role may change this (owner, 2026-11-21). A
-    tripwire, not a control: review is the control. Any store, import alias or string naming the
-    constant counts, so unpacking, walrus, `for`, `with`, `globals()[...]`, `setattr`, `mock.patch`
-    strings, `__dict__.update(NAME=...)` and `global` all turn this red. A name built at run time
+def test_the_gate_is_open_in_src_and_assigned_only_once() -> None:
+    """Opened by the PR that built and reviewed MET's role (ADR 0031, owner 2026-11-21); closing it
+    again or setting it anywhere else needs review. A tripwire, not a control: review is the
+    control. Any store, import alias or string naming the constant counts, so unpacking, walrus,
+    `for`, `with`, `globals()[...]`, `setattr`, `mock.patch` strings, `__dict__.update(NAME=...)`
+    and `global` all turn this red. A name built at run time
     (concatenation, f-string, `join`) is not seen; review is the control."""
-    assert settings_module.MET_TIGHTEN_ONLY_ROLE_BUILT is False
+    assert settings_module.MET_TIGHTEN_ONLY_ROLE_BUILT is True
     found: list[tuple[str, object]] = []
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
@@ -114,12 +129,13 @@ def test_the_gate_is_closed_in_src_and_assigned_only_once() -> None:
                 and NAME in node.value
             ):
                 found.append((rel, "string"))
-    assert found == [("config/settings.py", False)]
+    assert found == [("config/settings.py", True)]
 
 
-# --- b. Settings refuses the flag --------------------------------------------------------------
+# --- b. Settings refuses the flag while the gate is closed, or without the MET token -----------
 
 
+@pytest.mark.usefixtures("met_role_closed")
 @ENVIRONMENTS
 @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
 def test_the_environment_variable_is_refused_even_with_a_pinned_ruleset(
@@ -128,12 +144,15 @@ def test_the_environment_variable_is_refused_even_with_a_pinned_ruleset(
     monkeypatch.setenv("DIVESAFE_DEGRADED_MAY_SUPPORT_GO", value)
     monkeypatch.setenv("DIVESAFE_RULESET_PATH", str(MARK_PATH))
     monkeypatch.setenv("DIVESAFE_RULESET_SHA256", MARK_SHA)
+    monkeypatch.setenv("DIVESAFE_MET_API_TOKEN", MET_TOKEN)
     with pytest.raises(ValidationError) as caught:
         Settings(_env_file=None, **env)
     assert [e["msg"] for e in caught.value.errors()] == [f"Value error, {MET_ROLE}"]
     assert MARK_SHA not in str(caught.value) and str(MARK_PATH) not in str(caught.value)
+    assert MET_TOKEN not in str(caught.value)  # the token is set here, and still not echoed
 
 
+@pytest.mark.usefixtures("met_role_closed")
 @ENVIRONMENTS
 def test_settings_refuse_the_flag_even_with_a_pinned_ruleset(env: dict[str, Any]) -> None:
     with pytest.raises(ValidationError) as caught:
@@ -142,11 +161,33 @@ def test_settings_refuse_the_flag_even_with_a_pinned_ruleset(env: dict[str, Any]
             degraded_may_support_go=True,
             ruleset_path=MARK_PATH,
             ruleset_sha256=MARK_SHA,
+            met_api_token=MET_TOKEN,
             **env,
         )
     assert [e["msg"] for e in caught.value.errors()] == [f"Value error, {MET_ROLE}"]
     off = Settings(_env_file=None, ruleset_path=MARK_PATH, ruleset_sha256=MARK_SHA, **env)
     assert off.degraded_may_support_go is False  # control: only the flag is refused
+
+
+@ENVIRONMENTS
+@pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+def test_the_environment_variable_is_refused_without_the_met_token(
+    env: dict[str, Any], value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DIVESAFE_DEGRADED_MAY_SUPPORT_GO", value)
+    monkeypatch.setenv("DIVESAFE_RULESET_PATH", str(MARK_PATH))
+    monkeypatch.setenv("DIVESAFE_RULESET_SHA256", MARK_SHA)
+    monkeypatch.delenv("DIVESAFE_MET_API_TOKEN", raising=False)
+    with pytest.raises(ValidationError) as caught:
+        Settings(_env_file=None, **env)
+    assert [e["msg"] for e in caught.value.errors()] == [f"Value error, {MET_TOKEN_NEEDED}"]
+    monkeypatch.setenv("DIVESAFE_MET_API_TOKEN", MET_TOKEN)
+    on = Settings(_env_file=None, **env)  # control: the token is the only thing missing
+    assert on.degraded_may_support_go is True
+
+
+def test_the_token_message_is_the_one_settings_and_build_engine_use() -> None:
+    assert settings_module.DEGRADED_NEEDS_MET_TOKEN == MET_TOKEN_NEEDED
 
 
 def test_the_message_is_the_one_settings_and_build_engine_use() -> None:
@@ -156,13 +197,15 @@ def test_the_message_is_the_one_settings_and_build_engine_use() -> None:
 # --- c. build_engine repeats the check ---------------------------------------------------------
 
 
+@pytest.mark.usefixtures("met_role_closed")
 @pytest.mark.parametrize("how", ["model_copy", "model_construct"])
 def test_build_engine_refuses_the_flag_that_bypassed_settings(
     how: str, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A pinned ruleset with a definition: every other start-up condition for the flag holds."""
+    """A pinned ruleset with a definition and the MET token: every other start-up condition for
+    the flag holds."""
     path, sha = _pinned_ruleset(tmp_path, tioman())
-    base = _settings(path, sha, on=False)
+    base = _settings(path, sha, on=False, met_token=True)
     if how == "model_copy":
         bypassed = base.model_copy(update={"degraded_may_support_go": True})
     else:
@@ -178,6 +221,31 @@ def test_build_engine_refuses_the_flag_that_bypassed_settings(
     # control: the same settings start once the role is built, so the refusal above is this gate
     monkeypatch.setattr(settings_module, "MET_TIGHTEN_ONLY_ROLE_BUILT", True)
     engine = build_engine(bypassed, now=NOW)
+    assert engine is not None and engine.policy.degraded_may_support_go is True
+
+
+@pytest.mark.parametrize("how", ["model_copy", "model_construct"])
+def test_build_engine_refuses_the_flag_without_the_met_token(
+    how: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path, sha = _pinned_ruleset(tmp_path, tioman())
+    base = _settings(path, sha, on=False)
+    assert base.met_api_token is None
+    if how == "model_copy":
+        bypassed = base.model_copy(update={"degraded_may_support_go": True})
+    else:
+        bypassed = Settings.model_construct(**{**dict(base), "degraded_may_support_go": True})
+    assert bypassed.degraded_may_support_go is True  # the validator really was skipped
+    caplog.set_level(logging.DEBUG, logger=STATE_LOGGER)
+    with pytest.raises(RuntimeError) as caught:
+        build_engine(bypassed, now=NOW)
+    assert str(caught.value) == MET_TOKEN_NEEDED
+    messages = [r.getMessage() for r in caplog.records]
+    assert WARNING_TEXT not in messages and not any("DEGRADED" in m for m in messages)
+
+    # control: the same settings start with the token, so the refusal above is this check
+    with_token = _settings(path, sha, on=True)
+    engine = build_engine(with_token, now=NOW)
     assert engine is not None and engine.policy.degraded_may_support_go is True
 
 
@@ -231,17 +299,18 @@ def _all_validated() -> list[EvidenceItem]:
     return [_validated(c, v) for c, v in by_category.items()]
 
 
-@pytest.mark.parametrize("on", [False, True], ids=["flag_off", "flag_on_if_the_role_existed"])
+@pytest.mark.parametrize("on", [False, True], ids=["flag_off", "flag_on"])
 def test_a_go_band_for_every_encodable_factor_and_validated_evidence_still_is_not_go(
-    on: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    on: bool, tmp_path: Path
 ) -> None:
-    """The production wiring with the most permissive ruleset that can be written today."""
-    if on:
-        monkeypatch.setattr(settings_module, "MET_TIGHTEN_ONLY_ROLE_BUILT", True)
+    """The production wiring with the most permissive ruleset that can be written today, and MET
+    ranges inside every GO band (so MET's check adds nothing)."""
     definitions = [_go_band(f, m) for f, ms in FACTOR_METRICS.items() for m in sorted(ms)]
     engine = build_engine(_settings(*_pinned_ruleset(tmp_path, *definitions), on=on), now=NOW)
     assert engine is not None
-    result = engine.assess(PAST_PLAN, _all_validated(), NOW)
+    end = PAST_START + timedelta(minutes=PAST_PLAN.planned_duration_minutes)
+    met = met_items(PAST_PLAN.site_id, PAST_START, end, wind=(1.0, 1.0), wave=(1.0, 1.0))
+    result = engine.assess(PAST_PLAN, [*_all_validated(), *met], NOW)
     outcomes = {r.rule_id: r.outcome for r in result.rule_results}
 
     # controls: every signed-off definition returned GO on VALIDATED evidence
