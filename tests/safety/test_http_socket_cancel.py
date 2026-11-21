@@ -1,5 +1,6 @@
 """Per-read receive, socket close on cancel and cancelled-job handling of `divesafe.data.http`
-(security M1 fix), for BOTH getters (GET `UrllibJsonGetter`, POST `UrllibFormPostJsonGetter`).
+(security M1 fix), for the GET getter `UrllibJsonGetter` (the PHN POST getter was removed with
+ADR 0021).
 
 Offline: no network and no database. Fake responses cover the logic; a REAL
 `http.client.HTTPResponse` on a `socket.socketpair()` covers the private path
@@ -584,7 +585,7 @@ class Body:
 
 def call_with_job(mod: Any, kind: str, job: Any, opener: Opener) -> Exception | Any:
     getter = make(mod, kind, 5.0, 30.0)
-    fn = getter._get if kind == "get" else getter._post
+    fn = getter._get
     with pytest.MonkeyPatch.context() as m:
         install(m, opener)
         mod._local.job = job
@@ -774,7 +775,7 @@ def mutant_plan() -> list[tuple[str, Callable[[Any], list[str]]]]:
     for kind in KINDS:
         plan.append((f"cancel/{kind}", lambda mod, k=kind: s_cancel(mod, k)))
     plan.append(("real/get", lambda mod: s_real_cancel(mod, "get")))
-    plan.append(("real/post", lambda mod: s_real_cancel(mod, "post", "timeout")))
+    plan.append(("real/get-timeout", lambda mod: s_real_cancel(mod, "get", "timeout")))
     return plan
 
 

@@ -520,6 +520,8 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     the adversarial set), checked by identity, never by a `synthetic` flag, and the fixture
     payloads they use match pinned SHA-256 values;
   - the tide check is not included while PHN's terms are not on file (ADR 0021);
+    *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the tide check no longer
+    exists.*
   - the sending script never imports `api.state` or `capture_item6` (an AST test), so it
     cannot use the item-6 capture, its replays or `build_default_state`;
   - no knowledge connector is built, and `DIVESAFE_EVAL_KNOWLEDGE_HOST`, `DIVESAFE_DATABASE_URL`
@@ -562,34 +564,43 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   upload sends `data:` URIs to a URL the server chooses, so the sender switches it off. After
   shutdown one daemon thread (`PromptCacheRefreshConsumer`) remains. The evaluation environment at
   that check (`pip freeze --exclude-editable`, 38 packages) is below. The live check against
-  `divesafe-eval` was run on 2026-11-20 from commit `731498a`, twice, against Langfuse server 4.80.0
-  (record below). The agents' egress basis was `loopback_external_opt_in`: the first scenario's
-  prompts went through a forwarding proxy on the owner's machine to the hosted evaluation model;
-  Langfuse was reached directly on `127.0.0.1:3000`. Earlier attempts with a key pair of another
-  project were refused at the project check before any dataset, item, span or score was sent, and
-  that pair was deleted. On that server the dataset-run link is stored only as the span's
-  `experiment_*` fields: no `dataset_runs` row and no dataset-run item is written, so the public
-  dataset-runs API lists no run, and "dataset run" in this section means that experiment. On both
-  runs the experiment id stored on the span equalled the sender's derived id; the server stores the
-  id the sender sends rather than deriving its own, so on this server
-  `experiment_id_equals_server_run_id` compares with the span's stored experiment id. That the
-  server finds run-level scores by `dataset_run_id` equal to that id rests on its code (write mode
-  `events_only`), not on an observed marker: the live check sends none. Before the first full run is
-  cited, a read-only query confirms that its `run.completion_marker` score is stored with
-  `dataset_run_id` equal to that run's experiment id; until then, only the local file is cited. This
-  gate is a manual step, not enforced by code or a test; its result is noted in ADR 0030 with the
-  date and no ids, and the query output (which holds score, run and project ids) is never put in
-  git. The live check is run from the owner's shell with the sender's code from the change under
-  review (never an uncommitted probe; the record names the commit it was run from, as information
-  only, read with `git -C <repository root> rev-parse HEAD` (the root taken from the sender module's
-  own file path, never from the working directory or the environment) with every `GIT_*` variable
-  removed from that command's environment. The clean-worktree check runs on EVERY run of the sender,
-  not only the live check: it refuses unless `git -c core.fsmonitor=false -c
-  core.untrackedCache=false --no-optional-locks status --porcelain --untracked-files=all
-  --ignore-submodules=none`, run the same way, is empty (the two `-c` flags switch off the
-  file-system monitor and the untracked cache, so a stale cache cannot report a clean tree;
-  `--no-optional-locks` stops `status` taking the index lock; a failing `git` command, or a
-  `rev-parse` output that is not 40 hex characters, also refuses)).
+  `divesafe-eval` was run on 2026-11-20 from commit `731498a`, twice, against Langfuse server
+  4.80.0. It was run again once on 2026-11-22 (+08:00) from commit `54931e7`, because the PHN
+  removal changed `egress_gate.py` and `langfuse_checks.py`. The rerun used the same server, SDK and
+  evaluation environment and the same egress basis, and it passed (record below, updated for that
+  rerun). The rerun observed again the commit (read by the sender from the clean tree), the four
+  `calls` and `otlp_status` (the sender refuses unless each equals its constant),
+  `dataset_create_existing_status` (recorded only; the dataset already existed, and `DATASET_CALL`
+  requires the 200 it returned) and `langfuse_server_version` (from the health call; the sender
+  checks only its shape, and the value is the one the live check printed);
+  `dataset_run_link_as_span_attributes` and `experiment_id_equals_server_run_id` were observed on
+  2026-11-20 and carried over, since the server version is unchanged. The agents' egress basis was
+  `loopback_external_opt_in`: the first scenario's prompts went through a forwarding proxy on the
+  owner's machine to the hosted evaluation model; Langfuse was reached directly on `127.0.0.1:3000`.
+  Earlier attempts with a key pair of another project were refused at the project check before any
+  dataset, item, span or score was sent, and that pair was deleted. On that server the dataset-run
+  link is stored only as the span's `experiment_*` fields: no `dataset_runs` row and no dataset-run
+  item is written, so the public dataset-runs API lists no run, and "dataset run" in this section
+  means that experiment. On both 2026-11-20 runs the experiment id stored on the span equalled the
+  sender's derived id (it was not queried again on 2026-11-22); the server stores the id the sender
+  sends rather than deriving its own, so on this server `experiment_id_equals_server_run_id`
+  compares with the span's stored experiment id. That the server finds run-level scores by
+  `dataset_run_id` equal to that id rests on its code (write mode `events_only`), not on an observed
+  marker: the live check sends none. Before the first full run is cited, a read-only query confirms
+  that its `run.completion_marker` score is stored with `dataset_run_id` equal to that run's
+  experiment id; until then, only the local file is cited. This gate is a manual step, not enforced
+  by code or a test; its result is noted in ADR 0030 with the date and no ids, and the query output
+  (which holds score, run and project ids) is never put in git. The live check is run from the
+  owner's shell with the sender's code from the change under review (never an uncommitted probe; the
+  record names the commit it was run from, as information only, read with `git -C <repository root>
+  rev-parse HEAD` (the root taken from the sender module's own file path, never from the working
+  directory or the environment) with every `GIT_*` variable removed from that command's environment.
+  The clean-worktree check runs on EVERY run of the sender, not only the live check: it refuses
+  unless `git -c core.fsmonitor=false -c core.untrackedCache=false --no-optional-locks status
+  --porcelain --untracked-files=all --ignore-submodules=none`, run the same way, is empty (the two
+  `-c` flags switch off the file-system monitor and the untracked cache, so a stale cache cannot
+  report a clean tree; `--no-optional-locks` stops `status` taking the index lock; a failing `git`
+  command, or a `rev-parse` output that is not 40 hex characters, also refuses)).
 
   **Freeze by file hashes (owner decision, 2026-11-20, on the risk-reviewer's finding):** the
   record is frozen against the files it was made with, not against git history. An earlier
@@ -717,10 +728,13 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
   wrapt==2.5.2
   ```
 
+  The record's `commit` is the 2026-11-22 rerun's; its `dataset_run_link_as_span_attributes` and
+  `experiment_id_equals_server_run_id` values are from the 2026-11-20 runs (commit `731498a`).
+
   #### Live check record
   ```json
   {
-    "commit": "731498a467d14b10f45b249fdcdda6bcec9e5db2",
+    "commit": "54931e7a2e59f24c2585450ea51f0ab9be6081c4",
     "langfuse_version": "5.2.0",
     "base_url": "http://127.0.0.1:3000",
     "projects_read": ["divesafe-eval"],
@@ -751,11 +765,11 @@ A script in `tests/evaluation/` (the `[eval]` extra) may send one harness run to
     "langfuse_server_version": "4.80.0",
     "sender_sha256": {
       "tests/evaluation/langfuse_sender.py": "a5ede1e45eecce57d1d84d8bd975ccb3aec23b1df073d4cf4799633e3d246312",
-      "tests/evaluation/langfuse_checks.py": "9db1ebb8899a18ef0028fe8904930e28aea644fa30a815125ff8406440cecc91",
+      "tests/evaluation/langfuse_checks.py": "fc02d84be6e310ec5cd8ab8598b1096ace6a52629f1b0857b49969c8f3f8d3c2",
       "tests/evaluation/code_scores.py": "3439787db4fc137779b048727094832698494f553b0728b9252423165ded002c",
       "tests/evaluation/harness.py": "3d86a041e52de75f28bc0d986b59fcbe5b8db81771c3fab454b21ab1a7d18e81",
       "tests/evaluation/output_dir.py": "1e2b117489e7c6ffcaad25fda2761514ff3221441724d0332b542659bd75ace8",
-      "tests/evaluation/egress_gate.py": "801c43b9d8d030f019ea0ce92f048026d1ded972e50e8acffe4061b3aebb47d0",
+      "tests/evaluation/egress_gate.py": "4625b0827bcdd8d56972bb0202545b0968bdeb16ce35c1df1c893d26ec925ba8",
       "tests/evaluation/ablation.py": "7f7597034e516e7fc742a8b04bc60a5634397ba70851e7f42fc6f9bb7672d55a",
       "pyproject.toml#eval:langfuse": "b46857790273351e62e80fcc787ccc70ed67caa138e05289784ebf35508a0fa0",
       "tests/fixtures/open_meteo_marine_tioman_recorded_2026-10-08.json": "405af6b665f67800053459634cb35cf72281f47acdacca6e8a25f9fe0eed496e",
@@ -1155,8 +1169,8 @@ Settled 2026-11-15, each as the recommended default:
   the id).
 - No alert can be checked by a test in this repository; alerting is operator discipline.
 - Tiger Reef (registered 2026-11-20, ADR 0029 Amendment 2): the forecast and MET marine
-  connectors are mapped to Tioman's areas (owner, 2026-11-20), so only PHN, while it exists and
-  is on, refuses it and adds `observe.connector_failed:<name>` counts. Every Tiger Reef run still
+  connectors are mapped to Tioman's areas (owner, 2026-11-20), and PHN e-Tide was removed
+  (2026-11-21, ADR 0021 WITHDRAWN), so no connector refuses it. Every Tiger Reef run still
   ends below GO (INSUFFICIENT EVIDENCE at best; NO-GO is still possible; see ADR 0029 Amendment
   2). That is expected, not a data-source outage: when reading connector-failure or INSUFFICIENT
   EVIDENCE alerts, separate Tiger Reef runs from Tioman runs. Runs whose forecast requests are

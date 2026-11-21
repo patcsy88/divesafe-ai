@@ -25,6 +25,7 @@ from typing import IO, Any, Protocol
 
 from divesafe.config.logging import bind_request_id, current_request_id
 from divesafe.data.errors import ConnectorResponseError, ConnectorTransportError
+from divesafe.data.removed_sources import PHN_ETIDE_HOSTS
 
 USER_AGENT = "divesafe-ai/0.1 (non-commercial research; decision support only)"
 ALLOWED_HOSTS: frozenset[str] = frozenset(
@@ -42,9 +43,6 @@ CREDENTIAL_SCHEMES: tuple[tuple[frozenset[str], str, str], ...] = (
     (TIDES_TODAY_HOSTS, "x-api-key", ""),
 )
 CREDENTIAL_HOST_LISTS: tuple[frozenset[str], ...] = tuple(h for h, _, _ in CREDENTIAL_SCHEMES)
-# Also kept out of ALLOWED_HOSTS: only the POST getter below may call it.
-PHN_HOSTS: frozenset[str] = frozenset({"etide.hydro.gov.my"})
-PHN_MAX_BYTES = 512 * 1024
 MAX_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 2
 MAX_JSON_DEPTH = 32  # a parsing bound for hostile bodies, not a safety limit
@@ -345,8 +343,8 @@ class UrllibJsonGetter:
         ):
             # Fixed text: never the value.
             raise ValueError("a credential header value must be printable ASCII and not blank")
-        if hosts & PHN_HOSTS:
-            raise ValueError("the PHN host may only be called by the PHN POST getter")
+        if hosts & PHN_ETIDE_HOSTS:
+            raise ValueError("the PHN e-Tide host was removed (ADR 0021 WITHDRAWN)")
         self._timeout = timeout_seconds
         self._deadline = deadline_seconds
         self._allowed = hosts
@@ -422,7 +420,7 @@ def _open_json(
         echoed = False
     if echoed:
         raise ConnectorTransportError(f"request to {_label(url)} failed")
-    # The body is parsed whatever the Content-Type says: PHN sends JSON labelled text/html.
+    # The body is parsed whatever the Content-Type says.
     try:
         parsed = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
@@ -443,51 +441,3 @@ def _depth_exceeds(value: Any, limit: int) -> bool:
             children = item.values() if isinstance(item, dict) else item
             stack.extend((c, depth + 1) for c in children if isinstance(c, dict | list))
     return False
-
-
-class UrllibFormPostJsonGetter:
-    """POSTs `params` as a form and reads JSON, for the PHN e-Tide endpoint only.
-
-    It sends no credential, keeps no cookie (the session cookie PHN sets is ignored), follows no
-    redirect, and may only be built for the PHN host. `params` is the form body, not a query.
-    """
-
-    def __init__(
-        self,
-        timeout_seconds: float = 15.0,
-        deadline_seconds: float = 30.0,
-        allowed_hosts: Collection[str] = PHN_HOSTS,
-        max_bytes: int = PHN_MAX_BYTES,
-    ) -> None:
-        if isinstance(allowed_hosts, str):
-            raise TypeError("allowed_hosts must be a collection of host names")
-        hosts = frozenset(allowed_hosts)
-        if not hosts or not hosts <= PHN_HOSTS:
-            raise ValueError("this getter may only call the PHN e-Tide host")
-        self._timeout = timeout_seconds
-        self._deadline = deadline_seconds
-        self._allowed = hosts
-        self._max_bytes = max_bytes
-
-    async def get_json(self, url: str, params: Mapping[str, str]) -> Any:
-        check_url(url, self._allowed)
-        try:
-            return await _call_in_pool(self._post, url, params, self._deadline)
-        except TimeoutError as exc:
-            raise _timed_out(_label(url)) from exc
-
-    def _post(self, url: str, params: Mapping[str, str]) -> Any:
-        request = urllib.request.Request(  # noqa: S310 (scheme and host checked above)
-            url,
-            data=urllib.parse.urlencode(params).encode("ascii"),
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                # The e-Tide page's own script sends this; it is what the one recorded call used.
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            method="POST",
-        )
-        opener = urllib.request.build_opener(_NoRedirect())
-        return _open_json(opener, request, url, self._timeout, self._max_bytes)

@@ -72,24 +72,23 @@ professional. Raw records are kept outside the repository. They show the pipelin
 whatever model the host served under that name; they do not show a model is safe or reliable.
 
 **2026-10-17, runs 1 and 2, `claude-sonnet-5-5` through the OpenAI-compatible adapter** (a local
-proxy at `localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). Those runs
-predate ADR 0023: the proxy was treated as local and no opt-in was required. What left the
+proxy at `localhost:8317`, which forwards off-machine; code `cc3fa76`, prompt `2026-10-17.2`). Those
+runs predate ADR 0023: the proxy was treated as local and no opt-in was required. What left the
 machine was the synthetic scenarios plus recorded fixtures, including the recorded PHN tide item,
-which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, accepted but permission wording not on file). Which
-model answered rests on the proxy's routing; no digest was recorded. Today the evaluation runs
-the same gate as start-up and skips a loopback server unless `DIVESAFE_LLM_SERVER_IS_LOCAL=true`
-or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy should use the latter. Since
-ADR 0028, `DIVESAFE_EVAL_KNOWLEDGE_HOST` names the evaluation's knowledge host (basis
-`remote_knowledge_opt_in`); it must equal the evaluation URL's and the provider's host. A
-mismatch fails the run and is not skipped, and the tide check's PHN rule does not change. Each
-output file now records the `egress_basis` and the host name. The tide check also skips
-(writing a record that says so) unless the basis is `declared_local` or the operator sets
-`DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN=true`, because the PHN item would otherwise leave the machine
-while PHN's terms are not on file. A skipped tide check means that check did not run, and a run
-record should say so. In the table below, "ran" for all three runs predates that rule: the PHN
+which went on to a third-party vendor while PHN's terms are not on file (ADR 0021, accepted but
+permission wording not on file). Which model answered rests on the proxy's routing; no digest was
+recorded. Today the evaluation runs the same gate as start-up and skips a loopback server unless
+`DIVESAFE_LLM_SERVER_IS_LOCAL=true` or `DIVESAFE_ALLOW_EXTERNAL_LLM=true` is set; a forwarding proxy
+should use the latter. Since ADR 0028, `DIVESAFE_EVAL_KNOWLEDGE_HOST` names the evaluation's
+knowledge host (basis `remote_knowledge_opt_in`); it must equal the evaluation URL's and the
+provider's host. A mismatch fails the run and is not skipped. Each output file now records the
+`egress_basis` and the host name. The tide check, which sent one recorded PHN tide item through the
+real Reason stage, was removed on 2026-11-21 together with the PHN connector and its rule
+`DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN` (ADR 0021 WITHDRAWN). In the table below, "ran" for all three
+runs predates the later rule that required a declared-local server or an acknowledgement: the PHN
 item went to a forwarding host each time (two runs through the local proxy, one through
-`wall-e.ch30ng.org`) with no acknowledgement in place. A repeat run or a skipped check now writes
-a new file and never replaces an earlier raw record, whose hash a record here may cite.
+`wall-e.ch30ng.org`) with no acknowledgement in place. A repeat run or a skipped check now writes a
+new file and never replaces an earlier raw record, whose hash a record here may cite.
 
 **2026-10-18, `claude-sonnet-5-5` through the OpenAI-compatible adapter** at
 `https://wall-e.ch30ng.org/v1` (run 3; code `d0a46dd`, which was `2872b86` until the unpushed commits were rewritten on 2026-10-18 to remove host details; the raw run files record `2872b86`; prompt `2026-10-17.2`, `egress_basis`
@@ -141,6 +140,13 @@ answered rests on the host's routing; no digest was recorded.
 
 Scenario results do not prove real-world safety. Evaluation supports the capstone's claims
 about engineering quality, not operational certification.
+
+Known gap (2026-11-21): since the tide check was removed, no live check sends a tide item to a
+model. A tides.today-based tide-prompt check is not built. The tides.today item is excluded from
+evaluation sends (ADR 0029 decision 12), so such a check would need the SYNTHETIC fixture and a
+decision on where its prompts may go. The offline tests in
+`tests/safety/test_tide_is_not_a_current.py` still check that every prompt holding a tide item
+states the prohibition outside the untrusted block. Nothing now checks what a real model replies.
 
 ## Ablation and adversarial sets (ADR 0025 item 4)
 

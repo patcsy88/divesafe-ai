@@ -239,6 +239,10 @@ because each is new egress.
    stricter full-name rule above, taken before the silencing (a name is listed, a child of a
    listed name, or a placeholder ancestor of one); it is not in force and is not to be cited as
    such.
+
+   *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the evaluation tide check
+   (`tests/evaluation/tide_check.py`, `run_tide_check`) and its record no longer exist. The live
+   runners named above are now `harness.run_case` and the step-4 adversarial runner.*
 4. **Judge model:** `claude-fable-5-1`, a different model from the agents', on the same host.
    This reduces self-grading bias; it does not remove it (same vendor family). The id is a
    constant in the judge module, not an environment value; the script refuses to start if it

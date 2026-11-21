@@ -37,7 +37,7 @@ from tests.agent import scripted_llm
 from tests.evaluation import adversarial, harness
 from tests.evaluation.output_dir import CaptureRefused, check_output_dir
 
-from divesafe.data.phn_etide import SOURCE as PHN_SOURCE
+from divesafe.data.removed_sources import PHN_ETIDE_SOURCE as PHN_SOURCE
 from divesafe.data.tides_today import SOURCE as TIDES_TODAY_SOURCE
 from divesafe.domain import AssessmentRecord, DataKind
 

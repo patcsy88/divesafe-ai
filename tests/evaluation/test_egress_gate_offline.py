@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from tests.evaluation.egress_gate import egress_gate, output_path, tide_check_allowed
+from tests.evaluation.egress_gate import egress_gate, output_path
 
-from divesafe.models.egress import EgressBasis
 from divesafe.models.openai_compatible import OpenAICompatibleProvider
 
 pytestmark = pytest.mark.safety
@@ -145,22 +144,6 @@ def test_mutation_the_gate_catching_validation_error_is_caught() -> None:
         )
 
 
-def test_mutation_widening_the_tide_rule_to_the_knowledge_basis_is_caught() -> None:
-    """ADR 0028 decision 9: the knowledge attestation does not cover PHN data."""
-    from tests.evaluation import egress_gate as gate_module
-    from tests.safety.kb_fakes import mutated_module
-
-    assert tide_check_allowed("remote_knowledge_opt_in", phn_terms_acknowledged=False) is False
-    mutant = mutated_module(
-        gate_module,
-        (
-            '    return basis == "declared_local" or phn_terms_acknowledged\n',
-            '    return basis in ("declared_local", "remote_knowledge_opt_in") or phn_terms_acknowledged\n',  # noqa: E501
-        ),
-    )
-    assert mutant.tide_check_allowed("remote_knowledge_opt_in", phn_terms_acknowledged=False)
-
-
 def test_the_capture_knows_the_knowledge_label() -> None:
     from tests.evaluation.capture_item6 import EGRESS_BASES
 
@@ -171,27 +154,6 @@ def test_the_capture_knows_the_knowledge_label() -> None:
         "remote_external_opt_in",
         "remote_knowledge_opt_in",
     } == EGRESS_BASES
-
-
-@pytest.mark.parametrize(
-    ("basis", "acknowledged", "allowed"),
-    [
-        ("remote_knowledge_opt_in", False, False),
-        ("remote_knowledge_opt_in", True, True),
-        ("declared_local", False, True),
-        ("declared_local", True, True),
-        ("loopback_external_opt_in", False, False),
-        ("remote_external_opt_in", False, False),
-        ("none", False, False),
-        ("none", True, True),
-        ("loopback_external_opt_in", True, True),
-        ("remote_external_opt_in", True, True),
-    ],
-)
-def test_the_tide_check_sends_the_phn_item_only_to_a_local_server_or_when_acknowledged(
-    basis: EgressBasis, acknowledged: bool, allowed: bool
-) -> None:
-    assert tide_check_allowed(basis, phn_terms_acknowledged=acknowledged) is allowed
 
 
 def test_an_output_path_never_replaces_an_existing_record(tmp_path: Path) -> None:

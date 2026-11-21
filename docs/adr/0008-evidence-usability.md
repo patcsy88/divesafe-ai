@@ -276,3 +276,7 @@ remain unreachable in production. That is now the only code barrier, so any chan
 drops one of those factors needs its own risk review. The sign-off covers this change only. It does
 not cover the owner's judgement that tide predictions are adequate, which is recorded as the
 owner's.
+
+*Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the PHN evidence tests
+(`tests/safety/test_phn_tide_evidence.py`) no longer exist. Each of their cases has a tides.today
+twin in `tests/safety/test_tides_today_evidence.py`.*

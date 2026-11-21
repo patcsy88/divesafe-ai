@@ -18,9 +18,9 @@ from divesafe.data import (
     met_api_marine,
     open_meteo_marine,
     open_meteo_wind,
-    phn_etide,
     tides_today,
 )
+from divesafe.data.removed_sources import PHN_ETIDE_SOURCE
 from divesafe.services.kb_common import LoaderRefusal
 
 # Decision 9: "the prefixes are listed in code from the connectors, not a generic pattern". Each
@@ -32,7 +32,8 @@ CONNECTOR_PREFIXES: tuple[str, ...] = (
     met_api_marine.SOURCE,
     open_meteo_marine.SOURCE,
     open_meteo_wind.SOURCE,
-    phn_etide.SOURCE,
+    # Removed (ADR 0021 WITHDRAWN); kept so an old id is still caught.
+    PHN_ETIDE_SOURCE,
     tides_today.SOURCE,
 )
 

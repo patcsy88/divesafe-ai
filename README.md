@@ -25,8 +25,6 @@ warnings, historical observations, dive-site knowledge and a user's dive plan in
   - Open-Meteo marine and wind model data;
   - MET Malaysia warnings through data.gov.my, and the MET API marine forecast for the Tioman
     waters zone (in production since 2026-11-17);
-  - PHN e-Tide tide predictions, which are off by default and DEGRADED
-    ([ADR 0021](docs/adr/0021-phn-etide-tide-predictions.md));
   - tides.today tide predictions (Teluk Tekek: 3.7 km from the Tioman reference point, 13.4 km from
     the Tiger Reef dive site, position as published by PADI, as an owner-ordered proxy), which are
     DEGRADED (so they never support GO or CAUTION, whatever `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` says;

@@ -17,7 +17,8 @@ cannot be encoded yet (docs/risk-model.md), so GO is not reachable (as of 2026-1
 Every assessment sends its plan fields, evidence, rule results and findings to the model host named in
 `DIVESAFE_LLM_BASE_URL` (the opt-in is stated in the compose file). The API also calls the data
 sources from inside the container: Open-Meteo and data.gov.my, and MET Malaysia if you add a token.
-PHN is off by default. Use a plan for a real site and a future date, nothing private. Do not paste
+tides.today is called only if you switch it on and add its key.
+Use a plan for a real site and a future date, nothing private. Do not paste
 any secret into a chat, a ticket or a file inside the repository.
 
 ## Before you start

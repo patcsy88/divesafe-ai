@@ -85,21 +85,44 @@ from recommendation"; overrides need a non-blank rationale and an identified dec
 actual conditions require a human decision. A record without a `HumanDecision` has status
 `PENDING_HUMAN` and must not be acted on.
 
-### Reporting actual current (2026-11-20, owner)
+### Reporting actual current (2026-11-20, owner; list form 2026-11-21)
 
 Actual conditions are free-form `observations`, reported through `POST
 /v1/assessments/{assessment_id}/actual-conditions` by the assessment's assigned `decider` (ADR
 0013), and, once a decision is recorded, only after the planned start. For current at a site, report
-under `observations.current`: `observed_at` (ISO time with offset), `speed_kn` (a number, the
-diver's or crew's estimate), `band` (`none`/`mild`/`moderate`/`strong`), `direction_to_deg`
-(optional, where the water was going), `depth_m` (optional), `method` (`dive_guide_estimate`,
-`drift_gps` or `boat_crew`), and `phase` (optional, e.g. `near_high`, `ebbing`). Reports can be
-compared by hand with the stored model values for that hour (no code does this yet); they never
-change a result. The API does not check this format; it is a convention, so a report that does not
-follow it is stored as written. A report needs a recorded human decision and is written once only,
-so put every current reading into one submission. `band` labels have no numeric meaning here and
-must never become limits (AGENTS.md section 7). `speed_kn` is in knots and the model value is in
-km/h, so a comparison must state its conversion.
+`observations.current` as a list of readings, one per observation (for example at descent, mid-dive
+and ascent, or one per diver or boat). Each reading has: `observed_at` (ISO time with offset),
+`speed_kn` (a non-negative number, the diver's or crew's estimate), `band`
+(`none`/`mild`/`moderate`/`strong`), `direction_to_deg` (optional, degrees 0-359 clockwise from
+north, where the water was going; whether true or magnetic north is not yet fixed, so a comparison
+must state which it assumed), `depth_m` (optional), `method` (`dive_guide_estimate`,
+`drift_gps` or `boat_crew`), and `phase` (optional, e.g. `near_high`, `ebbing`). A single reading
+is still a list of one. Reports can be compared by hand with the stored model values nearest each
+reading's `observed_at` (no code does this yet); they never change a result. The API does not check
+this format; it is a convention, so a report that does not follow it (including an older
+single-object report) is stored as written. When reading reports, an object under `current` (the
+form before 2026-11-21) is one reading. The API refuses a report nested more than 6 levels deep
+(the `observations` object is level 1), with more than 500 entries in total (every object, list
+and value counts) or longer than 20,000 characters, so keep each reading to the fields above. A
+report needs a recorded human decision and is written once only. That covers the whole
+`observations` object, not only `current`, so put every reading and every other observation into
+one submission; a wrong reading cannot be corrected later. `band` labels have no numeric meaning.
+Neither the labels nor the reported speeds are limits, and neither may become one: a current limit
+still needs a cited, reviewed, `VALIDATED` rule definition (AGENTS.md section 7). `speed_kn` is in
+knots and the model value is in km/h (1 kn = 1.852 km/h), so a comparison must state its
+conversion.
+
+Example (synthetic: invented values, not a real report or site. The speeds and bands are paired
+arbitrarily and define no band; `band` is the reporter's own judgement):
+
+```json
+{"observations": {"current": [
+  {"observed_at": "2026-01-15T09:10:00+08:00", "speed_kn": 0.5, "band": "mild",
+   "method": "dive_guide_estimate", "depth_m": 12},
+  {"observed_at": "2026-01-15T09:40:00+08:00", "speed_kn": 1.0, "band": "moderate",
+   "direction_to_deg": 220, "method": "dive_guide_estimate", "phase": "ebbing"}
+]}}
+```
 
 ## Pipeline guarantees (`divesafe.orchestration`)
 
@@ -329,7 +352,8 @@ cannot confirm the decision was saved.
   definitions' depth, and Tioman stays open. There, missing or unusable MET data gives INSUFFICIENT
   EVIDENCE. It is always on. Still open: the check does not see the item's age, and gusts,
   direction, swell and the zone's extent are not covered (ADR 0031 Known gaps).
-- **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md)):**
+- **PHN tide predictions (2026-10-17, [ADR 0021](adr/0021-phn-etide-tide-predictions.md); removed
+  2026-11-21, WITHDRAWN):** Kept as a record of what applied.
   `PhnEtideConnector` items are DEGRADED daily predictions (high/low times and heights above chart
   datum) under `value["tide"]`, for one PHN station (not named in the response) and today plus two
   days only. A tide height or time gives no current speed or slack-water time, so `tidal_current`
@@ -340,7 +364,8 @@ cannot confirm the decision was saved.
   because `tidal_current` has no metric. The +08:00 zone is inferred and checked only against our
   clock; the permission to use the endpoint is the owner's report and is not on file. The connector
   is off by default. GO stays unreachable because `tidal_current` has no metric
-  (`tests/safety/test_tide_is_not_a_current.py:114`). The `tidal_current` placeholder no longer
+  (`tests/safety/test_tide_is_not_a_current.py::test_no_signed_limit_can_ever_be_expressed_on_a_tide_metric`).
+  The `tidal_current` placeholder no longer
   cites tide ids; the agent prompts say a tide is not a current.
 - **tides.today tide predictions (2026-11-17, [ADR
   0029](adr/0029-tides-today-tide-predictions.md)):** `TidesTodayConnector` items are DEGRADED daily
@@ -350,13 +375,13 @@ cannot confirm the decision was saved.
   each item states its own distance), today plus six days. Heights are taken as metres from the API
   field name `heightM`; no unit is documented. Only chart datum (CD) is accepted, and its level at
   this point is not stated. The provider names its own engine (`tpe`), which is not verified, so
-  lineage is unknown and it never corroborates PHN or anything else. The moon phase is context only:
-  not a spring/neap classification and nothing about current strength. An estimated extreme is
-  refused. The parser checks order, alternation and an 18 h gap, but a single missing high/low pair
-  can pass. All of PHN's limits on currents apply unchanged: `tidal_current` stays unencodable;
-  DEGRADED tide predictions satisfy the required `tides` category for GO or CAUTION only with the
-  setting on; no rule reads them (ADR 0008 Amendment 2). With PHN also on, both items are present
-  and no check compares them. Off by default (switching it on is the owner's decision); the full
+  lineage is unknown and it never corroborates any other source (PHN, the only other tide source,
+  was removed 2026-11-21). The moon phase is context only: not a spring/neap classification and
+  nothing about current strength. An estimated extreme is refused. The parser checks order,
+  alternation and an 18 h gap, but a single missing high/low pair can pass. The limits on currents
+  listed for PHN above apply unchanged: `tidal_current` stays unencodable; DEGRADED tide predictions
+  satisfy the required `tides` category for GO or CAUTION only with the setting on; no rule reads
+  them (ADR 0008 Amendment 2). Off by default (switching it on is the owner's decision); the full
   copyright notice is shown once with every assessment view that holds a tides.today item (evaluated
   or withheld), deduplicated, at most 4 notices then a count (ADR 0029 decision 11). Switched on in
   production by the owner on 2026-11-20 (ADR 0029, "Switched on").

@@ -71,8 +71,8 @@ The final decision always belongs to the diver, dive master or dive leader.
   (with their evidence ids), the screened rationale, and a completion marker holding only case
   counts, a code-set run id and the commit): never production data, knowledge extracts,
   refused or partial reply text, the model's confidence self-estimate, the PHN tide item
-  (ADR 0021), the tides.today tide item (ADR 0029), or the item-6 capture (ADR 0027
-  amendment). Their refusal checks are offline safety tests.
+  (ADR 0021; source removed 2026-11-21; still refused), the tides.today tide item (ADR 0029),
+  or the item-6 capture (ADR 0027 amendment). Their refusal checks are offline safety tests.
   Scores are advisory: they never change rules, prompts, thresholds, `confidence` or the corpus
   automatically, and a change they suggest goes through review like any other. The offline
   safety gates (`false_go = 0`) are not scores; they stay hard gates.

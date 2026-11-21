@@ -25,7 +25,6 @@ from divesafe.data import (
     DataGovMyForecastConnector,
     MetApiMarineConnector,
     OpenMeteoMarineConnector,
-    PhnEtideConnector,
 )
 from divesafe.data import data_gov_my_forecast as dgm
 from divesafe.data import met_api_marine as met
@@ -161,20 +160,6 @@ def test_tides_today_still_has_no_mapping_for_an_unregistered_site() -> None:
     with pytest.raises(ConnectorResponseError, match="no tides.today location"):
         asyncio.run(tt.TidesTodayConnector(getter).fetch(other, START, END, NOW))
     assert getter.calls == []
-
-
-def test_unmapped_connectors_refuse_tiger_reef_before_any_request() -> None:
-    # Open-Meteo marine is deliberately not listed: it has no site table and requests the site's
-    # own point (pinned below, ADR 0029 Amendment 2). The data.gov.my forecast and MET marine are
-    # mapped to Tioman's areas by owner decision (2026-11-20), pinned below.
-    cases: list[tuple[Any, str]] = [
-        (PhnEtideConnector, "no tide location is registered"),
-    ]
-    for connector, message in cases:
-        getter = _Getter()
-        with pytest.raises(ConnectorResponseError, match=message):
-            asyncio.run(connector(getter).fetch(TIGER_REEF, START, END, NOW))
-        assert getter.calls == []
 
 
 def test_open_meteo_marine_requests_tiger_reefs_own_point_and_returns_forecast_currents() -> None:

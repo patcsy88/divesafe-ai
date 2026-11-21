@@ -22,7 +22,6 @@ from divesafe.config.secret_files import secret_file_name
 from divesafe.data import (
     MET_API_HOSTS,
     MET_API_QUOTA,
-    PHN_ETIDE_QUOTA,
     SITES,
     TIDES_TODAY_HOSTS,
     TIDES_TODAY_QUOTA,
@@ -34,12 +33,11 @@ from divesafe.data import (
     MetApiMarineConnector,
     OpenMeteoMarineConnector,
     OpenMeteoWindConnector,
-    PhnEtideConnector,
     TidesTodayConnector,
-    UrllibFormPostJsonGetter,
     UrllibJsonGetter,
 )
 from divesafe.data.http import HTTP_POOL_CEILING, configure_http_pool, http_pool_size
+from divesafe.data.removed_sources import PHN_ETIDE_REFUSAL, PHN_ETIDE_SETTING
 from divesafe.domain import DataCategory, RecordEgressBasis, RiskFactorKind
 from divesafe.models import LLMProvider, create_provider
 from divesafe.models.egress import EgressBasis, check_egress
@@ -67,8 +65,8 @@ from divesafe.services import (
     kb_attestation,
 )
 
-# The required categories. Tide predictions are DEGRADED (tides.today, ADR 0029, and PHN e-Tide,
-# ADR 0021, both off by default). Signed-off definitions come only from a reviewed ruleset file
+# The required categories. Tide predictions are DEGRADED (tides.today, ADR 0029, off by
+# default). Signed-off definitions come only from a reviewed ruleset file
 # (ADR 0009); factors without one keep their placeholders, so GO and CAUTION stay unreachable
 # while tidal current, weather, forecast uncertainty and site constraints cannot be encoded
 # (pinned by tests/safety/test_degraded_needs_met_role.py, section d). See docs/data-sources.md.
@@ -289,13 +287,6 @@ def build_provider(settings: Settings) -> tuple[LLMProvider | None, ProviderBasi
             "this (ADR 0029)",
             extra={"egress_basis": basis},
         )
-    # ADR 0028 decision 9: unchanged; the knowledge basis does not cover PHN data.
-    if settings.phn_etide_enabled and basis != "declared_local":
-        logger.warning(
-            "PHN e-Tide data is ON and the model server is not declared local: the PHN tide item "
-            "is sent to it with every assessment, and PHN's terms are not on file (ADR 0021)",
-            extra={"egress_basis": basis},
-        )
     return provider, basis
 
 
@@ -353,7 +344,15 @@ def refuse_loader_credentials(environ: Mapping[str, str]) -> None:
         )
 
 
+def refuse_removed_settings(environ: Mapping[str, str]) -> None:
+    """ADR 0021 WITHDRAWN: the PHN connector is gone, so its switch stops start-up in every
+    environment, whatever its value. Settings reads names case-insensitively, so this does too."""
+    if any(k.upper() == PHN_ETIDE_SETTING for k in environ):
+        raise RuntimeError(PHN_ETIDE_REFUSAL)
+
+
 def build_default_state(settings: Settings) -> AppState:
+    refuse_removed_settings(os.environ)
     if settings.environment == "production" and settings.admin_database_url is not None:
         raise RuntimeError(
             "refusing to start in production with the owner-role database URL "
@@ -393,20 +392,6 @@ def build_default_state(settings: Settings) -> AppState:
             quotas=(MET_API_QUOTA,),
         )
         connectors.append(MetApiMarineConnector(met_getter))
-    if settings.phn_etide_enabled:
-        logger.warning(
-            "PHN e-Tide tide predictions are ON (DIVESAFE_PHN_ETIDE_ENABLED); "
-            "PHN's permission wording is not on file (ADR 0021)"
-        )
-        connectors.append(
-            PhnEtideConnector(
-                CachingRateLimitedGetter(
-                    UrllibFormPostJsonGetter(),
-                    min_interval_seconds={"etide.hydro.gov.my": 0.0},
-                    quotas=(PHN_ETIDE_QUOTA,),
-                )
-            )
-        )
     if settings.tides_today_enabled:
         logger.warning(
             "tides.today tide predictions are ON (DIVESAFE_TIDES_TODAY_ENABLED); the full "

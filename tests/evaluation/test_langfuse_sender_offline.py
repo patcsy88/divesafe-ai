@@ -1547,11 +1547,11 @@ def _tide_source(which: str) -> str:
     """The PHN source, or the other refused tide source (ADR 0029's), taken from
     `REFUSED_SOURCES` so this file never names it: only the files the tide-name scan of
     `test_capture_item6_live_offline.py` exempts may. That file pins which source it is."""
-    from divesafe.data import phn_etide
+    from divesafe.data.removed_sources import PHN_ETIDE_SOURCE
 
-    others = sorted(langfuse_checks.REFUSED_SOURCES - {phn_etide.SOURCE})
-    assert phn_etide.SOURCE in langfuse_checks.REFUSED_SOURCES and len(others) == 1
-    return phn_etide.SOURCE if which == "phn" else others[0]
+    others = sorted(langfuse_checks.REFUSED_SOURCES - {PHN_ETIDE_SOURCE})
+    assert PHN_ETIDE_SOURCE in langfuse_checks.REFUSED_SOURCES and len(others) == 1
+    return PHN_ETIDE_SOURCE if which == "phn" else others[0]
 
 
 RECORD_REFUSALS: dict[str, tuple[str, Any]] = {
@@ -1651,18 +1651,6 @@ def test_the_harness_runner_records_the_basis_and_host_it_was_given() -> None:
 
     assert result.raw_record["egress_basis"] == REMOTE["egress_basis"]
     assert result.raw_record["model_host"] == REMOTE["model_host"]
-
-
-def test_the_tide_check_runner_records_the_basis_and_host_it_was_given() -> None:
-    from tests.evaluation.tide_check import run_tide_check
-
-    result = run_tide_check(fake(), **REMOTE)
-
-    assert result.record.egress_basis is not None
-    assert (result.record.egress_basis.value, result.record.model_host) == (
-        REMOTE["egress_basis"],
-        REMOTE["model_host"],
-    )
 
 
 def test_the_post_run_check_refuses_a_record_with_other_egress_values() -> None:

@@ -20,7 +20,7 @@ from tests.evaluation import item6_scrub
 from divesafe.config import Settings
 from divesafe.data import TIOMAN_ISLAND
 from divesafe.data.met_api_marine import SOURCE as MET_SOURCE
-from divesafe.data.phn_etide import SOURCE as PHN_SOURCE
+from divesafe.data.removed_sources import PHN_ETIDE_SOURCE as PHN_SOURCE
 from divesafe.data.tides_today import SOURCE as TIDES_TODAY_SOURCE
 from divesafe.models import FakeProvider
 

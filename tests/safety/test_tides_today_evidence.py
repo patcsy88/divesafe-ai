@@ -305,6 +305,16 @@ def _not_alternating(t: Any, m: Any, s: Any) -> None:
     m["items"][5].update(type="low-tide", heightM=1.35)
 
 
+def _not_alternating_across_midnight(t: Any, m: Any, s: Any) -> None:
+    # The last extreme of 17 Nov MYT (20:10, low) and the first of 18 Nov (03:40) made both lows,
+    # the second lower, and every later extreme flipped so that each later pair still alternates,
+    # each high above the lows beside it: only an alternation check that spans the local day
+    # boundary, not one applied per day, can refuse this.
+    for index, height in enumerate((1.1, 1.6, 1.0, 1.5, 0.9, 1.45, 0.8, 1.35, 0.7), start=3):
+        kind = "low-tide" if index % 2 else "high-tide"
+        m["items"][index].update(type=kind, heightM=height)
+
+
 def _long_gap(t: Any, m: Any, s: Any) -> None:
     # A pair removed and the next low moved an hour later: still in order and alternating, with
     # the high above the low, but 18 h 20 min between them. Only the gap bound refuses this.
@@ -402,6 +412,7 @@ BREAKS = {
     "wrong-name": (_wrong_name, "name differs from the table"),
     "wrong-latitude": (_wrong_latitude, "coordinates differ from the table"),
     "not-alternating": (_not_alternating, "do not alternate"),
+    "not-alternating-across-midnight": (_not_alternating_across_midnight, "do not alternate"),
     "estimated": (_estimated, "marked estimated"),
     "long-gap": (_long_gap, "appears to be missing"),
     "high-below-low": (_high_below_low, "not above the low"),
@@ -685,7 +696,7 @@ def _host_misses(module: Any) -> list[str]:
         except ValueError:
             continue
         bad.append(f"a {header[0]} header {header[1]!r} was allowed for {sorted(hosts)}")
-    lists = [*module.CREDENTIAL_HOST_LISTS, module.ALLOWED_HOSTS, module.PHN_HOSTS]
+    lists = [*module.CREDENTIAL_HOST_LISTS, module.ALLOWED_HOSTS, module.PHN_ETIDE_HOSTS]
     if any(a & b for i, a in enumerate(lists) for b in lists[i + 1 :]):
         bad.append("host lists overlap")
     # A blank value or one that could split the header line is refused for either scheme.

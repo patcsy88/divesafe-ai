@@ -70,6 +70,11 @@ plan and evidence data left the machine. The address cannot show where the promp
    writes `tide_check_<provider>.json` with `status: skipped`, the reason and the basis; a run
    writes `status: ran` and whether the acknowledgement was set. Both output files record the
    host name only (no scheme, port, path or key).
+   *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the evaluation tide check
+   (`tests/evaluation/tide_check.py`, `run_tide_check`), `tide_check_allowed`,
+   `DIVESAFE_EVAL_ACCEPT_PHN_TERMS_OPEN` and the `tide_check_<provider>.json` record no longer
+   exist. The PHN start-up warning described below was also removed. Setting
+   `DIVESAFE_PHN_ETIDE_ENABLED` now stops start-up.*
 8. **Callers.** `create_provider`, the adapter constructors, each adapter module's `_factory` and
    the registry do **not** check egress. Every runtime caller must go through `build_provider` or
    call `check_egress` itself and log the basis. A safety test scans each file under
@@ -257,6 +262,9 @@ plan and evidence data left the machine. The address cannot show where the promp
   proxy, one through `wall-e.ch30ng.org`), all before this rule existed, while PHN's terms are
   not on file (ADR 0021). Sharing a "ran" tide-check record also redistributes that item. The live tide check now skips unless the basis is `declared_local` or an explicit
   acknowledgement is set; nothing equivalent exists for a running application.
+  *Note (2026-11-21): PHN e-Tide was removed (ADR 0021 WITHDRAWN); the live tide check and its
+  acknowledgement no longer exist, so no evaluation run sends a PHN item. The three earlier runs
+  still happened as described.*
 - **The basis cannot tell hosts apart.** A self-hosted model on another machine and a public
   forwarding proxy both log `remote_external_opt_in`, so setting the opt-in becomes routine and
   signals less. It does not name the recipient. The record should carry the host too (the typed
