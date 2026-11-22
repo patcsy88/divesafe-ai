@@ -129,18 +129,18 @@ Gaps added:
 
 ## Amendment 2026-11-22: restyle with HeroUI v3 (PROPOSED, owner review)
 
-- Status: PROPOSED. Owner decisions 2026-11-22: the web UI stays a browser app; it is restyled
-  with HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the deploy
-  items (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service,
-  the gaps above) are separate and unchanged by this amendment.
+- Status: PROPOSED. Owner decisions 2026-11-22: the web UI stays a browser app; it is restyled with
+  HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the deploy items
+  (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service, the gaps
+  above) are separate and unchanged by this amendment.
 - Changes only how `web/` looks. Nothing in "Decision" above is relaxed.
 
 ### Decision
 
-Restyle `web/` with HeroUI v3 (`@heroui/react` and `@heroui/styles`, line 3.2.x, open source),
-which sits on React Aria Components and Tailwind CSS v4, needs no provider and animates with CSS
-only. Reasons: accessible components (roles, labels, focus handled by React Aria) instead of
-more hand-written CSS, and one consistent look for the forms, tables and badges.
+Restyle `web/` with HeroUI v3 (`@heroui/react` and `@heroui/styles`, line 3.2.x, open source), which
+sits on React Aria Components and Tailwind CSS v4, needs no provider and animates with CSS only.
+Reasons: accessible components (roles, labels, focus handled by React Aria) instead of more
+hand-written CSS, and one consistent look for the forms, tables and badges.
 
 Rejected:
 - **Ionic (and Capacitor, a native app):** mobile-first and client-rendered. It fights the
@@ -151,70 +151,100 @@ Rejected:
 
 ### New dependencies
 
-Exact-pinned like the rest of `package.json`: `@heroui/react`, `@heroui/styles`, `tailwindcss`
-(v4), `@tailwindcss/postcss` (or whatever the official Next.js setup needs), and, transitively,
-React Aria. Supply chain: this is a large transitive tree. CI's existing `web` job covers it
-(`npm audit --omit=dev --package-lock-only`, the no-install-script check, `npm ci
---ignore-scripts`); a new advisory can fail an unrelated change (already a known gap).
-To do before merge: record each direct package's licence (MIT expected) and the lock file's
-install-script result; do not accept a package that adds an install script.
+Exact-pinned like the rest of `package.json`: `@heroui/react`, `@heroui/styles`, `tailwindcss` (v4),
+`@tailwindcss/postcss` (or whatever the official Next.js setup needs), and, transitively, React
+Aria. Supply chain: this is a large transitive tree. CI's existing `web` job covers it (`npm audit
+--omit=dev --package-lock-only`, the no-install-script check, `npm ci --ignore-scripts`); a new
+advisory can fail an unrelated change (already a known gap). To do before merge: record each direct
+package's licence (MIT expected) and the lock file's install-script result; do not accept a package
+that adds an install script.
 
 ### What must not change
 
+- No visible text changes, and no element that states a status, warning, limit or caveat is removed,
+  merged, reordered or given a weaker role. Only styling and markup change. The lists below name the
+  most important elements; they are not exhaustive. Among them, besides those named below: the run
+  states ("NO RESULT YET", "Did not finish"), the decision-withheld box, the not-evaluated list
+  ("not the same as being safe"), the source-failure and model-failure cards, the
+  unverified-proposal box, the less-severe override wording on a recorded decision, the decision
+  form's order (most severe first, nothing preselected, the less-severe warning, the confirm step),
+  the conflicting-signals box with its caveat, and the evidence page's "measured" and quality
+  wording.
 - Pages stay server-rendered. Only the server talks to the API. The API key never reaches the
   browser. The sealed httpOnly cookie, the session and the login throttle are unchanged.
 - No risk logic in `web/`. `final_recommendation` is shown as returned; an unrecognised value is
   INSUFFICIENT EVIDENCE.
 - Model-written text is plain text, under a model heading, in the box labelled unverified. No
   `dangerouslySetInnerHTML`; no component that renders model or provider text as markup.
-- **CSP and headers:** the CSP stays as it is: no new script, style, font or connect source, no
-  CDN, no remote fonts, no runtime CSS-in-JS that needs `eval`. Tailwind output is built CSS
-  served from `'self'`; fonts stay the system stack. This must be verified on the built app
-  (response headers and the browser console show no CSP violation), not assumed. The other
-  security headers and `robots: noindex` are unchanged.
+- **CSP and headers:** the CSP stays as it is: no new script, style, font or connect source, no CDN,
+  no remote fonts, no runtime CSS-in-JS that needs `eval`. Tailwind output is built CSS served from
+  `'self'`; fonts stay the system stack. This must be verified on the built app (response headers
+  and the browser console show no CSP violation), not assumed. The other security headers and
+  `robots: noindex` are unchanged.
 - **Meaning of the visuals:** each result keeps a distinct colour AND its text label (colour is
   never the only signal), and INSUFFICIENT EVIDENCE stays visibly different from GO. Kept as they
   are: the PENDING-human banner, the disclaimer (`role="note"`), the DEGRADED note right after the
-  result and in the decision form's context, model output under its heading, provider notices,
-  the withheld evidence box and the "a report, not a measurement by the system" wording on
-  reported conditions.
+  result and in the decision form's context, model output under its heading, provider notices, the
+  withheld evidence box and the "a report, not a measurement by the system" wording on reported
+  conditions.
+- No safety text (banner, disclaimer, DEGRADED note, pending and withheld states, not-evaluated
+  list, run states, override warnings) sits in anything collapsed, hover-only, dismissible or timed.
+  All four result badges have the same size and weight. INSUFFICIENT EVIDENCE and NO-GO never use
+  the success (green) style, and INSUFFICIENT EVIDENCE is never shown as disabled. The DEGRADED note
+  stays a full-width block right after the badge, at least as prominent as now, not a small caption.
 - Accessibility at least as good as now: roles (`alert`, `status`, `note`), labels on every input,
-  visible focus, keyboard use of the decision form and its confirm step, contrast in light and
-  dark.
+  visible focus, keyboard use of the decision form and its confirm step, contrast of at least WCAG
+  AA in light and dark (4.5:1 for text; 3:1 for large text and the badge border), checked by hand on
+  the screenshots. Today's dark-mode NO-GO and INSUFFICIENT EVIDENCE badges fall below 3:1, and the
+  restyle must fix that.
 
 ### Client boundary
 
-Reports exist of "client-only" errors when `@heroui/react` is imported in server components on
-Next 16. Rule: HeroUI interactive components are imported only in files that start with
-`"use client"`. Server pages use plain elements with `@heroui/styles` classes, or thin client
-wrappers that receive display data only, never the key, the session or a server module. The
-existing boundary test (no client file imports `lib/api|auth|config|session`, reads
-`process.env`, or uses `NEXT_PUBLIC`) applies to the wrappers.
+Reports exist of "client-only" errors when `@heroui/react` is imported in server components on Next
+16. Rule: HeroUI interactive components are imported only in files that start with `"use client"`.
+Server pages use plain elements with `@heroui/styles` classes, or thin client wrappers that receive
+display data only, never the key, the session or a server module. The existing boundary test (no
+client file imports `lib/api|auth|config|session`, reads `process.env`, or uses `NEXT_PUBLIC`)
+applies to the wrappers.
 
 ### Tests
 
-`web/tests/degradednote.test.ts` and others read page source (for instance the order of the
-badge and `<DegradedEvidenceNote>` in the page, and `className="pending"`). A restyle may force
-edits to them. Any such change must keep or strengthen what the test proves, never weaken it, and
-needs owner approval and `risk-reviewer` review (AGENTS.md section 4). `boundary.test.ts` is
-unchanged. The Python safety tests that read `web/` files (the degraded note wording, provider
-notices, `NOTHING_RECORDED_503`) keep passing unchanged. Mutation-check any new or edited guard.
+`web/tests/degradednote.test.ts` and others read page source (for instance the order of the badge
+and `<DegradedEvidenceNote>` in the page, and `className="pending"`). A restyle may force edits to
+them. Any such change must keep or strengthen what the test proves, never weaken it, and needs owner
+approval and `risk-reviewer` review (AGENTS.md section 4). `boundary.test.ts` is unchanged.
+`DegradedEvidenceNote.ts`, `ProviderNotices.ts` and `NOTHING_RECORDED_503` in `lib/api.ts` keep
+their paths, constants and offline renderability, so the Python safety tests that read them keep
+passing unchanged. If the restyle needs to change any of them, the Python safety test change follows
+AGENTS.md section 4 (owner approval, `risk-reviewer`, mutation check) like the web tests.
+Mutation-check any new or edited guard. An edited `degradednote.test.ts` must fail on each of these
+mutants: the note moved away from the badge, the note dropped from the decision-form context, the
+note rendered unconditionally, and the note's role removed. A render of the result block is
+preferred to a source-position check.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 
 The restyle changes `web/` after `fbad5a2`, the build on which ADR 0008 Amendment 1, Open
 preconditions (a), was checked (2026-11-22). That check must be repeated on the restyled build
-before the restyle is accepted, by the method recorded there: a stand-in API serving synthetic
-views built with the real `AssessmentView.of`, marked GO and CAUTION compared with unmarked GO,
-CAUTION and NO-GO, and the note text found in the server chunks of a production build. The note's
-wording stays pinned to the API constant.
+before the restyle is accepted, by the method recorded there: views from the real
+`AssessmentView.of`; marked GO and CAUTION records show the note after the badge and in the
+decision-form context; unmarked GO, CAUTION and NO-GO records show neither. Checked in the
+server-rendered HTML whether or not the note's component is a client component, plus one browser
+look in light and dark. In the same run, for each synthetic view, the page's visible text (tags
+stripped, whitespace normalised) and its sequence of `role` attributes are the same before and after
+the restyle, and so are the evidence page and the decision form's review and confirm states. The
+result, with the restyled commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open
+preconditions (a). The note's wording stays pinned to the API constant.
 
 ### Reviews
 
 - `security-reviewer`: the dependencies and licences, the CSP on the build, the client boundary.
 - `risk-reviewer`: colours and labels, the note and banner, any test change.
-- Before acceptance: screenshots, by hand, of each of the four result badges, the PENDING banner
-  and the DEGRADED note, in light and dark, attached to the PR for `risk-reviewer` and the owner.
+- Before acceptance: screenshots, by hand, of each of the four result badges, the PENDING banner and
+  the DEGRADED note, in light and dark, and also an unrecognised result value, the "NO RESULT YET"
+  and "Did not finish" states, the decision form's less-severe warning and confirm step, the
+  decision-withheld box, the evidence page's withheld box, and a narrow phone width, attached to the
+  PR for `risk-reviewer` and the owner.
 - Both before merge; blockers fixed first.
 
 ### Known gaps added
@@ -225,5 +255,5 @@ wording stays pinned to the API constant.
   bumps; no lock file with hashes (ADR 0024 open item).
 - Tailwind's generated CSS is not reviewed line by line; visual meaning is checked by hand and by
   the tests above.
-- The CSP still allows inline scripts and styles (gap above); the restyle does not close it and
-  must not widen it.
+- The CSP still allows inline scripts and styles (gap above); the restyle does not close it and must
+  not widen it.
