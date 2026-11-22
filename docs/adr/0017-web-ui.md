@@ -225,19 +225,22 @@ HeroUI's stylesheet applies to every page, and a class of ours that it also defi
 property our rule does not set (found 2026-11-22: `badge`, `card`, `label`, `link` and `tag`; the
 result badge got HeroUI's grey background). So every class in `app/` and `components/` carries the
 `ds-` prefix, and `web/tests/classes.test.ts` fails if a class is used without a rule in
-`globals.css`, has no prefix, is set from anything but a literal or `badgeClass(...)`, or is also a
-class in `@heroui/styles`. HeroUI's rules that are not tied to a class are Tailwind's element reset,
-a border colour on every element and two `:root` settings; its other unclassed selectors need
-attributes the app does not use (`data-slot`, `data-theme`, `data-reduce-motion`, `data-scrollbar`,
-`dir`). The reset removes paragraph and list spacing, list bullets, heading weight and link
-underlines, so `globals.css` puts these browser defaults back with element rules. On 2026-11-22
-every element of the result, evidence, home and login pages had the same computed style as at
-`fbad5a2`, in light and dark mode and with reduced motion on and off. Tailwind scans only `app/`,
-`components/` and `lib/` (`source(none)` and `@source`), so text in tests or scripts never reaches
-the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22):
-it fails if a built stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address,
-has a `url()` or `image-set()` address that is not a `data:` URI or a `/_next/static/` file, or if
-there is no stylesheet to check.
+`globals.css`, has no prefix, is set from anything but a literal or `badgeClass(...)`, is set
+through a quoted `className` key or a `class` prop, or is also a class in `@heroui/styles`. HeroUI's
+rules that are not tied to a class are Tailwind's element reset, a border colour on every element
+and two `:root` settings; its other unclassed selectors need attributes the app does not use
+(`data-slot`, `data-theme`, `data-reduce-motion`, `data-scrollbar`, `dir`). The reset removes
+paragraph and list spacing, list bullets, heading weight and link underlines, so `globals.css` puts
+these browser defaults back with element rules. On 2026-11-22 every element of the result, evidence,
+home and login pages had the same computed style as at `fbad5a2`, in light and dark mode and with
+reduced motion on and off (in Chromium, as first rendered; the decision form's less-severe warning,
+the confirm step and the error alerts were not opened and are left to the (a) repeat). Tailwind
+scans only `app/`, `components/` and `lib/` (`source(none)` and `@source`), so text in tests or
+scripts never reaches the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after the
+build (owner, 2026-11-22): it fails if a built stylesheet keeps an `@import`, names an `http(s)` or
+protocol-relative address, has a `url()` or `image-set()` address that is not a `data:` URI or a
+`/_next/static/` file (a `..` step, an encoded dot or a backslash counts as leaving it), or if there
+is no stylesheet to check.
 
 ### What must not change
 
@@ -315,7 +318,11 @@ each of these mutants: the note moved away from the badge, the note dropped from
 context, the note rendered unconditionally, and the note's role removed. A render of the result
 block is preferred to a source-position check. Before the restyle touches `lib/present.ts`, a web
 test pins that GO, CAUTION, NO-GO and INSUFFICIENT EVIDENCE map to four distinct badge classes, each
-with its own label.
+with its own label. If the restyle needs classes without the `ds-` prefix (Tailwind utilities, or a
+`className` on a HeroUI component), `web/tests/classes.test.ts` gets an explicit allow-list, with
+owner approval and `risk-reviewer` review. It still fails on any hiding utility (`hidden`,
+`invisible`, `sr-only`, `opacity-0`, `collapse`, `h-0`, `w-0`, `animate-out`, or `overflow-hidden`
+on a safety element) and on HeroUI's `badge`, `card`, `label`, `link` and `tag` as a class of ours.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 

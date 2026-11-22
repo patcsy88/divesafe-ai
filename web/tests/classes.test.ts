@@ -23,6 +23,8 @@ function appClasses(): Set<string> {
   const files = [...walk(join(ROOT, "app")), ...walk(join(ROOT, "components"))];
   for (const file of files.filter((f) => /\.tsx?$/.test(f))) {
     const text = readFileSync(file, "utf8");
+    const unchecked = /["']className["']\s*:|\bclass\s*[:=]/;
+    assert.doesNotMatch(text, unchecked, `${file}: a class is set in a form not checked`);
     for (const m of text.matchAll(/className(?:=|:\s*)(.)/g)) {
       assert.match(m[1] ?? "", /["'`{]/, `${file}: className is not a literal`);
     }

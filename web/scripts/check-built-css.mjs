@@ -32,11 +32,13 @@ for (const p of sheets) {
   }
   const targets = [...text.matchAll(/url\(\s*(["']?)([^"')]*)/gi)].map((m) => m[2] ?? "");
   // image-set() also takes plain strings as image addresses.
-  for (const m of text.matchAll(/image-set\(([^)]*)\)/gi)) {
+  for (const m of text.matchAll(/image-set\(((?:[^()]|\([^()]*\))*)\)/gi)) {
     for (const q of (m[1] ?? "").matchAll(/["']([^"']*)["']/g)) targets.push(q[1] ?? "");
   }
   for (const target of targets) {
-    if (!/^data:/i.test(target) && !target.startsWith("/_next/static/")) {
+    // A ".." step, an encoded dot or a backslash can lead out of /_next/static/.
+    const local = target.startsWith("/_next/static/") && !/\.\.|%2e|\\/i.test(target);
+    if (!/^data:/i.test(target) && !local) {
       problems.push(`${p} loads url(${target.slice(0, 60)})`);
     }
   }
