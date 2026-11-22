@@ -17,9 +17,9 @@ function item(it: EvidenceItem, n: number): ReactElement {
     h(
       "p",
       null,
-      h("span", { className: "tag" }, clip(it.data_kind)),
-      h("span", { className: "tag" }, provenanceLabel(String(it.data_kind))),
-      h("span", { className: "tag" }, "not in main result"),
+      h("span", { className: "ds-tag" }, clip(it.data_kind)),
+      h("span", { className: "ds-tag" }, provenanceLabel(String(it.data_kind))),
+      h("span", { className: "ds-tag" }, "not in main result"),
     ),
     h(
       "dl",
@@ -38,7 +38,7 @@ function item(it: EvidenceItem, n: number): ReactElement {
       "details",
       null,
       h("summary", null, "Raw values (third-party text, shown as plain text)"),
-      h("pre", { className: "value" }, shown(it.value)),
+      h("pre", { className: "ds-value" }, shown(it.value)),
     ),
   );
 }
@@ -54,7 +54,7 @@ export default function WithheldBox({
   const { shown: list, hidden } = capWithheld(items);
   return h(
     "section",
-    { className: "card warn", "aria-labelledby": "withheld-heading", "data-testid": "withheld-evidence" },
+    { className: "ds-card ds-warn", "aria-labelledby": "withheld-heading", "data-testid": "withheld-evidence" },
     h("h2", { id: "withheld-heading" }, WITHHELD_TITLE),
     h("p", null, WITHHELD_INTRO),
     h("p", { role: "note" }, plain(note ?? "")),

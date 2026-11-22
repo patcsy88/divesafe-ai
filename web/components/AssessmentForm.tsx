@@ -17,7 +17,7 @@ export default function AssessmentForm({
     if (state.renewKey) renewKey();
   }, [state, renewKey]);
   return (
-    <form action={action} onChange={renewKey} className="card">
+    <form action={action} onChange={renewKey} className="ds-card">
       <input type="hidden" name="retry_key" value={retryKey} />
       <label htmlFor="site_id">Dive site</label>
       <select id="site_id" name="site_id" required>
@@ -27,7 +27,7 @@ export default function AssessmentForm({
       </select>
 
       <label htmlFor="planned_start">Planned start</label>
-      <div className="row">
+      <div className="ds-row">
         <input id="planned_start" name="planned_start" type="datetime-local" required />
         <select name="zone" aria-label="Time zone" defaultValue="+08:00">
           <option value="+08:00">Malaysia time (UTC+8)</option>
@@ -43,12 +43,12 @@ export default function AssessmentForm({
 
       <label htmlFor="decider">Person who will record the decision (optional)</label>
       <input id="decider" name="decider" maxLength={100} autoComplete="off" />
-      <p className="hint">
+      <p className="ds-hint">
         Leave blank to decide it yourself, if your key has the decider role. Otherwise name a key
         holder who does.
       </p>
 
-      {state.error && <p role="alert" className="error">{state.error}</p>}
+      {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       <button type="submit" disabled={pending}>
         {pending ? "Starting…" : "Run assessment"}
       </button>

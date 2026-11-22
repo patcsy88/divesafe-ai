@@ -28,8 +28,8 @@ test("an unknown recommendation is shown as inconclusive, never as safe", () => 
   assert.equal(labelFor("go"), "INSUFFICIENT EVIDENCE");
   assert.equal(labelFor("SAFE"), "INSUFFICIENT EVIDENCE");
   assert.equal(labelFor(""), "INSUFFICIENT EVIDENCE");
-  assert.equal(badgeClass("SAFE"), "badge insufficient");
-  assert.equal(badgeClass("NO-GO"), "badge nogo");
+  assert.equal(badgeClass("SAFE"), "ds-badge ds-insufficient");
+  assert.equal(badgeClass("NO-GO"), "ds-badge ds-nogo");
 });
 
 test("the four results get four distinct badge classes, each with its own label", () => {
@@ -41,7 +41,7 @@ test("the four results get four distinct badge classes, each with its own label"
   // contrast check cover that.
   const tokens = classes.map((c) => new Set(c.split(/\s+/).filter(Boolean)));
   const shared = [...(tokens[0] ?? [])].filter((t) => tokens.every((s) => s.has(t)));
-  assert.ok(shared.includes("badge"), `the base class is not on all four: ${classes.join(" | ")}`);
+  assert.ok(shared.includes("ds-badge"), `the base class is not on all four: ${classes.join(" | ")}`);
   tokens.forEach((own, i) => {
     const name = RECOMMENDATIONS[i];
     assert.ok([...own].some((t) => !shared.includes(t)), `${name} has no class of its own`);
@@ -54,7 +54,7 @@ test("the four results get four distinct badge classes, each with its own label"
   for (const rec of RECOMMENDATIONS) {
     assert.equal(labelFor(rec), rec, rec);
     // Every badge keeps the shared base class, so all four have the same size and weight.
-    assert.match(badgeClass(rec), /^badge\b/, rec);
+    assert.match(badgeClass(rec), /^ds-badge\b/, rec);
   }
   for (const bad of ["SAFE", "go", "", "GO "]) {
     assert.equal(badgeClass(bad), badgeClass("INSUFFICIENT EVIDENCE"), bad);

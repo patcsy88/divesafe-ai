@@ -9,9 +9,9 @@ const initial: FormState = { error: null };
 export default function ConditionsForm({ id }: { id: string }) {
   const [state, action, pending] = useActionState(submitActualConditions, initial);
   return (
-    <form action={action} className="card">
+    <form action={action} className="ds-card">
       <h2>Report the conditions you found</h2>
-      <p className="hint">
+      <p className="ds-hint">
         What you actually saw, after the dive. Leave a box empty if you did not measure it. These are
         your reports, kept with the record. They do not change the recommendation and can be sent once.
       </p>
@@ -24,7 +24,7 @@ export default function ConditionsForm({ id }: { id: string }) {
       ))}
       <label htmlFor="notes">Notes</label>
       <textarea id="notes" name="notes" rows={4} maxLength={2000} />
-      {state.error && <p role="alert" className="error">{state.error}</p>}
+      {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       <button type="submit" disabled={pending}>{pending ? "Recording…" : "Record conditions"}</button>
     </form>
   );

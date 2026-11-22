@@ -37,14 +37,14 @@ export default function DecisionForm({
   };
   const lessSevere = known && isLessSevere(choice, system);
   return (
-    <form action={action} onChange={change} className="card">
+    <form action={action} onChange={change} className="ds-card">
       <input type="hidden" name="retry_key" value={retryKey} />
       <h2>Record the human decision</h2>
       <p>
         The system recommended <strong>{system}</strong>. {context}{" "}
         <Link href={`/assessments/${encodeURIComponent(id)}/evidence`}>Read the evidence first.</Link>
       </p>
-      <p className="hint">
+      <p className="ds-hint">
         You may accept it or choose a more severe outcome. A less severe outcome needs the overrider
         role. A different outcome needs a reason. This is recorded against your name and cannot be changed.
       </p>
@@ -63,7 +63,7 @@ export default function DecisionForm({
         ))}
       </select>
       {lessSevere && (
-        <p className="pending" role="alert">
+        <p className="ds-pending" role="alert">
           You are choosing a LESS SEVERE outcome than the system recommended ({system}). This will be
           recorded as an override against your name, with your reason.
         </p>
@@ -77,18 +77,18 @@ export default function DecisionForm({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
-      {state.error && <p role="alert" className="error">{state.error}</p>}
+      {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       {reviewing ? (
-        <div className="card" role="group" aria-label="Confirm your decision">
+        <div className="ds-card" role="group" aria-label="Confirm your decision">
           <p>
             <strong>Check before you record.</strong> You are recording{" "}
             <strong>{choice}</strong>
             {known && choice === system ? " (the system's recommendation)" : ` (the system recommended ${system})`}.
           </p>
-          {reason.trim() && <p className="hint">Your reason: {reason.trim()}</p>}
-          <p className="hint">This is recorded against your name and cannot be changed.</p>
+          {reason.trim() && <p className="ds-hint">Your reason: {reason.trim()}</p>}
+          <p className="ds-hint">This is recorded against your name and cannot be changed.</p>
           {needsReason && (
-            <p className="error" role="alert">A different outcome needs a reason. Go back and add one.</p>
+            <p className="ds-error" role="alert">A different outcome needs a reason. Go back and add one.</p>
           )}
           <button type="submit" disabled={pending || needsReason}>
             {pending ? "Recording…" : `Confirm and record ${choice}`}

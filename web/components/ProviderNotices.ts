@@ -33,10 +33,10 @@ export default function ProviderNotices({
     list.length > 0
       ? h(
           "section",
-          { className: "card", "aria-labelledby": "provider-notice-heading", "data-testid": "provider-notices" },
+          { className: "ds-card", "aria-labelledby": "provider-notice-heading", "data-testid": "provider-notices" },
           h("h2", { id: "provider-notice-heading" }, PROVIDER_NOTICE_TITLE),
-          h("p", { className: "hint", role: "note" }, PROVIDER_NOTICE_NOTE),
-          list.map((text, i) => h("pre", { key: i, className: "provider-notice-text" }, plain(String(text)))),
+          h("p", { className: "ds-hint", role: "note" }, PROVIDER_NOTICE_NOTE),
+          list.map((text, i) => h("pre", { key: i, className: "ds-provider-notice-text" }, plain(String(text)))),
           more > 0 ? h("p", null, `${more} more provider notices not shown`) : null,
         )
       : null;

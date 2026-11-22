@@ -17,7 +17,7 @@ export default function DegradedEvidenceNote({ note }: { note: unknown }): React
   if (!showsDegradedNote(note)) return null;
   return h(
     "p",
-    { className: "pending", role: "note", "data-testid": "degraded-evidence-note" },
+    { className: "ds-pending", role: "note", "data-testid": "degraded-evidence-note" },
     `This result is ${DEGRADED_EVIDENCE_NOTE}.`,
   );
 }

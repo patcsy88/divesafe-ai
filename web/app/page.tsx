@@ -20,15 +20,15 @@ export default async function Home() {
   }
   return (
     <>
-      <header className="top">
+      <header className="ds-top">
         <h1>New assessment</h1>
         <form action={logout}>
-          <button type="submit" className="link">Sign out</button>
+          <button type="submit" className="ds-link">Sign out</button>
         </form>
       </header>
       <Banner />
-      <nav className="sub"><Link href="/sites">Dive sites</Link></nav>
-      {problem && <p role="alert" className="error">{problem}</p>}
+      <nav className="ds-sub"><Link href="/sites">Dive sites</Link></nav>
+      {problem && <p role="alert" className="ds-error">{problem}</p>}
       {sites.length > 0 ? (
         <AssessmentForm sites={sites} />
       ) : (
