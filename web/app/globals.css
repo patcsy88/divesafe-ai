@@ -60,6 +60,11 @@ button:where(:not([data-slot])):disabled { opacity:.6; cursor:wait; } button:whe
 .ds-hint { font-size:.85rem; opacity:.8; } .ds-label { margin:0; font-size:.85rem; opacity:.8; }
 .ds-badge { display:inline-block; margin:.2rem 0 .6rem; padding:.45rem 1rem; border-radius:999px; font-weight:800; font-size:1.25rem; letter-spacing:.02em; border:3px solid currentColor; }
 .ds-badge.ds-go { color:#0a7a3d; } .ds-badge.ds-caution { color:#a86b00; } .ds-badge.ds-nogo { color:#b00020; } .ds-badge.ds-insufficient { color:#5a5f66; }
+/* Dark badge colours: each at least 7:1 against the dark card (ADR 0017 asks for 3.1:1). */
+@media (prefers-color-scheme: dark) {
+  .ds-badge.ds-go { color:#3ccf7e; } .ds-badge.ds-caution { color:#f0b429; }
+  .ds-badge.ds-nogo { color:#ff8a9b; } .ds-badge.ds-insufficient { color:#b4bcc6; }
+}
 .ds-pending { background:#fff4cc; color:#3a2c00; padding:.6rem .8rem; border-radius:8px; font-weight:700; }
 dl { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; } dt { font-weight:600; } dd { margin:0; overflow-wrap:anywhere; }
 li { margin:.5rem 0; overflow-wrap:anywhere; }
@@ -71,8 +76,11 @@ table { width:100%; border-collapse:collapse; font-size:.9rem; } th, td { text-a
 pre.ds-provider-notice-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; }
 pre.ds-value { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; font-size:.8rem; max-height:14rem; overflow:auto; }
 .ds-tag { display:inline-block; padding:0 .55rem; border:1px solid var(--ds-line); border-radius:999px; font-size:.8rem; margin-right:.3rem; background:var(--ds-bg); }
-.ds-submit { margin-top:1rem; font-size:1rem; font-weight:600; white-space:normal; height:auto; min-height:2.5rem; padding-block:.4rem; }
-.ds-submit:disabled { opacity:.6; cursor:wait; }
+.ds-submit, .ds-action { margin-top:1rem; font-size:1rem; font-weight:600; white-space:normal;
+  height:auto; min-height:2.5rem; padding-block:.4rem; }
+.ds-submit:disabled, .ds-action:disabled { opacity:.6; cursor:wait; }
+/* HeroUI shrinks a pressed button (scale .97); form buttons keep their size and position. */
+.ds-submit[data-pressed], .ds-action[data-pressed] { transform:none; }
 /* 16px in fields: smaller text hides a mistyped depth, and iOS zooms in on focus below 16px. */
 .ds-field { font-size:1rem; line-height:1.5; }
 /* HeroUI draws focus with a box-shadow, which forced-colors mode removes. */

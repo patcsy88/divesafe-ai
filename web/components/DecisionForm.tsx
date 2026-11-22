@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
+import { Button } from "@heroui/react/button";
+import { Label } from "@heroui/react/label";
+import { TextArea } from "@heroui/react/textarea";
+import { type ChangeEvent, useActionState, useEffect, useState } from "react";
 import { submitDecision, type FormState } from "../app/actions.ts";
 import { isLessSevere, RECOMMENDATIONS } from "../lib/present.ts";
 import { useRetryKey } from "./useRetryKey.ts";
@@ -36,6 +39,8 @@ export default function DecisionForm({
     renewKey();
   };
   const lessSevere = known && isLessSevere(choice, system);
+  // A named handler keeps "=>" out of the TextArea tag, so the class test reads the whole tag.
+  const onReason = (e: ChangeEvent<HTMLTextAreaElement>) => setReason(e.target.value);
   return (
     <form action={action} onChange={change} className="ds-card">
       <input type="hidden" name="retry_key" value={retryKey} />
@@ -49,7 +54,7 @@ export default function DecisionForm({
         role. A different outcome needs a reason. This is recorded against your name and cannot be changed.
       </p>
       <input type="hidden" name="assessment_id" value={id} />
-      <label htmlFor="decision">Your decision</label>
+      <Label htmlFor="decision" className="ds-field-label">Your decision</Label>
       <select
         id="decision"
         name="decision"
@@ -68,14 +73,18 @@ export default function DecisionForm({
           recorded as an override against your name, with your reason.
         </p>
       )}
-      <label htmlFor="rationale">Reason (required if different from the system)</label>
-      <textarea
+      <Label htmlFor="rationale" className="ds-field-label">
+        Reason (required if different from the system)
+      </Label>
+      <TextArea
         id="rationale"
         name="rationale"
         rows={4}
         maxLength={5000}
         value={reason}
-        onChange={(e) => setReason(e.target.value)}
+        onChange={onReason}
+        fullWidth
+        className="ds-field"
       />
       {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       {reviewing ? (
@@ -90,17 +99,28 @@ export default function DecisionForm({
           {needsReason && (
             <p className="ds-error" role="alert">A different outcome needs a reason. Go back and add one.</p>
           )}
-          <button type="submit" disabled={pending || needsReason}>
+          <Button type="submit" isDisabled={pending || needsReason} className="ds-submit">
             {pending ? "Recording…" : `Confirm and record ${choice}`}
-          </button>{" "}
-          <button type="button" onClick={() => setReviewing(false)} disabled={pending}>
+          </Button>{" "}
+          <Button
+            type="button"
+            variant="secondary"
+            onPress={() => setReviewing(false)}
+            isDisabled={pending}
+            className="ds-action"
+          >
             Back and edit
-          </button>
+          </Button>
         </div>
       ) : (
-        <button type="button" disabled={choice === ""} onClick={() => setReviewing(true)}>
+        <Button
+          type="button"
+          isDisabled={choice === ""}
+          onPress={() => setReviewing(true)}
+          className="ds-action"
+        >
           Review decision
-        </button>
+        </Button>
       )}
     </form>
   );
