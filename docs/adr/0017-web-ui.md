@@ -132,7 +132,12 @@ Gaps added:
 - Status: ACCEPTED (owner, 2026-11-22). Owner decisions 2026-11-22: the web UI stays a browser app;
   it is restyled with HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the
   deploy items (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service,
-  the gaps above) are separate and unchanged by this amendment.
+  the gaps above) are separate and unchanged by this amendment. Accepting this amendment approves
+  the design only. Every "before merge" and "before acceptance" check below applies to the restyle
+  PR(s), and none has been done yet. A restyle PR merges only after each check is met and recorded
+  in it: the dependency and licence checks, the tests (including the badge-class test before
+  `lib/present.ts` changes), the ADR 0008 Amendment 1 (a) repeat with the text and role comparison,
+  and the screenshots. It also needs `risk-reviewer` and `security-reviewer`.
 - Changes only how `web/` looks, and replaces "no other runtime dependency" (Decision, first item)
   with the packages listed under "New dependencies". Nothing else in "Decision" is relaxed.
 
