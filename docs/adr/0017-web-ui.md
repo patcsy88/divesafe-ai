@@ -133,7 +133,8 @@ Gaps added:
   HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the deploy items
   (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service, the gaps
   above) are separate and unchanged by this amendment.
-- Changes only how `web/` looks. Nothing in "Decision" above is relaxed.
+- Changes only how `web/` looks, and replaces "no other runtime dependency" (Decision, first item)
+  with the packages listed under "New dependencies". Nothing else in "Decision" is relaxed.
 
 ### Decision
 
@@ -147,17 +148,26 @@ Rejected:
   server-rendered pages and the rule that only the server holds the API key.
 - **Keep the hand-written `globals.css`:** safe, but every control's accessibility and focus
   behaviour stays our own to maintain.
-- **HeroUI Pro, Chat, Agents, MCP:** not used, in the app or in the build.
+- **HeroUI Pro, Chat, Agents, MCP:** not used, in the app, the build, or any agent or editor
+  configuration in the repository (`opencode.jsonc`, `.opencode/`). Checked before merge: the lock
+  file has no `@heroui/*` package other than `@heroui/react`, `@heroui/styles` and their
+  dependencies; every `resolved` is on `registry.npmjs.org`; no `.npmrc` is added.
 
 ### New dependencies
 
-Exact-pinned like the rest of `package.json`: `@heroui/react`, `@heroui/styles`, `tailwindcss` (v4),
-`@tailwindcss/postcss` (or whatever the official Next.js setup needs), and, transitively, React
-Aria. Supply chain: this is a large transitive tree. CI's existing `web` job covers it (`npm audit
---omit=dev --package-lock-only`, the no-install-script check, `npm ci --ignore-scripts`); a new
-advisory can fail an unrelated change (already a known gap). To do before merge: record each direct
-package's licence (MIT expected) and the lock file's install-script result; do not accept a package
-that adds an install script.
+Exact-pinned like the rest of `package.json`, all under `dependencies` so that `npm audit
+--omit=dev` covers them: `@heroui/react` and `@heroui/styles` (3.2.x, Apache-2.0), `tailwindcss` and
+`@tailwindcss/postcss` (4.x, MIT), and transitively React Aria (Apache-2.0) and Tailwind's native
+engine `@tailwindcss/oxide`. Any other direct package needs a new security review. CI's existing
+`web` job checks advisories and install scripts only (`npm audit --omit=dev --package-lock-only`,
+the no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
+(already a known gap). Build-time packages (Tailwind's native engine, the PostCSS plugin) run code
+during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
+the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
+file, record the licence of each direct package and of React Aria, and any licence among the bundled
+packages that is not MIT, Apache-2.0 or ISC; confirm no `hasInstallScript`, and that the lock file
+holds the Linux build of the native engine as well as the macOS one. Do not accept a package that
+adds an install script.
 
 ### What must not change
 
@@ -178,9 +188,13 @@ that adds an install script.
   `dangerouslySetInnerHTML`; no component that renders model or provider text as markup.
 - **CSP and headers:** the CSP stays as it is: no new script, style, font or connect source, no CDN,
   no remote fonts, no runtime CSS-in-JS that needs `eval`. Tailwind output is built CSS served from
-  `'self'`; fonts stay the system stack. This must be verified on the built app (response headers
-  and the browser console show no CSP violation), not assumed. The other security headers and
-  `robots: noindex` are unchanged.
+  `'self'`; fonts stay the system stack. This is verified on the production build, not assumed: `git
+  diff fbad5a2 -- web/next.config.ts` shows no CSP line; the `Content-Security-Policy` header on
+  `/`, an assessment page and the sign-in page equals the one at `fbad5a2`; the built CSS
+  (`.next/static/css`) contains no `@import` of a URL, no remote `url(` and no `@font-face` with a
+  remote source; `next/font/google` is not used; and the browser console shows no violation with
+  every interactive component opened at least once (the decision form's choice and confirm step, any
+  menu, select or dialog). The other security headers and `robots: noindex` are unchanged.
 - **Meaning of the visuals:** each result keeps a distinct colour AND its text label (colour is
   never the only signal), and INSUFFICIENT EVIDENCE stays visibly different from GO. Kept as they
   are: the PENDING-human banner, the disclaimer (`role="note"`), the DEGRADED note right after the
@@ -203,24 +217,28 @@ that adds an install script.
 Reports exist of "client-only" errors when `@heroui/react` is imported in server components on Next
 16. Rule: HeroUI interactive components are imported only in files that start with `"use client"`.
 Server pages use plain elements with `@heroui/styles` classes, or thin client wrappers that receive
-display data only, never the key, the session or a server module. The existing boundary test (no
-client file imports `lib/api|auth|config|session`, reads `process.env`, or uses `NEXT_PUBLIC`)
-applies to the wrappers.
+display data only: the strings, numbers and booleans the wrapper renders, already passed through
+`plain()`, never a whole `view`, `record` or decision object, because every prop is serialised into
+the page for the browser; never the key, the session or a server module. `DecisionForm` and
+`ConditionsForm` keep their current props and server actions, and the restyle adds no new prop to
+them. The existing boundary test (no client file imports `lib/api|auth|config|session`, reads
+`process.env`, or uses `NEXT_PUBLIC`) applies to the wrappers.
 
 ### Tests
 
 `web/tests/degradednote.test.ts` and others read page source (for instance the order of the badge
 and `<DegradedEvidenceNote>` in the page, and `className="pending"`). A restyle may force edits to
 them. Any such change must keep or strengthen what the test proves, never weaken it, and needs owner
-approval and `risk-reviewer` review (AGENTS.md section 4). `boundary.test.ts` is unchanged.
-`DegradedEvidenceNote.ts`, `ProviderNotices.ts` and `NOTHING_RECORDED_503` in `lib/api.ts` keep
-their paths, constants and offline renderability, so the Python safety tests that read them keep
-passing unchanged. If the restyle needs to change any of them, the Python safety test change follows
-AGENTS.md section 4 (owner approval, `risk-reviewer`, mutation check) like the web tests.
-Mutation-check any new or edited guard. An edited `degradednote.test.ts` must fail on each of these
-mutants: the note moved away from the badge, the note dropped from the decision-form context, the
-note rendered unconditionally, and the note's role removed. A render of the result block is
-preferred to a source-position check.
+approval and `risk-reviewer` review (AGENTS.md section 4). `boundary.test.ts` is unchanged or
+strengthened (for instance, to treat `'use client'` and a directive after a comment as client
+files), never weakened. `DegradedEvidenceNote.ts`, `ProviderNotices.ts` and `NOTHING_RECORDED_503`
+in `lib/api.ts` keep their paths, constants and offline renderability, so the Python safety tests
+that read them keep passing unchanged. If the restyle needs to change any of them, the Python safety
+test change follows AGENTS.md section 4 (owner approval, `risk-reviewer`, mutation check) like the
+web tests. Mutation-check any new or edited guard. An edited `degradednote.test.ts` must fail on
+each of these mutants: the note moved away from the badge, the note dropped from the decision-form
+context, the note rendered unconditionally, and the note's role removed. A render of the result
+block is preferred to a source-position check.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 
@@ -238,7 +256,8 @@ preconditions (a). The note's wording stays pinned to the API constant.
 
 ### Reviews
 
-- `security-reviewer`: the dependencies and licences, the CSP on the build, the client boundary.
+- `security-reviewer`: the dependencies and licences, the CSP on the build, the client boundary, and
+  the lock-file diff summary (packages added, any `hasInstallScript`, any non-registry `resolved`).
 - `risk-reviewer`: colours and labels, the note and banner, any test change.
 - Before acceptance: screenshots, by hand, of each of the four result badges, the PENDING banner and
   the DEGRADED note, in light and dark, and also an unrecognised result value, the "NO RESULT YET"
@@ -252,8 +271,10 @@ preconditions (a). The note's wording stays pinned to the API constant.
 - Component-level behaviour is trusted to HeroUI and React Aria; web tests stay source-level plus
   offline renders, with no browser test of focus, contrast or the CSP.
 - A large, fast-moving dependency tree (HeroUI v3 is a recent line) and exact pins mean frequent
-  bumps; no lock file with hashes (ADR 0024 open item).
+  bumps; no hashed Python lock file (ADR 0024 open item); the npm lock file's integrity hashes are
+  checked by `npm ci`, but nothing reviews what a version bump brings in.
 - Tailwind's generated CSS is not reviewed line by line; visual meaning is checked by hand and by
   the tests above.
 - The CSP still allows inline scripts and styles (gap above); the restyle does not close it and must
-  not widen it.
+  not widen it. React Aria's inline style attributes mean a later nonce CSP keeps `style-src-attr
+  'unsafe-inline'`; the restyle makes the style half of that gap harder to close.
