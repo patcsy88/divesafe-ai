@@ -343,14 +343,17 @@ element that holds the banner, the disclaimer, the DEGRADED note or an `alert`, 
 role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invisible`, `opacity-0`,
 `sr-only`, `aria-hidden`, `inert`, `animate-out`, or an inline style that hides it (`display: none`,
 `visibility: hidden`, `opacity: 0`, clipping or zero size), or an entry animation that starts
-invisible), and no such element's text is cut short, checked at phone width (for each, `scrollWidth
-≤ clientWidth` and `scrollHeight ≤ clientHeight`). The browser look is taken with
-`prefers-reduced-motion` both on and off. If the confirm step is a modal or popover, it shows the
-result, the DEGRADED context sentence and the less-severe warning itself, and the hiding check is
-repeated in the browser with it open. Any other added role or hidden text is listed in the PR for
-`risk-reviewer`. The same holds for the evidence page and the decision form's review and confirm
-states. The result, with the restyled commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1,
-Open preconditions (a). The note's wording stays pinned to the API constant.
+invisible), and no such element's text is cut short, checked at phone width: for each element that
+holds the text (measured on the element itself if it is a block or inline-block, otherwise on its
+nearest block container, never on a further ancestor), `scrollWidth - clientWidth ≤ 1` and
+`scrollHeight - clientHeight ≤ 1`, and its bounding box lies inside every ancestor whose `overflow`
+is not `visible`. The browser look is taken with `prefers-reduced-motion` both on and off. If the
+confirm step is a modal or popover, it shows the result, the DEGRADED context sentence and the
+less-severe warning itself, and the hiding check is repeated in the browser with it open. Any other
+added role or hidden text is listed in the PR for `risk-reviewer`. The same holds for the evidence
+page and the decision form's review and confirm states. The result, with the restyled commit,
+replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's wording
+stays pinned to the API constant.
 
 ### Reviews
 
