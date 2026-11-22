@@ -169,7 +169,7 @@ by the lock file. A HeroUI bump that adds or widens a peer dependency is reviewe
 package. Any other direct package needs a new security review. CI's existing `web` job checks
 advisories and install scripts only (`npm audit --omit=dev --package-lock-only`, the
 no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
-(already a known gap). Build-time packages (Tailwind's native engine, the PostCSS plugin) run code
+(already a known gap). Build-time packages (Tailwind's native engines, the PostCSS plugin) run code
 during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
 the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
 file, record the licence of each direct package and of React Aria, and any licence among the bundled
@@ -222,7 +222,8 @@ that the lock file holds the Linux builds of the native engines (`@tailwindcss/o
   AA in light and dark (4.5:1 for text; 3:1 for large text and the badge border), checked by hand on
   the screenshots. Measured on 2026-11-22 against the card background: light GO 5.43, CAUTION 4.40,
   NO-GO 7.33, INSUFFICIENT EVIDENCE 6.43; dark GO 3.00, CAUTION 3.70, NO-GO 2.22, INSUFFICIENT
-  EVIDENCE 2.53. The restyle must bring every badge to at least 3.1:1 in both modes.
+  EVIDENCE 2.53. The restyle must bring every badge to at least 3.1:1 in both modes, and the badge
+  label stays large text (at least 14pt bold), or else reaches 4.5:1.
 
 ### Client boundary
 
@@ -234,7 +235,8 @@ display data only: the strings, numbers and booleans the wrapper renders, alread
 the page for the browser; never the key, the session or a server module. `DecisionForm` and
 `ConditionsForm` keep their current props and server actions, and the restyle adds no new prop to
 them. A wrapper for the DEGRADED note receives only whether to show it (a boolean from
-`showsDegradedNote`) and renders `DEGRADED_EVIDENCE_NOTE` itself. The existing boundary test (no
+`showsDegradedNote`) and renders `DEGRADED_EVIDENCE_NOTE` itself, imported from
+`components/DegradedEvidenceNote.ts` (never a copy of the text). The existing boundary test (no
 client file imports `lib/api|auth|config|session`, reads `process.env`, or uses `NEXT_PUBLIC`)
 applies to the wrappers.
 
