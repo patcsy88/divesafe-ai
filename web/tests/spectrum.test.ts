@@ -9,7 +9,7 @@ import { test } from "node:test";
 // CI's build check covers imports through other packages.
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
-const BANNED = /["'`](@adobe\/|@react-spectrum\/|@spectrum-icons\/|react-transition-group|@react-types\/color)/;
+const BANNED = /["'`(](@adobe\/|@react-spectrum\/|@spectrum-icons\/|react-transition-group|@react-types\/color)/;
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -24,4 +24,15 @@ test("no file in web/ imports Adobe React Spectrum or @react-types/color", () =>
   const found = files(ROOT);
   assert.ok(found.some((p) => p.endsWith("package.json")), "the scan found no package.json");
   for (const p of found) assert.ok(!BANNED.test(readFileSync(p, "utf8")), `${p} names a banned package`);
+});
+
+test("the lock file keeps the Spectrum icon set at 2.3.5 and holds no -ND or -NC licence", () => {
+  const lock = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8")) as {
+    packages: Record<string, { version?: string; license?: string }>;
+  };
+  // 2.4.0 and later are CC-BY-ND-4.0 (ADR 0017); a move needs the owner's acceptance.
+  assert.equal(lock.packages["node_modules/@adobe/react-spectrum-workflow"]?.version, "2.3.5");
+  for (const [name, entry] of Object.entries(lock.packages)) {
+    assert.ok(!/-(ND|NC)\b/.test(entry.license ?? ""), `${name} is ${entry.license}`);
+  }
 });

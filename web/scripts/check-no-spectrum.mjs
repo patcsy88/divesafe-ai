@@ -24,6 +24,7 @@ if (!existsSync(OUT)) {
 }
 const all = walk(OUT);
 const problems = [];
+for (const p of all) if (PATH.test(p)) problems.push(`${p} is a Spectrum file`);
 const traces = all.filter((p) => p.endsWith(".nft.json"));
 let tracedModules = 0;
 for (const p of traces) {

@@ -195,25 +195,31 @@ Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pi
 (BSD-3-Clause). The installed `@adobe/react-spectrum-workflow` 2.3.5 (pinned by
 `@spectrum-icons/workflow` 4.3.2) is Apache-2.0 in its `package.json`, its `LICENSE` file and the
 lock file; its later release 2.4.0 is CC-BY-ND-4.0, so a change that moves it to 2.4.0 or later is
-refused unless the owner accepts that licence. HeroUI uses `@react-types/color` for TypeScript types
-only, and no runtime file in `@heroui/*`, `react-aria` or `react-aria-components` imports these
-packages. So they are installed but must not ship or run. No code in `web/` imports them, and a web
-test fails if any file in `web/` imports `@adobe/`, `@react-spectrum/`, `@spectrum-icons/`,
-`react-transition-group` or `@react-types/color`, type-only imports included. Before merge, on the
-production build: no file in the build output (browser and server) contains code from `@adobe/*`,
-`@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is checked by module path
-(the server's `.nft.json` trace files, and the `sources` of a scratch build with
-`productionBrowserSourceMaps: true`, not committed) and by a distinctive string literal from each
-package (recorded in the PR). The check is first shown to find a deliberate import of
-`@adobe/react-spectrum` in a scratch build, in a client file and in a server file. The restyle PR
-does not merge if any is found. A HeroUI, `@react-types/color` or `@spectrum-icons/workflow` change
-that alters this chain is reviewed like a new direct package. When a web image is built, it copies
-only Next's traced output (`output: "standalone"`), never the whole `node_modules`. CI's `web` job
-repeats the check on every change, after `next build` (`web/scripts/check-no-spectrum.mjs`, owner,
-2026-11-22): it fails if any `.nft.json` trace file or source map lists a file in those four package
-scopes, if any built `.js` or `.css` file holds one of the recorded strings, or if it finds nothing
-to check. Known gap: CI's build has no browser source maps, so in CI the browser output is checked
-by string only.
+refused unless the owner accepts that licence (`web/tests/spectrum.test.ts` fails if the lock file
+moves it from 2.3.5 or holds any `-ND` or `-NC` licence). HeroUI uses `@react-types/color` for
+TypeScript types only, and no runtime file in `@heroui/*`, `react-aria` or `react-aria-components`
+imports these packages. So they are installed but must not ship or run. No code in `web/` imports
+them, and a web test fails if any file in `web/` imports `@adobe/`, `@react-spectrum/`,
+`@spectrum-icons/`, `react-transition-group` or `@react-types/color`, type-only imports included.
+Before merge, on the production build: no file in the build output (browser and server) contains
+code from `@adobe/*`, `@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is
+checked by module path (the server's `.nft.json` trace files and source maps, and the `sources` of a
+scratch build with `productionBrowserSourceMaps: true`, not committed) and by string literals that
+survive minification (listed in `check-no-spectrum.mjs`: two from `@adobe/react-spectrum`, which
+every `@spectrum-icons` and `@react-spectrum` package loads, and one from `react-transition-group`).
+The icon packages `@adobe/react-spectrum-workflow` and `-ui` have no string of their own; they ship
+only through `@spectrum-icons` (caught by the strings) or a direct import (caught by the web test).
+The check was first shown to find deliberate imports in a scratch build (2026-11-22: a workflow
+icon, `@adobe/react-spectrum`, `react-transition-group` and `@react-spectrum/provider` from a client
+file; a server-file import fails `next build` and is also found). The restyle PR does not merge if
+any is found. A HeroUI, `@react-types/color` or `@spectrum-icons/workflow` change that alters this
+chain is reviewed like a new direct package. When a web image is built, it copies only Next's traced
+output (`output: "standalone"`), never the whole `node_modules`. CI's `web` job repeats the check on
+every change, after `next build` (`web/scripts/check-no-spectrum.mjs`, owner, 2026-11-22): it fails
+if any `.nft.json` trace file or source map lists a file in those four package scopes, if any built
+`.js` or `.css` file holds one of the recorded strings, if any file under `.next` is itself in one
+of those package scopes, or if it finds nothing to check. Known gap: CI's build has no browser
+source maps, so in CI the browser output is checked by string only.
 
 ### What must not change
 
@@ -306,12 +312,15 @@ stripped, whitespace normalised, visually hidden text excluded) is the same befo
 restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. No
 element that holds the banner, the disclaimer, the DEGRADED note or an `alert`, `status` or `note`
 role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invisible`, `opacity-0`,
-`sr-only`, `aria-hidden`, `inert`, `animate-out`, or an entry animation that starts invisible). The
-browser look is taken with `prefers-reduced-motion` both on and off. Any other added role or hidden
-text is listed in the PR for `risk-reviewer`. The same holds for the evidence page and the decision
-form's review and confirm states. The result, with the restyled commit, replaces the `fbad5a2` entry
-in ADR 0008 Amendment 1, Open preconditions (a). The note's wording stays pinned to the API
-constant.
+`sr-only`, `aria-hidden`, `inert`, `animate-out`, or an inline style that hides it (`display: none`,
+`visibility: hidden`, `opacity: 0`, clipping or zero size), or an entry animation that starts
+invisible). The browser look is taken with `prefers-reduced-motion` both on and off. If the confirm
+step is a modal or popover, it shows the result, the DEGRADED context sentence and the less-severe
+warning itself, and the hiding check is repeated in the browser with it open. Any other added role
+or hidden text is listed in the PR for `risk-reviewer`. The same holds for the evidence page and the
+decision form's review and confirm states. The result, with the restyled commit, replaces the
+`fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's wording stays pinned to
+the API constant.
 
 ### Reviews
 
