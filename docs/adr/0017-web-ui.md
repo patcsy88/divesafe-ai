@@ -126,3 +126,104 @@ Gaps added:
   bidi characters but leaves lookalike letters, combining marks and U+2028/U+2029. The withheld
   items' dates have no "after assessment" marker.
 - The web actions themselves have no tests (ID tampering, a 401 mid-write). Only the library is tested.
+
+## Amendment 2026-11-22: restyle with HeroUI v3 (PROPOSED, owner review)
+
+- Status: PROPOSED. Owner decisions 2026-11-22: the web UI stays a browser app; it is restyled
+  with HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the deploy
+  items (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service,
+  the gaps above) are separate and unchanged by this amendment.
+- Changes only how `web/` looks. Nothing in "Decision" above is relaxed.
+
+### Decision
+
+Restyle `web/` with HeroUI v3 (`@heroui/react` and `@heroui/styles`, line 3.2.x, open source),
+which sits on React Aria Components and Tailwind CSS v4, needs no provider and animates with CSS
+only. Reasons: accessible components (roles, labels, focus handled by React Aria) instead of
+more hand-written CSS, and one consistent look for the forms, tables and badges.
+
+Rejected:
+- **Ionic (and Capacitor, a native app):** mobile-first and client-rendered. It fights the
+  server-rendered pages and the rule that only the server holds the API key.
+- **Keep the hand-written `globals.css`:** safe, but every control's accessibility and focus
+  behaviour stays our own to maintain.
+- **HeroUI Pro, Chat, Agents, MCP:** not used, in the app or in the build.
+
+### New dependencies
+
+Exact-pinned like the rest of `package.json`: `@heroui/react`, `@heroui/styles`, `tailwindcss`
+(v4), `@tailwindcss/postcss` (or whatever the official Next.js setup needs), and, transitively,
+React Aria. Supply chain: this is a large transitive tree. CI's existing `web` job covers it
+(`npm audit --omit=dev --package-lock-only`, the no-install-script check, `npm ci
+--ignore-scripts`); a new advisory can fail an unrelated change (already a known gap).
+To do before merge: record each direct package's licence (MIT expected) and the lock file's
+install-script result; do not accept a package that adds an install script.
+
+### What must not change
+
+- Pages stay server-rendered. Only the server talks to the API. The API key never reaches the
+  browser. The sealed httpOnly cookie, the session and the login throttle are unchanged.
+- No risk logic in `web/`. `final_recommendation` is shown as returned; an unrecognised value is
+  INSUFFICIENT EVIDENCE.
+- Model-written text is plain text, under a model heading, in the box labelled unverified. No
+  `dangerouslySetInnerHTML`; no component that renders model or provider text as markup.
+- **CSP and headers:** the CSP stays as it is: no new script, style, font or connect source, no
+  CDN, no remote fonts, no runtime CSS-in-JS that needs `eval`. Tailwind output is built CSS
+  served from `'self'`; fonts stay the system stack. This must be verified on the built app
+  (response headers and the browser console show no CSP violation), not assumed. The other
+  security headers and `robots: noindex` are unchanged.
+- **Meaning of the visuals:** each result keeps a distinct colour AND its text label (colour is
+  never the only signal), and INSUFFICIENT EVIDENCE stays visibly different from GO. Kept as they
+  are: the PENDING-human banner, the disclaimer (`role="note"`), the DEGRADED note right after the
+  result and in the decision form's context, model output under its heading, provider notices,
+  the withheld evidence box and the "a report, not a measurement by the system" wording on
+  reported conditions.
+- Accessibility at least as good as now: roles (`alert`, `status`, `note`), labels on every input,
+  visible focus, keyboard use of the decision form and its confirm step, contrast in light and
+  dark.
+
+### Client boundary
+
+Reports exist of "client-only" errors when `@heroui/react` is imported in server components on
+Next 16. Rule: HeroUI interactive components are imported only in files that start with
+`"use client"`. Server pages use plain elements with `@heroui/styles` classes, or thin client
+wrappers that receive display data only, never the key, the session or a server module. The
+existing boundary test (no client file imports `lib/api|auth|config|session`, reads
+`process.env`, or uses `NEXT_PUBLIC`) applies to the wrappers.
+
+### Tests
+
+`web/tests/degradednote.test.ts` and others read page source (for instance the order of the
+badge and `<DegradedEvidenceNote>` in the page, and `className="pending"`). A restyle may force
+edits to them. Any such change must keep or strengthen what the test proves, never weaken it, and
+needs owner approval and `risk-reviewer` review (AGENTS.md section 4). `boundary.test.ts` is
+unchanged. The Python safety tests that read `web/` files (the degraded note wording, provider
+notices, `NOTHING_RECORDED_503`) keep passing unchanged. Mutation-check any new or edited guard.
+
+### ADR 0008 Amendment 1, Open preconditions (a)
+
+The restyle changes `web/` after `fbad5a2`, the build on which ADR 0008 Amendment 1, Open
+preconditions (a), was checked (2026-11-22). That check must be repeated on the restyled build
+before the restyle is accepted, by the method recorded there: a stand-in API serving synthetic
+views built with the real `AssessmentView.of`, marked GO and CAUTION compared with unmarked GO,
+CAUTION and NO-GO, and the note text found in the server chunks of a production build. The note's
+wording stays pinned to the API constant.
+
+### Reviews
+
+- `security-reviewer`: the dependencies and licences, the CSP on the build, the client boundary.
+- `risk-reviewer`: colours and labels, the note and banner, any test change.
+- Before acceptance: screenshots, by hand, of each of the four result badges, the PENDING banner
+  and the DEGRADED note, in light and dark, attached to the PR for `risk-reviewer` and the owner.
+- Both before merge; blockers fixed first.
+
+### Known gaps added
+
+- Component-level behaviour is trusted to HeroUI and React Aria; web tests stay source-level plus
+  offline renders, with no browser test of focus, contrast or the CSP.
+- A large, fast-moving dependency tree (HeroUI v3 is a recent line) and exact pins mean frequent
+  bumps; no lock file with hashes (ADR 0024 open item).
+- Tailwind's generated CSS is not reviewed line by line; visual meaning is checked by hand and by
+  the tests above.
+- The CSP still allows inline scripts and styles (gap above); the restyle does not close it and
+  must not widen it.
