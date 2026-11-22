@@ -255,12 +255,31 @@ build with no `.dark` anywhere); dark styles therefore go in the `globals.css` m
 test also fails if any CSS or JavaScript file in `@heroui/styles` or `@heroui/react` uses `dark:`
 outside a comment. Focus rings and other interaction states take HeroUI's dark values too, so the
 (a) repeat includes a keyboard pass through the decision form and its confirm step in dark mode.
-Tailwind scans only `app/`, `components/` and `lib/` (`source(none)` and `@source`), so text in
-tests or scripts never reaches the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after
-the build (owner, 2026-11-22): it fails if a built stylesheet keeps an `@import`, names an `http(s)`
-or protocol-relative address, has a `url()` or `image-set()` address that is not a `data:` URI or a
-`/_next/static/` file (a `..` step, an encoded dot or a backslash counts as leaving it), or if there
-is no stylesheet to check.
+HeroUI's own colours fail contrast against ours (white on its accent 3.59:1; in dark mode its field
+background against our card 1.09:1, with no field border), so ten HeroUI variables are set from our
+`--ds-` palette in both modes (option A1, owner, 2026-11-22): `--foreground`, `--background`,
+`--border`, `--accent`, `--accent-foreground`, `--focus`, `--field-background`,
+`--field-foreground`, `--field-border` and `--field-border-width` (`1px`). The field outline is
+therefore as at `fbad5a2`, below 3:1 against the card: not a regression, and not fixed by A1. The
+dark block then holds HeroUI's own dark value for every other variable (values HeroUI builds from a
+mapped variable, such as `--accent-soft`, now resolve from our palette, so they are not HeroUI's
+tested colours); `classes.test.ts` fails if the ten change, if another HeroUI variable is set, or if
+a set one is not defined by HeroUI. HeroUI components (`Button`, `Input`, `Label`) are used only in
+`"use client"` files, imported by subpath from a fixed list in that test, which also refuses any
+other import of `@heroui/`, `react-aria` or `@react-aria/` and `@react-stately/` packages;
+`isRequired` (adds a visible `*`), `isPending` and `Description` (renders nothing outside a field)
+are refused, and native `<select>` stays. Our rules whose selector starts with `button`, `input`,
+`label` or `textarea` apply only to elements without `data-slot`, and the test fails on one that
+does not (a descendant rule such as `.ds-row input` is not checked). Text in fields stays 16px
+(`.ds-field`). React Aria adds one `<style>` element to the page head (`touch-action` on pressable
+elements), which the current `style-src 'unsafe-inline'` allows; a nonce CSP would have to account
+for it. In forced-colours mode, where HeroUI's box-shadow focus ring is removed, its components get
+a solid outline. Tailwind scans only `app/`, `components/` and `lib/` (`source(none)` and
+`@source`), so text in tests or scripts never reaches the shipped CSS. CI also runs
+`web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22): it fails if a built
+stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address, has a `url()` or
+`image-set()` address that is not a `data:` URI or a `/_next/static/` file (a `..` step, an encoded
+dot or a backslash counts as leaving it), or if there is no stylesheet to check.
 
 ### What must not change
 
@@ -398,4 +417,6 @@ note's wording stays pinned to the API constant.
   the tests above.
 - The CSP still allows inline scripts and styles (gap above); the restyle does not close it and must
   not widen it. React Aria's inline style attributes mean a later nonce CSP keeps `style-src-attr
-  'unsafe-inline'`; the restyle makes the style half of that gap harder to close.
+  'unsafe-inline'`; the restyle makes the style half of that gap harder to close. React Aria also
+  injects one `<style>` element into `<head>` at runtime (a fixed `touch-action` rule); a nonce CSP
+  without `'unsafe-inline'` in `style-src-elem` must allow it.

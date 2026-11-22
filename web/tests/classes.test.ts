@@ -77,6 +77,22 @@ test("no class of ours is also a HeroUI class, and HeroUI has no ds- class", () 
 });
 
 const DARK = "@media (prefers-color-scheme: dark) { :root {";
+// HeroUI's own colours fail contrast against ours (button text 3.59:1, a dark field 1.09:1
+// against our card, with no border), so these HeroUI variables are set from our palette in
+// both modes (option A1, owner, 2026-11-22). Every other HeroUI dark value is HeroUI's own.
+const OURS = "/* HeroUI's variables, from our palette";
+const FROM_PALETTE = new Map([
+  ["--foreground", "var(--ds-fg)"],
+  ["--background", "var(--ds-bg)"],
+  ["--border", "var(--ds-line)"],
+  ["--accent", "var(--ds-accent)"],
+  ["--accent-foreground", "var(--ds-on-accent)"],
+  ["--focus", "var(--ds-accent)"],
+  ["--field-background", "var(--ds-bg)"],
+  ["--field-foreground", "var(--ds-fg)"],
+  ["--field-border", "var(--ds-line)"],
+  ["--field-border-width", "1px"],
+]);
 
 function declarations(text: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -111,15 +127,18 @@ test("our custom properties carry the ds- prefix and none is also a HeroUI one",
   for (const name of heroui) assert.ok(!name.startsWith("--ds-"), `HeroUI defines ${name}`);
   const css = readFileSync(join(ROOT, "app/globals.css"), "utf8");
   const dark = new Set(declarations(block(css, DARK)).keys());
+  const mapped = block(css.slice(css.indexOf(OURS)), ":root {");
+  assert.deepEqual(declarations(mapped), FROM_PALETTE, "HeroUI variables set from our palette");
   const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
   for (const name of declarations(css).keys()) {
     if (name.startsWith("--ds-")) {
       assert.ok(!heroui.has(name), `HeroUI also defines ${name}`);
       continue;
     }
-    assert.ok(dark.has(name), `globals.css sets ${name}, with no ds- prefix`);
+    assert.ok(heroui.has(name), `globals.css sets ${name}, which HeroUI does not define`);
+    assert.ok(dark.has(name) !== FROM_PALETTE.has(name), `globals.css sets ${name} unchecked`);
     const times = [...bare.matchAll(new RegExp(`(?<![\\w-])${name}\\s*:`, "g"))].length;
-    assert.equal(times, 1, `${name} is set outside the dark block`);
+    assert.equal(times, 1, `globals.css sets ${name} more than once`);
   }
   const outside = bare.replace(block(bare, DARK), "");
   for (const m of outside.matchAll(/var\(\s*(--[\w-]+)/g)) {
@@ -132,8 +151,9 @@ test("dark mode follows the system setting with exactly HeroUI's own dark values
   const light = declarations(block(theme, "  :root,\n  .light,"));
   const heroDark = declarations(block(theme, "  .dark,\n"));
   assert.ok(heroDark.size > 50, `found only ${heroDark.size} dark values`);
-  const expected = new Map([...heroDark].filter(([name, value]) => light.get(name) !== value));
-  assert.ok(expected.has("--background") && expected.has("--foreground"), "no dark colours");
+  const differ = new Map([...heroDark].filter(([name, value]) => light.get(name) !== value));
+  assert.ok(differ.has("--background") && differ.has("--surface"), "no dark colours");
+  const expected = new Map([...differ].filter(([name]) => !FROM_PALETTE.has(name)));
   const css = readFileSync(join(ROOT, "app/globals.css"), "utf8");
   const body = block(css, DARK);
   const ours = declarations(body);
@@ -222,4 +242,52 @@ test("HeroUI keys nothing on .dark or data-theme but its theme variables and dar
     const kept = /localStorage|sessionStorage|document\.cookie|next-themes|ThemeProvider|useTheme/;
     assert.doesNotMatch(text, kept, `${file} stores or provides a theme`);
   }
+});
+
+// HeroUI components go only in client components, by subpath import, from this list. Props
+// that change visible text or hide it are refused: `isRequired` adds a "*" to the label,
+// `isPending` swaps the button's type, and `Description` renders nothing outside a field. React
+// Aria's own packages are not imported directly, so the same list covers them.
+const COMPONENTS = new Map([
+  ["@heroui/react/button", "Button"],
+  ["@heroui/react/input", "Input"],
+  ["@heroui/react/label", "Label"],
+]);
+
+test("HeroUI components are imported by subpath, from a fixed list, in client files only", () => {
+  const files = ["app", "components", "lib"]
+    .flatMap((d) => walk(join(ROOT, d)))
+    .filter((f) => /\.(tsx?|jsx?|mjs)$/.test(f));
+  let uses = 0;
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    const before = uses;
+    const pkg = /(?:@heroui\/|react-aria|@react-(?:aria|stately)\/)/.source;
+    const named = new RegExp(`(?:from|import|require)\\s*\\(?\\s*["'\`]${pkg}`, "g");
+    for (const m of text.matchAll(named)) {
+      const end = text.indexOf("\n", m.index);
+      const line = text.slice(text.lastIndexOf("\n", m.index) + 1, end < 0 ? undefined : end);
+      const listed = line.match(/^import \{ (\w+) \} from "(@heroui\/react\/[\w-]+)";$/);
+      assert.ok(listed && COMPONENTS.get(listed[2] ?? "") === listed[1], `${file}: ${line}`);
+      uses++;
+      assert.ok(text.startsWith('"use client"'), `${file} uses HeroUI outside a client file`);
+    }
+    const mentions = text.match(new RegExp(pkg, "g"))?.length ?? 0;
+    assert.equal(mentions, uses - before, `${file} names HeroUI or React Aria outside an import`);
+    assert.doesNotMatch(text, /\bisRequired\b|\bisPending\b|<Description\b/, file);
+    // Text in fields stays 16px: smaller hides a mistyped depth, and iOS zooms in below 16px.
+    for (const input of text.matchAll(/<Input\b[^>]*>/g)) {
+      assert.match(input[0], /\sclassName="ds-field"\s/, `${file}: an Input without ds-field`);
+      assert.doesNotMatch(input[0], /\{\s*\.\.\./, `${file}: a spread on an Input`);
+    }
+    assert.doesNotMatch(text, /(?:createElement|\bh)\(\s*(?:Input|Button|Label)\b/, file);
+  }
+  assert.ok(uses >= 6, `found only ${uses} HeroUI imports`);
+  const css = readFileSync(join(ROOT, "app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  let rules = 0;
+  for (const m of css.matchAll(/(?:^|[{},])\s*((?:button|input|label|textarea)\b[^,{]*)/g)) {
+    rules++;
+    assert.match(m[1] ?? "", /^\w+:where\(:not\(\[data-slot\]\)\)/, `${m[1]} also styles HeroUI`);
+  }
+  assert.ok(rules >= 7, `found only ${rules} element rules`);
 });
