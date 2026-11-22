@@ -162,6 +162,12 @@ it), and before any web UI is deployed: (a) check that the web build includes `D
 (no web UI is deployed today); (b) check that every client a decider uses shows
 `degraded_evidence_note` (today the API's JSON view, which carries it).
 
+(a) checked 2026-11-22 on a production build of `web/` at `fbad5a2` (not deployed): with a stand-in
+API serving synthetic views, marked GO and CAUTION records show the note beside the result and in
+the decision-form context, and an unmarked NO-GO record shows neither. Still to do at the web
+deploy: confirm the deployed bundle is built from a commit with no `web/` change since `fbad5a2` (or
+repeat this check), and that it contains the note text.
+
 Per category (owner, 2026-11-20): DEGRADED `tides` evidence never supports GO or CAUTION, whatever
 the setting says. `risk.DEGRADED_NEVER_SUPPORTS_GO` (a reviewed constant, not a setting) names the
 categories. With the setting on, the engine still adds `evidence.quality_insufficient_for_go` when a
