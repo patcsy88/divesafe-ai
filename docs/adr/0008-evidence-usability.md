@@ -171,12 +171,13 @@ the result. Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
 - confirm the bundle is built from a commit with no `web/` change since `fbad5a2`, and that the API
-  it talks to serves an assessment view unchanged since `fbad5a2` (`AssessmentView` in
-  `src/divesafe/api/schemas.py`); otherwise repeat this check against that API;
+  it talks to serves an assessment view unchanged since `fbad5a2` (`git diff fbad5a2 <API commit> --
+  src/divesafe/api/schemas.py` is empty); otherwise repeat this check against that API;
 - confirm the build output contains the note text (`This result is based on model and forecast data,
   not observations.`). It is in the server chunks, not the browser ones, because the page renders on
   the server;
-- look at one marked record in a browser.
+- look at one marked record in a browser (a synthetic one, served as above, while production can
+  produce none).
 
 Per category (owner, 2026-11-20): DEGRADED `tides` evidence never supports GO or CAUTION, whatever
 the setting says. `risk.DEGRADED_NEVER_SUPPORTS_GO` (a reviewed constant, not a setting) names the
