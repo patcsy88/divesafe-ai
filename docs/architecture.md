@@ -290,3 +290,7 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   `git diff`, `git log` and `mypy` run; `git push`, `rm` and edits are denied; bare
   `git status` is still denied for unknown reasons (use `git diff --staged`). Without the plugin
   the extra rules are harmless. Re-verify after changing the plugin or OpenCode.
+- **Reason-stage `evidence_ids` wording (2026-11-22):** the audit-record paragraph above and ADR
+  0024 Step 3 call the Reason stage's `evidence_ids` "the ids a prompt actually held". They are the
+  ids the model's replies cited (`orchestration/pipeline.py`, `_trace_evidence_ids`); the ids
+  actually sent go only to Supervise and are not stored. Correct the wording, or store the sent ids.
