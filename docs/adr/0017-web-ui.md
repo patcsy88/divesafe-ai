@@ -169,22 +169,37 @@ they never float within the peer range: `react-aria`, `react-aria-components`, `
 `@heroui/react`'s declared range (`tailwindcss`, also a peer, is already listed). `npm ci` must
 succeed without `--legacy-peer-deps` or `--force`, so a version outside a peer range fails the
 install instead of being accepted. `@heroui/react`'s own dependencies (`@radix-ui/react-avatar`,
-`input-otp`, `tailwind-variants`, `@react-stately/utils`, `@react-types/*`) and Tailwind's native
-engines `@tailwindcss/oxide` and `lightningcss` (MPL-2.0, a build-time tool) stay transitive, fixed
-by the lock file. A HeroUI bump that adds or widens a peer dependency is reviewed like a new direct
-package. Any other direct package needs a new security review. CI's existing `web` job checks
-advisories and install scripts only (`npm audit --omit=dev --package-lock-only`, the
-no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
-(already a known gap). Build-time packages (Tailwind's native engines, the PostCSS plugin) run code
-during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
-the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
-file, record the licence of each direct package and of React Aria, and any licence among the bundled
-packages that is not MIT, Apache-2.0 or ISC; record any licence other than MIT, Apache-2.0 or ISC
-among build-time packages too; note that the published 3.2.x packages' `LICENSE` and `package.json`
-(Apache-2.0) govern, not the repository root's older MIT file; record whether any bundled Apache-2.0
-package ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and
-that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
-`lightningcss`) as well as the macOS ones. Do not accept a package that adds an install script.
+`input-otp`, `tailwind-variants`, `@react-stately/utils`, `@react-types/*`), `@heroui/styles`'s
+(`tw-animate-css`, `tailwind-variants`) and Tailwind's native engines `@tailwindcss/oxide` and
+`lightningcss` (MPL-2.0, a build-time tool) stay transitive, fixed by the lock file. A HeroUI bump
+that adds or widens a peer dependency is reviewed like a new direct package. Any other direct
+package needs a new security review. CI's existing `web` job checks advisories and install scripts
+only (`npm audit --omit=dev --package-lock-only`, the no-install-script check, `npm ci
+--ignore-scripts`); a new advisory can fail an unrelated change (already a known gap). Build-time
+packages (Tailwind's native engines, the PostCSS plugin) run code during `next build`, which
+`--ignore-scripts` does not cover, so the build runs with no secret in the environment (no
+`DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock file, record the
+licence of each direct package and of React Aria, and any licence among the bundled packages that is
+not MIT, Apache-2.0 or ISC; record any licence other than MIT, Apache-2.0 or ISC among build-time
+packages too; note that the published 3.2.x packages' `LICENSE` and `package.json` (Apache-2.0)
+govern, not the repository root's older MIT file; record whether any bundled Apache-2.0 package
+ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and that
+the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`, `lightningcss`) as
+well as the macOS ones. Do not accept a package that adds an install script.
+
+Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pins
+`@react-types/color` 3.2.0, which depends on `@react-spectrum/color` and through it on
+`@adobe/react-spectrum` and its icon packages. They are Apache-2.0, except
+`@adobe/react-spectrum-workflow` (CC-BY-ND-4.0) and `react-transition-group` (BSD-3-Clause). HeroUI
+uses `@react-types/color` for TypeScript types only, and no runtime file in `@heroui/*`,
+`react-aria` or `react-aria-components` imports these packages. So they are installed but must not
+ship or run. No code in `web/` imports them. Before merge, on the production build: no file in the
+build output (`.next/static` for the browser, and the server output) contains code from `@adobe/*`,
+`@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is checked both by module
+path and by a distinctive string from each package's code, and the restyle PR does not merge if any
+is found. A HeroUI or `@react-types/color` change that alters this chain is reviewed like a new
+direct package. Known gap: the install and the lock file hold a CC-BY-ND-4.0 package that is never
+shipped or modified.
 
 ### What must not change
 
