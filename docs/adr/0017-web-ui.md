@@ -344,8 +344,8 @@ role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invis
 `sr-only`, `aria-hidden`, `inert`, `animate-out`, or an inline style that hides it (`display: none`,
 `visibility: hidden`, `opacity: 0`, clipping or zero size), or an entry animation that starts
 invisible), and no such element's text is cut short, checked at phone width: for each element that
-holds the text (measured on the element itself if it is a block or inline-block, otherwise on its
-nearest block container, never on a further ancestor), `scrollWidth - clientWidth ≤ 1` and
+holds the text (measured on the element itself unless its computed `display` is `inline`, then on
+its nearest block container, never on a further ancestor), `scrollWidth - clientWidth ≤ 1` and
 `scrollHeight - clientHeight ≤ 1`, and its bounding box lies inside every ancestor whose `overflow`
 is not `visible`. The browser look is taken with `prefers-reduced-motion` both on and off. If the
 confirm step is a modal or popover, it shows the result, the DEGRADED context sentence and the
