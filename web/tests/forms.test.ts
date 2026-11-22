@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { describeFailure } from "../lib/api.ts";
-import { badgeClass, labelFor, plain } from "../lib/present.ts";
+import { badgeClass, labelFor, plain, RECOMMENDATIONS } from "../lib/present.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
 
 test("a local time gets an explicit zone and a bare one is refused", () => {
@@ -30,6 +30,37 @@ test("an unknown recommendation is shown as inconclusive, never as safe", () => 
   assert.equal(labelFor(""), "INSUFFICIENT EVIDENCE");
   assert.equal(badgeClass("SAFE"), "badge insufficient");
   assert.equal(badgeClass("NO-GO"), "badge nogo");
+});
+
+test("the four results get four distinct badge classes, each with its own label", () => {
+  assert.deepEqual([...RECOMMENDATIONS], ["GO", "CAUTION", "NO-GO", "INSUFFICIENT EVIDENCE"]);
+  const classes = RECOMMENDATIONS.map(badgeClass);
+  assert.equal(new Set(classes).size, 4, classes.join(" | "));
+  // A class on only some badges could carry one result's style onto another, so only classes on
+  // all four may be shared. Class names cannot prove colour; the restyle's screenshots and
+  // contrast check cover that.
+  const tokens = classes.map((c) => new Set(c.split(/\s+/).filter(Boolean)));
+  const shared = [...(tokens[0] ?? [])].filter((t) => tokens.every((s) => s.has(t)));
+  assert.ok(shared.includes("badge"), `the base class is not on all four: ${classes.join(" | ")}`);
+  tokens.forEach((own, i) => {
+    const name = RECOMMENDATIONS[i];
+    assert.ok([...own].some((t) => !shared.includes(t)), `${name} has no class of its own`);
+    tokens.forEach((other, j) => {
+      if (i === j) return;
+      const overlap = [...own].filter((t) => other.has(t) && !shared.includes(t));
+      assert.deepEqual(overlap, [], `${name} and ${RECOMMENDATIONS[j]} share ${overlap.join(" ")}`);
+    });
+  });
+  for (const rec of RECOMMENDATIONS) {
+    assert.equal(labelFor(rec), rec, rec);
+    // Every badge keeps the shared base class, so all four have the same size and weight.
+    assert.match(badgeClass(rec), /^badge\b/, rec);
+  }
+  for (const bad of ["SAFE", "go", "", "GO "]) {
+    assert.equal(badgeClass(bad), badgeClass("INSUFFICIENT EVIDENCE"), bad);
+    assert.notEqual(badgeClass(bad), badgeClass("GO"), bad);
+    assert.equal(labelFor(bad), "INSUFFICIENT EVIDENCE", bad);
+  }
 });
 
 test("failure messages never echo the server's body", () => {
