@@ -320,9 +320,12 @@ block is preferred to a source-position check. Before the restyle touches `lib/p
 test pins that GO, CAUTION, NO-GO and INSUFFICIENT EVIDENCE map to four distinct badge classes, each
 with its own label. If the restyle needs classes without the `ds-` prefix (Tailwind utilities, or a
 `className` on a HeroUI component), `web/tests/classes.test.ts` gets an explicit allow-list, with
-owner approval and `risk-reviewer` review. It still fails on any hiding utility (`hidden`,
-`invisible`, `sr-only`, `opacity-0`, `collapse`, `h-0`, `w-0`, `animate-out`, or `overflow-hidden`
-on a safety element) and on HeroUI's `badge`, `card`, `label`, `link` and `tag` as a class of ours.
+owner approval and `risk-reviewer` review. It still fails on any utility that hides, clips, shrinks,
+moves off-screen or makes transparent (for example `hidden`, `invisible`, `sr-only`, `opacity-0`,
+`collapse`, `h-0`, `w-0`, `size-0`, `max-h-0`, `scale-0`, `text-transparent`, `-translate-x-full`,
+`animate-out`, or `overflow-hidden` on a safety element), with any variant prefix such as `md:`,
+`dark:` or `motion-reduce:`, on any arbitrary value or arbitrary-property class with the same
+effect, and on HeroUI's `badge`, `card`, `label`, `link` and `tag` as a class of ours.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 

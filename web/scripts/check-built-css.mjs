@@ -30,9 +30,13 @@ for (const p of sheets) {
   for (const m of text.matchAll(/https?:|["'(]\s*\/\//gi)) {
     problems.push(`${p} names an address: ${text.slice(m.index, m.index + 60)}`);
   }
-  const targets = [...text.matchAll(/url\(\s*(["']?)([^"')]*)/gi)].map((m) => m[2] ?? "");
+  // A quoted address may itself contain ")", so quoted and bare forms are read separately.
+  const targets = [...text.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))/gi)].map(
+    (m) => m[1] ?? m[2] ?? m[3] ?? "",
+  );
   // image-set() also takes plain strings as image addresses.
-  for (const m of text.matchAll(/image-set\(((?:[^()]|\([^()]*\))*)\)/gi)) {
+  const set = /image-set\(((?:"[^"]*"|'[^']*'|[^()"']|\((?:"[^"]*"|'[^']*'|[^()"'])*\))*)\)/gi;
+  for (const m of text.matchAll(set)) {
     for (const q of (m[1] ?? "").matchAll(/["']([^"']*)["']/g)) targets.push(q[1] ?? "");
   }
   for (const target of targets) {
