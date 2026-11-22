@@ -2581,14 +2581,20 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     to `~/DiveSafe/corpus-archive/` first. Backup `divesafe-20261121T012045Z` (scratch restore
     equal: 25 assessments, 8 decided) with both record CSVs. The egress basis is
     `remote_knowledge_opt_in` (knowledge host set 2026-11-15, Step 3) and the note attests
-    model-host egress, so the item is sent to the model host (corrected 2026-11-22; the earlier text
-    said it was withheld); it is expected to appear as `kb:` evidence on Tiger Reef assessment
-    records, readable by keys that can read those records. Not yet checked on a real assessment
-    record.
+    model-host egress, so the item is sent to the model host and to the vendor behind it on every
+    Tiger Reef assessment that retrieves it, where it can only tighten the proposal (corrected
+    2026-11-22; the earlier text said it was withheld). The owner confirmed on 2026-11-22 that
+    sending this note to the model host is intended (Step 3 and the note's attestation). Seen on a
+    real record on 2026-11-22: `eed96cb0…` holds the item as `kb:` evidence, not withheld and in the
+    Reason stage's `evidence_ids` (read-only check as the application role `divesafe_app`). Its text
+    is not shown to the human (ADR 0029 Known gap).
   - **Test runs of 2026-11-20 left pending.** The four test runs of 2026-11-20 (`6205ac42…`,
     `d8e01656…`, `dddcf8cc…`, `cf38becd…`) stay `PENDING_HUMAN`: they were not decided within the
     180-minute decision window, and a decision attempt at about 10:30 UTC was refused with 409 as
     designed. They were deploy and switch-on tests, not planned dives.
+  - **Test runs of 2026-11-22 left pending.** `1f4e2e2e…` (every model call failed with
+    `http_error`, a model-host fault fixed by the owner) and `eed96cb0…` (model calls succeeded) are
+    Tiger Reef test runs for the ADR 0029 Known gap, not planned dives. They stay `PENDING_HUMAN`.
   - **Rollback after ADR 0008 Amendment 1.** Rolling back to an earlier image breaks reads of
     records written after this deploy (`rests_on_degraded_evidence`, `extra="forbid"`): the API
     returns 500 for them until it is rolled forward.

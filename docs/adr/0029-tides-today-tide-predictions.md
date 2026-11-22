@@ -526,18 +526,35 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
   value "probably understates the channel". The items stay DEGRADED: this judgement does not by
   itself let them support GO or CAUTION (ADR 0008). The strong-current hazard named by the owner's
   trial report and PADI's page still does not reach the human until a reviewed Tiger Reef guide is
-  loaded (note B; loaded 2026-11-21, not yet seen on a record; see the Known gap).
-- **Known gap:** the strong-current hazard does not reach the human (note B loaded 2026-11-21 but
-  not yet seen on a record; see the update below).
-  **Update 2026-11-21:** note B (`tiger-reef-currents` v1) is loaded and APPROVED (ADR 0024 A8
-  "Tiger Reef note loaded"). Production's egress basis is `remote_knowledge_opt_in` (knowledge host
-  set 2026-11-15, ADR 0024 Step 3) and the note carries the `attests_model_host_egress` attestation,
-  so it is sent to the model host, not withheld. It has not been seen on a real record, so the gap
-  stays open. Close it when a Tiger Reef record created after 2026-11-21 01:19:31 UTC holds
-  `kb:tiger-reef-currents:1:1` in its evidence, its `egress_basis` is `remote_knowledge_opt_in`, the
-  item is not in `withheld_knowledge`, the Reason stage's `evidence_ids` include it, and the human
-  view shows its text. Even then no rule reads it: it informs the human, it changes no outcome, and
-  `tidal_current` stays not evaluated.
+  loaded (note B; loaded 2026-11-21, seen on a record 2026-11-22, its text not yet shown to the
+  human; see the Known gap).
+- **Known gap:** the strong-current hazard does not reach the human: note B reaches the model, but
+  its text is not shown to the human (see the update below).
+  **Update 2026-11-21 (corrected and extended 2026-11-22):** note B (`tiger-reef-currents` v1) is
+  loaded and APPROVED (ADR 0024 A8 "Tiger Reef note loaded"). Production's egress basis is
+  `remote_knowledge_opt_in` (knowledge host set 2026-11-15, ADR 0024 Step 3) and the note carries
+  the `attests_model_host_egress` attestation, so it is sent to the model host and the vendor behind
+  it, not withheld. Close the gap when a Tiger Reef record created after 2026-11-21 01:19:31 UTC
+  meets all of these:
+  - its site is `my-pahang-tiger-reef` and its evidence holds `kb:tiger-reef-currents:1:1`;
+  - its `egress_basis` is `remote_knowledge_opt_in` and its `model_host` is the Step 3 host;
+  - the item is not in `withheld_knowledge`;
+  - the Reason stage's `evidence_ids` include it;
+  - `deterministic_recommendation` is not GO or CAUTION, and `final_recommendation` is at least as
+    severe;
+  - the human view shows its text.
+
+  **Result 2026-11-22 (read-only check):** `eed96cb0…` (00:23:37 UTC) meets the first five
+  conditions. An earlier run, `1f4e2e2e…` (00:07:38 UTC), did not: every model call failed with
+  `http_error` (a model-host fault, since fixed by the owner), so its Reason stage held no ids. The
+  sixth condition cannot pass yet: the record keeps only the item's id, version, chunk and hash (ADR
+  0022 decision 16), and the scoped text lookup that would show the text is not built (no API route,
+  nothing in the web UI). The gap stays open. No rule reads the note as a limit
+  (`placeholder.site_constraint` cites it and stays TBD / INSUFFICIENT EVIDENCE). It informs the
+  model, and reaches the human only through the model's text and the cited id. Through the model's
+  proposal it can only tighten the result (`reconcile`), never relax it, and `tidal_current` stays
+  not evaluated. What the model writes about current from the note and the tide item is not measured
+  (the offline tests check only the prompt).
 - **Tests:** `tests/unit/test_tiger_reef_site.py` (synthetic fixture only), including a table
   test over every `LOCATIONS` entry, marked `safety`: the key is a registered site, the stated
   kilometres equal the haversine distance from that site's own coordinates, the note is not
