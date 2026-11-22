@@ -6,6 +6,7 @@
 - Amended again 2026-11-20 (Amendment 2, owner): with the setting on, tide predictions satisfy the
   required `tides` category for GO and CAUTION; tides no longer need observations; no other DEGRADED
   tide item can satisfy the category. See Amendment 2 at the end.
+- Setting switched on in production by the owner on 2026-11-22 (ADR 0024 A8, deploy of `c61d23f`).
 - Date: 2026-10-09
 
 ## Context
@@ -154,6 +155,12 @@ follow-up), check that the deployed web build includes `DegradedEvidenceNote`: o
 marked record on a staging deploy of the same web build, or confirm the note text is in the
 deployed bundle. The web UI is deployed separately from the API, and nothing in the code checks
 this.
+
+**Open preconditions (2026-11-22, flag on in production since then, ADR 0024 A8).** Before GO or
+CAUTION can first become reachable for any site (a ruleset covering the last placeholder factor for
+it), and before any web UI is deployed: (a) check that the web build includes `DegradedEvidenceNote`
+(no web UI is deployed today); (b) check that every client a decider uses shows
+`degraded_evidence_note` (today the API's JSON view, which carries it).
 
 Per category (owner, 2026-11-20): DEGRADED `tides` evidence never supports GO or CAUTION, whatever
 the setting says. `risk.DEGRADED_NEVER_SUPPORTS_GO` (a reviewed constant, not a setting) names the
