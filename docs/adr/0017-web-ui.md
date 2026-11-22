@@ -157,17 +157,28 @@ Rejected:
 
 Exact-pinned like the rest of `package.json`, all under `dependencies` so that `npm audit
 --omit=dev` covers them: `@heroui/react` and `@heroui/styles` (3.2.x, Apache-2.0), `tailwindcss` and
-`@tailwindcss/postcss` (4.x, MIT), and transitively React Aria (Apache-2.0) and Tailwind's native
-engine `@tailwindcss/oxide`. Any other direct package needs a new security review. CI's existing
-`web` job checks advisories and install scripts only (`npm audit --omit=dev --package-lock-only`,
-the no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
+`@tailwindcss/postcss` (4.x, MIT), and `@heroui/react`'s peer dependencies, exact-pinned here too so
+they never float within the peer range: `react-aria`, `react-aria-components`, `@react-aria/ssr`,
+`@react-aria/utils` and `@internationalized/date` (Apache-2.0), each at a version inside
+`@heroui/react`'s declared range (`tailwindcss`, also a peer, is already listed). `npm ci` must
+succeed without `--legacy-peer-deps` or `--force`, so a version outside a peer range fails the
+install instead of being accepted. `@heroui/react`'s own dependencies (`@radix-ui/react-avatar`,
+`input-otp`, `tailwind-variants`, `@react-stately/utils`, `@react-types/*`) and Tailwind's native
+engines `@tailwindcss/oxide` and `lightningcss` (MPL-2.0, a build-time tool) stay transitive, fixed
+by the lock file. A HeroUI bump that adds or widens a peer dependency is reviewed like a new direct
+package. Any other direct package needs a new security review. CI's existing `web` job checks
+advisories and install scripts only (`npm audit --omit=dev --package-lock-only`, the
+no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
 (already a known gap). Build-time packages (Tailwind's native engine, the PostCSS plugin) run code
 during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
 the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
 file, record the licence of each direct package and of React Aria, and any licence among the bundled
-packages that is not MIT, Apache-2.0 or ISC; confirm no `hasInstallScript`, and that the lock file
-holds the Linux build of the native engine as well as the macOS one. Do not accept a package that
-adds an install script.
+packages that is not MIT, Apache-2.0 or ISC; record any licence other than MIT, Apache-2.0 or ISC
+among build-time packages too; note that the published 3.2.x packages' `LICENSE` and `package.json`
+(Apache-2.0) govern, not the repository root's older MIT file; record whether any bundled Apache-2.0
+package ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and
+that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
+`lightningcss`) as well as the macOS ones. Do not accept a package that adds an install script.
 
 ### What must not change
 
@@ -209,8 +220,9 @@ adds an install script.
 - Accessibility at least as good as now: roles (`alert`, `status`, `note`), labels on every input,
   visible focus, keyboard use of the decision form and its confirm step, contrast of at least WCAG
   AA in light and dark (4.5:1 for text; 3:1 for large text and the badge border), checked by hand on
-  the screenshots. Today's dark-mode NO-GO and INSUFFICIENT EVIDENCE badges fall below 3:1, and the
-  restyle must fix that.
+  the screenshots. Measured on 2026-11-22 against the card background: light GO 5.43, CAUTION 4.40,
+  NO-GO 7.33, INSUFFICIENT EVIDENCE 6.43; dark GO 3.00, CAUTION 3.70, NO-GO 2.22, INSUFFICIENT
+  EVIDENCE 2.53. The restyle must bring every badge to at least 3.1:1 in both modes.
 
 ### Client boundary
 
@@ -221,8 +233,10 @@ display data only: the strings, numbers and booleans the wrapper renders, alread
 `plain()`, never a whole `view`, `record` or decision object, because every prop is serialised into
 the page for the browser; never the key, the session or a server module. `DecisionForm` and
 `ConditionsForm` keep their current props and server actions, and the restyle adds no new prop to
-them. The existing boundary test (no client file imports `lib/api|auth|config|session`, reads
-`process.env`, or uses `NEXT_PUBLIC`) applies to the wrappers.
+them. A wrapper for the DEGRADED note receives only whether to show it (a boolean from
+`showsDegradedNote`) and renders `DEGRADED_EVIDENCE_NOTE` itself. The existing boundary test (no
+client file imports `lib/api|auth|config|session`, reads `process.env`, or uses `NEXT_PUBLIC`)
+applies to the wrappers.
 
 ### Tests
 
@@ -238,7 +252,9 @@ test change follows AGENTS.md section 4 (owner approval, `risk-reviewer`, mutati
 web tests. Mutation-check any new or edited guard. An edited `degradednote.test.ts` must fail on
 each of these mutants: the note moved away from the badge, the note dropped from the decision-form
 context, the note rendered unconditionally, and the note's role removed. A render of the result
-block is preferred to a source-position check.
+block is preferred to a source-position check. Before the restyle touches `lib/present.ts`, a web
+test pins that GO, CAUTION, NO-GO and INSUFFICIENT EVIDENCE map to four distinct badge classes, each
+with its own label.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 
@@ -249,10 +265,12 @@ before the restyle is accepted, by the method recorded there: views from the rea
 decision-form context; unmarked GO, CAUTION and NO-GO records show neither. Checked in the
 server-rendered HTML whether or not the note's component is a client component, plus one browser
 look in light and dark. In the same run, for each synthetic view, the page's visible text (tags
-stripped, whitespace normalised) and its sequence of `role` attributes are the same before and after
-the restyle, and so are the evidence page and the decision form's review and confirm states. The
-result, with the restyled commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open
-preconditions (a). The note's wording stays pinned to the API constant.
+stripped, whitespace normalised, visually hidden text excluded) is the same before and after the
+restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. Any
+other added role or hidden text is listed in the PR for `risk-reviewer`. The same holds for the
+evidence page and the decision form's review and confirm states. The result, with the restyled
+commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's
+wording stays pinned to the API constant.
 
 ### Reviews
 
