@@ -2587,8 +2587,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     The owner confirmed on 2026-11-22 that sending this note to the model host is intended (Step 3
     and the note's attestation). Seen on a real record on 2026-11-22: `eed96cb0…` holds the item as
     `kb:` evidence, not withheld and in the Reason stage's `evidence_ids` (the ids the model's
-    replies cited) (read-only check as the application role `divesafe_app`). Its text is not shown
-    to the human (ADR 0029 Known gap).
+    replies cited; read-only check as the application role `divesafe_app`). Its text is not shown to
+    the human (ADR 0029 Known gap).
   - **Test runs of 2026-11-20 left pending.** The four test runs of 2026-11-20 (`6205ac42…`,
     `d8e01656…`, `dddcf8cc…`, `cf38becd…`) stay `PENDING_HUMAN`: they were not decided within the
     180-minute decision window, and a decision attempt at about 10:30 UTC was refused with 409 as
