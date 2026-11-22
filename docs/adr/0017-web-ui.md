@@ -176,30 +176,44 @@ that adds or widens a peer dependency is reviewed like a new direct package. Any
 package needs a new security review. CI's existing `web` job checks advisories and install scripts
 only (`npm audit --omit=dev --package-lock-only`, the no-install-script check, `npm ci
 --ignore-scripts`); a new advisory can fail an unrelated change (already a known gap). Build-time
-packages (Tailwind's native engines, the PostCSS plugin) run code during `next build`, which
-`--ignore-scripts` does not cover, so the build runs with no secret in the environment (no
-`DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock file, record the
-licence of each direct package and of React Aria, and any licence among the bundled packages that is
-not MIT, Apache-2.0 or ISC; record any licence other than MIT, Apache-2.0 or ISC among build-time
-packages too; note that the published 3.2.x packages' `LICENSE` and `package.json` (Apache-2.0)
-govern, not the repository root's older MIT file; record whether any bundled Apache-2.0 package
-ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and that
-the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`, `lightningcss`) as
-well as the macOS ones. Do not accept a package that adds an install script.
+packages (Tailwind's native engines, the PostCSS plugin and its loaders such as `jiti`) run code
+during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
+the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
+file, record the licence of each direct package and of React Aria, and any licence among the bundled
+packages that is not MIT, Apache-2.0 or ISC; record any licence other than MIT, Apache-2.0 or ISC
+among build-time packages too; note that the published 3.2.x packages' `LICENSE` and `package.json`
+(Apache-2.0) govern, not the repository root's older MIT file; record whether any bundled Apache-2.0
+package ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and
+that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
+`lightningcss`) as well as the macOS ones. Licences are read from each package's licence file as
+well as the lock file's `license` field, and a mismatch is recorded. Do not accept a package that
+adds an install script.
 
 Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pins
 `@react-types/color` 3.2.0, which depends on `@react-spectrum/color` and through it on
-`@adobe/react-spectrum` and its icon packages. They are Apache-2.0, except
-`@adobe/react-spectrum-workflow` (CC-BY-ND-4.0) and `react-transition-group` (BSD-3-Clause). HeroUI
-uses `@react-types/color` for TypeScript types only, and no runtime file in `@heroui/*`,
-`react-aria` or `react-aria-components` imports these packages. So they are installed but must not
-ship or run. No code in `web/` imports them. Before merge, on the production build: no file in the
-build output (`.next/static` for the browser, and the server output) contains code from `@adobe/*`,
-`@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is checked both by module
-path and by a distinctive string from each package's code, and the restyle PR does not merge if any
-is found. A HeroUI or `@react-types/color` change that alters this chain is reviewed like a new
-direct package. Known gap: the install and the lock file hold a CC-BY-ND-4.0 package that is never
-shipped or modified.
+`@adobe/react-spectrum` and its icon packages. They are Apache-2.0, except `react-transition-group`
+(BSD-3-Clause). The installed `@adobe/react-spectrum-workflow` 2.3.5 (pinned by
+`@spectrum-icons/workflow` 4.3.2) is Apache-2.0 in its `package.json`, its `LICENSE` file and the
+lock file; its later release 2.4.0 is CC-BY-ND-4.0, so a change that moves it to 2.4.0 or later is
+refused unless the owner accepts that licence. HeroUI uses `@react-types/color` for TypeScript types
+only, and no runtime file in `@heroui/*`, `react-aria` or `react-aria-components` imports these
+packages. So they are installed but must not ship or run. No code in `web/` imports them, and a web
+test fails if any file in `web/` imports `@adobe/`, `@react-spectrum/`, `@spectrum-icons/`,
+`react-transition-group` or `@react-types/color`, type-only imports included. Before merge, on the
+production build: no file in the build output (browser and server) contains code from `@adobe/*`,
+`@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is checked by module path
+(the server's `.nft.json` trace files, and the `sources` of a scratch build with
+`productionBrowserSourceMaps: true`, not committed) and by a distinctive string literal from each
+package (recorded in the PR). The check is first shown to find a deliberate import of
+`@adobe/react-spectrum` in a scratch build, in a client file and in a server file. The restyle PR
+does not merge if any is found. A HeroUI, `@react-types/color` or `@spectrum-icons/workflow` change
+that alters this chain is reviewed like a new direct package. When a web image is built, it copies
+only Next's traced output (`output: "standalone"`), never the whole `node_modules`. CI's `web` job
+repeats the check on every change, after `next build` (`web/scripts/check-no-spectrum.mjs`, owner,
+2026-11-22): it fails if any `.nft.json` trace file or source map lists a file in those four package
+scopes, if any built `.js` or `.css` file holds one of the recorded strings, or if it finds nothing
+to check. Known gap: CI's build has no browser source maps, so in CI the browser output is checked
+by string only.
 
 ### What must not change
 
@@ -289,11 +303,15 @@ decision-form context; unmarked GO, CAUTION and NO-GO records show neither. Chec
 server-rendered HTML whether or not the note's component is a client component, plus one browser
 look in light and dark. In the same run, for each synthetic view, the page's visible text (tags
 stripped, whitespace normalised, visually hidden text excluded) is the same before and after the
-restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. Any
-other added role or hidden text is listed in the PR for `risk-reviewer`. The same holds for the
-evidence page and the decision form's review and confirm states. The result, with the restyled
-commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's
-wording stays pinned to the API constant.
+restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. No
+element that holds the banner, the disclaimer, the DEGRADED note or an `alert`, `status` or `note`
+role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invisible`, `opacity-0`,
+`sr-only`, `aria-hidden`, `inert`, `animate-out`, or an entry animation that starts invisible). The
+browser look is taken with `prefers-reduced-motion` both on and off. Any other added role or hidden
+text is listed in the PR for `risk-reviewer`. The same holds for the evidence page and the decision
+form's review and confirm states. The result, with the restyled commit, replaces the `fbad5a2` entry
+in ADR 0008 Amendment 1, Open preconditions (a). The note's wording stays pinned to the API
+constant.
 
 ### Reviews
 
