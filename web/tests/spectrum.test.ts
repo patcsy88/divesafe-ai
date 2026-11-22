@@ -33,6 +33,7 @@ test("the lock file keeps the Spectrum icon set at 2.3.5 and holds no -ND or -NC
   // 2.4.0 and later are CC-BY-ND-4.0 (ADR 0017); a move needs the owner's acceptance.
   assert.equal(lock.packages["node_modules/@adobe/react-spectrum-workflow"]?.version, "2.3.5");
   for (const [name, entry] of Object.entries(lock.packages)) {
-    assert.ok(!/-(ND|NC)\b/.test(entry.license ?? ""), `${name} is ${entry.license}`);
+    if (name.endsWith("node_modules/@adobe/react-spectrum-workflow")) assert.equal(entry.version, "2.3.5", name);
+    assert.ok(!/-(ND|NC)\b/i.test(entry.license ?? ""), `${name} is ${entry.license}`);
   }
 });
