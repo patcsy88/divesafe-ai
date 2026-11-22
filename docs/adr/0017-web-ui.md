@@ -127,12 +127,12 @@ Gaps added:
   items' dates have no "after assessment" marker.
 - The web actions themselves have no tests (ID tampering, a 401 mid-write). Only the library is tested.
 
-## Amendment 2026-11-22: restyle with HeroUI v3 (PROPOSED, owner review)
+## Amendment 2026-11-22: restyle with HeroUI v3 (ACCEPTED)
 
-- Status: PROPOSED. Owner decisions 2026-11-22: the web UI stays a browser app; it is restyled with
-  HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the deploy items
-  (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service, the gaps
-  above) are separate and unchanged by this amendment.
+- Status: ACCEPTED (owner, 2026-11-22). Owner decisions 2026-11-22: the web UI stays a browser app;
+  it is restyled with HeroUI v3; no other HeroUI product is used. Not deployed anywhere yet, so the
+  deploy items (session secret, TLS proxy, `allowedOrigins`, trusted proxies, a compose web service,
+  the gaps above) are separate and unchanged by this amendment.
 - Changes only how `web/` looks, and replaces "no other runtime dependency" (Decision, first item)
   with the packages listed under "New dependencies". Nothing else in "Decision" is relaxed.
 
