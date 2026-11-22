@@ -2576,13 +2576,15 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
     `my-pahang-tiger-reef`, 1 chunk, all three attestations, text checked for third-party content
     beforehand), manifest `8b11ba8f…d7be0` built with `d981a6a` (the host hash equal to the
     `--check` output). Owner approval recorded at 01:17:05 UTC, before the load; loaded as DRAFT
-    01:19:21 UTC; APPROVED 01:19:31 UTC with `hash_checked = true`; `tioman-site-guide` v3
-    APPROVED and v1, v2 WITHDRAWN unchanged. The earlier draft and manifest in the corpus folder
-    were moved to `~/DiveSafe/corpus-archive/` first. Backup `divesafe-20261121T012045Z` (scratch
-    restore equal: 25 assessments, 8 decided) with both record CSVs. The egress basis is not
-    `declared_local` and `DIVESAFE_LLM_KNOWLEDGE_HOST` is empty, so the item is withheld from the
-    model host; it is expected to appear as `kb:` evidence on Tiger Reef assessment records,
-    readable by keys that can read those records. Not yet checked on a real assessment record.
+    01:19:21 UTC; APPROVED 01:19:31 UTC with `hash_checked = true`; `tioman-site-guide` v3 APPROVED
+    and v1, v2 WITHDRAWN unchanged. The earlier draft and manifest in the corpus folder were moved
+    to `~/DiveSafe/corpus-archive/` first. Backup `divesafe-20261121T012045Z` (scratch restore
+    equal: 25 assessments, 8 decided) with both record CSVs. The egress basis is
+    `remote_knowledge_opt_in` (knowledge host set 2026-11-15, Step 3) and the note attests
+    model-host egress, so the item is sent to the model host (corrected 2026-11-22; the earlier text
+    said it was withheld); it is expected to appear as `kb:` evidence on Tiger Reef assessment
+    records, readable by keys that can read those records. Not yet checked on a real assessment
+    record.
   - **Test runs of 2026-11-20 left pending.** The four test runs of 2026-11-20 (`6205ac42…`,
     `d8e01656…`, `dddcf8cc…`, `cf38becd…`) stay `PENDING_HUMAN`: they were not decided within the
     180-minute decision window, and a decision attempt at about 10:30 UTC was refused with 409 as

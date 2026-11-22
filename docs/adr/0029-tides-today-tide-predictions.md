@@ -530,12 +530,13 @@ to location 2960 "Teluk Tekek" (2.8, 104.133003), the same point as the Tioman e
 - **Known gap:** the strong-current hazard does not reach the human (note B loaded 2026-11-21 but
   not yet seen on a record; see the update below).
   **Update 2026-11-21:** note B (`tiger-reef-currents` v1) is loaded and APPROVED (ADR 0024 A8
-  "Tiger Reef note loaded"). With `DIVESAFE_LLM_KNOWLEDGE_HOST` empty it is withheld from the model
-  host. It is expected to appear as `kb:` evidence on Tiger Reef assessment records. That has not
-  been seen on a real record, so the gap stays open. Close it when a Tiger Reef record created
-  after 2026-11-21 01:19:31 UTC holds `kb:tiger-reef-currents:1:1` in its evidence,
-  `withheld_knowledge` lists `tiger-reef-currents` version 1 chunk 1, and the human view shows its
-  text. Even then no rule reads it: it informs the human, it changes no outcome, and
+  "Tiger Reef note loaded"). Production's egress basis is `remote_knowledge_opt_in` (knowledge host
+  set 2026-11-15, ADR 0024 Step 3) and the note carries the `attests_model_host_egress` attestation,
+  so it is sent to the model host, not withheld. It has not been seen on a real record, so the gap
+  stays open. Close it when a Tiger Reef record created after 2026-11-21 01:19:31 UTC holds
+  `kb:tiger-reef-currents:1:1` in its evidence, its `egress_basis` is `remote_knowledge_opt_in`, the
+  item is not in `withheld_knowledge`, the Reason stage's `evidence_ids` include it, and the human
+  view shows its text. Even then no rule reads it: it informs the human, it changes no outcome, and
   `tidal_current` stays not evaluated.
 - **Tests:** `tests/unit/test_tiger_reef_site.py` (synthetic fixture only), including a table
   test over every `LOCATIONS` entry, marked `safety`: the key is a registered site, the stated
