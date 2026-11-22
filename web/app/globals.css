@@ -1,5 +1,14 @@
+@layer theme, base, components, utilities;
 @import "tailwindcss" source(none);
-@import "@heroui/styles";
+/* HeroUI, selectively (its documented import order): only the components the app uses. */
+@import "@heroui/styles/base/base.css" layer(base);
+@import "@heroui/styles/themes/default" layer(theme);
+@import "@heroui/styles/components/label.css" layer(components);
+@import "@heroui/styles/components/button.css" layer(components);
+@import "@heroui/styles/components/input.css" layer(components);
+@import "@heroui/styles/components/textarea.css" layer(components);
+@import "@heroui/styles/utilities";
+@import "@heroui/styles/variants";
 @source "./";
 @source "../components";
 @source "../lib";

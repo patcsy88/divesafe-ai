@@ -279,7 +279,16 @@ a solid outline. Tailwind scans only `app/`, `components/` and `lib/` (`source(n
 `web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22): it fails if a built
 stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address, has a `url()` or
 `image-set()` address that is not a `data:` URI or a `/_next/static/` file (a `..` step, an encoded
-dot or a backslash counts as leaving it), or if there is no stylesheet to check.
+dot or a backslash counts as leaving it), or if there is no stylesheet to check. `globals.css`
+imports HeroUI selectively, in its documented order (restyle step 8): `base/base.css`, the default
+theme, `utilities`, `variants` and the component files of the components in that test's list
+(`label`, `button`, `input`, `textarea`), not `@heroui/styles` as a whole and not `tw-animate-css`.
+The built stylesheet went from 476 KB to 70 KB (45 KB to 9 KB gzipped), with every computed style
+and screenshot unchanged. A component added to the list needs its file imported as well, or it is
+unstyled. The class and dark-selector checks still read every file in `@heroui/styles`.
+`tw-animate-css` stays installed as a dependency of `@heroui/styles` but is not imported: importing
+it again brings back the animation utilities the hiding rule bans, so it needs `risk-reviewer`
+review, and an added overlay's enter and exit animations are re-checked under the (a) hiding rule.
 
 ### What must not change
 
