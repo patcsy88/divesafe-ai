@@ -36,8 +36,13 @@ for (const p of sheets) {
   );
   // image-set() also takes plain strings as image addresses.
   const set = /image-set\(((?:"[^"]*"|'[^']*'|[^()"']|\((?:"[^"]*"|'[^']*'|[^()"'])*\))*)\)/gi;
-  for (const m of text.matchAll(set)) {
+  const sets = [...text.matchAll(set)];
+  for (const m of sets) {
     for (const q of (m[1] ?? "").matchAll(/["']([^"']*)["']/g)) targets.push(q[1] ?? "");
+  }
+  // An image-set() the pattern cannot read (deeper nesting) fails rather than passing unchecked.
+  if (sets.length !== (text.match(/image-set\(/gi) ?? []).length) {
+    problems.push(`${p} has an image-set() the check cannot read`);
   }
   for (const target of targets) {
     // A ".." step, an encoded dot or a backslash can lead out of /_next/static/.

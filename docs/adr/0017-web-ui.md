@@ -322,10 +322,11 @@ with its own label. If the restyle needs classes without the `ds-` prefix (Tailw
 `className` on a HeroUI component), `web/tests/classes.test.ts` gets an explicit allow-list, with
 owner approval and `risk-reviewer` review. It still fails on any utility that hides, clips, shrinks,
 moves off-screen or makes transparent (for example `hidden`, `invisible`, `sr-only`, `opacity-0`,
-`collapse`, `h-0`, `w-0`, `size-0`, `max-h-0`, `scale-0`, `text-transparent`, `-translate-x-full`,
-`animate-out`, or `overflow-hidden` on a safety element), with any variant prefix such as `md:`,
-`dark:` or `motion-reduce:`, on any arbitrary value or arbitrary-property class with the same
-effect, and on HeroUI's `badge`, `card`, `label`, `link` and `tag` as a class of ours.
+`collapse`, `h-0`, `w-0`, `size-0`, `max-h-0`, `scale-0`, `text-transparent`, `truncate`,
+`line-clamp-*`, `-translate-x-full`, `animate-out`, or `overflow-hidden` on a safety element), with
+any variant prefix such as `md:`, `dark:` or `motion-reduce:`, on any arbitrary value or
+arbitrary-property class with the same effect, and on HeroUI's `badge`, `card`, `label`, `link` and
+`tag` as a class of ours.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 
@@ -342,13 +343,14 @@ element that holds the banner, the disclaimer, the DEGRADED note or an `alert`, 
 role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invisible`, `opacity-0`,
 `sr-only`, `aria-hidden`, `inert`, `animate-out`, or an inline style that hides it (`display: none`,
 `visibility: hidden`, `opacity: 0`, clipping or zero size), or an entry animation that starts
-invisible). The browser look is taken with `prefers-reduced-motion` both on and off. If the confirm
-step is a modal or popover, it shows the result, the DEGRADED context sentence and the less-severe
-warning itself, and the hiding check is repeated in the browser with it open. Any other added role
-or hidden text is listed in the PR for `risk-reviewer`. The same holds for the evidence page and the
-decision form's review and confirm states. The result, with the restyled commit, replaces the
-`fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's wording stays pinned to
-the API constant.
+invisible), and no such element's text is cut short, checked at phone width (for each, `scrollWidth
+≤ clientWidth` and `scrollHeight ≤ clientHeight`). The browser look is taken with
+`prefers-reduced-motion` both on and off. If the confirm step is a modal or popover, it shows the
+result, the DEGRADED context sentence and the less-severe warning itself, and the hiding check is
+repeated in the browser with it open. Any other added role or hidden text is listed in the PR for
+`risk-reviewer`. The same holds for the evidence page and the decision form's review and confirm
+states. The result, with the restyled commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1,
+Open preconditions (a). The note's wording stays pinned to the API constant.
 
 ### Reviews
 
