@@ -2600,6 +2600,50 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   - **Rollback after ADR 0008 Amendment 1.** Rolling back to an earlier image breaks reads of
     records written after this deploy (`rests_on_degraded_evidence`, `extra="forbid"`): the API
     returns 500 for them until it is rolled forward.
+  - **Deploy of `c61d23f` (2026-11-22 11:34 +08:00, 03:34 UTC, owner).** PRs #52–#56 (ADR 0031,
+    MET's daily ranges may only tighten; the PHN e-Tide removal; the Tiger Reef gap docs; 18 commits
+    over `d981a6a`). No migration change; under `docker/` only the `production.env.example` comment
+    beside the DEGRADED flag changed. The owner confirmed beforehand that neither the host
+    `production.env` nor the shell sets `DIVESAFE_PHN_ETIDE_ENABLED`, which start-up now refuses.
+    Backup `divesafe-20261122T025726Z` with both record CSVs (no scratch restore). The database
+    container restarted at 03:21:26 UTC, after the backup, because the owner restarted the Mac;
+    nothing was written in between (read-only check: no row in any timestamped table is newer than
+    the backup, and the counts of assessments, decided assessments, knowledge status events and
+    pending runs equal the backup manifest's). The previous image `ffdb352af25d` (commit `d981a6a`)
+    was tagged `divesafe-api:rollback-20261122` before the build. The new API image is
+    `fa0716a9a55d` and is healthy. Checks after start:
+    - the "ruleset loaded" line shows `tiger-reef-2026-11-20`, 4 definitions and `ruleset_sha256`
+      `96561f5aeb8de477265a5485b534c2ddaf410c4fc9c552a14c9de0ea8c2b7a29`, equal to the pin;
+    - `risk/met_ranges.py` is in the image and pairs `wave_height` and `wind_speed_10m`;
+    - `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is `false`;
+    - health is 200 and there are 0 ERROR or CRITICAL log lines.
+
+    The owner then replaced the comment above the flag in the host `production.env` with the
+    example's wording, and the block now matches the example. This also removed the hand-added
+    paragraph of 2026-11-21 ("Do not set true … Nothing enforces this.").
+    - **DEGRADED switched on (2026-11-22 03:51:56 UTC, owner decision, ADR 0031).** The owner set
+      `DIVESAFE_DEGRADED_MAY_SUPPORT_GO=true` in the host `production.env` and ran `C up -d
+      --no-build --wait api` (same image `fa0716a9a55d`). Start-up accepted the flag (pin, 4
+      definitions, MET token file present and not empty, checked by size only). The warning
+      "DEGRADED evidence may support GO and CAUTION" is logged once; health is 200; there are 0
+      ERROR or CRITICAL lines. No outcome changes yet: the four placeholder factors keep every
+      result at INSUFFICIENT EVIDENCE or NO-GO, so GO and CAUTION stay unreachable for every site.
+    - **Web build check (ADR 0008 Amendment 1, control 2): not possible yet.** No web UI is deployed
+      anywhere (owner, 2026-11-22). The production compose file has no web service, so decisions go
+      through the API, whose assessment view carries the fixed note in `degraded_evidence_note`.
+      Before any web UI deploy, and before GO or CAUTION can first become reachable, check that the
+      build includes `DegradedEvidenceNote`.
+    - **Rollback, new first step:** set `DIVESAFE_DEGRADED_MAY_SUPPORT_GO=false` in
+      `production.env`, then `docker tag divesafe-api:rollback-20261122 divesafe-api:local && C up
+      -d --no-build --wait api`, keeping both `DIVESAFE_RULESET_*` lines. `rollback-20261122` is
+      `d981a6a`. It is older than ADR 0031 and the PR #53 refusal, so it has no MET check and would
+      start with `true`. Records written since ADR 0008 Amendment 1 still read on it.
+    - **Housekeeping (owner-approved, 2026-11-22):**
+      - rollback images pruned to the last two (`rollback-20261122`, `rollback-20261121`; 11 older
+        tags removed, none in use);
+      - the returned domain-validation form moved to `docs/domain-validation/returned/`, which git
+        ignores and the image never includes;
+      - merged worktrees removed.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
       `org.opencontainers.image.revision` label); A8 is the only evidence. A build-arg label could
