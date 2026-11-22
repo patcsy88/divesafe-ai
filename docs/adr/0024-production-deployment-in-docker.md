@@ -2658,10 +2658,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
         back further means a rebuild from a clean checkout of that commit);
       - the returned domain-validation form (names people; the reviewed source behind
         `tiger-reef-2026-11-20`) moved to `~/DiveSafe/records/domain-validation/` (outside the
-        checkout; folder mode 700, file 600; never committed, checked against every commit; sha256
-        `76ce126891fbed7b51ff44cc5be37a46ab7f637f34fb11ee341977062abb63d3`), signed off 2026-11-20;
-        kept while any ruleset citing it is in force or under review; not in any backup until an
-        off-machine copy exists (condition 3);
+        checkout; folder mode 700, file 600; never committed (its blob is not in the repository);
+        sha256 `76ce126891fbed7b51ff44cc5be37a46ab7f637f34fb11ee341977062abb63d3`), signed off
+        2026-11-20; kept while any ruleset citing it is in force or under review; not in any backup
+        until an off-machine copy exists (condition 3 of "Conditions before acceptance");
       - merged worktrees removed.
   - **Gaps from the review of the deploy procedure (2026-11-13, security nits):**
     - The image carries no record of the commit it was built from (no
