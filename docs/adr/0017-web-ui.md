@@ -234,11 +234,31 @@ paragraph and list spacing, list bullets, heading weight and link underlines, so
 these browser defaults back with element rules. On 2026-11-22 every element of the result, evidence,
 home and login pages had the same computed style as at `fbad5a2`, in light and dark mode and with
 reduced motion on and off (in Chromium, as first rendered; the decision form's less-severe warning,
-the confirm step and the error alerts were not opened and are left to the (a) repeat). Tailwind
-scans only `app/`, `components/` and `lib/` (`source(none)` and `@source`), so text in tests or
-scripts never reaches the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after the
-build (owner, 2026-11-22): it fails if a built stylesheet keeps an `@import`, names an `http(s)` or
-protocol-relative address, has a `url()` or `image-set()` address that is not a `data:` URI or a
+the confirm step and the error alerts were not opened and are left to the (a) repeat). The same
+holds for custom properties: HeroUI also defines `--accent`, so ours carry the `--ds-` prefix, and
+`classes.test.ts` fails on an unprefixed one or one HeroUI also defines. HeroUI's dark theme
+variables switch only on a `.dark` class or `data-theme="dark"`, which would need a script, a cookie
+or stored state (security N3, round 1), so `globals.css` sets HeroUI's own dark variable values
+under `@media (prefers-color-scheme: dark)`, and `classes.test.ts` fails unless they equal the
+values in `@heroui/styles` that differ from its light theme, each set once and nowhere else (on
+2026-11-22 all 31 resolved in Chromium to the same values as HeroUI's `.dark`). That covers dark
+mode only while HeroUI keys nothing else on `.dark` or `data-theme`, so the test also fails if a
+HeroUI selector naming them is not one of the eight listed in it (the theme blocks, the unused
+vibrant palette and the `dark` variant), if `@heroui/styles` names a stylesheet other than its
+`index.css`, if HeroUI's `.dark` sets anything but variables and `color-scheme`, if `globals.css`
+drops `color-scheme: light dark`, reads a variable that nothing sets or reads a HeroUI one outside
+the dark block, or if a file in `app/`, `components/` or `lib/` sets a theme class or attribute,
+uses a `dark:` utility, or names browser storage, `document.cookie` or a theme provider. HeroUI's
+`dark` variant has a `prefers-color-scheme` branch, but it also needs the utility's class on an
+ancestor, so a `dark:` utility did not apply in system dark mode (Chromium, 2026-11-22, a scratch
+build with no `.dark` anywhere); dark styles therefore go in the `globals.css` media block, and the
+test also fails if any CSS or JavaScript file in `@heroui/styles` or `@heroui/react` uses `dark:`
+outside a comment. Focus rings and other interaction states take HeroUI's dark values too, so the
+(a) repeat includes a keyboard pass through the decision form and its confirm step in dark mode.
+Tailwind scans only `app/`, `components/` and `lib/` (`source(none)` and `@source`), so text in
+tests or scripts never reaches the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after
+the build (owner, 2026-11-22): it fails if a built stylesheet keeps an `@import`, names an `http(s)`
+or protocol-relative address, has a `url()` or `image-set()` address that is not a `data:` URI or a
 `/_next/static/` file (a `..` step, an encoded dot or a backslash counts as leaving it), or if there
 is no stylesheet to check.
 

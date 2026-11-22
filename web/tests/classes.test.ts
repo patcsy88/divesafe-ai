@@ -75,3 +75,151 @@ test("no class of ours is also a HeroUI class, and HeroUI has no ds- class", () 
   const shared = [...ours].filter((c) => heroui.has(c));
   assert.deepEqual(shared, [], `HeroUI also defines: ${shared.join(" ")}`);
 });
+
+const DARK = "@media (prefers-color-scheme: dark) { :root {";
+
+function declarations(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of text.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) {
+    out.set(m[1] ?? "", (m[2] ?? "").replace(/\s+/g, " ").trim());
+  }
+  return out;
+}
+
+function block(text: string, opener: string): string {
+  const start = text.indexOf(opener);
+  assert.ok(start >= 0, `did not find ${JSON.stringify(opener)}`);
+  let i = text.indexOf("{", start + opener.length - 1) + 1;
+  const from = i;
+  for (let depth = 1; depth > 0; i++) {
+    assert.ok(i < text.length, `unbalanced braces after ${JSON.stringify(opener)}`);
+    if (text[i] === "{") depth++;
+    if (text[i] === "}") depth--;
+  }
+  return text.slice(from, i - 1);
+}
+
+test("our custom properties carry the ds- prefix and none is also a HeroUI one", () => {
+  const files = walk(HEROUI).filter((f) => f.endsWith(".css"));
+  const heroui = new Set<string>();
+  for (const f of files) for (const name of declarations(readFileSync(f, "utf8")).keys()) {
+    heroui.add(name);
+  }
+  for (const known of ["--accent", "--background", "--border", "--foreground", "--surface"]) {
+    assert.ok(heroui.has(known), `the scan did not find HeroUI's ${known}`);
+  }
+  for (const name of heroui) assert.ok(!name.startsWith("--ds-"), `HeroUI defines ${name}`);
+  const css = readFileSync(join(ROOT, "app/globals.css"), "utf8");
+  const dark = new Set(declarations(block(css, DARK)).keys());
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const name of declarations(css).keys()) {
+    if (name.startsWith("--ds-")) {
+      assert.ok(!heroui.has(name), `HeroUI also defines ${name}`);
+      continue;
+    }
+    assert.ok(dark.has(name), `globals.css sets ${name}, with no ds- prefix`);
+    const times = [...bare.matchAll(new RegExp(`(?<![\\w-])${name}\\s*:`, "g"))].length;
+    assert.equal(times, 1, `${name} is set outside the dark block`);
+  }
+  const outside = bare.replace(block(bare, DARK), "");
+  for (const m of outside.matchAll(/var\(\s*(--[\w-]+)/g)) {
+    assert.ok(m[1]?.startsWith("--ds-"), `globals.css reads ${m[1]} outside the dark block`);
+  }
+});
+
+test("dark mode follows the system setting with exactly HeroUI's own dark values", () => {
+  const theme = readFileSync(join(HEROUI, "themes/default/variables.css"), "utf8");
+  const light = declarations(block(theme, "  :root,\n  .light,"));
+  const heroDark = declarations(block(theme, "  .dark,\n"));
+  assert.ok(heroDark.size > 50, `found only ${heroDark.size} dark values`);
+  const expected = new Map([...heroDark].filter(([name, value]) => light.get(name) !== value));
+  assert.ok(expected.has("--background") && expected.has("--foreground"), "no dark colours");
+  const css = readFileSync(join(ROOT, "app/globals.css"), "utf8");
+  const body = block(css, DARK);
+  const ours = declarations(body);
+  const count = [...body.matchAll(/--[\w-]+\s*:/g)].length;
+  assert.equal(count, ours.size, "the dark block sets a property twice");
+  const heroOnly = new Map([...ours].filter(([name]) => !name.startsWith("--ds-")));
+  assert.deepEqual(heroOnly, expected);
+});
+
+test("every variable globals.css reads is defined, by us or by HeroUI", () => {
+  const heroui = new Set<string>();
+  for (const f of walk(HEROUI).filter((f) => f.endsWith(".css"))) {
+    for (const name of declarations(readFileSync(f, "utf8")).keys()) heroui.add(name);
+  }
+  const raw = readFileSync(join(ROOT, "app/globals.css"), "utf8");
+  const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+  const ours = new Set([...declarations(css).keys()].filter((n) => n.startsWith("--ds-")));
+  const read = [...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1] ?? "");
+  assert.ok(read.length > 20, `found only ${read.length} var() reads`);
+  for (const name of read) {
+    assert.ok(ours.has(name) || heroui.has(name), `globals.css reads ${name}; nothing sets it`);
+  }
+});
+
+// Copying HeroUI's dark variables covers dark mode only while HeroUI keys nothing else on
+// `.dark` or `data-theme`. These are every such selector in @heroui/styles 3.2.7, read from its
+// source: the light and dark theme blocks, the vibrant palette (an attribute the app never sets)
+// and the `dark` variant. A HeroUI release that adds one fails here until it is reviewed. The
+// variant's system fallback needs the class on an ancestor as well, so a `dark:` utility never
+// applies in system dark mode (Chromium, 2026-11-22): dark styles go in globals.css instead.
+const THEME = "themes/default/variables.css";
+const VARIANTS = "variants/index.css";
+const DARK_SELECTORS = [
+  [
+    THEME,
+    ':root, .light, .default, [data-theme="light"], [data-theme="default"], :host(.light), ' +
+      ':host(.default), :host([data-theme="light"]), :host([data-theme="default"])',
+  ],
+  [THEME, '.dark, [data-theme="dark"], :host(.dark), :host([data-theme="dark"])'],
+  [THEME, '[data-vibrant-palette="true"]:not(.dark):not([data-theme="dark"])'],
+  [THEME, '[data-vibrant-palette="true"].dark, [data-vibrant-palette="true"][data-theme="dark"]'],
+  [VARIANTS, "@custom-variant dark"],
+  [VARIANTS, '&:is(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *)'],
+  [VARIANTS, "@media (prefers-color-scheme: dark)"],
+  [VARIANTS, '&:not(:is(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *)) &'],
+];
+
+test("HeroUI keys nothing on .dark or data-theme but its theme variables and dark variant", () => {
+  const found: string[][] = [];
+  for (const f of walk(HEROUI).filter((f) => f.endsWith(".css") && !f.endsWith(".min.css"))) {
+    const text = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const m of text.matchAll(/([^{};]*)\{/g)) {
+      const selector = (m[1] ?? "").replace(/\s+/g, " ").trim();
+      if (/\.dark\b|data-theme|\bdark\b|data-vibrant/.test(selector)) {
+        found.push([f.slice(HEROUI.length + 1), selector]);
+      }
+    }
+  }
+  assert.deepEqual(found, DARK_SELECTORS);
+  const react = join(HEROUI, "../../react/dist");
+  const code = [...walk(HEROUI), ...walk(react)].filter((f) => /\.(css|js)$/.test(f));
+  assert.ok(code.length > 100, `found only ${code.length} HeroUI files`);
+  for (const f of code) {
+    const text = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    assert.doesNotMatch(text, /(?<![\w-])dark:/, `${f} uses a dark: utility`);
+  }
+  const pkg = JSON.parse(readFileSync(join(HEROUI, "../package.json"), "utf8"));
+  assert.equal(pkg.style, "./dist/index.css", "@heroui/styles ships another stylesheet");
+  assert.equal(pkg.exports?.["."]?.style, "./dist/index.css", "@heroui/styles exports another");
+  const theme = readFileSync(join(HEROUI, THEME), "utf8");
+  const other = block(theme, "  .dark,\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split(";")
+    .map((d) => d.replace(/\s+/g, " ").trim())
+    .filter((d) => d && !d.startsWith("--"));
+  assert.deepEqual(other, ["color-scheme: dark"], "HeroUI's .dark sets more than variables");
+  const root = readFileSync(join(ROOT, "app/globals.css"), "utf8");
+  assert.match(root, /^:root \{ color-scheme: light dark;/m, "the page no longer follows dark");
+  const dirs = ["app", "components", "lib"].map((d) => join(ROOT, d));
+  const files = dirs.flatMap(walk).filter((f) => /\.(tsx?|jsx?|mjs|css)$/.test(f));
+  assert.ok(files.length > 20, `found only ${files.length} app files`);
+  for (const file of files) {
+    const text = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const themes = /data-theme|data-vibrant|["'`]dark["'`]|\.dark\b|(?<![\w-])dark:/;
+    assert.doesNotMatch(text, themes, `${file} sets a theme or uses a dark: utility`);
+    const kept = /localStorage|sessionStorage|document\.cookie|next-themes|ThemeProvider|useTheme/;
+    assert.doesNotMatch(text, kept, `${file} stores or provides a theme`);
+  }
+});
