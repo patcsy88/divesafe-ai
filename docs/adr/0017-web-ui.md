@@ -225,12 +225,19 @@ HeroUI's stylesheet applies to every page, and a class of ours that it also defi
 property our rule does not set (found 2026-11-22: `badge`, `card`, `label`, `link` and `tag`; the
 result badge got HeroUI's grey background). So every class in `app/` and `components/` carries the
 `ds-` prefix, and `web/tests/classes.test.ts` fails if a class is used without a rule in
-`globals.css`, has no prefix, or is also a class in `@heroui/styles`. Tailwind scans only `app/`,
+`globals.css`, has no prefix, is set from anything but a literal or `badgeClass(...)`, or is also a
+class in `@heroui/styles`. HeroUI's rules that are not tied to a class are Tailwind's element reset,
+a border colour on every element and two `:root` settings; its other unclassed selectors need
+attributes the app does not use (`data-slot`, `data-theme`, `data-reduce-motion`, `data-scrollbar`,
+`dir`). The reset removes paragraph and list spacing, list bullets, heading weight and link
+underlines, so `globals.css` puts these browser defaults back with element rules. On 2026-11-22
+every element of the result, evidence, home and login pages had the same computed style as at
+`fbad5a2`, in light and dark mode and with reduced motion on and off. Tailwind scans only `app/`,
 `components/` and `lib/` (`source(none)` and `@source`), so text in tests or scripts never reaches
 the shipped CSS. CI also runs `web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22):
 it fails if a built stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address,
-has a `url()` that is not a `data:` URI or a `/_next/static/` file, or if there is no stylesheet to
-check.
+has a `url()` or `image-set()` address that is not a `data:` URI or a `/_next/static/` file, or if
+there is no stylesheet to check.
 
 ### What must not change
 

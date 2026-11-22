@@ -9,6 +9,9 @@
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
 main { max-width: 46rem; margin: 0 auto; padding: 1.25rem; }
+/* Tailwind's reset removes these browser defaults; they keep blocks apart and headings and links visible. */
+p, ul, dl, pre, h3 { margin: revert; } ul, option { padding: revert; } ul { list-style: revert; }
+h1, h2, h3 { font-weight: revert; } h3 { font-size: revert; } a { text-decoration: revert; } pre { font: revert; }
 h1 { font-size: 1.6rem; margin: .5rem 0; } h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
 .ds-top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
 .ds-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1rem 1.1rem; margin:1rem 0; }

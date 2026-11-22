@@ -23,6 +23,9 @@ function appClasses(): Set<string> {
   const files = [...walk(join(ROOT, "app")), ...walk(join(ROOT, "components"))];
   for (const file of files.filter((f) => /\.tsx?$/.test(f))) {
     const text = readFileSync(file, "utf8");
+    for (const m of text.matchAll(/className(?:=|:\s*)(.)/g)) {
+      assert.match(m[1] ?? "", /["'`{]/, `${file}: className is not a literal`);
+    }
     for (const m of text.matchAll(/className(?:=|:\s*)(["'`{])([^"'`}]*)/g)) {
       if (m[1] === "{") {
         assert.match(m[2] ?? "", /^badgeClass\(/, `${file}: a computed className is not checked`);
