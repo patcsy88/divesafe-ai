@@ -45,8 +45,10 @@ p, ul, dl, pre, h3 { margin: revert; } ul, option { padding: revert; } ul { list
 h1, h2, h3 { font-weight: revert; } h3 { font-size: revert; } a { text-decoration: revert; } pre { font: revert; }
 h1 { font-size: 1.6rem; margin: .5rem 0; } h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
 .ds-top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
-.ds-card { background:var(--ds-card); border:1px solid var(--ds-line); border-radius:12px; padding:1rem 1.1rem; margin:1rem 0; }
-.ds-card.ds-warn { border-left:6px solid #d99a00; } .ds-card.ds-ai { border-style:dashed; }
+.ds-card { background:var(--ds-card); border:1px solid var(--ds-line); border-radius:24px; padding:1rem 1.1rem; margin:1rem 0;
+  box-shadow:0 2px 4px 0 rgba(0, 0, 0, .04), 0 1px 2px 0 rgba(0, 0, 0, .06), 0 0 1px 0 rgba(0, 0, 0, .06); }
+@media (prefers-color-scheme: dark) { .ds-card { box-shadow:none; } }
+.ds-card.ds-warn { border-left:6px solid #d99a00; border-radius:12px; } .ds-card.ds-ai { border-style:dashed; }
 .ds-disclaimer { border:1px solid var(--ds-line); border-left:6px solid var(--ds-accent); padding:.6rem .8rem; border-radius:8px; font-size:.9rem; }
 label:where(:not([data-slot])), .ds-field-label { display:block; font-weight:600; font-size:1rem; line-height:1.5; margin:.9rem 0 .25rem; }
 input:where(:not([data-slot])), select { width:100%; padding:.6rem; border:1px solid var(--ds-line); border-radius:8px; font:inherit; background:var(--ds-bg); color:var(--ds-fg); }
@@ -61,13 +63,14 @@ button:where(:not([data-slot])):disabled { opacity:.6; cursor:wait; } button:whe
 .ds-pending { background:#fff4cc; color:#3a2c00; padding:.6rem .8rem; border-radius:8px; font-weight:700; }
 dl { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; } dt { font-weight:600; } dd { margin:0; overflow-wrap:anywhere; }
 li { margin:.5rem 0; overflow-wrap:anywhere; }
+summary { cursor:pointer; font-weight:600; }
 a { color:var(--ds-accent); }
 textarea:where(:not([data-slot])) { width:100%; padding:.6rem; border:1px solid var(--ds-line); border-radius:8px; font:inherit; background:var(--ds-bg); color:var(--ds-fg); }
 nav.ds-sub { display:flex; gap:1rem; margin:.5rem 0; }
 table { width:100%; border-collapse:collapse; font-size:.9rem; } th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--ds-line); vertical-align:top; overflow-wrap:anywhere; }
 pre.ds-provider-notice-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; }
 pre.ds-value { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; font-size:.8rem; max-height:14rem; overflow:auto; }
-.ds-tag { display:inline-block; padding:0 .45rem; border:1px solid var(--ds-line); border-radius:6px; font-size:.8rem; margin-right:.3rem; }
+.ds-tag { display:inline-block; padding:0 .55rem; border:1px solid var(--ds-line); border-radius:999px; font-size:.8rem; margin-right:.3rem; background:var(--ds-bg); }
 .ds-submit { margin-top:1rem; font-size:1rem; font-weight:600; white-space:normal; height:auto; min-height:2.5rem; padding-block:.4rem; }
 .ds-submit:disabled { opacity:.6; cursor:wait; }
 /* 16px in fields: smaller text hides a mistyped depth, and iOS zooms in on focus below 16px. */
