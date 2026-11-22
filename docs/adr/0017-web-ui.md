@@ -264,13 +264,13 @@ therefore as at `fbad5a2`, below 3:1 against the card: not a regression, and not
 dark block then holds HeroUI's own dark value for every other variable (values HeroUI builds from a
 mapped variable, such as `--accent-soft`, now resolve from our palette, so they are not HeroUI's
 tested colours); `classes.test.ts` fails if the ten change, if another HeroUI variable is set, or if
-a set one is not defined by HeroUI. HeroUI components (`Button`, `Input`, `Label`) are used only in
-`"use client"` files, imported by subpath from a fixed list in that test, which also refuses any
-other import of `@heroui/`, `react-aria` or `@react-aria/` and `@react-stately/` packages;
-`isRequired` (adds a visible `*`), `isPending` and `Description` (renders nothing outside a field)
-are refused, and native `<select>` stays. Our rules whose selector starts with `button`, `input`,
-`label` or `textarea` apply only to elements without `data-slot`, and the test fails on one that
-does not (a descendant rule such as `.ds-row input` is not checked). Text in fields stays 16px
+a set one is not defined by HeroUI. HeroUI components (`Button`, `Input`, `Label`, `TextArea`) are
+used only in `"use client"` files, imported by subpath from a fixed list in that test, which also
+refuses any other import of `@heroui/`, `react-aria` or `@react-aria/` and `@react-stately/`
+packages; `isRequired` (adds a visible `*`), `isPending` and `Description` (renders nothing outside
+a field) are refused, and native `<select>` stays. Our rules whose selector starts with `button`,
+`input`, `label` or `textarea` apply only to elements without `data-slot`, and the test fails on one
+that does not (a descendant rule such as `.ds-row input` is not checked). Text in fields stays 16px
 (`.ds-field`). React Aria adds one `<style>` element to the page head (`touch-action` on pressable
 elements), which the current `style-src 'unsafe-inline'` allows; a nonce CSP would have to account
 for it. In forced-colours mode, where HeroUI's box-shadow focus ring is removed, its components get

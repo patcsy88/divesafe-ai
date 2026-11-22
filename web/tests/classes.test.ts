@@ -252,6 +252,7 @@ const COMPONENTS = new Map([
   ["@heroui/react/button", "Button"],
   ["@heroui/react/input", "Input"],
   ["@heroui/react/label", "Label"],
+  ["@heroui/react/textarea", "TextArea"],
 ]);
 
 test("HeroUI components are imported by subpath, from a fixed list, in client files only", () => {
@@ -276,11 +277,12 @@ test("HeroUI components are imported by subpath, from a fixed list, in client fi
     assert.equal(mentions, uses - before, `${file} names HeroUI or React Aria outside an import`);
     assert.doesNotMatch(text, /\bisRequired\b|\bisPending\b|<Description\b/, file);
     // Text in fields stays 16px: smaller hides a mistyped depth, and iOS zooms in below 16px.
-    for (const input of text.matchAll(/<Input\b[^>]*>/g)) {
-      assert.match(input[0], /\sclassName="ds-field"\s/, `${file}: an Input without ds-field`);
-      assert.doesNotMatch(input[0], /\{\s*\.\.\./, `${file}: a spread on an Input`);
+    for (const input of text.matchAll(/<(?:Input|TextArea)\b[^>]*>/g)) {
+      const field = /\sclassName="ds-field"\s/;
+      assert.match(input[0], field, `${file}: an Input or TextArea without ds-field`);
+      assert.doesNotMatch(input[0], /\{\s*\.\.\./, `${file}: a spread on an Input or TextArea`);
     }
-    assert.doesNotMatch(text, /(?:createElement|\bh)\(\s*(?:Input|Button|Label)\b/, file);
+    assert.doesNotMatch(text, /(?:createElement|\bh)\(\s*(?:Input|TextArea|Button|Label)\b/, file);
   }
   assert.ok(uses >= 6, `found only ${uses} HeroUI imports`);
   const css = readFileSync(join(ROOT, "app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");

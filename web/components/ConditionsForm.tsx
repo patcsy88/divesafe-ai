@@ -1,6 +1,10 @@
 "use client";
 
 import { useActionState } from "react";
+import { Button } from "@heroui/react/button";
+import { Input } from "@heroui/react/input";
+import { Label } from "@heroui/react/label";
+import { TextArea } from "@heroui/react/textarea";
 import { submitActualConditions, type FormState } from "../app/actions.ts";
 import { NUMERIC_FIELDS } from "../lib/observations.ts";
 
@@ -18,14 +22,30 @@ export default function ConditionsForm({ id }: { id: string }) {
       <input type="hidden" name="assessment_id" value={id} />
       {NUMERIC_FIELDS.map((f) => (
         <div key={f.key}>
-          <label htmlFor={f.key}>{f.label}</label>
-          <input id={f.key} name={f.key} inputMode="decimal" autoComplete="off" />
+          <Label htmlFor={f.key} className="ds-field-label">{f.label}</Label>
+          <Input
+            id={f.key}
+            name={f.key}
+            inputMode="decimal"
+            autoComplete="off"
+            fullWidth
+            className="ds-field"
+          />
         </div>
       ))}
-      <label htmlFor="notes">Notes</label>
-      <textarea id="notes" name="notes" rows={4} maxLength={2000} />
+      <Label htmlFor="notes" className="ds-field-label">Notes</Label>
+      <TextArea
+        id="notes"
+        name="notes"
+        rows={4}
+        maxLength={2000}
+        fullWidth
+        className="ds-field"
+      />
       {state.error && <p role="alert" className="ds-error">{state.error}</p>}
-      <button type="submit" disabled={pending}>{pending ? "Recording…" : "Record conditions"}</button>
+      <Button type="submit" isDisabled={pending} className="ds-submit">
+        {pending ? "Recording…" : "Record conditions"}
+      </Button>
     </form>
   );
 }
