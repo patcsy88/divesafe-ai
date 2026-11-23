@@ -294,6 +294,24 @@ def test_a_non_decider_cannot_decide_override_or_report_even_with_a_bad_body() -
     assert stored["human_decision"] is None and stored["actual_conditions"] is None
 
 
+def test_a_decider_posting_no_decision_gets_422_and_nothing_is_recorded() -> None:
+    # The web UI's last line of defence after its own checks (owner, 2026-11-23): a body without a
+    # decision is refused as invalid, never defaulted to an outcome.
+    client, make = _client()
+    aid = make()
+    h = HEADERS[Role.DECIDER]
+    marker = "marker-rationale-q7"
+    for body in ({}, {"rationale": marker}, {"decision": None}, {"decision": ""}):
+        refused = client.post(f"/v1/assessments/{aid}/decision", json=body, headers=h)
+        assert refused.status_code == 422, (body, refused.status_code)
+        assert marker not in refused.text, "a client error repeats the submitted input"
+    everyone = {"Authorization": "Bearer key-all"}
+    stored = client.get(f"/v1/assessments/{aid}", headers=everyone).json()["record"]
+    assert stored["human_decision"] is None
+    body = {"decision": "INSUFFICIENT EVIDENCE"}
+    assert client.post(f"/v1/assessments/{aid}/decision", json=body, headers=h).status_code == 200
+
+
 def test_actual_conditions_are_rate_limited_and_share_the_decide_bucket() -> None:
     client, make = _client(default_limits(decide_per_minute=1))
     aid = make()

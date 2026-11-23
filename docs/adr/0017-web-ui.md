@@ -284,8 +284,12 @@ imports HeroUI selectively, in its documented order (restyle step 8): `base/base
 theme, `utilities`, `variants` and the component files of the components in that test's list
 (`label`, `button`, `input`, `textarea`), not `@heroui/styles` as a whole and not `tw-animate-css`.
 The built stylesheet went from 476 KB to 70 KB (45 KB to 9 KB gzipped), with every computed style
-and screenshot unchanged. A component added to the list needs its file imported as well, or it is
-unstyled. The class and dark-selector checks still read every file in `@heroui/styles`.
+and screenshot unchanged. `classes.test.ts` fails unless those imports are exactly that base list
+plus one file per listed component, in HeroUI's order and layers, each resolving through the
+package's `exports` to a `dist/` file the checks read, with every file those import being a
+relative `dist/` file the checks read too, and the files loaded are an exact list; `globals.css`
+is the only stylesheet in `app/`, `components/` and `lib/` (owner, 2026-11-23). The class and
+dark-selector checks still read every file in `@heroui/styles`.
 `tw-animate-css` stays installed as a dependency of `@heroui/styles` but is not imported: importing
 it again brings back the animation utilities the hiding rule bans, so it needs `risk-reviewer`
 review, and an added overlay's enter and exit animations are re-checked under the (a) hiding rule.

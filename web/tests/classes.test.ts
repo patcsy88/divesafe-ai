@@ -255,6 +255,121 @@ const COMPONENTS = new Map([
   ["@heroui/react/textarea", "TextArea"],
 ]);
 
+// globals.css imports HeroUI selectively (restyle step 8): this base list plus one stylesheet per
+// component in COMPONENTS, in this order. Each must resolve, through the package's exports, to a
+// file in dist/, which the class and dark-selector checks above read.
+const HEROUI_BASE = ["base/base.css", "themes/default"];
+const HEROUI_TAIL = ["utilities", "variants"];
+const HEROUI_LOADED = [
+  "base/base.css",
+  "base/overlay-motion.css",
+  "components/button.css",
+  "components/input.css",
+  "components/label.css",
+  "components/textarea.css",
+  "themes/default/components/index.css",
+  "themes/default/index.css",
+  "themes/default/variables.css",
+  "themes/shared/theme.css",
+  "utilities/index.css",
+  "variants/index.css",
+];
+
+function resolveExport(exports: Record<string, unknown>, sub: string): string {
+  // Node's rule: an exact key, else the pattern with the longest part before "*", then the
+  // longer key. Tailwind resolves CSS with the "style" condition only, and a resolver takes the
+  // first active key in the object's own order ("default" is always active). Anything nested
+  // gives "", so the test fails rather than guess.
+  const pick = (v: unknown): string => {
+    if (typeof v === "string") return v;
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return "";
+    const hit = Object.entries(v).find(([k]) => k === "style" || k === "default");
+    return typeof hit?.[1] === "string" ? hit[1] : "";
+  };
+  const key = `./${sub}`;
+  if (key in exports) return pick(exports[key]);
+  const fits = Object.keys(exports)
+    .filter((k) => k.split("*").length === 2)
+    .filter((k) => {
+      const [head = "", tail = ""] = k.split("*");
+      return key.startsWith(head) && key.endsWith(tail) && key.length >= k.length;
+    })
+    .sort((x, y) => y.indexOf("*") - x.indexOf("*") || y.length - x.length);
+  const best = fits[0];
+  if (best === undefined) return "";
+  const [head = "", tail = ""] = best.split("*");
+  return pick(exports[best]).replaceAll("*", key.slice(head.length, key.length - tail.length));
+}
+
+test("globals.css imports exactly the HeroUI styles of the listed components, from dist", () => {
+  const css = readFileSync(join(ROOT, "app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const imports = [...css.matchAll(/@import\s+"@heroui\/styles([^"]*)"([^;]*);/g)];
+  const names = [...COMPONENTS.keys()].map((k) => `components/${k.split("/").pop()}.css`);
+  const subs = imports.map((m) => (m[1] ?? "").replace(/^\//, ""));
+  assert.deepEqual(subs.slice(0, 2), HEROUI_BASE, "the base and theme come first");
+  assert.deepEqual(subs.slice(-2), HEROUI_TAIL, "utilities and variants come last");
+  const components = subs.slice(2, -2);
+  assert.deepEqual([...components].sort(), names.sort(), "one stylesheet per listed component");
+  const layers = imports.map((m) => (m[2] ?? "").trim());
+  const wantLayers = ["layer(base)", "layer(theme)", ...components.map(() => "layer(components)")];
+  assert.deepEqual(layers, [...wantLayers, "", ""], "a HeroUI import is in the wrong layer");
+  // HeroUI's full list says its order matters (shared pieces such as label first): keep it.
+  const order = readFileSync(join(HEROUI, "components/index.css"), "utf8");
+  const at = components.map((c) => order.indexOf(`"./${c.slice("components/".length)}"`));
+  assert.ok(at.every((i) => i >= 0), `not in HeroUI's list: ${components.join(", ")}`);
+  assert.deepEqual(at, [...at].sort((x, y) => x - y), "component styles out of HeroUI's order");
+  // Every @import, however written, is tailwindcss or one of the HeroUI lines read above.
+  const all = [...css.matchAll(/@import\b[^;]*;/g)].map((m) => m[0]);
+  const known = new Set(['@import "tailwindcss" source(none);', ...imports.map((m) => m[0])]);
+  assert.equal(all.length, imports.length + 1, `globals.css imports: ${all.join(" ")}`);
+  for (const line of all) assert.ok(known.has(line), `globals.css imports ${line}`);
+  assert.doesNotMatch(css, /@(?:plugin|config|reference)\b/, "globals.css loads a build file");
+  // globals.css is the only stylesheet, and only the root layout imports it.
+  const sheets = ["app", "components", "lib"].flatMap((d) => walk(join(ROOT, d)))
+    .filter((f) => !/\.(tsx?|jsx?|mjs)$/.test(f) || /\.css\b/.test(readFileSync(f, "utf8")));
+  assert.deepEqual(sheets.map((f) => f.slice(ROOT.length + 1)).sort(),
+    ["app/globals.css", "app/layout.tsx"],
+    "a non-code file in app/, components/ or lib/ (counted as a stylesheet), or code importing CSS",
+  );
+  for (const f of ["app", "components", "lib"].flatMap((d) => walk(join(ROOT, d)))) {
+    assert.doesNotMatch(readFileSync(f, "utf8"), /tw-animate-css/, `${f} names tw-animate-css`);
+  }
+  const layout = readFileSync(join(ROOT, "app/layout.tsx"), "utf8");
+  assert.deepEqual(layout.match(/[^\n]*\.css\b[^\n]*/g), ['import "./globals.css";']);
+  assert.doesNotMatch(css, /tw-animate-css/, "tw-animate-css brings back the banned animations");
+  const pkg = JSON.parse(readFileSync(join(HEROUI, "../package.json"), "utf8"));
+  const scanned = new Set(walk(HEROUI));
+  const loaded = new Set<string>();
+  for (const sub of subs) {
+    const target = resolveExport(pkg.exports ?? {}, sub);
+    const where = `@heroui/styles/${sub} resolves to ${target}`;
+    assert.match(target, /^\.\/dist\/[\w/.-]+\.css$/, where);
+    assert.doesNotMatch(target, /\.min\.css$|\.\./, where);
+    const file = join(HEROUI, "..", target);
+    assert.ok(scanned.has(file), `@heroui/styles/${sub} resolves outside the scanned files`);
+    // The build inlines a file's own imports too: each must be relative, a scanned dist/ file and
+    // not minified, so nothing (tw-animate-css included) arrives that the checks do not read.
+    const queue = [file];
+    for (let f = queue.shift(); f !== undefined; f = queue.shift()) {
+      // A file already read is not read again, so an import loop cannot hang the test.
+      if (loaded.has(f)) continue;
+      loaded.add(f);
+      const text = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      assert.doesNotMatch(text, /@(?:plugin|config|reference)\b/, `${f} loads a build file`);
+      for (const m of text.matchAll(/@import\b([^;]*);/g)) {
+        const ref = /^\s*"(\.{1,2}\/[\w/.-]+\.css)"(?:\s+layer\(\w+\))?\s*$/.exec(m[1] ?? "");
+        assert.ok(ref, `${f} imports ${m[0]}`);
+        const next = join(dirname(f), ref[1] ?? "");
+        assert.ok(scanned.has(next) && !next.endsWith(".min.css"), `${f} imports ${next}`);
+        queue.push(next);
+      }
+    }
+  }
+  // Every HeroUI file the build loads, nested ones included: a HeroUI release that adds one fails
+  // here until it is reviewed.
+  assert.deepEqual([...loaded].map((f) => f.slice(HEROUI.length + 1)).sort(), HEROUI_LOADED);
+});
+
 test("HeroUI components are imported by subpath, from a fixed list, in client files only", () => {
   const files = ["app", "components", "lib"]
     .flatMap((d) => walk(join(ROOT, d)))
@@ -277,10 +392,20 @@ test("HeroUI components are imported by subpath, from a fixed list, in client fi
     assert.equal(mentions, uses - before, `${file} names HeroUI or React Aria outside an import`);
     assert.doesNotMatch(text, /\bisRequired\b|\bisPending\b|<Description\b/, file);
     // Text in fields stays 16px: smaller hides a mistyped depth, and iOS zooms in below 16px.
-    for (const input of text.matchAll(/<(?:Input|TextArea)\b[^>]*>/g)) {
-      const field = /\sclassName="ds-field"\s/;
-      assert.match(input[0], field, `${file}: an Input or TextArea without ds-field`);
-      assert.doesNotMatch(input[0], /\{\s*\.\.\./, `${file}: a spread on an Input or TextArea`);
+    // A tag is read past "=>" up to its closing ">". A read with unbalanced braces or quotes
+    // stopped at a ">" in an expression or a string, so it fails rather than check part of a tag.
+    const tags = /<(Input|TextArea|Button)\b(?:=>|[^>])*>/g;
+    for (const [tag, name] of text.matchAll(tags)) {
+      // Quoted strings are dropped first, so a brace inside one cannot balance the count.
+      const bare = tag.replace(/"[^"\n]*"|'[^'\n]*'/g, "");
+      const whole = !/["']/.test(bare) && bare.split("{").length === bare.split("}").length;
+      assert.ok(whole, `${file}: could not read the whole tag ${tag}`);
+      assert.doesNotMatch(tag, /\.\.\./, `${file}: a spread on a HeroUI component`);
+      if (name === "Input" || name === "TextArea") {
+        assert.ok(tag.endsWith("/>"), `${file}: an Input or TextArea that is not self-closing`);
+        const field = /\sclassName="ds-field"\s/;
+        assert.match(tag, field, `${file}: an Input or TextArea without ds-field`);
+      }
     }
     assert.doesNotMatch(text, /(?:createElement|\bh)\(\s*(?:Input|TextArea|Button|Label)\b/, file);
   }
