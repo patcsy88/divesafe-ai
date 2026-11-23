@@ -101,6 +101,114 @@ and others.
 
 A lower layer can never relax a higher one. See [docs/architecture.md](docs/architecture.md).
 
+## Sample pages
+
+Screens from the web UI ([ADR 0017](docs/adr/0017-web-ui.md)). **These are not real
+assessments.** A local stand-in API served records built by the offline test harness from
+recorded provider data (October 2026), a scripted fake model and an invented
+`synthetic-decider`. No production data was used and no live call was made. The model text is
+the harness's placeholder wording.
+
+The repository ships no validated rule. Without a signed-off ruleset, deployed separately, a
+real assessment ends at `INSUFFICIENT EVIDENCE` (or `NO-GO` if a model proposal raises it) and
+lists the factors it could not evaluate; `GO` or `CAUTION` needs a `VALIDATED` rule for every
+required factor (see [docs/risk-model.md](docs/risk-model.md)). The `GO` and `CAUTION` samples
+exist only because the test harness uses a rule that returns `GO` for any input (`synthetic.go`,
+not a signed-off limit), lets model and forecast data support it, and requires no factors. That
+is also why every sample shows "0 factor(s) not evaluated".
+
+The recorded marine data come from [Open-Meteo](https://open-meteo.com/) (CC BY 4.0; currents
+and sea temperature derived from Copernicus Marine), and the marine warnings from MET Malaysia
+via data.gov.my.
+
+<details>
+<summary>1. Starting a new assessment</summary>
+
+The dive site, planned start, duration, maximum depth and, optionally, the person who will
+record the decision.
+
+<img src="docs/assets/screens/01-new-assessment.png"
+  alt="New assessment form: dive site, planned start with time zone, duration, maximum depth,
+  an optional decider and a Run assessment button"
+  width="600">
+</details>
+
+<details>
+<summary>2. The completed assessment: rules, model commentary and conflicting signals</summary>
+
+The result is pending until a human decides. The page shows the deterministic checks and the
+unverified model proposal, which can only make the result stricter. It also lists the rule
+results, the model-written commentary, the model's questions and conflicting signals, and the
+model calls that failed. The decision form comes last.
+
+In this sample the test rule returns `GO` and the scripted model proposes
+`INSUFFICIENT EVIDENCE`, so "Deterministic checks: GO" with a stricter result is expected here.
+A model can never relax a rule result, and a model alone can never produce `GO`.
+
+<img src="docs/assets/screens/02-result-rules-commentary-conflicts.png"
+  alt="Synthetic example: assessment page with an INSUFFICIENT EVIDENCE result pending a human
+  decision, rule results, model-written commentary, questions and conflicting signals, a failed
+  model call and the decision form"
+  width="600">
+</details>
+
+<details>
+<summary>3. The human decision: NO-GO, INSUFFICIENT EVIDENCE, CAUTION and GO</summary>
+
+Each form accepts the system's recommendation and is shown at the "check before you record"
+step; overrides are not shown. A decision is written once and cannot be changed. A different
+outcome needs a reason, and a less severe one also needs the overrider role. The `NO-GO` comes
+from a test rule that returns `NO-GO`. No shipped rule returns `NO-GO`, so a real `NO-GO` comes
+from a signed-off rule in a deployed ruleset or from a model proposal; when a model raised it,
+"Deterministic checks" shows a less severe result. The `INSUFFICIENT EVIDENCE` form is the sample
+from section 2. The `CAUTION` and `GO` forms cannot occur without such a ruleset; see above.
+
+<img src="docs/assets/screens/03-decision-no-go.png"
+  alt="Synthetic example: decision form confirming NO-GO"
+  width="420">
+<img src="docs/assets/screens/04-decision-insufficient-evidence.png"
+  alt="Synthetic example: decision form confirming INSUFFICIENT EVIDENCE"
+  width="420">
+<img src="docs/assets/screens/05-decision-caution.png"
+  alt="Synthetic example (test harness only): decision form confirming CAUTION, noting the
+  result rests on model and forecast data, not observations"
+  width="420">
+<img src="docs/assets/screens/06-decision-go.png"
+  alt="Synthetic example (test harness only): decision form confirming GO, noting the result
+  rests on model and forecast data, not observations"
+  width="420">
+</details>
+
+<details>
+<summary>4. Recording the conditions found</summary>
+
+After the decision and the planned start, the person can report the conditions they actually
+found. The report is kept with the record and never changes the recommendation. The reported
+values here are invented and are not compared with any limit.
+
+<img src="docs/assets/screens/07-decided-record-conditions-form.png"
+  alt="Synthetic example: a decided NO-GO assessment with the human decision and the form for
+  reporting the conditions found, partly filled in"
+  width="600">
+<img src="docs/assets/screens/08-conditions-reported.png"
+  alt="Synthetic example: the conditions reported afterwards, marked as a report rather than a
+  measurement by the system"
+  width="420">
+</details>
+
+<details>
+<summary>5. The evidence behind an assessment</summary>
+
+Each evidence item shows its kind, quality, source, retrieval time, validity window and how it
+was derived. It also shows the raw provider values as plain text. The image shows the first
+four items.
+
+<img src="docs/assets/screens/09-evidence.png"
+  alt="Evidence page: the retrieval note and the first evidence items (currents and a marine
+  warning), each with its source, times, quality and derivation"
+  width="600">
+</details>
+
 ## Quick start
 
 ```bash
