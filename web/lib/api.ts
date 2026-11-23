@@ -36,7 +36,11 @@ export function describeFailure(status: number, detail: unknown, retryAfter: str
   if (status === 409) {
     return typeof detail === "string" ? plain(detail).slice(0, 300) : "That cannot be done in the current state.";
   }
-  if (status === 429) return `Too many requests. Wait ${retryAfter ?? "a moment"} seconds and retry.`;
+  if (status === 429) {
+    // Only a plain whole number of seconds is shown; anything else is the server's text.
+    const n = /^\d{1,5}$/.test(retryAfter ?? "") ? Number(retryAfter) : NaN;
+    return n <= 86_400 ? `Too many requests. Wait ${n} seconds and retry.` : "Too many requests. Wait a moment and retry.";
+  }
   if (status === 422) {
     if (typeof detail === "string") return plain(detail).slice(0, 300);
     if (Array.isArray(detail)) {

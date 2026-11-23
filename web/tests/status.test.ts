@@ -42,7 +42,7 @@ const finished = (
   decision_withheld: withheld,
   overrides_to_less_severe: status === "DECISION_WITHHELD" ? null : false,
 });
-const DECISION = { decision: "NO-GO", decided_by: "alice", decided_at: "2026-10-10T00:00:00Z" };
+const DECISION = { decision: "NO-GO", decided_by: "alice", decided_at: "2026-10-10T00:00:00Z", is_override: false };
 const DECIDED_REC = record({ human_decision: DECISION });
 
 const real = globalThis.fetch;
@@ -92,6 +92,28 @@ test("the page does not call a withheld decision pending or offer the forms for 
   assert.ok(source.includes('view.status === "PENDING_HUMAN" && !withheld'));
   assert.ok(source.includes("!pending && !withheld && !r.actual_conditions"));
   assert.ok(source.includes("DECISION NOT SHOWN TO THIS KEY"));
+});
+
+test("a decision whose override flags disagree with the outcomes is refused", () => {
+  const sys = (decision: string, over: Record<string, unknown>, less: unknown) => ({
+    ...finished("DECIDED", record({ human_decision: { ...DECISION, decision, ...over } })),
+    overrides_to_less_severe: less,
+  });
+  // Consistent: an accepted NO-GO, a GO override of NO-GO (less severe).
+  assert.notEqual(classify(sys("NO-GO", { is_override: false }, false)), null);
+  assert.notEqual(classify(sys("GO", { is_override: true }, true)), null);
+  for (const [decision, over, less] of [
+    ["NO-GO", { is_override: undefined }, false],
+    ["NO-GO", { is_override: "false" }, false],
+    ["NO-GO", { is_override: true }, false],
+    ["GO", { is_override: false }, true],
+    ["GO", { is_override: true }, false],
+    ["NO-GO", { is_override: false }, true],
+  ] as const) {
+    assert.equal(classify(sys(decision, over, less)), null, `${decision} ${JSON.stringify(over)} ${less}`);
+  }
+  const { is_override: _gone, ...noFlag } = DECISION;
+  assert.equal(classify({ ...finished("DECIDED", record({ human_decision: noFlag })) }), null, "flag missing");
 });
 
 test("an unknown status is refused, not shown as pending or as a result", () => {

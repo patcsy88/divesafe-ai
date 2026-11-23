@@ -13,7 +13,14 @@ import {
 import { endSession, requireKey, startSession } from "../lib/auth.ts";
 import { trustProxy } from "../lib/config.ts";
 import { resolveConflict } from "../lib/conflict.ts";
-import { parseObservations, sameObservations } from "../lib/observations.ts";
+import { NO_VISIBLE_REASON, reasonShown } from "../lib/notes.ts";
+import {
+  normaliseNewlines,
+  parseObservations,
+  sameObservations,
+  UNSAFE_NAME,
+  UNSAFE_TEXT,
+} from "../lib/observations.ts";
 import { RECOMMENDATIONS } from "../lib/present.ts";
 import type { AssessmentView } from "../lib/types.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
@@ -25,6 +32,9 @@ export interface FormState {
   renewKey?: boolean;
 }
 
+// A server action can be called directly with any argument; only a form is read.
+const INVALID: FormState = { error: "Invalid request." };
+
 const text = (data: FormData, name: string): string => {
   const value = data.get(name);
   return typeof value === "string" ? value.trim() : "";
@@ -34,6 +44,7 @@ const throttle = ((globalThis as { __divesafeThrottle?: LoginThrottle }).__dives
   new LoginThrottle());
 
 export async function login(_prev: FormState, data: FormData): Promise<FormState> {
+  if (!(data instanceof FormData)) return INVALID;
   const forwarded = (await headers()).get("x-forwarded-for");
   const source = sourceOf(forwarded, trustProxy());
   const key = text(data, "api_key");
@@ -62,9 +73,10 @@ export async function logout(): Promise<void> {
 }
 
 export async function runAssessment(_prev: FormState, data: FormData): Promise<FormState> {
+  if (!(data instanceof FormData)) return INVALID;
   const key = await requireKey();
   const site = text(data, "site_id");
-  if (!site) return { error: "Choose a registered site." };
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(site)) return { error: "Choose a registered site." };
   const start = toAwareIso(text(data, "planned_start"), text(data, "zone"));
   if (!start) return { error: "Enter a start date and time, and say which time zone it is in." };
   const minutes = parsePositive(text(data, "duration_minutes"), true);
@@ -74,6 +86,9 @@ export async function runAssessment(_prev: FormState, data: FormData): Promise<F
   const depth = parsePositive(text(data, "max_depth_m"), false);
   if (depth === null || depth > 1000) return { error: "Maximum depth must be a positive number of metres." };
   const decider = text(data, "decider");
+  if (decider.length > 100 || UNSAFE_NAME.test(decider)) {
+    return { error: "The decider's name is too long, or contains invisible or formatting characters (some emoji included)." };
+  }
 
   let id: string;
   try {
@@ -128,6 +143,7 @@ async function failed(
 }
 
 export async function submitDecision(_prev: FormState, data: FormData): Promise<FormState> {
+  if (!(data instanceof FormData)) return INVALID;
   const key = await requireKey();
   const id = text(data, "assessment_id");
   if (!ASSESSMENT_ID.test(id)) return { error: "Unknown assessment." };
@@ -135,8 +151,19 @@ export async function submitDecision(_prev: FormState, data: FormData): Promise<
   if (!(RECOMMENDATIONS as readonly string[]).includes(decision)) {
     return { error: "Choose the decision you are making." };
   }
-  const rationale = text(data, "rationale");
+  const rationale = normaliseNewlines(text(data, "rationale"));
   if (rationale.length > 5000) return { error: "The rationale is too long (5000 characters at most)." };
+  // Invisible, control and text-direction characters would make the stored reason unreadable or
+  // misleading, and a reason made only of them would pass as one.
+  if (UNSAFE_TEXT.test(rationale)) {
+    return {
+      error: "The reason contains invisible or formatting characters (some emoji included). Type it as plain text.",
+    };
+  }
+  // Decisions are write-once, so a reason nobody can read is refused here rather than recorded.
+  if (rationale && reasonShown(rationale) === NO_VISIBLE_REASON) {
+    return { error: "The reason has no visible letters, digits or punctuation. Type the reason in words." };
+  }
   try {
     // The API compares this with the system's recommendation and demands a rationale for an override.
     await recordDecision(
@@ -164,6 +191,7 @@ export async function submitDecision(_prev: FormState, data: FormData): Promise<
 }
 
 export async function submitActualConditions(_prev: FormState, data: FormData): Promise<FormState> {
+  if (!(data instanceof FormData)) return INVALID;
   const key = await requireKey();
   const id = text(data, "assessment_id");
   if (!ASSESSMENT_ID.test(id)) return { error: "Unknown assessment." };

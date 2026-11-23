@@ -26,10 +26,12 @@ export function labelFor(rec: string): string {
   return (RECOMMENDATIONS as readonly string[]).includes(rec) ? rec : "INSUFFICIENT EVIDENCE";
 }
 
+// Both zones, because dive times are entered in Malaysia time (UTC+8) but stored in UTC.
 export function formatWhen(iso: string): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "unknown time";
-  return `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  const at = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
+  return `${at(t)} UTC (${at(t + 8 * 60 * 60 * 1000)} UTC+8)`;
 }
 
 // Strips control and format characters (including bidi overrides) from third-party text.
@@ -74,10 +76,13 @@ export function provenanceLabel(dataKind: string): string {
 
 // Display order only, used to warn before a less severe choice. The service decides what an
 // override is and records it; this never gates or changes anything.
-const SEVERITY = ["GO", "CAUTION", "INSUFFICIENT EVIDENCE", "NO-GO"];
+const SEVERITY: readonly Recommendation[] = ["GO", "CAUTION", "INSUFFICIENT EVIDENCE", "NO-GO"];
+
+// The decision form's order: NO-GO first (AGENTS.md section 5 severity order).
+export const MOST_SEVERE_FIRST: readonly Recommendation[] = [...SEVERITY].reverse();
 
 export function isLessSevere(choice: string, system: string): boolean {
-  const c = SEVERITY.indexOf(choice);
-  const s = SEVERITY.indexOf(system);
+  const c = (SEVERITY as readonly string[]).indexOf(choice);
+  const s = (SEVERITY as readonly string[]).indexOf(system);
   return c !== -1 && s !== -1 && c < s;
 }

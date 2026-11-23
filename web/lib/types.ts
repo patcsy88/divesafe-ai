@@ -16,6 +16,8 @@ export interface Finding {
   risk_factors: string[];
   conflicting_signals: string[];
   flagged_signals?: number[];
+  // True when the model cited no evidence for this finding.
+  no_evidence?: boolean;
 }
 
 export interface ScenarioItem {
@@ -47,6 +49,8 @@ export interface AssessmentRecord {
   scenarios: ScenarioItem[];
   explanation: string;
   agent_issues: string[];
+  // Conflicting items dropped before the rules ran (ADR 0008); absent on an older service.
+  withheld_evidence?: unknown[];
   ruleset_version: string;
   model_version: string | null;
   created_by: string | null;
@@ -84,6 +88,8 @@ export interface AssessmentView {
   outcome_note: string;
   status_note: string;
   agent_note: string;
+  // ADR 0022 decision 14: site-document notes in fixed wording; "" when there are none.
+  knowledge_note?: string;
   attributions: string[];
   // The tides.today provider's full notice (ADR 0029 decision 11): third-party text, plain only.
   provider_notices?: string[];

@@ -23,8 +23,8 @@ export default function LoginForm() {
         className="ds-field"
       />
       <p className="ds-hint">
-        Each person uses their own key, so every decision is recorded against the right name. Keys
-        are never shared or shown again.
+        Each person uses their own key, so every decision is recorded against the right name. Never
+        share your key; it is not shown again.
       </p>
       {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       <Button type="submit" isDisabled={pending} className="ds-submit">
