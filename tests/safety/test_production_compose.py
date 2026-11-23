@@ -991,6 +991,22 @@ def test_the_image_runs_as_the_unprivileged_user() -> None:
     assert not any("usermod" in x or "groupadd" in x or "adduser" in x for x in instructions)
 
 
+def test_the_api_image_runs_the_installed_package_not_the_copied_sources() -> None:
+    """The copied sources keep the checkout's modes, unreadable after a umask 077 checkout. The
+    app is safe only because a non-editable install puts it in site-packages with normal modes
+    (owner #73a)."""
+    instructions = _dockerfile_instructions()
+    assert [x for x in instructions if x.startswith("RUN") and "pip" in x] == [
+        "RUN pip install --no-cache-dir ."
+    ]
+    assert not [x for x in instructions if " -e " in f" {x} " or "--editable" in x]
+    assert not [
+        x
+        for x in instructions
+        if not x.startswith("COPY ") and ("PYTHONPATH" in x or "--app-dir" in x or "/app/src" in x)
+    ]
+
+
 def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
     services = _blocks(_strip_comments(COMPOSE.read_text()), "services")
     for name in ("api", "db-init", *LOADERS):
@@ -1005,6 +1021,10 @@ def test_both_built_services_use_this_dockerfile_and_no_target() -> None:
             build.append(line.strip())
         assert build == ["context: ..", "dockerfile: docker/Dockerfile"], name
         assert _value(block, "user") is None, name
+        # Run the installed package, never the copied sources (owner #73a).
+        joined = "\n".join(block)
+        for word in ("PYTHONPATH", "--app-dir", "/app/src", "working_dir"):
+            assert word not in joined, (name, word)
 
 
 # --- the knowledge loader role script (ADR 0024 Amendment 1, A1) ---------------------------------
@@ -1551,9 +1571,9 @@ WEB_DOCKERFILE = [
     "FROM node:24-bookworm-slim AS build",
     "ENV NEXT_TELEMETRY_DISABLED=1",
     "WORKDIR /web",
-    "COPY web/package.json web/package-lock.json ./",
+    "COPY --chmod=u=rwX,go=rX web/package.json web/package-lock.json ./",
     "RUN npm ci --ignore-scripts --no-audit --no-fund",
-    "COPY web/ ./",
+    "COPY --chmod=u=rwX,go=rX web/ ./",
     "RUN npm run build && node scripts/check-no-spectrum.mjs && node scripts/check-built-css.mjs"
     " && rm -rf .next/cache",
     'RUN set -- node_modules/@next/swc-linux-*-gnu && if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then'
@@ -1561,7 +1581,7 @@ WEB_DOCKERFILE = [
     "FROM node:24-bookworm-slim",
     "ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1",
     "WORKDIR /web",
-    "COPY web/package.json web/package-lock.json ./",
+    "COPY --chmod=u=rwX,go=rX web/package.json web/package-lock.json ./",
     "RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund"
     " && npm cache clean --force && if find node_modules -type d \\( -name sharp -o -path"
     " '*/@img/*' -o -name '@img' \\) | grep -q .; then echo \"sharp or @img present\" >&2;"
@@ -1572,7 +1592,7 @@ WEB_DOCKERFILE = [
     " -o -name '@img' \\) | grep -q .; then echo \"sharp or @img present\" >&2; exit 1; fi",
     "COPY --from=build /web/.next ./.next",
     "COPY --from=build /web/next.config.ts ./next.config.ts",
-    "COPY docker/web-start.cjs ./web-start.cjs",
+    "COPY --chmod=u=rwX,go=rX docker/web-start.cjs ./web-start.cjs",
     "USER node",
     "EXPOSE 3100",
     'CMD ["node", "web-start.cjs"]',
@@ -1655,6 +1675,8 @@ def test_the_web_service_uses_the_web_image_and_is_locked_down(
     assert _value(web, "image") == "divesafe-web:local"
     assert _value(web, "read_only") == "true"
     assert _value(web, "user") is None
+    # The build output is 664 root:root: a run-time group 0 would make it writable by node (#72b).
+    assert _value(web, "group_add") is None
     assert _value(web, "cap_add") is None
     assert _value(web, "volumes") is None
     assert _value(web, "cap_drop") == "[ALL]"
@@ -1693,6 +1715,18 @@ def test_the_web_dockerfile_is_exactly_these_instructions() -> None:
     assert got == WEB_DOCKERFILE
 
 
+def test_every_web_copy_from_the_checkout_sets_readable_modes() -> None:
+    """The image runs as node, but files COPY'd from the checkout belong to root and keep the
+    checkout's modes: a checkout made under umask 077 gave a launcher node could not read
+    (owner #72b). Every COPY that is not from the build stage must set u=rwX,go=rX."""
+    copies = [x for x in _web_dockerfile_instructions() if x.startswith("COPY ")]
+    from_checkout = [x for x in copies if not x.startswith("COPY --from=")]
+    assert len(from_checkout) == 4
+    for line in from_checkout:
+        assert line.startswith("COPY --chmod=u=rwX,go=rX "), line
+        assert "--chown" not in line, line
+
+
 def test_the_web_image_starts_through_the_launcher_as_the_node_user() -> None:
     instructions = _web_dockerfile_instructions()
     assert [x for x in instructions if x.startswith("CMD ")] == ['CMD ["node", "web-start.cjs"]']
@@ -1702,7 +1736,7 @@ def test_the_web_image_starts_through_the_launcher_as_the_node_user() -> None:
         "FROM node:24-bookworm-slim AS build",
         "FROM node:24-bookworm-slim",
     ]
-    assert "COPY docker/web-start.cjs ./web-start.cjs" in instructions
+    assert "COPY --chmod=u=rwX,go=rX docker/web-start.cjs ./web-start.cjs" in instructions
     # The runtime stage alone: it runs as node after its last RUN or COPY, takes only the SWC
     # binary and the build output from the build stage (never its node_modules, which hold sharp
     # and libvips), installs without optional packages and refuses sharp twice (owner #17, #42).

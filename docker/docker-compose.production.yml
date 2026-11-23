@@ -12,6 +12,8 @@
 #       without it db-init refuses with LOADER_ROLE_MISSING)
 #   C up -d --build --wait api         # 3. db-init, then the API
 #
+# Update this checkout from a shell with `umask 022` (ADR 0017 #72b): bind-mounted db files keep
+# their host modes.
 # Build only from the commit you deploy. Never use --build or `build` with --profile knowledge:
 # the loaders share the api image tag, so a build there would replace the running api's image.
 #

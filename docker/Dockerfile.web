@@ -1,11 +1,13 @@
 # Web UI image (ADR 0017). Built from the repository root with docker/Dockerfile.web.dockerignore.
 # Nothing under web/ is changed for the image: it ships the normal `next build` output (owner #15b).
+# Every COPY from the checkout sets its modes (u=rwX,go=rX: files 644, folders 755), so a checkout
+# made under a strict umask (077) still gives an image the node user can read (owner #72b).
 FROM node:24-bookworm-slim AS build
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+COPY --chmod=u=rwX,go=rX web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
-COPY web/ ./
+COPY --chmod=u=rwX,go=rX web/ ./
 RUN npm run build \
  && node scripts/check-no-spectrum.mjs \
  && node scripts/check-built-css.mjs \
@@ -20,7 +22,7 @@ FROM node:24-bookworm-slim
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+COPY --chmod=u=rwX,go=rX web/package.json web/package-lock.json ./
 # No optional packages: sharp and its LGPL libvips binaries are never installed (owner #17).
 # Image optimisation is off in next.config.ts, so nothing at run time needs them.
 RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund \
@@ -35,7 +37,7 @@ RUN set -- node_modules/@next/swc-* \
 COPY --from=build /web/.next ./.next
 COPY --from=build /web/next.config.ts ./next.config.ts
 # Reads the two secrets from /run/secrets and starts next in the same process (owner #50a).
-COPY docker/web-start.cjs ./web-start.cjs
+COPY --chmod=u=rwX,go=rX docker/web-start.cjs ./web-start.cjs
 
 USER node
 EXPOSE 3100

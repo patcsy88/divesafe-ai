@@ -143,8 +143,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A checkout made under umask 077 once gave an image node could not read (owner #72b), so
+      # the build context here is made owner-only first and the image must still be readable.
+      - name: Make the web build context owner-only, as a umask 077 checkout would be
+        run: chmod -R go-rwx web docker/web-start.cjs
       - name: Build docker/Dockerfile.web (ADR 0017)
         run: docker build -f docker/Dockerfile.web -t divesafe-web-ci .
+      - name: node can read everything under /web; nothing there is world-writable, setuid or not root's
+        run: |
+          # The sh -c script is single-quoted: never put a single quote inside it.
+          docker run --rm --network none --user node --entrypoint sh divesafe-web-ci -c '
+          set -eu
+          test -r /web/web-start.cjs
+          test -r /web/package.json
+          test -r /web/next.config.ts
+          if id -G | tr " " "\n" | grep -qx 0; then echo "node is in group root" >&2; exit 1; fi
+          # GNU find: anything node cannot read, a folder it cannot enter, or a find error fails.
+          bad=$(find /web -xdev ! -type l \( ! -readable -o \( -type d ! -executable \) -o -perm /6002 -o ! -user root -o ! -group root \) -print 2>&1) || { printf "find failed:\n%s\n" "$bad" >&2; exit 1; }
+          if [ -n "$bad" ]; then printf "%s\n" "$bad" >&2; exit 1; fi
+          '
       - name: The web image runs as node and holds no sharp, @img or .env file (owner #17)
         run: |
           docker run --rm --network none --entrypoint sh divesafe-web-ci -c '

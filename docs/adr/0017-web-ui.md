@@ -518,7 +518,8 @@ Nothing under `web/` changes for it (#15b). It is defined, not deployed: the own
   passes on 200 alone. `DIVESAFE_WEB_TRUST_PROXY` is fixed at `"0"`. The healthcheck covers Next
   only, not the relay. Uptime Kuma watches the API's `/health` directly (ADR 0027 item 3), not
   through the relay; a broken relay path shows as errors in the web UI, not as an alert.
-- **Deploying and rolling back.** Before each `--build`, keep the running image: `docker tag
+- **Deploying and rolling back.** Update the production checkout from a shell with `umask 022`
+  (#72b). Before each `--build`, keep the running image: `docker tag
   divesafe-web:local divesafe-web:rollback-<date>`. Always name the services: a bare `C up -d`
   starts `web` too. The first time, `C up -d --no-build --wait api` once, so the API joins `web-api`
   at its fixed address, then `C up -d --build --wait web`. Roll back by tagging the old image as
@@ -666,3 +667,48 @@ at deploy (deploy note).
   this predates the change.
 - **Real browsers.** Sign-in is checked by hand in Chrome or Firefox at deploy; Safari may refuse
   the `Secure` cookie on plain HTTP.
+
+## Amendment 2026-11-23: file modes in the web image (owner #72b, #73a)
+
+The first deploy build failed to start: Node could not read `/web/web-start.cjs`. Git records
+only whether a file is executable, so a checkout made under a strict umask (077) holds `0600`
+files; `COPY` kept those modes with root as owner, and the image runs as `node`. The CI checkout
+uses normal modes, so CI did not catch it.
+
+- **Fix.** Every `COPY` in `docker/Dockerfile.web` that takes files from the checkout sets
+  `--chmod=u=rwX,go=rX` (files 644, folders 755, executables keep their bit). The three
+  `COPY --from=build` steps are unchanged: `.next` and the SWC binary are written in the build
+  stage with normal modes, and `next.config.ts` comes from the checkout, so its mode is set by the
+  build stage's `COPY --chmod`.
+- **Tests.** `tests/safety/test_production_compose.py` pins the mode on every checkout `COPY`, as
+  well as the whole Dockerfile. Dropping any `--chmod` fails at least two tests (three for the
+  launcher's). The CI `web docker image` job makes `web/` and the launcher owner-only before it
+  builds, then checks as `node` that everything under `/web` is readable (folders enterable) and
+  that nothing there is world-writable, setuid, setgid or owned by anyone but root; a folder
+  `node` cannot enter, or any `find` error, fails the step. `next build` writes its output
+  group-writable for root's group, so `node` must not be in group 0: the image's groups are
+  checked there, and the compose `web` service may set neither `user` nor `group_add`.
+- **The API image is unchanged (#73a).** The app runs from site-packages, which a non-editable
+  `pip install .` writes with normal modes, and `/app/src` is never imported. The install line is
+  pinned in the same test file, which also refuses `PYTHONPATH`, `--app-dir` and `/app/src`
+  outside a `COPY`, in the Dockerfile and on the services built from it. An editable install, or
+  running from `/app/src`, would bring the problem back.
+- **Checked.** A web image built from a umask-077 clone with this change reads its launcher as
+  `node` and stops with the fixed message when the secret files are missing; with the `--chmod`
+  dropped from the launcher's `COPY`, or from `COPY web/ ./`, the CI check fails. An API image
+  built from the same clone imports the app as its unprivileged user.
+- **Build requirement.** Symbolic `--chmod` needs a recent BuildKit Dockerfile frontend (the
+  production host has BuildKit 0.33); an older builder, or the legacy builder, refuses the build.
+  No `# syntax=` line is added, so no frontend image is pulled at build time.
+- **Not covered.** Files bind-mounted from the checkout (the database's `pg_hba.conf` and init
+  script) keep their host modes: a checkout updated under umask 077 could make them unreadable
+  inside the database container, which stops it from starting. "Deploying and rolling back" above
+  and the header of `docker/docker-compose.production.yml` say to update the production checkout
+  from a shell with umask 022. Secret files are not in the checkout; they keep the mode they were
+  created with, so create them readable by the service that reads them (`docker/make-secrets.sh`
+  writes them 0444 in a 0700 folder).
+- **Known gap: the API Dockerfile is not pinned line by line.** The test refuses an editable
+  install spelled with `pip`, `-e` or `--editable`, but another installer that installs editable
+  by default (for example `RUN uv sync`) would pass, and a `RUN set -e` line would be refused by
+  mistake. Neither line exists today. Closing it means pinning the whole API Dockerfile as
+  `Dockerfile.web` is pinned, in a later reviewed change.
