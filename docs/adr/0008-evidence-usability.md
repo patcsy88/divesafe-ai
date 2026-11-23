@@ -194,26 +194,32 @@ inside a combo box or popover, which the app does not render. The confirm step a
 were checked in restyle step 7 and again in step 9.
 
 The deploy baseline moved from `web-baseline-20261123` (`30ebce7`, which stays as the record of the
-check above) to `web-baseline-20261123-2` (`e18ea8d`) on 2026-11-23 (owner), without repeating the
-check: `git diff web-baseline-20261123 e18ea8d -- web/` adds only `web/tests/hiding.test.ts` (ADR
-0017), and the build output is the same. Each commit was built from a fresh `npm ci` of the same
-lock file (Node 26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`) with one fixed
-`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never in a committed
-file, CI or an image, and those builds are never deployed). A scratch script (not committed; SHA-256
-`85558f31e29292dc4e9da3c9490e4f4c272ece1688642926d324e9cd4115cf0b`) hashed every file under `.next`
+check above) to `web-baseline-20261123-2` (`04fe0c1`) on 2026-11-23 (owner), without repeating the
+check: `git diff web-baseline-20261123 04fe0c1 -- web/` adds only `web/tests/hiding.test.ts` (ADR
+0017), and the build output is the same. Each commit was built from a fresh `npm ci
+--ignore-scripts` of the same lock file (Node 26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`)
+with one fixed `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never
+in a committed file, CI or an image, and those builds are never deployed). A script
+(`tools/web-build-compare.sh`, committed byte for byte as run (owner, 2026-11-23); run `bash
+tools/web-build-compare.sh <web>/.next <list>` on each build, then `diff` the lists; SHA-256
+`ba3e30e36d6aa67577d4126e919b8e035b7dd95b1c0b7f94a37184fff946da31`) hashed every file under `.next`
 except `cache/`, `trace*` and `diagnostics/` (256 files) after masking only what Next makes random
 or path-specific on every build: the build id, the 42-hex server action ids, the 32-hex hashes in
 `.nft.json` trace files, the preview mode id and keys, `server/preview-props.json` and the
 checkout's absolute path. The two lists are identical (`diff` exit 0), and so are two builds of
-`30ebce7`; one word changed in `DegradedEvidenceNote.ts` changed 2 files and one CSS value 13, so
-the masks hide no real change. A later change touching only `web/tests/` moves the baseline only
-with the same comparison and a risk review; the checklist is never narrowed to skip `web/tests/`.
-Still to do at the web deploy:
+`30ebce7`. Three positive controls on `30ebce7` each showed a difference: one word in
+`DegradedEvidenceNote.ts` (2 lines of the list), one CSS value in `globals.css` (13) and one word in
+the client component `DecisionForm.tsx` (4), so the masks did not hide any of those changes. The tag
+is made on the pushed, reviewed commit; a rebase before that means the comparison and this hash are
+redone. A later change touching only `web/tests/` moves the baseline only with the owner's approval,
+review by `risk-reviewer` and `security-reviewer`, the same comparison including all three positive
+controls, and a `git diff` from the current tag confined to `web/tests/`; the checklist is never
+narrowed to skip `web/tests/`. Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
-- confirm the bundle is built from a commit with no `web/` change since `e18ea8d` (annotated tag
+- confirm the bundle is built from a commit with no `web/` change since `04fe0c1` (annotated tag
   `web-baseline-20261123-2`: `git rev-parse 'web-baseline-20261123-2^{commit}'` is
-  `e18ea8da0b4e54aabf3bc92c931a1a159705bff1`, then `git diff web-baseline-20261123-2 <web commit> --
+  `04fe0c120d4c090a6c4a8dfa4288fc36961ac54c`, then `git diff web-baseline-20261123-2 <web commit> --
   web/` is empty), and that the API it talks to serves an assessment view unchanged since `fbad5a2`
   (`git diff fbad5a2 <API commit> -- src/divesafe/api/schemas.py` is empty); otherwise repeat this
   check against that build or API;
