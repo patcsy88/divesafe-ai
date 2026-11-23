@@ -187,8 +187,8 @@ package ships a `NOTICE` file and, if so, where its text is kept; confirm no `ha
 that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
 `lightningcss`) as well as the macOS ones. Licences are read from each package's licence file as
 well as the lock file's `license` field, and a mismatch is recorded. Do not accept a package that
-adds an install script. Done in restyle step 9 (2026-11-23): the results are in the restyle PR's
-dependency record.
+adds an install script. Done in restyle step 9 (2026-11-23): the results are in restyle PR #62,
+"Dependency record".
 
 Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pins
 `@react-types/color` 3.2.0, which depends on `@react-spectrum/color` and through it on
