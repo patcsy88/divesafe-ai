@@ -304,26 +304,35 @@ walker, 2026-11-23); it runs only inside a combo box or popover, which the app d
 Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
 `inert`, `hidden`) on every page, with that component open.
 `web/tests/hiding.test.ts` (owner, 2026-11-23: the three attributes, then the wider scope below)
-refuses `aria-hidden`, `inert`, `hidden` and `popover` in the app's own source: as JSX attributes,
-`createElement` props keys (shorthand, quoted and computed ones included) or property assignments
-(dotted, by name, or through `Object.assign`, `Reflect.set` or `defineProperty`). Every props
-argument is `null` or an object literal written where the element is built, so props made elsewhere
-never reach an element; spreads into props, `cloneElement` and the JSX runtime are refused. It also
-refuses `setAttribute`, HTML writes, `<dialog>`, `<template>`, inline styles, `role` none or
-presentation, `classList` and `className` writes, and removing text (`textContent`, `innerText`,
-`replaceChildren`, `removeChild`, `.remove()`, `.open =`); it pins every `aria-label` and
-`aria-labelledby` and every `<details>`, by file. `lib/` builds no elements and does not reach the
-page. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is on a
-reviewed list. Classes are `classes.test.ts`'s: only `ds-` classes styled in `globals.css`, so no
-Tailwind hiding utility. It reads the source as text, not as a parsed program, so it is a tripwire,
-not proof: a name built at run time is not seen, nor is what a HeroUI or React Aria component adds.
-A failure on text that is not an attribute is fixed by rewording the text, not by loosening a
-pattern. Not checked (Known gaps, owner, 2026-11-23): `aria-live`, `aria-busy` and other live-region
-attributes, and hiding declarations in `globals.css` itself (`classes.test.ts` checks class names,
-not what a `ds-` rule does). Adding the test changed `web/`, so it ends the `web-baseline-20261123`
-deploy baseline (ADR 0008 Amendment 1 (a)): the deploy then needs a new reviewed baseline, the (a)
-check again, or PR #62's web build deployed before this merges; the checklist is never narrowed to
-skip `web/tests/`.
+refuses `aria-hidden`, `inert`, `hidden` and `popover` in the app's own source, in any letter case:
+as JSX attributes, `createElement` props keys (shorthand, quoted and computed ones included),
+property assignments (dotted, by name, or through `Object.assign`, `Reflect.set` or
+`defineProperty`), or as quoted strings anywhere (a form field's `type="hidden"` aside), so a name
+held in a variable is refused too. `\u` escapes and `\x` letter escapes are refused, and every write
+through a computed name (`obj[key] =`) is pinned by file. Every props argument is `null` or an
+object literal written where the element is built, so props made elsewhere never reach an element;
+spreads into props, `cloneElement` and the JSX runtime are refused, and a capitalised tag must be a
+component the file imports or declares. It also refuses `setAttribute`, `removeAttribute`, HTML
+writes, `eval` and code built from strings, `<dialog>`, `<template>`, `<noscript>`, `<datalist>`,
+`<svg>`, inline styles, `role` none or presentation, `classList` and `className` writes, imports
+from `tests/`, and removing text (`textContent`, `innerText`, `outerText`, `nodeValue`, `.data`,
+`replaceChildren`, `replaceWith`, `removeChild`, `.remove()`, `.open =`); it pins every `aria-label`
+and `aria-labelledby` and every `<details>`, by file, and refuses a banner, badge, notice, role or
+the DEGRADED note inside one. `lib/` builds no elements and does not look up the page (`document`,
+`window`, `querySelector`); it can still change an element it is given, which the write checks
+cover. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is on a
+reviewed list, and none of those folders may be a link. Classes are `classes.test.ts`'s: only `ds-`
+classes styled in `globals.css`, so no Tailwind hiding utility. It reads the source as text, not as
+a parsed program, so it is a tripwire, not proof: a name built at run time is not seen, nor is what
+a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed by
+rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
+`aria-live`, `aria-busy` and other live-region attributes; hiding declarations in `globals.css`
+itself (`classes.test.ts` checks class names, not what a `ds-` rule does); and other safety text
+inside the two existing `<details>` than the names refused there (the (a) harness opens every
+`<details>` before measuring, so it would not see this either). Adding the test changed `web/`, so
+it ended the `web-baseline-20261123` deploy baseline; the baseline moved to
+`web-baseline-20261123-2` on the build comparison recorded in ADR 0008 Amendment 1 (a). The
+checklist is never narrowed to skip `web/tests/`.
 
 ### What must not change
 

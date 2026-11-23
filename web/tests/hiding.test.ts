@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,7 @@ function walk(dir: string, skip: readonly string[] = []): string[] {
 }
 
 function source(dir: string): string[] {
+  assert.ok(!lstatSync(join(ROOT, dir)).isSymbolicLink(), `${dir}/ is a symbolic link`);
   return walk(join(ROOT, dir)).filter((f) => /\.[cm]?[jt]sx?$/.test(f));
 }
 
@@ -52,11 +53,18 @@ const LABELS = [
 ];
 
 // Every <details> in the app, by file: it starts closed, so what it holds is off the page until
-// opened, and no safety sentence moves into one without review.
+// opened. A new <details> fails; what an existing one holds is not checked (ADR 0017 Known gaps).
 const DETAILS = [
   ["app/assessments/[id]/evidence/page.tsx", 1],
   ["components/WithheldBox.ts", 1],
 ];
+
+// What an existing <details> must never hold: the result, the banners or the DEGRADED note.
+const NOT_IN_DETAILS = /Banner|Degraded|DEGRADED|badgeClass|ds-pending|ds-badge|Notice|role/;
+
+// Every write through a computed name (`obj[key] = v`) in the three folders, by file. The name is
+// not visible here, so each is reviewed: this one fills a plain object of form numbers.
+const COMPUTED_WRITES = [["lib/observations.ts", "observations[key] ="]];
 
 // Comments are not code. Only a comment that starts its line is dropped: a block comment that
 // does not fails, and a trailing `//` comment is kept and read as code (move it to its own line
@@ -70,6 +78,46 @@ function code(file: string, text: string): string {
   return lines.replace(/^\s*\/\/.*$/gm, "");
 }
 const read = (file: string) => code(file, readFileSync(file, "utf8"));
+
+// Components this file may use as tags: its imports and its own function declarations.
+function components(text: string): Set<string> {
+  const names = [...text.matchAll(/^import\s+(?:type\s+)?(\w+)/gm)].map((m) => m[1] ?? "");
+  for (const m of text.matchAll(/^import\s+(?:type\s+)?(?:\w+\s*,\s*)?\{([^}]*)\}/gm)) {
+    for (const part of (m[1] ?? "").split(",")) names.push(part.trim().split(/\s+/).pop() ?? "");
+  }
+  const own = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Z]\w*)/gm;
+  for (const m of text.matchAll(own)) names.push(m[1] ?? "");
+  return new Set(names.filter((n) => n !== ""));
+}
+
+// The text of each <details>: in JSX up to its closing tag; for `h("details", ...)` up to the
+// bracket that closes the call (counting round brackets outside strings). One that cannot be
+// read whole fails.
+function detailsBlocks(file: string, text: string): string[] {
+  const blocks: string[] = [];
+  for (const m of text.matchAll(/<details\b/gi)) {
+    const end = text.indexOf("</details>", m.index);
+    assert.ok(end > 0, `${file}: a <details> with no closing tag`);
+    blocks.push(text.slice(m.index, end));
+  }
+  for (const m of text.matchAll(/\b(?:h|createElement)\(\s*["'`]details\b/gi)) {
+    let depth = 0;
+    let quote = "";
+    let end = -1;
+    for (let i = m.index + m[0].indexOf("("); i < text.length && end < 0; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = "";
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")" && --depth === 0) end = i;
+    }
+    assert.ok(end > 0, `${file}: an h("details") call that cannot be read whole`);
+    blocks.push(text.slice(m.index, end));
+  }
+  return blocks;
+}
 
 // A failure on text that is not an attribute is fixed by rewording the text, never by loosening
 // a pattern here (ADR 0017).
@@ -91,32 +139,43 @@ test("no element in app/ or components/ is hidden, closed or relabelled by our c
   for (const file of files) {
     const text = read(file);
     const name = file.slice(ROOT.length + 1);
-    // An escaped name (`in\u0065rt`) would pass every pattern here.
-    assert.doesNotMatch(text, /\\u/, `${file}: a \\u escape, which these checks cannot read`);
     // A JSX attribute, with or without a value: `aria-hidden="true"`, `inert`, `hidden={x}`.
     if (file.endsWith("x")) {
       const jsx = new RegExp(`\\s(?:${ATTR})(?=\\s*=|\\s*/?>|\\s+[\\w-]+[\\s=/>])`, "i");
       assert.doesNotMatch(text, jsx, `${file}: a hiding attribute in JSX (${REWORD})`);
       assert.doesNotMatch(text, /\{\s*\.\.\./, `${file}: a spread, which could carry one`);
     }
+    // HTML attribute and tag names ignore case, so the checks below do too.
     // Elements the browser keeps closed or never shows, and inline styles, which could hide text.
-    const closed = /<(?:dialog|template)\b|\b(?:h|createElement)\(\s*["'`](?:dialog|template)\b/;
+    const shut = /(?:dialog|template|noscript|datalist|svg)\b/.source;
+    const closed = new RegExp(`<${shut}|\\b(?:h|createElement)\\(\\s*["'\`]${shut}`, "i");
     assert.doesNotMatch(text, closed, `${file}: a dialog or template`);
-    const style = /\bstyle["'`]?\s*[=:]|\.style\b|cssText/;
+    const style = /\bstyle["'`]?\s*[=:]|\.style\b|cssText/i;
     assert.doesNotMatch(text, style, `${file}: an inline style`);
     // A role of none or presentation removes what a screen reader announces for an element.
-    const role = /\brole["'`]?\s*[=:]\s*\{?\s*["'`](?:none|presentation)/;
+    const role = /\brole["'`]?\s*[=:]\s*\{?\s*["'`](?:none|presentation)/i;
     assert.doesNotMatch(text, role, `${file}: a role that removes the element's meaning`);
-    const opened = /<details\b|\b(?:h|createElement)\(\s*["'`]details\b/g;
+    const opened = /<details\b|\b(?:h|createElement)\(\s*["'`]details\b/gi;
     const n = text.match(opened)?.length ?? 0;
     if (n > 0) details.push([name, n]);
-    const label = /(aria-label(?:ledby)?)(?:["'`]\s*:|\s*=)\s*(?:"([^"]*)"|'([^']*)'|(.))/g;
+    for (const block of detailsBlocks(file, text)) {
+      assert.doesNotMatch(block, NOT_IN_DETAILS, `${file}: a safety sentence inside a <details>`);
+    }
+    // A capitalised tag is a component: one imported or declared in this file, never a name
+    // holding a tag such as `const T = "dialog"`. A type argument (`useRef<T>`) is not a tag.
+    const known = components(text);
+    const tags = /(?<![\w$.])<([A-Z][\w$]*)|(?<![\w.])(?:h|createElement)\(\s*([A-Z][\w$]*)/g;
+    for (const m of text.matchAll(tags)) {
+      const t = m[1] ?? m[2] ?? "";
+      assert.ok(known.has(t), `${file}: <${t}> is not an imported or declared component`);
+    }
+    const label = /(aria-label(?:ledby)?)(?:["'`]\s*:|\s*=)\s*(?:"([^"]*)"|'([^']*)'|(.))/gi;
     for (const m of text.matchAll(label)) {
       assert.equal(m[4], undefined, `${file}: an ${m[1]} that is not a literal`);
       labels.push([name, m[1] ?? "", m[2] ?? m[3] ?? ""]);
     }
     assert.equal(
-      text.match(/aria-label/g)?.length ?? 0,
+      text.match(/aria-label/gi)?.length ?? 0,
       labels.filter(([f]) => f === name).length,
       `${file}: an aria-label in a form not read here`,
     );
@@ -171,8 +230,25 @@ test("no element in app/ or components/ is hidden, closed or relabelled by our c
 
 test("no code in app/, components/ or lib/ sets a hiding attribute on the page", () => {
   const files = [...source("app"), ...source("components"), ...source("lib")];
+  const writes: string[][] = [];
   for (const file of files) {
     const text = read(file);
+    const name = file.slice(ROOT.length + 1);
+    // A name held in a variable (`const k = "inert"; el[k] = true`) is still written out as a
+    // string, so the names are refused as strings too. A form field's `type="hidden"` is allowed.
+    // An escape could spell one (`in\u0065rt`, `in\x65rt`): `\u` and a `\x` letter are refused.
+    assert.doesNotMatch(text, /\\u/, `${file}: a \\u escape, which these checks cannot read`);
+    const letter = /\\x(?:4[1-9a-f]|5[0-9a]|6[1-9a-f]|7[0-9a])/i;
+    assert.doesNotMatch(text, letter, `${file}: a \\x letter escape, which these cannot read`);
+    const field = text.replace(/\btype\s*[=:]\s*["']hidden["']/g, "");
+    const quoted = new RegExp(`(["'\`])(?:${ATTR})\\1`, "i");
+    assert.doesNotMatch(field, quoted, `${file}: a hiding name as a string (${REWORD})`);
+    // Code built from a string is never read by these checks.
+    const built = /\beval\s*\(|\bnew\s+Function\b|\bset(?:Timeout|Interval)\s*\(\s*["'`]/;
+    assert.doesNotMatch(text, built, `${file}: runs code built from a string`);
+    // Every write through a computed member (`el[k] = v`), whose name this cannot see.
+    const member = /[\w$)\]]+\[[^\]\n]+\]\s*(?:=(?![=>])|\|\|=|\?\?=|&&=)/g;
+    for (const m of text.matchAll(member)) writes.push([name, m[0].replace(/\s+/g, " ")]);
     const dom = /setAttribute|toggleAttribute|innerHTML|outerHTML|insertAdjacentHTML/;
     assert.doesNotMatch(text, dom, `${file}: writes attributes or HTML directly`);
     assert.doesNotMatch(text, /dangerouslySetInnerHTML/, `${file}: raw HTML`);
@@ -188,14 +264,27 @@ test("no code in app/, components/ or lib/ sets a hiding attribute on the page",
     // literals; the DOM routes around it are refused here.
     assert.doesNotMatch(text, /classList|\.className\s*=/, `${file}: sets classes on the page`);
     // Removing text from the page, or closing a <details>.
-    const remove =
-      /textContent\s*=|innerText\s*=|replaceChildren|removeChild|\.remove\(\)|\.open\s*=/;
+    const remove = new RegExp(
+      [
+        /(?:textContent|innerText|outerText|nodeValue)\s*=(?!=)/.source,
+        /replaceChildren|replaceWith|removeChild|\.remove\(\)|\.(?:open|data)\s*=(?!=)/.source,
+      ].join("|"),
+    );
     assert.doesNotMatch(text, remove, `${file}: removes text from the page`);
+    // Removing an attribute closes a <details> (`open`) or drops an alert's `role`.
+    const unset = /removeAttribute|\.attributes\b/;
+    assert.doesNotMatch(text, unset, `${file}: removes attributes from the page`);
+    // tests/ is not read by these checks, so app code never imports from it.
+    const fromTests = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)["'][^"']*\/tests\//;
+    assert.doesNotMatch(text, fromTests, `${file}: imports from tests/`);
   }
+  const changed = "a write through a computed name changed: each needs review (ADR 0017)";
+  assert.deepEqual(writes.sort(), COMPUTED_WRITES, changed);
 });
 
-// lib/ renders nothing; and since every props argument is a literal in the file that renders it,
-// a lib/ object never becomes props.
+// lib/ renders nothing and does not look up the page (it could still change an element it is
+// given, which the test above covers); and since every props argument is a literal in the file
+// that renders it, a lib/ object never becomes props.
 test("lib/ renders nothing", () => {
   assert.ok(source("lib").length > 5, "found almost no files in lib/");
   for (const file of source("lib")) {
@@ -204,7 +293,7 @@ test("lib/ renders nothing", () => {
     assert.doesNotMatch(text, react, `${file} imports React`);
     assert.doesNotMatch(text, /\bcreateElement\b|\bjsxs?\(/, `${file} builds elements`);
     const page = /\b(?:document|window)\b|querySelector|getElementBy/;
-    assert.doesNotMatch(text, page, `${file} reaches the page`);
+    assert.doesNotMatch(text, page, `${file} looks up the page`);
     assert.ok(!file.endsWith("x"), `${file} is a JSX file`);
   }
 });
