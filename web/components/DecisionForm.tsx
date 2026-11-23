@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Button } from "@heroui/react/button";
 import { Label } from "@heroui/react/label";
 import { TextArea } from "@heroui/react/textarea";
-import { type ChangeEvent, useActionState, useEffect, useState } from "react";
+import { type ChangeEvent, useActionState, useEffect, useRef, useState } from "react";
 import { submitDecision, type FormState } from "../app/actions.ts";
 import { isLessSevere, RECOMMENDATIONS } from "../lib/present.ts";
 import { useRetryKey } from "./useRetryKey.ts";
@@ -33,6 +33,12 @@ export default function DecisionForm({
       renewKey();
     }
   }, [state, renewKey]);
+  // React resets the form after each action, which clears the select's DOM value but not
+  // `choice`; put the choice back so the select agrees with the confirm text.
+  const select = useRef<HTMLSelectElement>(null);
+  useEffect(() => {
+    if (select.current && select.current.value !== choice) select.current.value = choice;
+  }, [state, choice]);
   const needsReason = known && choice !== "" && choice !== system && reason.trim() === "";
   const change = () => {
     setReviewing(false);
@@ -58,6 +64,7 @@ export default function DecisionForm({
       <select
         id="decision"
         name="decision"
+        ref={select}
         value={choice}
         onChange={(e) => setChoice(e.target.value)}
         required
