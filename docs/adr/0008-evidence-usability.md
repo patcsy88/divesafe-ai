@@ -183,14 +183,15 @@ In the server-rendered HTML of the eight views, the sequence of `alert`, `status
 each with its text, is the same as at `fbad5a2`, and no element has a hiding class or attribute
 (`hidden`, `aria-hidden`, `inert`, `sr-only`, `animate-out` and the like) except Next's empty
 streaming placeholder (`<div hidden>` with no text, also at `fbad5a2`); no role or hidden text was
-added. After hydration, in Chromium, on all 18 pages at 900 and 320 px, light and dark, the only
-element with `aria-hidden`, `inert` or `hidden` is that same placeholder, as at `fbad5a2`; in
-restyle steps 7 and 9 the decision form's Review and Confirm states had none on the safety sentences
-the probe lists (PENDING, DECISION NOT SHOWN, the DEGRADED note, the disclaimer, the less-severe
-warning, the confirm text) or their ancestors, as at `fbad5a2`; React Aria's overlay code, which
-adds those attributes, is reachable from HeroUI's `Input` and is in the built browser chunks, but
-runs only inside a combo box or popover, which the app does not render. The confirm step and the
-error alerts were checked in restyle step 7 and again in step 9. Still to do at the web deploy:
+added. After hydration, as first rendered, in Chromium (a scratch probe, not committed), on the 18
+page URLs of the 72-file comparison at 900 and 320 px, light and dark, the only element with
+`aria-hidden`, `inert` or `hidden` is that same placeholder, as at `fbad5a2`; in restyle steps 7 and
+9 the decision form's Review and Confirm states had none on the safety sentences the probe lists
+(PENDING, DECISION NOT SHOWN, the DEGRADED note, the disclaimer, the less-severe warning, the
+confirm text) or their ancestors, as at `fbad5a2`; React Aria's overlay code, which adds those
+attributes, is reachable from HeroUI's `Input` and is in the built browser chunks, but runs only
+inside a combo box or popover, which the app does not render. The confirm step and the error alerts
+were checked in restyle step 7 and again in step 9. Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
 - confirm the bundle is built from a commit with no `web/` change since `30ebce7` (annotated tag

@@ -298,10 +298,11 @@ dark-selector checks still read every file in `@heroui/styles`.
 it again brings back the animation utilities the hiding rule bans, so it needs `risk-reviewer`
 review, and an added overlay's enter and exit animations are re-checked under the (a) hiding rule.
 React Aria's overlay code (`ariaHideOutside`, which sets `aria-hidden` or `inert` on everything
-outside an open overlay, the banner, badge and note included) is reachable from HeroUI's `Input`
-and is in the built browser chunks; it runs only inside a combo box or popover, which the app does
-not render. Adding any component therefore also re-runs the after-hydration attribute check
-(`aria-hidden`, `inert`, `hidden`) on every page, with that component open.
+outside an open overlay, the banner, badge and note included) is reachable from HeroUI's `Input` and
+is in the built browser chunks (one chunk of a local build held its `[data-react-aria-top-layer]`
+walker, 2026-11-23); it runs only inside a combo box or popover, which the app does not render.
+Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
+`inert`, `hidden`) on every page, with that component open.
 
 ### What must not change
 
