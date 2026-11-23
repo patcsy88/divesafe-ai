@@ -44,6 +44,10 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
       {view.unevaluated_factors.length > 0 && (
         <section className="ds-card ds-warn">
           <h2>Not evaluated</h2>
+          <p>
+            No validated limit exists for these, so they were not assessed. That is not the same as
+            being safe.
+          </p>
           <p>{view.unevaluated_factors.map(plain).join(", ")}</p>
         </section>
       )}

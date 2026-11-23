@@ -1,4 +1,4 @@
-import { RECOMMENDATIONS } from "./present.ts";
+import { isLessSevere, RECOMMENDATIONS } from "./present.ts";
 import type { AssessmentView, RunStatusView } from "./types.ts";
 
 // What the API sent back for an assessment address: a finished assessment, or a run that has not
@@ -42,6 +42,12 @@ function classifyAssessment(
     // A decision is a real object with a known outcome, or the reply is not trusted.
     if (!isObject(decision) || !isRecommendation(decision.decision)) return null;
     if (typeof decision.decided_by !== "string" || typeof decision.decided_at !== "string") return null;
+    // The page words the decision from these flags, so each must agree with the two outcomes.
+    const differs = decision.decision !== record.final_recommendation;
+    if (decision.is_override !== differs) return null;
+    if (body.overrides_to_less_severe !== isLessSevere(String(decision.decision), String(record.final_recommendation))) {
+      return null;
+    }
   }
   const actual = record.actual_conditions;
   if (actual !== null && !isObject(actual)) return null;

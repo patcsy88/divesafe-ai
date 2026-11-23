@@ -9,8 +9,16 @@ import ProviderNotices from "../../../components/ProviderNotices.ts";
 import RunProgress from "../../../components/RunProgress.tsx";
 import { ApiError, getAssessment } from "../../../lib/api.ts";
 import { requireKey } from "../../../lib/auth.ts";
-import { badgeClass, formatWhen, labelFor, plain } from "../../../lib/present.ts";
+import { badgeClass, formatWhen, isLessSevere, labelFor, plain } from "../../../lib/present.ts";
 import { failureText as failedReason, type Fetched } from "../../../lib/status.ts";
+import {
+  DEGRADED_NOTE_MISSING,
+  degradedNoteMissing,
+  KNOWLEDGE_NOTE_MISSING,
+  knowledgeText,
+  reasonShown,
+  withheldCount,
+} from "../../../lib/notes.ts";
 
 export default async function AssessmentPage({ params }: { params: Promise<{ id: string }> }) {
   const key = await requireKey();
@@ -70,6 +78,27 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
   const pending = view.status === "PENDING_HUMAN" && !withheld;
   const decision = r.human_decision;
   const started = Date.parse(r.plan.planned_start) <= Date.now();
+  const knowledge = knowledgeText(view.knowledge_note);
+  const setAside = withheldCount(r.withheld_evidence);
+  const canDecide = pending && Boolean(r.assigned_decider);
+  // Worded from the two checked outcomes, not from a flag.
+  const proposalNote = isLessSevere(r.proposed_recommendation ?? "", r.deterministic_recommendation)
+    ? " (less severe than the rules: discarded)"
+    : r.proposed_recommendation === r.deterministic_recommendation
+      ? " (same as the rules)"
+      : " (this made the result stricter)";
+  const knowledgeMissing = knowledge === KNOWLEDGE_NOTE_MISSING;
+  const setAsideAction = withheld
+    ? "Ask the assigned decider, who can read them on the Evidence page."
+    : "Read them on the Evidence page before deciding.";
+  // Worded from the outcomes and the less-severe flag, both checked by classify().
+  const decidedNote = !decision
+    ? ""
+    : decision.decision === r.final_recommendation
+      ? " (accepted the system's recommendation)"
+      : view.overrides_to_less_severe
+        ? " (an override to a LESS SEVERE outcome than the system recommended)"
+        : " (an override of the system: more severe)";
 
   return (
     <>
@@ -83,9 +112,6 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       <Banner />
 
       <section className="ds-card">
-        <p className="ds-label">System recommendation</p>
-        <p className={badgeClass(r.final_recommendation)}>{labelFor(r.final_recommendation)}</p>
-        <DegradedEvidenceNote note={view.degraded_evidence_note} />
         {pending && (
           <p className="ds-pending" role="status">
             PENDING HUMAN DECISION. {plain(view.status_note)}
@@ -97,8 +123,35 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             result without asking the assigned decider.
           </p>
         )}
+        {decision && (
+          <p className="ds-pending" role="status">
+            HUMAN DECISION RECORDED: {labelFor(decision.decision)}
+            {plain(decidedNote)}.
+            See the human decision below.
+          </p>
+        )}
+        <p className="ds-label">
+          {pending ? "System recommendation (not yet decided by a human)" : "System recommendation"}
+        </p>
+        <p className={badgeClass(r.final_recommendation)}>{labelFor(r.final_recommendation)}</p>
+        <DegradedEvidenceNote note={view.degraded_evidence_note} />
+        {degradedNoteMissing(r.final_recommendation, view.degraded_evidence_note) && (
+          <p className="ds-pending" role="note">{plain(DEGRADED_NOTE_MISSING)}</p>
+        )}
+        {!pending && !withheld && view.status_note && <p>{plain(view.status_note)}</p>}
         <p>{plain(view.outcome_note)}</p>
         {view.agent_note && <p>{plain(view.agent_note)}</p>}
+        {knowledgeMissing && (
+          <p className="ds-pending" role="note">
+            {plain(KNOWLEDGE_NOTE_MISSING)}
+          </p>
+        )}
+        {knowledge && !knowledgeMissing && <p role="note">{plain(knowledge)}</p>}
+        {canDecide && (
+          <p className="ds-hint">
+            Read the problems and evidence on this page first; the decision form is at the end.
+          </p>
+        )}
         <dl>
           <dt>Deterministic checks</dt>
           <dd>{labelFor(r.deterministic_recommendation)}</dd>
@@ -107,7 +160,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
               <dt>Unverified model proposal</dt>
               <dd>
                 {labelFor(r.proposed_recommendation)}
-                {view.llm_tightened ? " (this made the result stricter)" : " (it could not relax the result)"}
+                {plain(proposalNote)}
               </dd>
             </>
           )}
@@ -152,27 +205,13 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
             {decision.override_rationale && (
               <>
                 <dt>Rationale</dt>
-                <dd>{plain(decision.override_rationale)}</dd>
+                <dd>{plain(reasonShown(decision.override_rationale))}</dd>
               </>
             )}
             <dt>When</dt>
             <dd>{formatWhen(decision.decided_at)}</dd>
           </dl>
         </section>
-      )}
-
-      {pending && r.assigned_decider && (
-        <>
-          <p className="ds-hint">
-            Only {plain(r.assigned_decider)} can record this decision. The service checks who you
-            are; if you are someone else it will refuse and nothing is recorded.
-          </p>
-          <DecisionForm
-            id={r.id}
-            system={r.final_recommendation}
-            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated.${degradedContext(view.degraded_evidence_note)}`}
-          />
-        </>
       )}
 
       {r.actual_conditions && (
@@ -244,6 +283,17 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         </section>
       )}
 
+      {setAside > 0 && (
+        <section className="ds-card ds-warn">
+          <h2>Conflicting evidence set aside</h2>
+          <p>
+            {plain(String(setAside))} conflicting item(s) were set aside before the rules ran. They may hold a more
+            severe result than the one shown.{" "}
+            {plain(setAsideAction)}
+          </p>
+        </section>
+      )}
+
       {r.unevaluated_factors.length > 0 && (
         <section className="ds-card ds-warn">
           <h2>Not evaluated</h2>
@@ -264,7 +314,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         <ul>
           {r.rule_results.map((rule, i) => (
             <li key={`${rule.rule_id}-${i}`}>
-              <strong>{labelFor(rule.outcome)}</strong> · {plain(rule.rule_id)}
+              rule outcome: <strong>{labelFor(rule.outcome)}</strong> · {plain(rule.rule_id)}
               {rule.factor ? ` · ${plain(rule.factor)}` : ""}
               <br />
               <span>{plain(rule.rationale)}</span>
@@ -283,6 +333,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
           {r.findings.map((f, i) => (
             <p key={`f-${i}`}>
               <strong>{plain(f.agent)}:</strong> {plain(f.summary)}
+              {f.no_evidence ? " (cites no evidence)" : ""}
             </p>
           ))}
           {r.scenarios.map((s, i) => (
@@ -340,7 +391,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
 
       {r.agent_issues.length > 0 && (
         <section className="ds-card ds-warn">
-          <h2>Model calls that failed</h2>
+          <h2>Model calls that failed, and model-server notes</h2>
           <ul>
             {r.agent_issues.map((a, i) => (
               <li key={i}>{plain(a)}</li>
@@ -349,8 +400,24 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         </section>
       )}
 
+      {canDecide && (
+        <>
+          <p className="ds-hint">
+            Only {plain(r.assigned_decider ?? "")} can record this decision. The service checks who you
+            are; if you are someone else it will refuse and nothing is recorded.
+          </p>
+          <DecisionForm
+            id={r.id}
+            system={r.final_recommendation}
+            context={`Deterministic checks: ${labelFor(r.deterministic_recommendation)}. ${r.evidence_issues.length} source issue(s); ${r.unevaluated_factors.length} factor(s) not evaluated; ${setAside} conflicting item(s) set aside (see Evidence).${degradedContext(view.degraded_evidence_note)}${degradedNoteMissing(r.final_recommendation, view.degraded_evidence_note) ? ` ${DEGRADED_NOTE_MISSING}` : ""}${knowledgeMissing ? ` ${KNOWLEDGE_NOTE_MISSING}` : ""}`}
+          />
+        </>
+      )}
+
       {view.attributions.length > 0 && (
-        <p className="ds-hint">Data: {plain(view.attributions.join("; "))}</p>
+        <p className="ds-hint">
+          Data attribution (supplied by the provider, not checked): {plain(view.attributions.join("; "))}
+        </p>
       )}
       <ProviderNotices
         notices={view.provider_notices}

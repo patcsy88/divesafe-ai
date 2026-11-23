@@ -38,16 +38,19 @@ actual-conditions form (shown once the planned start has passed).
 - The form shows the system recommendation, rules alone, the count of source issues and unevaluated
   factors, and links to the evidence before the choice.
 - On a 409 from a write, the action goes to the record only after a fresh read shows it was recorded.
+  Otherwise it shows the API's 409 text, stripped of control and bidi characters and cut at 300
+  characters, or a fixed sentence when the API sent none.
 - Evidence items are labelled by `data_kind`: only an observation is "measured". Notices and
   knowledge are "text, not a measurement". Quality tags are not sufficiency, and the page says so.
 - **Withheld evidence box.** When the evidence response carries `withheld_evidence` (items dropped
   because two sources disagreed under one id, ADR 0008), the evidence page shows a separate,
-  labelled box above the evidence list: "Withheld evidence - NOT used, NOT evaluated, may hold a
-  more severe result", the server's `withheld_note`, then each item. Everything is plain text: no
-  link, no anchor, no DOM id from an item, no raw HTML; ids are shown as text; raw values sit in a
-  collapsed block through the same `shown()` helper (cut at 20,000 characters). At most 50 items are
-  shown, ordered by id, followed by "N more withheld items not shown". Source, source version,
-  category and each quality note are cut at 1,000 characters (the normal evidence list is not).
+  labelled box above the evidence list: "Withheld evidence - NOT used in the main result, checked
+  separately for a more severe result", the server's `withheld_note`, then each item. Everything is
+  plain text: no link, no anchor, no DOM id from an item, no raw HTML; ids are shown as text; raw
+  values sit in a collapsed block through the same `shown()` helper (cut at 20,000 characters). At
+  most 50 items are shown, ordered by id, followed by "N more withheld items not shown". Source,
+  source version, category and each quality note are cut at 1,000 characters (the normal evidence
+  list is not).
   An older response without
   the field renders nothing. (Not to be confused with `DECISION_WITHHELD`; see the terms block in
   [architecture.md](../architecture.md).)
@@ -83,8 +86,10 @@ third-party text; the id pattern matches the API's; extra headers, `object-src '
   `X-Forwarded-For`. Only sign-in forwards the address, so a 401 elsewhere (a stale session) counts
   against the web server's own bucket when it is not trusted. Reservations of in-flight successful
   sign-ins count briefly, so five simultaneous sign-ins from one bucket can see a 429 (nothing is
-  recorded). A late release can remove another attempt's hit when the API timeout (120 s) exceeds
-  the 60 s window. `login` is a `"use server"` action with no direct test; the library is tested.
+  recorded). The API timeout is 30 s (`API_TIMEOUT_MS`; this line said 120 s until 2026-11-23),
+  shorter than the 60 s window. Whether a late release can still remove another attempt's hit has
+  not been re-checked against 30 s. `login` is a `"use server"` action with no direct test; the
+  library is tested.
   API keys must be generated (at least 128 bits), as the hashes are unsalted.
 - A retry key covers an unknown-outcome retry only while the form is unchanged and the page stays open; reloading starts a new attempt, so a timed-out create can still be duplicated after a reload. Check the record list before retrying.
 - No "who am I" endpoint, so the UI cannot hide actions a role cannot perform. Sign-in calls `GET /v1/sites`
@@ -506,8 +511,8 @@ Nothing under `web/` changes for it (#15b). It is defined, not deployed: the own
   the web code is still waiting for; a reset connection is shown as an unknown outcome to check
   before retrying, like any other unanswered call (#55a replaces the separate
   `web-relay` service of #48a, which lost its network after a `web` restart). (The "API timeout
-  (120 s)" in the login-throttle Known gap above predates this amendment; `API_TIMEOUT_MS` is 30 s.
-  That gap's late-release sentence should be re-checked against 30 s.)
+  (120 s)" that the login-throttle Known gap above once held is corrected to 30 s by the pre-deploy
+  fixes amendment below.)
 - **Hardening (#54a).** `init: true` and `pull_policy: build` on `web`; a read-only root file
   system, a small tmpfs, memory and process limits; a healthcheck that calls only loopback and
   passes on 200 alone. `DIVESAFE_WEB_TRUST_PROXY` is fixed at `"0"`. The healthcheck covers Next
@@ -581,7 +586,83 @@ Nothing under `web/` changes for it (#15b). It is defined, not deployed: the own
   including the `login` action. It never gets the session cookie (that cookie belongs to
   `127.0.0.1`), but with `DIVESAFE_WEB_TRUST_PROXY=0` its failed guesses fill the one shared
   throttle bucket and lock everyone out of sign-in for a minute at a time. The API port
-  `127.0.0.1:8000` has the same exposure, behind bearer authentication. A Host allow-list belongs
-  in the TLS proxy (#18a); `web/` stays unchanged (#15b).
+  `127.0.0.1:8000` has the same exposure, behind bearer authentication. Closed for the web UI by the
+  pre-deploy fixes amendment below (`web/proxy.ts`, #70b); the API port is unchanged.
 - **The `Secure` cookie attribute is not yet checked with a real sign-in** in the container
   (`NODE_ENV=production` is set in the image, which is what turns it on).
+
+## Amendment 2026-11-23: pre-deploy fixes (owner #69a, #70b, #71a)
+
+One reviewed change to `web/` before the first deploy, from the risk and security reviews of the
+web code. #15b (`web/` unchanged by the deploy) is set aside for this change only (#69a).
+
+- **Host allow-list (#70b).** `web/proxy.ts` runs before every request and answers 421 unless
+  `Host` is `127.0.0.1:3100` or `localhost:3100` and any `X-Forwarded-Host` is one of them too.
+  The two names are written in `web/lib/hosts.ts`; there is no setting. The TLS proxy change
+  (#67a, #68a) replaces them with `DIVESAFE_WEB_ALLOWED_HOSTS`.
+- **Start-up checks.** `web/instrumentation.ts` calls `web/lib/startup.ts`, which reads the session
+  secret and the API address once at start. Next 16 only logs an error thrown from `register()` and
+  goes on serving (checked: every page answered 500), so the check exits the process itself with
+  fixed text.
+- **A page that fails to render** shows fixed text (`web/app/error.tsx`, and
+  `web/app/global-error.tsx` for the root layout): "NO RESULT. This page failed to load. Do not act
+  on it." No error detail reaches the page.
+- **Assessment page.** The pending, decision-withheld and decision-recorded lines come before the
+  system's badge, and a pending badge is labelled "not yet decided by a human". The decided line
+  is worded from the two outcomes and calls out an override to a less severe outcome; a reply whose
+  `is_override` or `overrides_to_less_severe` disagrees with the outcomes is refused like any other
+  inconsistent reply. The proposal note is worded from the outcomes, not from `llm_tightened`.
+  A GO or CAUTION whose response lacks `degraded_evidence_note` shows a fixed note to treat it as
+  resting on model or forecast data. The site-document note (`knowledge_note`, ADR 0022 decision 14)
+  is shown; when the field is missing the page says site hazards may not have been checked.
+  Conflicting evidence set aside before the rules ran is counted in a warning card and in the
+  decision form's context. A finding that cites no evidence is marked. The decision form comes
+  after every problem section, and its choices run NO-GO first. Times show UTC and UTC+8.
+- **Typed text.** The override reason, the decider's name and the conditions notes refuse control,
+  format and text-direction characters, line and paragraph separators, private-use and unassigned
+  code points, characters Unicode marks as drawn as nothing (the Hangul fillers among them) and the
+  blank braille pattern. The decider's name also refuses line breaks and tabs. Browser line breaks
+  are normalised before the check and before the 409 comparison. A reason without a visible
+  letter, digit, punctuation mark or symbol is refused by the form, and a stored one (from another
+  client) is shown as "no visible text: treat as no reason given". Site ids are checked against the
+  API's pattern. The check is strict on purpose: an emoji with a variation selector (such as a
+  warning sign) or a character newer than the server's Unicode data is refused with the normal
+  message.
+- **Other.** Every server action refuses a call that is not a form; only this app's own pages, or
+  an address typed into the browser, can sign the person out (a link from another site, or from
+  another service on this machine, cannot; a browser that sends no `Sec-Fetch-Site` is let
+  through; a refused sign-out answers with fixed plain text, not a redirect, so it cannot loop);
+  `Retry-After` is shown only as a whole number of seconds up to a day; provider attribution is
+  labelled as supplied by the provider and not checked.
+
+### Checked on the built app (2026-11-23)
+
+`next start` from the production build, on `127.0.0.1:3100` with a throwaway secret and no API:
+no session secret, or an API address that is not loopback or https, exits with status 1 and the
+fixed line; the right host answers 200 by both names; a wrong `Host` or `X-Forwarded-Host` answers
+421 for a page, a static file and a server-action POST; logout ends the session for same-origin,
+`none` and no header, and not for `same-site` or `cross-site` (fixed text, no redirect); a
+sign-in form posted as a browser would reaches the API call (the `FormData` guard passes), and the
+throwaway secret is not in the log. `next build` with no session secret in the environment
+completes, so the start-up check does not run during the build. The same checks run on the image
+at deploy (deploy note).
+
+### Known gaps added
+
+- **Use DiveSafe in its own browser profile (#71a).** Over plain HTTP on loopback, the session
+  cookie is not `__Host-` prefixed and other pages in the same profile share the browser's state.
+  Sign in only from a browser profile used for nothing else. The `__Host-` prefix comes with TLS
+  (#68a).
+- **A 409 match ignores who decided.** After a 409 the decision form goes to the record when the
+  stored decision and reason equal the ones submitted. It does not compare `decided_by`, so an
+  identical decision recorded by someone else in the meantime reads as this person's.
+- **An invisible reason is refused by the web UI only.** The API still accepts an override reason
+  made only of invisible characters from another client; the page shows it as no reason given. No
+  API change is made now (owner). The web form refuses a non-empty reason without a visible
+  letter, digit, punctuation mark or symbol in any script (the same rule the page uses to show it).
+- **Joiners are refused in typed text.** U+200C and U+200D (zero-width non-joiner and joiner) are
+  format characters, so Persian text, some Indic spellings and joined emoji cannot be typed.
+- **Cross-examination summaries are not shown.** Only their conflicting signals reach the page;
+  this predates the change.
+- **Real browsers.** Sign-in is checked by hand in Chrome or Firefox at deploy; Safari may refuse
+  the `Secure` cookie on plain HTTP.

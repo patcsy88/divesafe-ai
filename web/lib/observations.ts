@@ -7,6 +7,21 @@ export const NUMERIC_FIELDS: ReadonlyArray<{ key: string; label: string }> = [
   { key: "wind_knots", label: "Wind (knots)" },
 ];
 
+// Control and format characters (bidi overrides, zero-width marks) other than a line break or a
+// tab, line and paragraph separators, private-use and unassigned code points, characters Unicode
+// says to draw as nothing (the Hangul fillers among them) and the blank braille pattern. Refused
+// in text the person types, which is stored as audit text.
+export const BLANK_BRAILLE = String.fromCodePoint(0x2800);
+const UNSAFE_SOURCE =
+  `[^\\P{Cc}\\n\\t]|[\\p{Cf}\\p{Zl}\\p{Zp}\\p{Co}\\p{Cn}\\p{Default_Ignorable_Code_Point}${BLANK_BRAILLE}]`;
+export const UNSAFE_TEXT = new RegExp(UNSAFE_SOURCE, "u");
+
+// A name is one line: none of the above, and no line break or tab either.
+export const UNSAFE_NAME = new RegExp(`${UNSAFE_SOURCE}|[\\n\\t]`, "u");
+
+// A browser sends textarea line breaks as CRLF; normalise them before checking or comparing.
+export const normaliseNewlines = (s: string): string => s.replace(/\r\n?/g, "\n");
+
 export type Parsed = { ok: true; observations: Record<string, string | number> } | { ok: false; error: string };
 
 export function parseObservations(get: (name: string) => string): Parsed {
@@ -20,10 +35,10 @@ export function parseObservations(get: (name: string) => string): Parsed {
     }
     observations[key] = Number(raw);
   }
-  const notes = get("notes").trim();
+  const notes = normaliseNewlines(get("notes")).trim();
   if (notes.length > 2000) return { ok: false, error: "Notes are too long (2000 characters at most)." };
-  if (/[^\P{Cc}\n\t]|\p{Cf}/u.test(notes)) {
-    return { ok: false, error: "Notes contain control characters." };
+  if (UNSAFE_TEXT.test(notes)) {
+    return { ok: false, error: "Notes contain invisible or formatting characters (some emoji included). Type them as plain text." };
   }
   if (notes) observations.notes = notes;
   if (Object.keys(observations).length === 0) {

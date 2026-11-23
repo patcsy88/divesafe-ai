@@ -35,8 +35,12 @@ function source(dir: string): string[] {
 // reviewed. Anything else outside app/, components/, lib/ and tests/ fails, so no new folder of
 // code (hooks/, src/, ui/) escapes the checks. Next writes `next-env.d.ts` (types only, ignored).
 const UNSCANNED = [
+  // Next requires these two at the root: start-up checks and the Host allow-list (owner #69a,
+  // #70b). Each only calls lib/, which is checked; tests/hosts.test.ts pins their whole text.
+  "instrumentation.ts",
   "next.config.ts",
   "postcss.config.mjs",
+  "proxy.ts",
   "scripts/check-built-css.mjs",
   "scripts/check-no-spectrum.mjs",
 ];

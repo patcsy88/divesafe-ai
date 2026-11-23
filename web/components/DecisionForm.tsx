@@ -6,11 +6,10 @@ import { Label } from "@heroui/react/label";
 import { TextArea } from "@heroui/react/textarea";
 import { type ChangeEvent, useActionState, useEffect, useRef, useState } from "react";
 import { submitDecision, type FormState } from "../app/actions.ts";
-import { isLessSevere, RECOMMENDATIONS } from "../lib/present.ts";
+import { isLessSevere, MOST_SEVERE_FIRST, RECOMMENDATIONS } from "../lib/present.ts";
 import { useRetryKey } from "./useRetryKey.ts";
 
 const initial: FormState = { error: null };
-const MOST_SEVERE_FIRST = [...RECOMMENDATIONS].reverse();
 
 export default function DecisionForm({
   id,
