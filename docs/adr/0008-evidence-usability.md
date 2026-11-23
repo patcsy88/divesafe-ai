@@ -199,7 +199,8 @@ check: `git diff web-baseline-20261123 1fe7311 -- web/` adds only `web/tests/hid
 0017), and the build output is the same. Each commit was built from a fresh `npm ci
 --ignore-scripts` of the same lock file (no package in it has an install script, which CI's `web`
 job checks for the whole lock file (ADR 0017), so this matches the plain `npm ci` below; Node
-26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`) with one fixed
+26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`, on macOS 27.0 arm64; the list hash may differ on
+another OS or CPU, so a rerun there compares its own two builds) with one fixed
 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never in a committed
 file, CI or an image, and those builds are never deployed). A script (`tools/web-build-compare.sh`,
 committed byte for byte as run (owner, 2026-11-23); run `bash tools/web-build-compare.sh <web>/.next
