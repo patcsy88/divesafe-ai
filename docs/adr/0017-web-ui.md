@@ -303,9 +303,16 @@ is in the built browser chunks (one chunk of a local build held its `[data-react
 walker, 2026-11-23); it runs only inside a combo box or popover, which the app does not render.
 Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
 `inert`, `hidden`) on every page, with that component open.
-`web/tests/hiding.test.ts` refuses `aria-hidden`, `inert` and `hidden` in the app's own source
-(JSX attributes, `createElement` props keys, spreads into props, `setAttribute` and property
-assignments; owner, 2026-11-23); it does not see what a HeroUI or React Aria component adds.
+`web/tests/hiding.test.ts` refuses `aria-hidden`, `inert`, `hidden` and `popover` in the app's own
+source (JSX attributes and `createElement` props keys, shorthand ones included; spreads into props;
+props that are not `null` or an object literal; `setAttribute`, HTML writes and property
+assignments), refuses `<dialog>`, `<template>` and inline styles, and pins the set of `aria-label`s
+(owner, 2026-11-23). It reads the source as text, not as a parsed program, so it is a tripwire, not
+proof: a name built at run time is not seen, nor is what a HeroUI or React Aria component adds. A
+failure on text that is not an attribute is fixed by rewording the text, not by loosening a pattern.
+Adding the test changed `web/`, so it ends the `web-baseline-20261123` deploy baseline (ADR 0008
+Amendment 1 (a)): the deploy then needs a new reviewed baseline or the (a) check again; the
+checklist is never narrowed to skip `web/tests/`.
 
 ### What must not change
 
