@@ -197,11 +197,12 @@ The deploy baseline moved from `web-baseline-20261123` (`30ebce7`, which stays a
 check above) to `web-baseline-20261123-2` (`04fe0c1`) on 2026-11-23 (owner), without repeating the
 check: `git diff web-baseline-20261123 04fe0c1 -- web/` adds only `web/tests/hiding.test.ts` (ADR
 0017), and the build output is the same. Each commit was built from a fresh `npm ci
---ignore-scripts` of the same lock file (Node 26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`)
-with one fixed `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never
-in a committed file, CI or an image, and those builds are never deployed). A script
-(`tools/web-build-compare.sh`, committed byte for byte as run (owner, 2026-11-23); run `bash
-tools/web-build-compare.sh <web>/.next <list>` on each build, then `diff` the lists; SHA-256
+--ignore-scripts` of the same lock file (no package in it has an install script, so this matches the
+plain `npm ci` below; Node 26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`) with one fixed
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never in a committed
+file, CI or an image, and those builds are never deployed). A script (`tools/web-build-compare.sh`,
+committed byte for byte as run (owner, 2026-11-23); run `bash tools/web-build-compare.sh <web>/.next
+<list>` on each build, then `diff` the lists; SHA-256
 `ba3e30e36d6aa67577d4126e919b8e035b7dd95b1c0b7f94a37184fff946da31`) hashed every file under `.next`
 except `cache/`, `trace*` and `diagnostics/` (256 files) after masking only what Next makes random
 or path-specific on every build: the build id, the 42-hex server action ids, the 32-hex hashes in

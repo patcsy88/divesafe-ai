@@ -318,19 +318,20 @@ writes, `eval` and code built from strings, `<dialog>`, `<template>`, `<noscript
 from `tests/`, and removing text (`textContent`, `innerText`, `outerText`, `nodeValue`, `.data`,
 `replaceChildren`, `replaceWith`, `removeChild`, `.remove()`, `.open =`); it pins every `aria-label`
 and `aria-labelledby` and every `<details>`, by file, and refuses a banner, badge, notice, role or
-the DEGRADED note inside one. `lib/` builds no elements and does not look up the page (`document`,
-`window`, `querySelector`); it can still change an element it is given, which the write checks
-cover. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is on a
-reviewed list, and none of those folders may be a link. Classes are `classes.test.ts`'s: only `ds-`
-classes styled in `globals.css`, so no Tailwind hiding utility. It reads the source as text, not as
-a parsed program, so it is a tripwire, not proof: a name built at run time is not seen, nor is what
-a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed by
-rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
+the DEGRADED note written inside one. `lib/` builds no elements and does not look up the page
+(`document`, `window`, `querySelector`); it can still change an element it is given, which the write
+checks cover. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is
+on a reviewed list, and none of those folders may be a link. Classes are `classes.test.ts`'s: only
+`ds-` classes styled in `globals.css`, so no Tailwind hiding utility. It reads the source as text,
+not as a parsed program, so it is a tripwire, not proof: a name built at run time is not seen, nor
+is what a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed
+by rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
 `aria-live`, `aria-busy` and other live-region attributes; hiding declarations in `globals.css`
-itself (`classes.test.ts` checks class names, not what a `ds-` rule does); and other safety text
-inside the two existing `<details>` than the names refused there (the (a) harness opens every
-`<details>` before measuring, so it would not see this either). Adding the test changed `web/`, so
-it ended the `web-baseline-20261123` deploy baseline; the baseline moved to
+itself (`classes.test.ts` checks class names, not what a `ds-` rule does); other safety text inside
+the two existing `<details>`, and refused content that reaches one through a variable or a child
+component (`<details>{note}</details>`, `<details><RawValues /></details>`); the (a) harness opens
+every `<details>` before measuring, so it would not see this either. Adding the test changed `web/`,
+so it ended the `web-baseline-20261123` deploy baseline; the baseline moved to
 `web-baseline-20261123-2` on the build comparison recorded in ADR 0008 Amendment 1 (a). The
 checklist is never narrowed to skip `web/tests/`.
 
