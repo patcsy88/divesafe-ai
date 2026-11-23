@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: hash-norm.sh <.next dir> <output list>
+# usage: tools/web-build-compare.sh <.next dir> <output list>
 # One line per file under .next (not cache/, not trace, not diagnostics/): a hash of its content after
 # masking the values Next makes random on every build, then the path with the build id masked.
 # Masked: the build id; 42-hex server action ids; in *.nft.json trace files, 32-hex content hashes; in
@@ -18,7 +18,7 @@ root=$(cd "$d/.." && pwd -P)
 test -n "$id"
 tmp=$(mktemp)
 list=$(mktemp)
-trap 'rm -f "$tmp" "$list"' EXIT
+trap 'rm -f "$tmp" "$tmp.files" "$list"' EXIT
 cd "$d"
 find . -type f ! -path './cache/*' ! -path './trace*' ! -path './diagnostics/*' | sed 's#^\./##' |
   sort > "$tmp.files"
@@ -40,6 +40,5 @@ while IFS= read -r f; do
   fi
   printf '%s %s\n' "$h" "${f//$id/BUILDID}" >> "$list"
 done < "$tmp.files"
-rm -f "$tmp.files"
 test -s "$list"
 sed -E 's# static/(chunks|media)/[^ /]+$# static/\1/*#' "$list" | sort -k2 -k1 > "$out"
