@@ -60,7 +60,23 @@ const DETAILS = [
 ];
 
 // What an existing <details> must never hold: the result, the banners or the DEGRADED note.
-const NOT_IN_DETAILS = /Banner|Degraded|DEGRADED|badgeClass|ds-pending|ds-badge|Notice|role/;
+const NOT_IN_DETAILS = /Banner|Degraded|DEGRADED|badgeClass|ds-pending|ds-badge|Notice|role/i;
+
+// The whole text of each existing <details>, whitespace folded, by file (owner, 2026-11-23). A
+// variable, a child component, an attribute or a comment added inside one changes the text and
+// fails here, so nothing reaches a closed <details> unreviewed.
+const DETAILS_BODIES = [
+  [
+    "app/assessments/[id]/evidence/page.tsx",
+    '<details> <summary>Raw values (third-party text, shown as plain text)</summary> <pre ' +
+      'className="ds-value">{shown(item.value)}</pre> ',
+  ],
+  [
+    "components/WithheldBox.ts",
+    'h( "details", null, h("summary", null, "Raw values (third-party text, shown as plain ' +
+      'text)"), h("pre", { className: "ds-value" }, shown(it.value)), ',
+  ],
+];
 
 // Every write through a computed name (`obj[key] = v`) in the three folders, by file. The name is
 // not visible here, so each is reviewed: this one fills a plain object of form numbers.
@@ -123,6 +139,9 @@ function detailsBlocks(file: string, text: string): string[] {
 // a pattern here (ADR 0017).
 const REWORD = "if this is text, not an attribute, reword it; do not loosen the pattern";
 
+// Every assignment operator, plain or compound (`=`, `+=`, `|=`, `**=`, `||=`, ...).
+const ASSIGN = /(?:\*\*|<<|>>>?|&&|\|\||\?\?|[-+*\/%&|^])?=(?![=>])/.source;
+
 test("no element in app/ or components/ is hidden, closed or relabelled by our code", () => {
   const files = [...source("app"), ...source("components")];
   assert.ok(files.length > 15, `found only ${files.length} files`);
@@ -136,6 +155,7 @@ test("no element in app/ or components/ is hidden, closed or relabelled by our c
   assert.deepEqual(outside, UNSCANNED, "a script outside the checked folders needs review");
   const labels: string[][] = [];
   const details: (string | number)[][] = [];
+  const bodies: string[][] = [];
   for (const file of files) {
     const text = read(file);
     const name = file.slice(ROOT.length + 1);
@@ -160,6 +180,7 @@ test("no element in app/ or components/ is hidden, closed or relabelled by our c
     if (n > 0) details.push([name, n]);
     for (const block of detailsBlocks(file, text)) {
       assert.doesNotMatch(block, NOT_IN_DETAILS, `${file}: a safety sentence inside a <details>`);
+      bodies.push([name, block.replace(/\s+/g, " ")]);
     }
     // A capitalised tag is a component: one imported or declared in this file, never a name
     // holding a tag such as `const T = "dialog"`. A type argument (`useRef<T>`) is not a tag.
@@ -226,6 +247,8 @@ test("no element in app/ or components/ is hidden, closed or relabelled by our c
   const changed = "the aria-labels changed: each needs review (ADR 0017)";
   assert.deepEqual(labels.sort(order), [...LABELS].sort(order), changed);
   assert.deepEqual(details.sort(), DETAILS, "the <details> changed: each needs review (ADR 0017)");
+  const held = "what a <details> holds changed: each change needs review (ADR 0017)";
+  assert.deepEqual(bodies.sort(), DETAILS_BODIES, held);
 });
 
 test("no code in app/, components/ or lib/ sets a hiding attribute on the page", () => {
@@ -243,22 +266,48 @@ test("no code in app/, components/ or lib/ sets a hiding attribute on the page",
     const field = text.replace(/\btype\s*[=:]\s*["']hidden["']/g, "");
     const quoted = new RegExp(`(["'\`])(?:${ATTR})\\1`, "i");
     assert.doesNotMatch(field, quoted, `${file}: a hiding name as a string (${REWORD})`);
+    // A tag name kept as a string (`export const Shut = "dialog"`) could be used as a tag
+    // elsewhere, so the closed elements' names never appear as strings, and "details" only in h().
+    const shut = /(["'`])(?:dialog|template|noscript|datalist|svg)\1/i;
+    assert.doesNotMatch(text, shut, `${file}: a closed element's name as a string (${REWORD})`);
+    const asString = text.match(/(["'`])details\1/gi)?.length ?? 0;
+    const inH = text.match(/\b(?:h|createElement)\(\s*["'`]details["'`]/gi)?.length ?? 0;
+    assert.equal(asString, inH, `${file}: "details" as a string outside h() (${REWORD})`);
     // Code built from a string is never read by these checks.
-    const built = /\beval\s*\(|\bnew\s+Function\b|\bset(?:Timeout|Interval)\s*\(\s*["'`]/;
+    const built = /\beval\b|\bFunction\s*\(|\bset(?:Timeout|Interval)\s*\(\s*["'`]/;
     assert.doesNotMatch(text, built, `${file}: runs code built from a string`);
-    // Every write through a computed member (`el[k] = v`), whose name this cannot see.
-    const member = /[\w$)\]]+\[[^\]\n]+\]\s*(?:=(?![=>])|\|\|=|\?\?=|&&=)/g;
+    // Every write through a computed member (`el[k] = v`, `el [k] |= 1`, `el[k]++`, `++el[k]`,
+    // `[el[k]] = x`), whose name this cannot see. A declaration (`const [a, b] =`) is not one.
+    const word = /(?!(?:const|let|var|return|of|in|await|yield)\s)/.source;
+    const target = new RegExp(`(?<![\\w$])${word}[\\w$)\\]]+\\s*\\[[^\\]\\n]+\\]`);
+    const member = new RegExp(
+      [
+        `${target.source}\\s*(?:${ASSIGN}|\\+\\+|--)`,
+        `(?:\\+\\+|--)\\s*${target.source}`,
+        `[\\[{,]\\s*${target.source}\\s*[,\\]}]`,
+      ].join("|"),
+      "g",
+    );
     for (const m of text.matchAll(member)) writes.push([name, m[0].replace(/\s+/g, " ")]);
     const dom = /setAttribute|toggleAttribute|innerHTML|outerHTML|insertAdjacentHTML/;
     assert.doesNotMatch(text, dom, `${file}: writes attributes or HTML directly`);
     assert.doesNotMatch(text, /dangerouslySetInnerHTML/, `${file}: raw HTML`);
-    const assign = /\s*(?:=(?!=)|\|\|=|\?\?=|&&=)/.source;
+    // Any write to a hiding property: plain, compound (`|=`, `+=`), `++`/`--` on either side, or
+    // as a destructuring target (`[el.hidden] = [x]`, `({ a: el.inert } = y)`). Reading one, as
+    // `document.hidden` is read, is allowed outside an array or object literal.
     const names = `(?:${ATTR}|ariaLabel(?:ledBy)?)`;
-    const prop = new RegExp(`\\.${names}${assign}`, "i");
+    const prop = new RegExp(
+      [
+        `\\.${names}\\s*(?:${ASSIGN}|\\+\\+|--)`,
+        `(?:\\+\\+|--)\\s*[\\w$.]*\\.${names}\\b`,
+        `\\.${names}\\s*[,\\]}]`,
+      ].join("|"),
+      "i",
+    );
     assert.doesNotMatch(text, prop, `${file}: assigns a hiding property`);
-    const bracket = new RegExp(`\\[\\s*["'\`]${names}["'\`]\\s*\\]${assign}`, "i");
+    const bracket = new RegExp(`\\[\\s*["'\`]${names}["'\`]\\s*\\]\\s*(?:${ASSIGN})`, "i");
     assert.doesNotMatch(text, bracket, `${file}: assigns a hiding property by name`);
-    const indirect = /Object\.assign|Reflect\.set|defineProperty/;
+    const indirect = /Object\.assign|Reflect\.set|defineProperty|defineProperties/;
     assert.doesNotMatch(text, indirect, `${file}: sets properties indirectly`);
     // Classes: classes.test.ts allows only ds- classes styled in globals.css, in className
     // literals; the DOM routes around it are refused here.

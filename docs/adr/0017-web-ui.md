@@ -304,36 +304,39 @@ walker, 2026-11-23); it runs only inside a combo box or popover, which the app d
 Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
 `inert`, `hidden`) on every page, with that component open.
 `web/tests/hiding.test.ts` (owner, 2026-11-23: the three attributes, then the wider scope below)
-refuses `aria-hidden`, `inert`, `hidden` and `popover` in the app's own source, in any letter case:
-as JSX attributes, `createElement` props keys (shorthand, quoted and computed ones included),
-property assignments (dotted, by name, or through `Object.assign`, `Reflect.set` or
-`defineProperty`), or as quoted strings anywhere (a form field's `type="hidden"` aside), so a name
+refuses `aria-hidden`, `inert`, `hidden` and `popover` in the app's own source, with attribute and
+tag names in any letter case: as JSX attributes, `createElement` props keys (shorthand, quoted and
+computed ones included), property writes (dotted or by name, plain, compound, `++`/`--` or as a
+destructuring target, or through `Object.assign`, `Reflect.set`, `defineProperty` or
+`defineProperties`), or as quoted strings anywhere (a form field's `type="hidden"` aside), so a name
 held in a variable is refused too. `\u` escapes and `\x` letter escapes are refused, and every write
-through a computed name (`obj[key] =`) is pinned by file. Every props argument is `null` or an
-object literal written where the element is built, so props made elsewhere never reach an element;
-spreads into props, `cloneElement` and the JSX runtime are refused, and a capitalised tag must be a
-component the file imports or declares. It also refuses `setAttribute`, `removeAttribute`, HTML
-writes, `eval` and code built from strings, `<dialog>`, `<template>`, `<noscript>`, `<datalist>`,
-`<svg>`, inline styles, `role` none or presentation, `classList` and `className` writes, imports
-from `tests/`, and removing text (`textContent`, `innerText`, `outerText`, `nodeValue`, `.data`,
-`replaceChildren`, `replaceWith`, `removeChild`, `.remove()`, `.open =`); it pins every `aria-label`
-and `aria-labelledby` and every `<details>`, by file, and refuses a banner, badge, notice, role or
-the DEGRADED note written inside one. `lib/` builds no elements and does not look up the page
-(`document`, `window`, `querySelector`); it can still change an element it is given, which the write
-checks cover. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is
-on a reviewed list, and none of those folders may be a link. Classes are `classes.test.ts`'s: only
-`ds-` classes styled in `globals.css`, so no Tailwind hiding utility. It reads the source as text,
-not as a parsed program, so it is a tripwire, not proof: a name built at run time is not seen, nor
-is what a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed
-by rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
+through a computed name (`obj[key] =`, in any of those forms) is pinned by file. Every props
+argument is `null` or an object literal written where the element is built, so props made elsewhere
+never reach an element; spreads into props, `cloneElement` and the JSX runtime are refused, and a
+capitalised tag must be a component the file imports or declares; the closed elements' names never
+appear as strings, and `"details"` only as the tag of an `h()` call, so a tag name kept in a
+constant elsewhere is refused. It also refuses `setAttribute`, `removeAttribute`, HTML writes,
+`eval`, `Function` and code built from strings, `<dialog>`, `<template>`, `<noscript>`,
+`<datalist>`, `<svg>`, inline styles, `role` none or presentation, `classList` and `className`
+writes, imports from `tests/`, and removing text (`textContent`, `innerText`, `outerText`,
+`nodeValue`, `.data`, `replaceChildren`, `replaceWith`, `removeChild`, `.remove()`, `.open =`); it
+pins every `aria-label` and `aria-labelledby` and every `<details>`, by file, and pins the whole
+text of the two that exist (owner, 2026-11-23), so a variable, child component, attribute or comment
+added inside one fails. `lib/` builds no elements and does not look up the page (`document`,
+`window`, `querySelector`); it can still change an element it is given, which the write checks
+cover. Every script file under `web/` outside `app/`, `components/`, `lib/` and `tests/` is on a
+reviewed list, and none of those folders may be a link. Classes are `classes.test.ts`'s: only `ds-`
+classes styled in `globals.css`, so no Tailwind hiding utility. It reads the source as text, not as
+a parsed program, so it is a tripwire, not proof: a name built at run time is not seen, nor is what
+a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed by
+rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
 `aria-live`, `aria-busy` and other live-region attributes; hiding declarations in `globals.css`
-itself (`classes.test.ts` checks class names, not what a `ds-` rule does); other safety text inside
-the two existing `<details>`, and refused content that reaches one through a variable or a child
-component (`<details>{note}</details>`, `<details><RawValues /></details>`); the (a) harness opens
-every `<details>` before measuring, so it would not see this either. Adding the test changed `web/`,
-so it ended the `web-baseline-20261123` deploy baseline; the baseline moved to
-`web-baseline-20261123-2` on the build comparison recorded in ADR 0008 Amendment 1 (a). The
-checklist is never narrowed to skip `web/tests/`.
+itself (`classes.test.ts` checks class names, not what a `ds-` rule does); and a component already
+used inside a `<details>` (none is today) changing what it renders; the (a) harness opens every
+`<details>` before measuring, so it would not see this either. Adding the test changed `web/`, so it
+ended the `web-baseline-20261123` deploy baseline; the baseline moved to `web-baseline-20261123-2`
+on the build comparison recorded in ADR 0008 Amendment 1 (a). The checklist is never narrowed to
+skip `web/tests/`.
 
 ### What must not change
 
