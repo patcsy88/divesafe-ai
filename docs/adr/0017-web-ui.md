@@ -187,7 +187,8 @@ package ships a `NOTICE` file and, if so, where its text is kept; confirm no `ha
 that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
 `lightningcss`) as well as the macOS ones. Licences are read from each package's licence file as
 well as the lock file's `license` field, and a mismatch is recorded. Do not accept a package that
-adds an install script.
+adds an install script. Done in restyle step 9 (2026-11-23): the results are in the restyle PR's
+dependency record.
 
 Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pins
 `@react-types/color` 3.2.0, which depends on `@react-spectrum/color` and through it on
@@ -234,9 +235,10 @@ paragraph and list spacing, list bullets, heading weight and link underlines, so
 these browser defaults back with element rules. On 2026-11-22 every element of the result, evidence,
 home and login pages had the same computed style as at `fbad5a2`, in light and dark mode and with
 reduced motion on and off (in Chromium, as first rendered; the decision form's less-severe warning,
-the confirm step and the error alerts were not opened and are left to the (a) repeat). The same
-holds for custom properties: HeroUI also defines `--accent`, so ours carry the `--ds-` prefix, and
-`classes.test.ts` fails on an unprefixed one or one HeroUI also defines. HeroUI's dark theme
+the confirm step and the error alerts were not opened and are left to the (a) repeat, and were
+checked in restyle steps 7 and 9). The same holds for custom properties: HeroUI also defines
+`--accent`, so ours carry the `--ds-` prefix, and `classes.test.ts` fails on an unprefixed one or
+one HeroUI also defines. HeroUI's dark theme
 variables switch only on a `.dark` class or `data-theme="dark"`, which would need a script, a cookie
 or stored state (security N3, round 1), so `globals.css` sets HeroUI's own dark variable values
 under `@media (prefers-color-scheme: dark)`, and `classes.test.ts` fails unless they equal the
