@@ -303,6 +303,9 @@ is in the built browser chunks (one chunk of a local build held its `[data-react
 walker, 2026-11-23); it runs only inside a combo box or popover, which the app does not render.
 Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
 `inert`, `hidden`) on every page, with that component open.
+`web/tests/hiding.test.ts` refuses `aria-hidden`, `inert` and `hidden` in the app's own source
+(JSX attributes, `createElement` props keys, spreads into props, `setAttribute` and property
+assignments; owner, 2026-11-23); it does not see what a HeroUI or React Aria component adds.
 
 ### What must not change
 
