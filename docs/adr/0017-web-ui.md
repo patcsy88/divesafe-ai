@@ -331,12 +331,12 @@ a parsed program, so it is a tripwire, not proof: a name built at run time is no
 a HeroUI or React Aria component adds. A failure on text that is not an attribute is fixed by
 rewording the text, not by loosening a pattern. Not checked (Known gaps, owner, 2026-11-23):
 `aria-live`, `aria-busy` and other live-region attributes; hiding declarations in `globals.css`
-itself (`classes.test.ts` checks class names, not what a `ds-` rule does); and a component already
-used inside a `<details>` (none is today) changing what it renders; the (a) harness opens every
-`<details>` before measuring, so it would not see this either. Adding the test changed `web/`, so it
-ended the `web-baseline-20261123` deploy baseline; the baseline moved to `web-baseline-20261123-2`
-on the build comparison recorded in ADR 0008 Amendment 1 (a). The checklist is never narrowed to
-skip `web/tests/`.
+itself (`classes.test.ts` checks class names, not what a `ds-` rule does); and a component or
+function already used inside a `<details>` (today only `shown()`, which returns text) changing what
+it renders or returns; the (a) harness opens every `<details>` before measuring, so it would not see
+this either. Adding the test changed `web/`, so it ended the `web-baseline-20261123` deploy
+baseline; the baseline moved to `web-baseline-20261123-2` on the build comparison recorded in ADR
+0008 Amendment 1 (a). The checklist is never narrowed to skip `web/tests/`.
 
 ### What must not change
 
