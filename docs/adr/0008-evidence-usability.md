@@ -179,15 +179,16 @@ Chromium, on 72 page and mode files (900 px, light and dark, reduced motion on a
 text and element order are the same as at `fbad5a2` except the not-found page's added card; of the
 properties that could hide text, only the dark badge colours (the reviewed set), HeroUI buttons'
 `inline-flex` display and an identity transform differ; the phone-width cut-off check is identical.
-In the server-rendered HTML of the eight views (not the hydrated page; React Aria adds `aria-hidden`
-or `inert` only through its overlay code, and `web/tests/classes.test.ts` allows only HeroUI's
-`Button`, `Input`, `Label` and `TextArea` and refuses direct React Aria imports; step 7 checked the
-confirm states in the browser), the sequence of `alert`, `status` and `note` roles, each with its
-text, is the same as at `fbad5a2`, and no element has a hiding class or attribute (`hidden`,
-`aria-hidden`, `inert`, `sr-only`, `animate-out` and the like) except Next's empty streaming
-placeholder (`<div hidden>` with no text, also at `fbad5a2`); no role or hidden text was added. The
-confirm step and the error alerts were checked in restyle step 7 and again in step 9. Still to do at
-the web deploy:
+In the server-rendered HTML of the eight views (the page after hydration was checked separately: in
+restyle steps 7 and 9, in Chromium, the decision form's Review and Confirm states at 900 and 320 px,
+light and dark, had no `aria-hidden`, `inert` or `hidden` on any protected text or its ancestors;
+React Aria's overlay code, which adds those attributes, is in the bundle through HeroUI's `Input`
+but runs only inside a combo box or popover, which the app does not render), the sequence of
+`alert`, `status` and `note` roles, each with its text, is the same as at `fbad5a2`, and no element
+has a hiding class or attribute (`hidden`, `aria-hidden`, `inert`, `sr-only`, `animate-out` and the
+like) except Next's empty streaming placeholder (`<div hidden>` with no text, also at `fbad5a2`); no
+role or hidden text was added. The confirm step and the error alerts were checked in restyle step 7
+and again in step 9. Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
 - confirm the bundle is built from a commit with no `web/` change since `30ebce7` (annotated tag
