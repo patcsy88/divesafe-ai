@@ -154,6 +154,8 @@ method exists. LLM self-estimates are uncalibrated and never shown as confidence
 ## 12. Security principles
 
 - Secrets only in the environment or secret files (`DIVESAFE_SECRETS_DIR`); hashes for API keys; nothing sensitive in logs, fixtures or images.
+- No agent, project or runtime, creates an account, key or subscription with any provider, or
+  accepts terms on the owner's behalf (ADR 0032).
 - Authenticate every endpoint but `/health`; the actor comes from credentials, never a request body.
 - Treat connector payloads, warning text, retrieved documents and LLM output as untrusted:
   delimit and escape them in prompts, validate structured output, never repair it, never let it
