@@ -238,9 +238,9 @@ reduced motion on and off (in Chromium, as first rendered; the decision form's l
 the confirm step and the error alerts were not opened and are left to the (a) repeat, and were
 checked in restyle steps 7 and 9). The same holds for custom properties: HeroUI also defines
 `--accent`, so ours carry the `--ds-` prefix, and `classes.test.ts` fails on an unprefixed one or
-one HeroUI also defines. HeroUI's dark theme
-variables switch only on a `.dark` class or `data-theme="dark"`, which would need a script, a cookie
-or stored state (security N3, round 1), so `globals.css` sets HeroUI's own dark variable values
+one HeroUI also defines. HeroUI's dark theme variables switch only on a `.dark` class or
+`data-theme="dark"`, which would need a script, a cookie or stored state (security N3, round 1),
+so `globals.css` sets HeroUI's own dark variable values
 under `@media (prefers-color-scheme: dark)`, and `classes.test.ts` fails unless they equal the
 values in `@heroui/styles` that differ from its light theme, each set once and nowhere else (on
 2026-11-22 all 31 resolved in Chromium to the same values as HeroUI's `.dark`). That covers dark

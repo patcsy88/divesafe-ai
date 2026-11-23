@@ -179,8 +179,9 @@ Chromium, on 72 page and mode files (900 px, light and dark, reduced motion on a
 text and element order are the same as at `fbad5a2` except the not-found page's added card; of the
 properties that could hide text, only the dark badge colours (the reviewed set), HeroUI buttons'
 `inline-flex` display and an identity transform differ; the phone-width cut-off check is identical.
-In the server-rendered HTML of the eight views (not the hydrated page; client code there adds no
-`aria-hidden` or `inert` outside overlays, which the app does not use, and step 7 checked the
+In the server-rendered HTML of the eight views (not the hydrated page; React Aria adds `aria-hidden`
+or `inert` only through its overlay code, and `web/tests/classes.test.ts` allows only HeroUI's
+`Button`, `Input`, `Label` and `TextArea` and refuses direct React Aria imports; step 7 checked the
 confirm states in the browser), the sequence of `alert`, `status` and `note` roles, each with its
 text, is the same as at `fbad5a2`, and no element has a hiding class or attribute (`hidden`,
 `aria-hidden`, `inert`, `sr-only`, `animate-out` and the like) except Next's empty streaming
@@ -190,7 +191,7 @@ the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
 - confirm the bundle is built from a commit with no `web/` change since `30ebce7` (annotated tag
-  `web-baseline-20261123`: `git rev-parse web-baseline-20261123^{commit}` is
+  `web-baseline-20261123`: `git rev-parse 'web-baseline-20261123^{commit}'` is
   `30ebce79ec378b7c5dd1fd3ba0eb7dc5c44748aa`, then `git diff web-baseline-20261123 <web commit> --
   web/` is empty), and that the API it talks to serves an assessment view unchanged since `fbad5a2`
   (`git diff fbad5a2 <API commit> -- src/divesafe/api/schemas.py` is empty); otherwise repeat this
