@@ -2638,10 +2638,13 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
       a ruleset that covers the last of these factors for a site makes GO or CAUTION reachable there
       on DEGRADED evidence, with no other switch. That ruleset's review must check the preconditions
       in ADR 0008 Amendment 1 ("Open preconditions").
-    - **Web build check (ADR 0008 Amendment 1, control 2): not possible yet.** No web UI is deployed
+    - **Web build check (ADR 0008 Amendment 1, control 2): not possible yet (2026-11-23: part (a)
+      is now a CI step in job `web-image`, see ADR 0017 amendment).** No web UI is deployed
       anywhere (owner, 2026-11-22). The production compose file has no web service, so decisions go
       through the API, whose assessment view carries the fixed note in `degraded_evidence_note`. See
-      ADR 0008 Amendment 1, Open preconditions.
+      ADR 0008 Amendment 1, Open preconditions. (2026-11-23: the compose file now defines `web`, see
+      ADR 0017 amendment 2026-11-23; it is still not deployed, and Open preconditions (a) and
+      (b) are checked at deploy, see that amendment's Known gaps.)
     - **Rollback, new first step:** set `DIVESAFE_DEGRADED_MAY_SUPPORT_GO=false` in
       `production.env`, then `docker tag divesafe-api:rollback-20261122 divesafe-api:local && C up
       -d --no-build --wait api`, keeping both `DIVESAFE_RULESET_*` lines. `rollback-20261122` is
@@ -2789,7 +2792,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   the proxy share one bucket, so one client's failures can lock out the others. Neither is solved
   here; a proxy on a fixed address of its own network would fix it. The start-up warning checks
   only that the list is empty.
-- **No web UI, log shipping or monitoring.** Backups are condition 3. Nothing checks that a recent
+- **No deployed web UI, log shipping or monitoring.** The compose file defines `web` (ADR 0017
+  amendment 2026-11-23), not yet deployed. Backups are condition 3. Nothing checks that a recent
   backup exists, and the manifest sits next to its archive, so it detects damage, not tampering.
   A decision made after the last backup is lost and that assessment is `PENDING_HUMAN` again; an
   assessment created after it does not exist; whoever acted on either must be told, and a dive

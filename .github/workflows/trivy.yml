@@ -41,3 +41,22 @@ jobs:
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: 'trivy-results.sarif'
+          category: 'trivy-api'
+
+      - name: Build the web image (ADR 0017)
+        run: docker build -f docker/Dockerfile.web -t divesafe-web-trivy:${{ github.sha }} .
+
+      - name: Run Trivy vulnerability scanner on the web image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'divesafe-web-trivy:${{ github.sha }}'
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-web-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy web scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: 'trivy-web-results.sarif'
+          category: 'trivy-web'

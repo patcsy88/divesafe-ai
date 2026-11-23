@@ -1,0 +1,44 @@
+# Web UI image (ADR 0017). Built from the repository root with docker/Dockerfile.web.dockerignore.
+# Nothing under web/ is changed for the image: it ships the normal `next build` output (owner #15b).
+FROM node:24-bookworm-slim AS build
+ENV NEXT_TELEMETRY_DISABLED=1
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web/ ./
+RUN npm run build \
+ && node scripts/check-no-spectrum.mjs \
+ && node scripts/check-built-css.mjs \
+ && rm -rf .next/cache
+# next start compiles next.config.ts with SWC. Keep only this platform's glibc binary (MIT), so
+# Next never tries to download a fallback at run time (owner #42).
+RUN set -- node_modules/@next/swc-linux-*-gnu \
+ && if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then echo "expected one SWC binary" >&2; exit 1; fi \
+ && mkdir /swc && cp -r "$1" /swc/
+
+FROM node:24-bookworm-slim
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+# No optional packages: sharp and its LGPL libvips binaries are never installed (owner #17).
+# Image optimisation is off in next.config.ts, so nothing at run time needs them.
+RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund \
+ && npm cache clean --force \
+ && if find node_modules -type d \( -name sharp -o -path '*/@img/*' -o -name '@img' \) \
+      | grep -q .; then echo "sharp or @img present" >&2; exit 1; fi
+COPY --from=build /swc/ ./node_modules/@next/
+RUN set -- node_modules/@next/swc-* \
+ && if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then echo "expected one SWC binary" >&2; exit 1; fi \
+ && if find node_modules -type d \( -name sharp -o -name '@img' \) | grep -q .; then \
+      echo "sharp or @img present" >&2; exit 1; fi
+COPY --from=build /web/.next ./.next
+COPY --from=build /web/next.config.ts ./next.config.ts
+# Reads the two secrets from /run/secrets and starts next in the same process (owner #50a).
+COPY docker/web-start.cjs ./web-start.cjs
+
+USER node
+EXPOSE 3100
+# Inside the container it listens on all of its own interfaces; compose publishes it on
+# 127.0.0.1 only (owner #18). web-start.cjs runs `next start -H 0.0.0.0 -p 3100`.
+CMD ["node", "web-start.cjs"]
