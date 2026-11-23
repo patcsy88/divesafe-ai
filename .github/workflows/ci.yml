@@ -130,3 +130,7 @@ jobs:
       - run: npm test
       - name: Build (no secret is needed to build)
         run: npm run build
+      - name: No Adobe React Spectrum code in the build (ADR 0017)
+        run: node scripts/check-no-spectrum.mjs
+      - name: The built CSS loads nothing from elsewhere (ADR 0017)
+        run: node scripts/check-built-css.mjs

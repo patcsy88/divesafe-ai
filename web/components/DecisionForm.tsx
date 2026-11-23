@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
+import { Button } from "@heroui/react/button";
+import { Label } from "@heroui/react/label";
+import { TextArea } from "@heroui/react/textarea";
+import { type ChangeEvent, useActionState, useEffect, useRef, useState } from "react";
 import { submitDecision, type FormState } from "../app/actions.ts";
 import { isLessSevere, RECOMMENDATIONS } from "../lib/present.ts";
 import { useRetryKey } from "./useRetryKey.ts";
@@ -30,29 +33,38 @@ export default function DecisionForm({
       renewKey();
     }
   }, [state, renewKey]);
+  // React resets the form after each action, which clears the select's DOM value but not
+  // `choice`; put the choice back so the select agrees with the confirm text.
+  const select = useRef<HTMLSelectElement>(null);
+  useEffect(() => {
+    if (select.current && select.current.value !== choice) select.current.value = choice;
+  }, [state, choice]);
   const needsReason = known && choice !== "" && choice !== system && reason.trim() === "";
   const change = () => {
     setReviewing(false);
     renewKey();
   };
   const lessSevere = known && isLessSevere(choice, system);
+  // A named handler keeps "=>" out of the TextArea tag, so the class test reads the whole tag.
+  const onReason = (e: ChangeEvent<HTMLTextAreaElement>) => setReason(e.target.value);
   return (
-    <form action={action} onChange={change} className="card">
+    <form action={action} onChange={change} className="ds-card">
       <input type="hidden" name="retry_key" value={retryKey} />
       <h2>Record the human decision</h2>
       <p>
         The system recommended <strong>{system}</strong>. {context}{" "}
         <Link href={`/assessments/${encodeURIComponent(id)}/evidence`}>Read the evidence first.</Link>
       </p>
-      <p className="hint">
+      <p className="ds-hint">
         You may accept it or choose a more severe outcome. A less severe outcome needs the overrider
         role. A different outcome needs a reason. This is recorded against your name and cannot be changed.
       </p>
       <input type="hidden" name="assessment_id" value={id} />
-      <label htmlFor="decision">Your decision</label>
+      <Label htmlFor="decision" className="ds-field-label">Your decision</Label>
       <select
         id="decision"
         name="decision"
+        ref={select}
         value={choice}
         onChange={(e) => setChoice(e.target.value)}
         required
@@ -63,44 +75,59 @@ export default function DecisionForm({
         ))}
       </select>
       {lessSevere && (
-        <p className="pending" role="alert">
+        <p className="ds-pending" role="alert">
           You are choosing a LESS SEVERE outcome than the system recommended ({system}). This will be
           recorded as an override against your name, with your reason.
         </p>
       )}
-      <label htmlFor="rationale">Reason (required if different from the system)</label>
-      <textarea
+      <Label htmlFor="rationale" className="ds-field-label">
+        Reason (required if different from the system)
+      </Label>
+      <TextArea
         id="rationale"
         name="rationale"
         rows={4}
         maxLength={5000}
         value={reason}
-        onChange={(e) => setReason(e.target.value)}
+        onChange={onReason}
+        fullWidth
+        className="ds-field"
       />
-      {state.error && <p role="alert" className="error">{state.error}</p>}
+      {state.error && <p role="alert" className="ds-error">{state.error}</p>}
       {reviewing ? (
-        <div className="card" role="group" aria-label="Confirm your decision">
+        <div className="ds-card" role="group" aria-label="Confirm your decision">
           <p>
             <strong>Check before you record.</strong> You are recording{" "}
             <strong>{choice}</strong>
             {known && choice === system ? " (the system's recommendation)" : ` (the system recommended ${system})`}.
           </p>
-          {reason.trim() && <p className="hint">Your reason: {reason.trim()}</p>}
-          <p className="hint">This is recorded against your name and cannot be changed.</p>
+          {reason.trim() && <p className="ds-hint">Your reason: {reason.trim()}</p>}
+          <p className="ds-hint">This is recorded against your name and cannot be changed.</p>
           {needsReason && (
-            <p className="error" role="alert">A different outcome needs a reason. Go back and add one.</p>
+            <p className="ds-error" role="alert">A different outcome needs a reason. Go back and add one.</p>
           )}
-          <button type="submit" disabled={pending || needsReason}>
+          <Button type="submit" isDisabled={pending || needsReason} className="ds-submit">
             {pending ? "Recording…" : `Confirm and record ${choice}`}
-          </button>{" "}
-          <button type="button" onClick={() => setReviewing(false)} disabled={pending}>
+          </Button>{" "}
+          <Button
+            type="button"
+            variant="secondary"
+            onPress={() => setReviewing(false)}
+            isDisabled={pending}
+            className="ds-action"
+          >
             Back and edit
-          </button>
+          </Button>
         </div>
       ) : (
-        <button type="button" disabled={choice === ""} onClick={() => setReviewing(true)}>
+        <Button
+          type="button"
+          isDisabled={choice === ""}
+          onPress={() => setReviewing(true)}
+          className="ds-action"
+        >
           Review decision
-        </button>
+        </Button>
       )}
     </form>
   );

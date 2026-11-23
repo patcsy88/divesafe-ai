@@ -1,30 +1,96 @@
-:root { color-scheme: light dark; --fg:#0b1f2e; --bg:#f4f8fa; --card:#fff; --line:#cfdce4; --accent:#0a5f86; }
-@media (prefers-color-scheme: dark) { :root { --fg:#e6f1f6; --bg:#06141e; --card:#0c2231; --line:#22485f; --accent:#6fd3e6; } }
+@layer theme, base, components, utilities;
+@import "tailwindcss" source(none);
+/* HeroUI, selectively (its documented import order): only the components the app uses. */
+@import "@heroui/styles/base/base.css" layer(base);
+@import "@heroui/styles/themes/default" layer(theme);
+@import "@heroui/styles/components/label.css" layer(components);
+@import "@heroui/styles/components/button.css" layer(components);
+@import "@heroui/styles/components/input.css" layer(components);
+@import "@heroui/styles/components/textarea.css" layer(components);
+@import "@heroui/styles/utilities";
+@import "@heroui/styles/variants";
+@source "./";
+@source "../components";
+@source "../lib";
+
+:root { color-scheme: light dark; --ds-fg:#0b1f2e; --ds-bg:#f4f8fa; --ds-card:#fff; --ds-line:#cfdce4; --ds-accent:#0a5f86; --ds-on-accent:#fff; }
+/* HeroUI's variables, from our palette (option A1): its own colours fail contrast here, and its
+   fields have no border. */
+:root { --foreground:var(--ds-fg); --background:var(--ds-bg); --border:var(--ds-line);
+  --accent:var(--ds-accent); --accent-foreground:var(--ds-on-accent); --focus:var(--ds-accent);
+  --field-background:var(--ds-bg); --field-foreground:var(--ds-fg); --field-border:var(--ds-line);
+  --field-border-width:1px; }
+/* Our dark palette, then HeroUI's own dark values for every variable not set from our palette:
+   its theme switches only on a .dark class or data-theme, which need a script, so they follow
+   the system setting here (CSS only). classes.test.ts keeps them equal to HeroUI's. */
+@media (prefers-color-scheme: dark) { :root {
+  --ds-fg:#e6f1f6; --ds-bg:#06141e; --ds-card:#0c2231; --ds-line:#22485f; --ds-accent:#6fd3e6;
+  --ds-on-accent:#06141e;
+  --surface:oklch(0.2103 0.0059 285.89); --surface-secondary:oklch(0.257 0.0037 286.14);
+  --surface-tertiary:oklch(0.2721 0.0024 247.91); --overlay:oklch(0.2103 0.0059 285.89);
+  --muted:oklch(70.5% 0.015 286.067); --default:oklch(27.4% 0.006 286.033);
+  --default-foreground:var(--snow); --warning:oklch(0.8203 0.1388 76.34);
+  --danger:oklch(0.594 0.1967 24.63); --segment:oklch(0.3964 0.01 285.93);
+  --segment-foreground:var(--foreground); --separator:oklch(25% 0.006 286.033);
+  --backdrop:rgba(0, 0, 0, 0.6); --surface-shadow:0 0 0 0 transparent inset;
+  --overlay-shadow:0 0 1px 0 rgba(255, 255, 255, 0.3) inset;
+  --field-shadow:0 0 0 0 transparent inset;
+  --accent-soft:color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-soft-foreground:color-mix(in oklab, var(--accent) 80%, var(--foreground) 30%);
+  --accent-soft-hover:color-mix(in oklab, var(--accent) 16%, transparent);
+  --danger-soft-foreground:color-mix(in oklab, var(--danger) 80%, var(--foreground) 30%);
+  --warning-soft:color-mix(in oklab, var(--warning) 12%, transparent);
+  --warning-soft-foreground:color-mix(in oklab, var(--warning) 80%, var(--foreground) 30%);
+  --warning-soft-hover:color-mix(in oklab, var(--warning) 16%, transparent);
+  --success-soft:color-mix(in oklab, var(--success) 12%, transparent);
+  --success-soft-foreground:color-mix(in oklab, var(--success) 80%, var(--foreground) 30%);
+  --success-soft-hover:color-mix(in oklab, var(--success) 16%, transparent);
+} }
 * { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+body { margin:0; background:var(--ds-bg); color:var(--ds-fg); font:16px/1.5 system-ui, sans-serif; }
 main { max-width: 46rem; margin: 0 auto; padding: 1.25rem; }
+/* Tailwind's reset removes these browser defaults; they keep blocks apart and headings and links visible. */
+p, ul, dl, pre, h3 { margin: revert; } ul, option { padding: revert; } ul { list-style: revert; }
+h1, h2, h3 { font-weight: revert; } h3 { font-size: revert; } a { text-decoration: revert; } pre { font: revert; }
 h1 { font-size: 1.6rem; margin: .5rem 0; } h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
-.top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1rem 1.1rem; margin:1rem 0; }
-.card.warn { border-left:6px solid #d99a00; } .card.ai { border-style:dashed; }
-.disclaimer { border:1px solid var(--line); border-left:6px solid var(--accent); padding:.6rem .8rem; border-radius:8px; font-size:.9rem; }
-label { display:block; font-weight:600; margin:.9rem 0 .25rem; }
-input, select { width:100%; padding:.6rem; border:1px solid var(--line); border-radius:8px; font:inherit; background:var(--bg); color:var(--fg); }
-.row { display:flex; gap:.5rem; } .row input { flex:2; } .row select { flex:1.2; }
-button { margin-top:1rem; padding:.7rem 1.2rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
-@media (prefers-color-scheme: dark) { button { color:#06141e; } }
-button:disabled { opacity:.6; cursor:wait; } button.link { background:none; color:var(--accent); text-decoration:underline; padding:0; margin:0; }
-.error { color:#b00020; font-weight:600; } @media (prefers-color-scheme: dark) { .error { color:#ff8a9b; } }
-.hint { font-size:.85rem; opacity:.8; } .label { margin:0; font-size:.85rem; opacity:.8; }
-.badge { display:inline-block; margin:.2rem 0 .6rem; padding:.45rem 1rem; border-radius:999px; font-weight:800; font-size:1.25rem; letter-spacing:.02em; border:3px solid currentColor; }
-.badge.go { color:#0a7a3d; } .badge.caution { color:#a86b00; } .badge.nogo { color:#b00020; } .badge.insufficient { color:#5a5f66; }
-.pending { background:#fff4cc; color:#3a2c00; padding:.6rem .8rem; border-radius:8px; font-weight:700; }
+.ds-top { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+.ds-card { background:var(--ds-card); border:1px solid var(--ds-line); border-radius:24px; padding:1rem 1.1rem; margin:1rem 0;
+  box-shadow:0 2px 4px 0 rgba(0, 0, 0, .04), 0 1px 2px 0 rgba(0, 0, 0, .06), 0 0 1px 0 rgba(0, 0, 0, .06); }
+@media (prefers-color-scheme: dark) { .ds-card { box-shadow:none; } }
+.ds-card.ds-warn { border-left:6px solid #d99a00; border-radius:12px; } .ds-card.ds-ai { border-style:dashed; }
+.ds-disclaimer { border:1px solid var(--ds-line); border-left:6px solid var(--ds-accent); padding:.6rem .8rem; border-radius:8px; font-size:.9rem; }
+label:where(:not([data-slot])), .ds-field-label { display:block; font-weight:600; font-size:1rem; line-height:1.5; margin:.9rem 0 .25rem; }
+input:where(:not([data-slot])), select { width:100%; padding:.6rem; border:1px solid var(--ds-line); border-radius:8px; font:inherit; background:var(--ds-bg); color:var(--ds-fg); }
+.ds-row { display:flex; gap:.5rem; } .ds-row input { flex:2; } .ds-row select { flex:1.2; }
+button:where(:not([data-slot])) { margin-top:1rem; padding:.7rem 1.2rem; border:0; border-radius:8px; background:var(--ds-accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+@media (prefers-color-scheme: dark) { button:where(:not([data-slot])) { color:#06141e; } }
+button:where(:not([data-slot])):disabled { opacity:.6; cursor:wait; } button:where(:not([data-slot])).ds-link { background:none; color:var(--ds-accent); text-decoration:underline; padding:0; margin:0; }
+.ds-error { color:#b00020; font-weight:600; } @media (prefers-color-scheme: dark) { .ds-error { color:#ff8a9b; } }
+.ds-hint { font-size:.85rem; opacity:.8; } .ds-label { margin:0; font-size:.85rem; opacity:.8; }
+.ds-badge { display:inline-block; margin:.2rem 0 .6rem; padding:.45rem 1rem; border-radius:999px; font-weight:800; font-size:1.25rem; letter-spacing:.02em; border:3px solid currentColor; }
+.ds-badge.ds-go { color:#0a7a3d; } .ds-badge.ds-caution { color:#a86b00; } .ds-badge.ds-nogo { color:#b00020; } .ds-badge.ds-insufficient { color:#5a5f66; }
+/* Dark badge colours: each at least 7:1 against the dark card (ADR 0017 asks for 3.1:1). */
+@media (prefers-color-scheme: dark) {
+  .ds-badge.ds-go { color:#3ccf7e; } .ds-badge.ds-caution { color:#f0b429; }
+  .ds-badge.ds-nogo { color:#ff8a9b; } .ds-badge.ds-insufficient { color:#b4bcc6; }
+}
+.ds-pending { background:#fff4cc; color:#3a2c00; padding:.6rem .8rem; border-radius:8px; font-weight:700; }
 dl { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; } dt { font-weight:600; } dd { margin:0; overflow-wrap:anywhere; }
 li { margin:.5rem 0; overflow-wrap:anywhere; }
-a { color:var(--accent); }
-textarea { width:100%; padding:.6rem; border:1px solid var(--line); border-radius:8px; font:inherit; background:var(--bg); color:var(--fg); }
-nav.sub { display:flex; gap:1rem; margin:.5rem 0; }
-table { width:100%; border-collapse:collapse; font-size:.9rem; } th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere; }
-pre.provider-notice-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; }
-pre.value { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; font-size:.8rem; max-height:14rem; overflow:auto; }
-.tag { display:inline-block; padding:0 .45rem; border:1px solid var(--line); border-radius:6px; font-size:.8rem; margin-right:.3rem; }
+summary { cursor:pointer; font-weight:600; }
+a { color:var(--ds-accent); }
+textarea:where(:not([data-slot])) { width:100%; padding:.6rem; border:1px solid var(--ds-line); border-radius:8px; font:inherit; background:var(--ds-bg); color:var(--ds-fg); }
+nav.ds-sub { display:flex; gap:1rem; margin:.5rem 0; }
+table { width:100%; border-collapse:collapse; font-size:.9rem; } th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--ds-line); vertical-align:top; overflow-wrap:anywhere; }
+pre.ds-provider-notice-text { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; }
+pre.ds-value { white-space:pre-wrap; overflow-wrap:anywhere; margin:.3rem 0 0; font-size:.8rem; max-height:14rem; overflow:auto; }
+.ds-tag { display:inline-block; padding:0 .55rem; border:1px solid var(--ds-line); border-radius:999px; font-size:.8rem; margin-right:.3rem; background:var(--ds-bg); }
+.ds-submit, .ds-action { margin-top:1rem; font-size:1rem; font-weight:600; white-space:normal;
+  height:auto; min-height:2.5rem; padding-block:.4rem; }
+.ds-submit:disabled, .ds-action:disabled { opacity:.6; cursor:wait; }
+/* HeroUI shrinks a pressed button (scale .97); form buttons keep their size and position. */
+.ds-submit[data-pressed], .ds-action[data-pressed] { transform:none; }
+/* 16px in fields: smaller text hides a mistyped depth, and iOS zooms in on focus below 16px. */
+.ds-field { font-size:1rem; line-height:1.5; }
+/* HeroUI draws focus with a box-shadow, which forced-colors mode removes. */
+@media (forced-colors: active) { [data-slot]:focus-visible, [data-slot="input"]:focus { outline:2px solid CanvasText; } }

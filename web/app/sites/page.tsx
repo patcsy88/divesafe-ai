@@ -14,20 +14,20 @@ export default async function SitesPage() {
   } catch (error) {
     if (error instanceof ApiError) {
       if (error.status === 401) redirect("/logout");
-      return <p role="alert" className="error">{error.message}</p>;
+      return <p role="alert" className="ds-error">{error.message}</p>;
     }
     throw error;
   }
   return (
     <>
-      <header className="top">
+      <header className="ds-top">
         <h1>Dive sites</h1>
         <Link href="/">New assessment</Link>
       </header>
       <Banner />
       {list.sites.length === 0 && <p>No dive sites are registered.</p>}
       {list.sites.map((s) => (
-        <section className="card" key={s.site.id}>
+        <section className="ds-card" key={s.site.id}>
           <h2>{plain(s.site.name)}</h2>
           <dl>
             <dt>Id</dt>
@@ -47,7 +47,7 @@ export default async function SitesPage() {
               <ul>
                 {s.site.constraints.map((c) => (
                   <li key={c.id}>
-                    <span className="tag">{plain(c.threshold_status)}</span>
+                    <span className="ds-tag">{plain(c.threshold_status)}</span>
                     {plain(c.description)}
                     {c.threshold_status !== "VALIDATED" && " (a placeholder, not a limit)"}
                   </li>
@@ -55,10 +55,10 @@ export default async function SitesPage() {
               </ul>
             </>
           )}
-          <p className="hint">{plain(s.hazards_note)} Not listing a hazard does not mean there are none.</p>
+          <p className="ds-hint">{plain(s.hazards_note)} Not listing a hazard does not mean there are none.</p>
         </section>
       ))}
-      <p className="hint">{plain(list.notice)}</p>
+      <p className="ds-hint">{plain(list.notice)}</p>
     </>
   );
 }

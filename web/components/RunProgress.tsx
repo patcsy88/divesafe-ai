@@ -37,14 +37,14 @@ export default function RunProgress() {
 
   if (gaveUp) {
     return (
-      <p role="alert" className="error">
+      <p role="alert" className="ds-error">
         No answer yet; outcome unknown. It may have finished or failed. Nothing may be acted on.
         Reload this page to check again.
       </p>
     );
   }
   return (
-    <p className="hint" role="status">
+    <p className="ds-hint" role="status">
       Checking again every few seconds…
     </p>
   );

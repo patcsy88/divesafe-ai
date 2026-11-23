@@ -17,32 +17,32 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
     if (error instanceof ApiError) {
       if (error.status === 401) redirect("/logout");
       if (error.status === 404) notFound();
-      return <p role="alert" className="error">{error.message}</p>;
+      return <p role="alert" className="ds-error">{error.message}</p>;
     }
     throw error;
   }
   return (
     <>
-      <header className="top">
+      <header className="ds-top">
         <h1>Evidence</h1>
         <Link href={`/assessments/${encodeURIComponent(view.assessment_id)}`}>Back to the assessment</Link>
       </header>
       <Banner />
-      <p className="pending" role="note">{plain(view.evidence_note)}</p>
-      <p className="hint">
+      <p className="ds-pending" role="note">{plain(view.evidence_note)}</p>
+      <p className="ds-hint">
         Assessed at {formatWhen(view.assessed_at)}. Quality tags here do not say an item covers the
         dive window or is recent enough; that is not shown on this page.
       </p>
 
       {view.evidence_issues.length > 0 && (
-        <section className="card warn">
+        <section className="ds-card ds-warn">
           <h2>Sources that failed or were rejected</h2>
           <ul>{view.evidence_issues.map((i, n) => <li key={n}>{plain(i)}</li>)}</ul>
         </section>
       )}
 
       {view.unevaluated_factors.length > 0 && (
-        <section className="card warn">
+        <section className="ds-card ds-warn">
           <h2>Not evaluated</h2>
           <p>{view.unevaluated_factors.map(plain).join(", ")}</p>
         </section>
@@ -52,13 +52,13 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
 
       {view.evidence.length === 0 && <p>No evidence was retrieved for this assessment.</p>}
       {view.evidence.map(({ item, effective_quality, retrieval_age_minutes_at_assessment, future_dated }) => (
-        <section className="card" key={item.id}>
+        <section className="ds-card" key={item.id}>
           <h2>{plain(item.category)}</h2>
           <p>
-            <span className="tag">{plain(item.data_kind)}</span>
-            <span className="tag">{provenanceLabel(item.data_kind)}</span>
-            {future_dated && <span className="tag">dated after the assessment</span>}
-            <span className="tag">quality: {plain(effective_quality)}</span>
+            <span className="ds-tag">{plain(item.data_kind)}</span>
+            <span className="ds-tag">{provenanceLabel(item.data_kind)}</span>
+            {future_dated && <span className="ds-tag">dated after the assessment</span>}
+            <span className="ds-tag">quality: {plain(effective_quality)}</span>
           </p>
           <dl>
             <dt>Source</dt>
@@ -85,11 +85,11 @@ export default async function EvidencePage({ params }: { params: Promise<{ id: s
           )}
           <details>
             <summary>Raw values (third-party text, shown as plain text)</summary>
-            <pre className="value">{shown(item.value)}</pre>
+            <pre className="ds-value">{shown(item.value)}</pre>
           </details>
         </section>
       ))}
-      <p className="hint">{plain(view.notice)}</p>
+      <p className="ds-hint">{plain(view.notice)}</p>
     </>
   );
 }

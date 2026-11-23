@@ -22,7 +22,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
     if (error instanceof ApiError) {
       if (error.status === 401) redirect("/logout");
       if (error.status === 404) notFound();
-      return <p role="alert" className="error">{error.message}</p>;
+      return <p role="alert" className="ds-error">{error.message}</p>;
     }
     throw error;
   }
@@ -31,36 +31,36 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
     const failed = run.status === "FAILED";
     return (
       <>
-        <header className="top">
+        <header className="ds-top">
           <h1>Assessment</h1>
-          <nav className="sub">
+          <nav className="ds-sub">
             <Link href="/">New assessment</Link>
           </nav>
         </header>
         <Banner />
-        <section className="card">
-          <p className="label">{failed ? "Did not finish" : "Running"}</p>
+        <section className="ds-card">
+          <p className="ds-label">{failed ? "Did not finish" : "Running"}</p>
           {failed ? (
             <>
-              <p className="error" role="alert">
+              <p className="ds-error" role="alert">
                 NO RESULT. The assessment did not finish. Do not act on this page.
               </p>
               <p>{failedReason(run.failure_code)}</p>
-              <p className="hint">
+              <p className="ds-hint">
                 This is not a result. It does not mean conditions are acceptable, and it is not
                 INSUFFICIENT EVIDENCE either: nothing was checked. Start a new assessment.
               </p>
             </>
           ) : (
             <>
-              <p className="pending" role="status">
+              <p className="ds-pending" role="status">
                 NO RESULT YET. Nothing has been assessed. Do not act on this page.
               </p>
               <RunProgress />
             </>
           )}
         </section>
-        <p className="hint">{plain(run.notice)}</p>
+        <p className="ds-hint">{plain(run.notice)}</p>
       </>
     );
   }
@@ -73,26 +73,26 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
 
   return (
     <>
-      <header className="top">
+      <header className="ds-top">
         <h1>Assessment</h1>
-        <nav className="sub">
+        <nav className="ds-sub">
           {!withheld && <Link href={`/assessments/${encodeURIComponent(r.id)}/evidence`}>Evidence</Link>}
           <Link href="/">New assessment</Link>
         </nav>
       </header>
       <Banner />
 
-      <section className="card">
-        <p className="label">System recommendation</p>
+      <section className="ds-card">
+        <p className="ds-label">System recommendation</p>
         <p className={badgeClass(r.final_recommendation)}>{labelFor(r.final_recommendation)}</p>
         <DegradedEvidenceNote note={view.degraded_evidence_note} />
         {pending && (
-          <p className="pending" role="status">
+          <p className="ds-pending" role="status">
             PENDING HUMAN DECISION. {plain(view.status_note)}
           </p>
         )}
         {withheld && (
-          <p className="pending" role="status">
+          <p className="ds-pending" role="status">
             DECISION NOT SHOWN TO THIS KEY. It does not mean none was made. Do not act on this
             result without asking the assigned decider.
           </p>
@@ -119,7 +119,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       </section>
 
       {decision && (
-        <section className="card">
+        <section className="ds-card">
           <h2>Human decision</h2>
           <dl>
             <dt>Decided by</dt>
@@ -163,7 +163,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
 
       {pending && r.assigned_decider && (
         <>
-          <p className="hint">
+          <p className="ds-hint">
             Only {plain(r.assigned_decider)} can record this decision. The service checks who you
             are; if you are someone else it will refuse and nothing is recorded.
           </p>
@@ -176,9 +176,9 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       )}
 
       {r.actual_conditions && (
-        <section className="card">
+        <section className="ds-card">
           <h2>Conditions reported afterwards</h2>
-          <p className="hint">
+          <p className="ds-hint">
             Reported by {plain(r.actual_conditions.reported_by)} at{" "}
             {formatWhen(r.actual_conditions.reported_at)}. A report, not a measurement by the system.
           </p>
@@ -197,12 +197,12 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         (started ? (
           <ConditionsForm id={r.id} />
         ) : (
-          <p className="hint">
+          <p className="ds-hint">
             Conditions can be reported once the planned start time ({formatWhen(r.plan.planned_start)}) has passed.
           </p>
         ))}
 
-      <section className="card">
+      <section className="ds-card">
         <h2>The dive plan</h2>
         <dl>
           <dt>Site</dt>
@@ -234,7 +234,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       </section>
 
       {r.evidence_issues.length > 0 && (
-        <section className="card warn">
+        <section className="ds-card ds-warn">
           <h2>Sources that failed or were rejected</h2>
           <ul>
             {r.evidence_issues.map((issue, i) => (
@@ -245,7 +245,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       )}
 
       {r.unevaluated_factors.length > 0 && (
-        <section className="card warn">
+        <section className="ds-card ds-warn">
           <h2>Not evaluated</h2>
           <p>
             No validated limit exists for these, so they were not assessed. That is not the same as
@@ -259,7 +259,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
         </section>
       )}
 
-      <section className="card">
+      <section className="ds-card">
         <h2>Rule results</h2>
         <ul>
           {r.rule_results.map((rule, i) => (
@@ -274,9 +274,9 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       </section>
 
       {(r.findings.length > 0 || r.scenarios.length > 0 || r.explanation) && (
-        <section className="card ai">
+        <section className="ds-card ds-ai">
           <h2>Model-written commentary</h2>
-          <p className="hint">
+          <p className="ds-hint">
             Written by an AI model. Unverified, and it never changes the result except to make it
             stricter. Read it as plain commentary.
           </p>
@@ -297,9 +297,9 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       {[...r.findings, ...r.cross_examination_findings, ...r.scenarios].some(
         (x) => x.conflicting_signals.length > 0,
       ) && (
-        <section className="card ai">
+        <section className="ds-card ds-ai">
           <h2>Questions and conflicting signals (model-written)</h2>
-          <p className="hint">
+          <p className="ds-hint">
             Written by an AI model and not verified. An automatic wording screen marks some lines
             FLAGGED. It misses wording, and records made before 2026-11-03 were not screened. An
             unmarked line has not been checked or endorsed. None of it changes the result; you
@@ -339,7 +339,7 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       )}
 
       {r.agent_issues.length > 0 && (
-        <section className="card warn">
+        <section className="ds-card ds-warn">
           <h2>Model calls that failed</h2>
           <ul>
             {r.agent_issues.map((a, i) => (
@@ -350,14 +350,14 @@ export default async function AssessmentPage({ params }: { params: Promise<{ id:
       )}
 
       {view.attributions.length > 0 && (
-        <p className="hint">Data: {plain(view.attributions.join("; "))}</p>
+        <p className="ds-hint">Data: {plain(view.attributions.join("; "))}</p>
       )}
       <ProviderNotices
         notices={view.provider_notices}
         notShown={view.provider_notices_not_shown}
         missing={view.provider_notice_missing}
       />
-      <p className="hint">{plain(view.notice)}</p>
+      <p className="ds-hint">{plain(view.notice)}</p>
     </>
   );
 }

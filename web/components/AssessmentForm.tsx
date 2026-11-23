@@ -1,6 +1,9 @@
 "use client";
 
 import { useActionState, useEffect } from "react";
+import { Button } from "@heroui/react/button";
+import { Input } from "@heroui/react/input";
+import { Label } from "@heroui/react/label";
 import { runAssessment, type FormState } from "../app/actions.ts";
 import { useRetryKey } from "./useRetryKey.ts";
 
@@ -17,41 +20,73 @@ export default function AssessmentForm({
     if (state.renewKey) renewKey();
   }, [state, renewKey]);
   return (
-    <form action={action} onChange={renewKey} className="card">
+    <form action={action} onChange={renewKey} className="ds-card">
       <input type="hidden" name="retry_key" value={retryKey} />
-      <label htmlFor="site_id">Dive site</label>
+      <Label htmlFor="site_id" className="ds-field-label">Dive site</Label>
       <select id="site_id" name="site_id" required>
         {sites.map((s) => (
           <option key={s.id} value={s.id}>{s.label}</option>
         ))}
       </select>
 
-      <label htmlFor="planned_start">Planned start</label>
-      <div className="row">
-        <input id="planned_start" name="planned_start" type="datetime-local" required />
+      <Label htmlFor="planned_start" className="ds-field-label">Planned start</Label>
+      <div className="ds-row">
+        <Input
+          id="planned_start"
+          name="planned_start"
+          type="datetime-local"
+          required
+          fullWidth
+          className="ds-field"
+        />
         <select name="zone" aria-label="Time zone" defaultValue="+08:00">
           <option value="+08:00">Malaysia time (UTC+8)</option>
           <option value="UTC">UTC</option>
         </select>
       </div>
 
-      <label htmlFor="duration_minutes">Planned duration (minutes)</label>
-      <input id="duration_minutes" name="duration_minutes" inputMode="numeric" required />
+      <Label htmlFor="duration_minutes" className="ds-field-label">
+        Planned duration (minutes)
+      </Label>
+      <Input
+        id="duration_minutes"
+        name="duration_minutes"
+        inputMode="numeric"
+        required
+        fullWidth
+        className="ds-field"
+      />
 
-      <label htmlFor="max_depth_m">Maximum depth (metres)</label>
-      <input id="max_depth_m" name="max_depth_m" inputMode="decimal" required />
+      <Label htmlFor="max_depth_m" className="ds-field-label">Maximum depth (metres)</Label>
+      <Input
+        id="max_depth_m"
+        name="max_depth_m"
+        inputMode="decimal"
+        required
+        fullWidth
+        className="ds-field"
+      />
 
-      <label htmlFor="decider">Person who will record the decision (optional)</label>
-      <input id="decider" name="decider" maxLength={100} autoComplete="off" />
-      <p className="hint">
+      <Label htmlFor="decider" className="ds-field-label">
+        Person who will record the decision (optional)
+      </Label>
+      <Input
+        id="decider"
+        name="decider"
+        maxLength={100}
+        autoComplete="off"
+        fullWidth
+        className="ds-field"
+      />
+      <p className="ds-hint">
         Leave blank to decide it yourself, if your key has the decider role. Otherwise name a key
         holder who does.
       </p>
 
-      {state.error && <p role="alert" className="error">{state.error}</p>}
-      <button type="submit" disabled={pending}>
+      {state.error && <p role="alert" className="ds-error">{state.error}</p>}
+      <Button type="submit" isDisabled={pending} className="ds-submit">
         {pending ? "Starting…" : "Run assessment"}
-      </button>
+      </Button>
     </form>
   );
 }

@@ -169,13 +169,14 @@ they never float within the peer range: `react-aria`, `react-aria-components`, `
 `@heroui/react`'s declared range (`tailwindcss`, also a peer, is already listed). `npm ci` must
 succeed without `--legacy-peer-deps` or `--force`, so a version outside a peer range fails the
 install instead of being accepted. `@heroui/react`'s own dependencies (`@radix-ui/react-avatar`,
-`input-otp`, `tailwind-variants`, `@react-stately/utils`, `@react-types/*`) and Tailwind's native
-engines `@tailwindcss/oxide` and `lightningcss` (MPL-2.0, a build-time tool) stay transitive, fixed
-by the lock file. A HeroUI bump that adds or widens a peer dependency is reviewed like a new direct
-package. Any other direct package needs a new security review. CI's existing `web` job checks
-advisories and install scripts only (`npm audit --omit=dev --package-lock-only`, the
-no-install-script check, `npm ci --ignore-scripts`); a new advisory can fail an unrelated change
-(already a known gap). Build-time packages (Tailwind's native engines, the PostCSS plugin) run code
+`input-otp`, `tailwind-variants`, `@react-stately/utils`, `@react-types/*`), `@heroui/styles`'s
+(`tw-animate-css`, `tailwind-variants`) and Tailwind's native engines `@tailwindcss/oxide` and
+`lightningcss` (MPL-2.0, a build-time tool) stay transitive, fixed by the lock file. A HeroUI bump
+that adds or widens a peer dependency is reviewed like a new direct package. Any other direct
+package needs a new security review. CI's existing `web` job checks advisories and install scripts
+only (`npm audit --omit=dev --package-lock-only`, the no-install-script check, `npm ci
+--ignore-scripts`); a new advisory can fail an unrelated change (already a known gap). Build-time
+packages (Tailwind's native engines, the PostCSS plugin and its loaders such as `jiti`) run code
 during `next build`, which `--ignore-scripts` does not cover, so the build runs with no secret in
 the environment (no `DIVESAFE_WEB_SESSION_SECRET`, no API key). To do before merge: on the real lock
 file, record the licence of each direct package and of React Aria, and any licence among the bundled
@@ -184,7 +185,124 @@ among build-time packages too; note that the published 3.2.x packages' `LICENSE`
 (Apache-2.0) govern, not the repository root's older MIT file; record whether any bundled Apache-2.0
 package ships a `NOTICE` file and, if so, where its text is kept; confirm no `hasInstallScript`, and
 that the lock file holds the Linux builds of the native engines (`@tailwindcss/oxide`,
-`lightningcss`) as well as the macOS ones. Do not accept a package that adds an install script.
+`lightningcss`) as well as the macOS ones. Licences are read from each package's licence file as
+well as the lock file's `license` field, and a mismatch is recorded. Do not accept a package that
+adds an install script. Done in restyle step 9 (2026-11-23): the results are in restyle PR #62,
+"Dependency record".
+
+Found on the real lock file (2026-11-22): every `@heroui/react` 3.2.x release pins
+`@react-types/color` 3.2.0, which depends on `@react-spectrum/color` and through it on
+`@adobe/react-spectrum` and its icon packages. They are Apache-2.0, except `react-transition-group`
+(BSD-3-Clause). The installed `@adobe/react-spectrum-workflow` 2.3.5 (pinned by
+`@spectrum-icons/workflow` 4.3.2) is Apache-2.0 in its `package.json`, its `LICENSE` file and the
+lock file; its later release 2.4.0 is CC-BY-ND-4.0, so a change that moves it to 2.4.0 or later is
+refused unless the owner accepts that licence (`web/tests/spectrum.test.ts` fails if the lock file
+moves it from 2.3.5 or holds any `-ND` or `-NC` licence). HeroUI uses `@react-types/color` for
+TypeScript types only, and no runtime file in `@heroui/*`, `react-aria` or `react-aria-components`
+imports these packages. So they are installed but must not ship or run. No code in `web/` imports
+them, and a web test fails if any file in `web/` imports `@adobe/`, `@react-spectrum/`,
+`@spectrum-icons/`, `react-transition-group` or `@react-types/color`, type-only imports included.
+Before merge, on the production build: no file in the build output (browser and server) contains
+code from `@adobe/*`, `@react-spectrum/*`, `@spectrum-icons/*` or `react-transition-group`. This is
+checked by module path (the server's `.nft.json` trace files and source maps, and the `sources` of a
+scratch build with `productionBrowserSourceMaps: true`, not committed) and by string literals that
+survive minification (listed in `check-no-spectrum.mjs`: two from `@adobe/react-spectrum`, which
+every `@spectrum-icons` and `@react-spectrum` package loads, and one from `react-transition-group`).
+The icon packages `@adobe/react-spectrum-workflow` and `-ui` have no string of their own; they ship
+only through `@spectrum-icons` (caught by the strings) or a direct import (caught by the web test).
+The check was first shown to find deliberate imports in a scratch build (2026-11-22: a workflow
+icon, `@adobe/react-spectrum`, `react-transition-group` and `@react-spectrum/provider` from a client
+file; a server-file import fails `next build` and is also found). The restyle PR does not merge if
+any is found. A HeroUI, `@react-types/color` or `@spectrum-icons/workflow` change that alters this
+chain is reviewed like a new direct package. When a web image is built, it copies only Next's traced
+output (`output: "standalone"`), never the whole `node_modules`. CI's `web` job repeats the check on
+every change, after `next build` (`web/scripts/check-no-spectrum.mjs`, owner, 2026-11-22): it fails
+if any `.nft.json` trace file or source map lists a file in those four package scopes, if any built
+`.js` or `.css` file holds one of the recorded strings, if any file under `.next` is itself in one
+of those package scopes, or if it finds nothing to check. Known gap: CI's build has no browser
+source maps, so in CI the browser output is checked by string only.
+
+HeroUI's stylesheet applies to every page, and a class of ours that it also defines takes on every
+property our rule does not set (found 2026-11-22: `badge`, `card`, `label`, `link` and `tag`; the
+result badge got HeroUI's grey background). So every class in `app/` and `components/` carries the
+`ds-` prefix, and `web/tests/classes.test.ts` fails if a class is used without a rule in
+`globals.css`, has no prefix, is set from anything but a literal or `badgeClass(...)`, is set
+through a quoted `className` key or a `class` prop, or is also a class in `@heroui/styles`. HeroUI's
+rules that are not tied to a class are Tailwind's element reset, a border colour on every element
+and two `:root` settings; its other unclassed selectors need attributes the app does not use
+(`data-slot`, `data-theme`, `data-reduce-motion`, `data-scrollbar`, `dir`). The reset removes
+paragraph and list spacing, list bullets, heading weight and link underlines, so `globals.css` puts
+these browser defaults back with element rules. On 2026-11-22 every element of the result, evidence,
+home and login pages had the same computed style as at `fbad5a2`, in light and dark mode and with
+reduced motion on and off (in Chromium, as first rendered; the decision form's less-severe warning,
+the confirm step and the error alerts were not opened and are left to the (a) repeat, and were
+checked in restyle steps 7 and 9). The same holds for custom properties: HeroUI also defines
+`--accent`, so ours carry the `--ds-` prefix, and `classes.test.ts` fails on an unprefixed one or
+one HeroUI also defines. HeroUI's dark theme variables switch only on a `.dark` class or
+`data-theme="dark"`, which would need a script, a cookie or stored state (security N3, round 1),
+so `globals.css` sets HeroUI's own dark variable values
+under `@media (prefers-color-scheme: dark)`, and `classes.test.ts` fails unless they equal the
+values in `@heroui/styles` that differ from its light theme, each set once and nowhere else (on
+2026-11-22 all 31 resolved in Chromium to the same values as HeroUI's `.dark`). That covers dark
+mode only while HeroUI keys nothing else on `.dark` or `data-theme`, so the test also fails if a
+HeroUI selector naming them is not one of the eight listed in it (the theme blocks, the unused
+vibrant palette and the `dark` variant), if `@heroui/styles` names a stylesheet other than its
+`index.css`, if HeroUI's `.dark` sets anything but variables and `color-scheme`, if `globals.css`
+drops `color-scheme: light dark`, reads a variable that nothing sets or reads a HeroUI one outside
+the dark block, or if a file in `app/`, `components/` or `lib/` sets a theme class or attribute,
+uses a `dark:` utility, or names browser storage, `document.cookie` or a theme provider. HeroUI's
+`dark` variant has a `prefers-color-scheme` branch, but it also needs the utility's class on an
+ancestor, so a `dark:` utility did not apply in system dark mode (Chromium, 2026-11-22, a scratch
+build with no `.dark` anywhere); dark styles therefore go in the `globals.css` media block, and the
+test also fails if any CSS or JavaScript file in `@heroui/styles` or `@heroui/react` uses `dark:`
+outside a comment. Focus rings and other interaction states take HeroUI's dark values too, so the
+(a) repeat includes a keyboard pass through the decision form and its confirm step in dark mode.
+HeroUI's own colours fail contrast against ours (white on its accent 3.59:1; in dark mode its field
+background against our card 1.09:1, with no field border), so ten HeroUI variables are set from our
+`--ds-` palette in both modes (option A1, owner, 2026-11-22): `--foreground`, `--background`,
+`--border`, `--accent`, `--accent-foreground`, `--focus`, `--field-background`,
+`--field-foreground`, `--field-border` and `--field-border-width` (`1px`). The field outline is
+therefore as at `fbad5a2`, below 3:1 against the card: not a regression, and not fixed by A1. The
+dark block then holds HeroUI's own dark value for every other variable (values HeroUI builds from a
+mapped variable, such as `--accent-soft`, now resolve from our palette, so they are not HeroUI's
+tested colours); `classes.test.ts` fails if the ten change, if another HeroUI variable is set, or if
+a set one is not defined by HeroUI. HeroUI components (`Button`, `Input`, `Label`, `TextArea`) are
+used only in `"use client"` files, imported by subpath from a fixed list in that test, which also
+refuses any other import of `@heroui/`, `react-aria` or `@react-aria/` and `@react-stately/`
+packages; `isRequired` (adds a visible `*`), `isPending` and `Description` (renders nothing outside
+a field) are refused, and native `<select>` stays. Our rules whose selector starts with `button`,
+`input`, `label` or `textarea` apply only to elements without `data-slot`, and the test fails on one
+that does not (a descendant rule such as `.ds-row input` is not checked). Text in fields stays 16px
+(`.ds-field`). React Aria adds one `<style>` element to the page head (`touch-action` on pressable
+elements), which the current `style-src 'unsafe-inline'` allows; a nonce CSP would have to account
+for it. In forced-colours mode, where HeroUI's box-shadow focus ring is removed, its components get
+a solid outline. Tailwind scans only `app/`, `components/` and `lib/` (`source(none)` and
+`@source`), so text in tests or scripts never reaches the shipped CSS. CI also runs
+`web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22): it fails if a built
+stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address, has a `url()` or
+`image-set()` address that is not a `data:` URI or a `/_next/static/` file (a `..` step, an encoded
+dot or a backslash counts as leaving it), or if the build makes no stylesheet or more than one
+(owner, 2026-11-23: a second would hold CSS the source checks never read; a Next change that
+splits the CSS is reviewed before the rule changes, not met by raising the limit). `globals.css`
+imports HeroUI selectively, in its documented order (restyle step 8): `base/base.css`, the default
+theme, `utilities`, `variants` and the component files of the components in that test's list
+(`label`, `button`, `input`, `textarea`), not `@heroui/styles` as a whole and not `tw-animate-css`.
+The built stylesheet went from 476 KB to 70 KB (45 KB to 9 KB gzipped), with every computed style
+and screenshot unchanged. `classes.test.ts` fails unless those imports are exactly that base list
+plus one file per listed component, in HeroUI's order and layers, each resolving through the
+package's `exports` to a `dist/` file the checks read, with every file those import being a
+relative `dist/` file the checks read too, and the files loaded are an exact list; `globals.css`
+is the only stylesheet in `app/`, `components/` and `lib/` (owner, 2026-11-23). The class and
+dark-selector checks still read every file in `@heroui/styles`.
+`tw-animate-css` stays installed as a dependency of `@heroui/styles` but is not imported: importing
+it again brings back the animation utilities the hiding rule bans, so it needs `risk-reviewer`
+review, and an added overlay's enter and exit animations are re-checked under the (a) hiding rule.
+React Aria's overlay code (`ariaHideOutside`, which sets `aria-hidden` or `inert` on everything
+outside an open overlay, the banner, badge and note included) is reachable from HeroUI's `Input` and
+is in the built browser chunks (one chunk of a local build held its `[data-react-aria-top-layer]`
+walker, 2026-11-23); it runs only inside a combo box or popover, which the app does not render.
+Adding any component therefore also re-runs the after-hydration attribute check (`aria-hidden`,
+`inert`, `hidden`) on every page, with that component open.
 
 ### What must not change
 
@@ -262,7 +380,15 @@ each of these mutants: the note moved away from the badge, the note dropped from
 context, the note rendered unconditionally, and the note's role removed. A render of the result
 block is preferred to a source-position check. Before the restyle touches `lib/present.ts`, a web
 test pins that GO, CAUTION, NO-GO and INSUFFICIENT EVIDENCE map to four distinct badge classes, each
-with its own label.
+with its own label. If the restyle needs classes without the `ds-` prefix (Tailwind utilities, or a
+`className` on a HeroUI component), `web/tests/classes.test.ts` gets an explicit allow-list, with
+owner approval and `risk-reviewer` review. It still fails on any utility that hides, clips, shrinks,
+moves off-screen or makes transparent (for example `hidden`, `invisible`, `sr-only`, `opacity-0`,
+`collapse`, `h-0`, `w-0`, `size-0`, `max-h-0`, `scale-0`, `text-transparent`, `truncate`,
+`line-clamp-*`, `-translate-x-full`, `animate-out`, or `overflow-hidden` on a safety element), with
+any variant prefix such as `md:`, `dark:` or `motion-reduce:`, on any arbitrary value or
+arbitrary-property class with the same effect, and on HeroUI's `badge`, `card`, `label`, `link` and
+`tag` as a class of ours.
 
 ### ADR 0008 Amendment 1, Open preconditions (a)
 
@@ -274,11 +400,22 @@ decision-form context; unmarked GO, CAUTION and NO-GO records show neither. Chec
 server-rendered HTML whether or not the note's component is a client component, plus one browser
 look in light and dark. In the same run, for each synthetic view, the page's visible text (tags
 stripped, whitespace normalised, visually hidden text excluded) is the same before and after the
-restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. Any
-other added role or hidden text is listed in the PR for `risk-reviewer`. The same holds for the
-evidence page and the decision form's review and confirm states. The result, with the restyled
-commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The note's
-wording stays pinned to the API constant.
+restyle. The sequence of `alert`, `status` and `note` roles, each with its text, is the same. No
+element that holds the banner, the disclaimer, the DEGRADED note or an `alert`, `status` or `note`
+role, nor any ancestor of one, has a hiding class or attribute (`hidden`, `invisible`, `opacity-0`,
+`sr-only`, `aria-hidden`, `inert`, `animate-out`, or an inline style that hides it (`display: none`,
+`visibility: hidden`, `opacity: 0`, clipping or zero size), or an entry animation that starts
+invisible), and no such element's text is cut short, checked at phone width: for each element that
+holds the text (measured on the element itself unless its computed `display` is `inline` or
+`contents`, then on its nearest block container, never on a further ancestor), `scrollWidth -
+clientWidth ≤ 1` and `scrollHeight - clientHeight ≤ 1`, and its bounding box lies inside every
+ancestor whose `overflow` is not `visible`. The browser look is taken with `prefers-reduced-motion`
+both on and off. If the confirm step is a modal or popover, it shows the result, the DEGRADED
+context sentence and the less-severe warning itself, and the hiding check is repeated in the browser
+with it open. Any other added role or hidden text is listed in the PR for `risk-reviewer`. The same
+holds for the evidence page and the decision form's review and confirm states. The result, with the
+restyled commit, replaces the `fbad5a2` entry in ADR 0008 Amendment 1, Open preconditions (a). The
+note's wording stays pinned to the API constant.
 
 ### Reviews
 
@@ -303,4 +440,6 @@ wording stays pinned to the API constant.
   the tests above.
 - The CSP still allows inline scripts and styles (gap above); the restyle does not close it and must
   not widen it. React Aria's inline style attributes mean a later nonce CSP keeps `style-src-attr
-  'unsafe-inline'`; the restyle makes the style half of that gap harder to close.
+  'unsafe-inline'`; the restyle makes the style half of that gap harder to close. React Aria also
+  injects one `<style>` element into `<head>` at runtime (a fixed `touch-action` rule); a nonce CSP
+  without `'unsafe-inline'` in `style-src-elem` must allow it.

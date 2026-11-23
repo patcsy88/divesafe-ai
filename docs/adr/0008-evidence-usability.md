@@ -167,17 +167,47 @@ server-rendered HTML. The check used a stand-in API serving synthetic views, bui
 `AssessmentView.of` at `fbad5a2`; the ids and the assigned decider were invented so the decision
 form renders. Marked GO and CAUTION records show the note beside the result and in the decision-form
 context. Unmarked GO, CAUTION and NO-GO records show neither, so the note follows the marker, not
-the result. Still to do at the web deploy:
+the result.
+
+(a) repeated 2026-11-23 for the HeroUI restyle (ADR 0017 amendment) on a production build of `web/`
+at `30ebce7` (not deployed; later commits of the restyle change no `web/` file), with the same
+stand-in API and the same eight synthetic views. The note appears in the same views, as often, as at
+`fbad5a2`: beside the result and in the decision-form context for the marked GO and CAUTION views;
+beside the result only in the withheld view of a marked GO (no decision form there); never in the
+unmarked GO, CAUTION, NO-GO or INSUFFICIENT EVIDENCE views or the unrecognised-result view. In
+Chromium, on 72 page and mode files (900 px, light and dark, reduced motion on and off), visible
+text and element order are the same as at `fbad5a2` except the not-found page's added card; of the
+properties that could hide text, only the dark badge colours (the reviewed set), HeroUI buttons'
+`inline-flex` display and an identity transform differ; the phone-width cut-off check is identical.
+In the server-rendered HTML of the eight views, the sequence of `alert`, `status` and `note` roles,
+each with its text, is the same as at `fbad5a2`, and no element has a hiding class or attribute
+(`hidden`, `aria-hidden`, `inert`, `sr-only`, `animate-out` and the like) except Next's empty
+streaming placeholder (`<div hidden>` with no text, also at `fbad5a2`); no role or hidden text was
+added. After hydration, as first rendered, in Chromium (a scratch probe, not committed), on the 18
+page URLs of the 72-file comparison at 900 and 320 px, light and dark, the only element with
+`aria-hidden`, `inert` or `hidden` is that same placeholder, as at `fbad5a2`; in restyle steps 7 and
+9 the decision form's Review and Confirm states had none on the safety sentences the probe lists
+(PENDING, DECISION NOT SHOWN, the DEGRADED note, the disclaimer, the less-severe warning, the
+confirm text) or their ancestors, as at `fbad5a2`; React Aria's overlay code, which adds those
+attributes, is reachable from HeroUI's `Input` and is in the built browser chunks, but runs only
+inside a combo box or popover, which the app does not render. The confirm step and the error alerts
+were checked in restyle step 7 and again in step 9. Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
-- confirm the bundle is built from a commit with no `web/` change since `fbad5a2`, and that the API
-  it talks to serves an assessment view unchanged since `fbad5a2` (`git diff fbad5a2 <API commit> --
-  src/divesafe/api/schemas.py` is empty); otherwise repeat this check against that API;
-- confirm the build output contains the note text (`This result is based on model and forecast data,
-  not observations.`). It is in the server chunks, not the browser ones, because the page renders on
-  the server;
+- confirm the bundle is built from a commit with no `web/` change since `30ebce7` (annotated tag
+  `web-baseline-20261123`: `git rev-parse 'web-baseline-20261123^{commit}'` is
+  `30ebce79ec378b7c5dd1fd3ba0eb7dc5c44748aa`, then `git diff web-baseline-20261123 <web commit> --
+  web/` is empty), and that the API it talks to serves an assessment view unchanged since `fbad5a2`
+  (`git diff fbad5a2 <API commit> -- src/divesafe/api/schemas.py` is empty); otherwise repeat this
+  check against that build or API;
+- confirm the build output contains the note's wording (`based on model and forecast data, not
+  observations`, the constant in `web/components/DegradedEvidenceNote.ts`; the full sentence is put
+  together when the page renders, so it is not in the build as one string; the earlier wording of
+  this check named the whole sentence, which no build has ever held). It is in the server chunks,
+  not the browser ones, because the page renders on the server. This shows the wording ships; the
+  browser look below shows it is rendered;
 - look at one marked record in a browser (a synthetic one, served as above, while production can
-  produce none).
+  produce none) and confirm the full sentence appears beside the result.
 
 Per category (owner, 2026-11-20): DEGRADED `tides` evidence never supports GO or CAUTION, whatever
 the setting says. `risk.DEGRADED_NEVER_SUPPORTS_GO` (a reviewed constant, not a setting) names the

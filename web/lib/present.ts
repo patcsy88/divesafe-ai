@@ -11,14 +11,14 @@ export const RECOMMENDATIONS: readonly Recommendation[] = [
 export function badgeClass(rec: string): string {
   switch (rec) {
     case "GO":
-      return "badge go";
+      return "ds-badge ds-go";
     case "CAUTION":
-      return "badge caution";
+      return "ds-badge ds-caution";
     case "NO-GO":
-      return "badge nogo";
+      return "ds-badge ds-nogo";
     default:
       // Anything unrecognised is shown as inconclusive, never as safe.
-      return "badge insufficient";
+      return "ds-badge ds-insufficient";
   }
 }
 

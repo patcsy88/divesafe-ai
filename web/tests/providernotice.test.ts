@@ -61,7 +61,7 @@ test("the fixed wording is pinned word for word and the note is shown under the 
   assert.equal(PROVIDER_NOTICE_TITLE, "Provider notice (tides.today)");
   const html = render(["x"]);
   const inside = block(html);
-  assert.ok(inside.includes(`<p class="hint" role="note">${NOTE_HTML}</p>`));
+  assert.ok(inside.includes(`<p class="ds-hint" role="note">${NOTE_HTML}</p>`));
   assert.ok(inside.indexOf(`>${PROVIDER_NOTICE_TITLE}</h2>`) < inside.indexOf("Text supplied by"));
   assert.ok(inside.indexOf("Text supplied by") < inside.indexOf(">x</pre>"));
   assert.equal(count(html, "Text supplied by"), 1);
@@ -86,7 +86,7 @@ test("with notices and the flag, the sentence is shown once, after and outside t
   const html = render(["PROVIDER TEXT"], 2, true);
   const inside = block(html);
   assert.ok(inside.includes(SECTION_OPEN));
-  assert.ok(inside.includes('<pre class="provider-notice-text">PROVIDER TEXT</pre>'));
+  assert.ok(inside.includes('<pre class="ds-provider-notice-text">PROVIDER TEXT</pre>'));
   assert.ok(inside.includes(NOTE_HTML));
   assert.ok(inside.includes(">2 more provider notices not shown</p>"));
   assert.ok(!inside.includes(MISSING), "the missing sentence is inside the provider block");
@@ -103,23 +103,23 @@ test("without the flag no missing sentence is rendered", () => {
 
 test("provider text equal to the missing sentence is provider text, inside the block", () => {
   const html = render([MISSING]);
-  assert.ok(block(html).includes(`<pre class="provider-notice-text">${MISSING}</pre>`));
+  assert.ok(block(html).includes(`<pre class="ds-provider-notice-text">${MISSING}</pre>`));
   assert.ok(!html.includes("provider-notice-missing"));
   assert.equal(count(html, MISSING), 1);
 });
 
 test("the notice text uses the CSS class, no inline style, and is not a scroll box", () => {
   const html = render(["x".repeat(2000)], 1, true);
-  assert.ok(html.includes('<section class="card"'));
-  assert.ok(html.includes(`<pre class="provider-notice-text">${"x".repeat(2000)}</pre>`));
+  assert.ok(html.includes('<section class="ds-card"'));
+  assert.ok(html.includes(`<pre class="ds-provider-notice-text">${"x".repeat(2000)}</pre>`));
   assert.ok(!html.includes("style="), "an inline style is set");
   assert.ok(!html.includes("overflow") && !html.includes("max-height"));
-  assert.ok(!html.includes('class="value"'));
+  assert.ok(!html.includes('class="ds-value"'));
   const css = read("../app/globals.css");
   const rules = css.split("\n").filter((line) => line.includes("provider-notice-text"));
   assert.equal(rules.length, 1, "the class is not styled exactly once");
   const rule = rules[0] ?? "";
-  assert.ok(rule.startsWith("pre.provider-notice-text {"), rule);
+  assert.ok(rule.startsWith("pre.ds-provider-notice-text {"), rule);
   assert.ok(rule.includes("white-space:pre-wrap"), rule);
   assert.ok(rule.includes("overflow-wrap:anywhere"), rule);
   assert.ok(!rule.includes("max-height") && !/overflow\s*:/.test(rule), rule);
@@ -133,7 +133,7 @@ test("a count of notices not shown is said in fixed words, only when finite and 
     const html = render(["x"], bad);
     assert.ok(!html.includes("more provider notices"), `count ${String(bad)}`);
     assert.ok(!html.includes("Infinity") && !html.includes("NaN"), `count ${String(bad)}`);
-    assert.ok(html.includes('<pre class="provider-notice-text">x</pre>'), `count ${String(bad)}`);
+    assert.ok(html.includes('<pre class="ds-provider-notice-text">x</pre>'), `count ${String(bad)}`);
   }
 });
 
@@ -141,7 +141,7 @@ test("the full text is shown uncut, one block per notice, in the order given", (
   const long = "n".repeat(1900);
   const html = render([long, "second"]);
   assert.ok(html.includes(`>${PROVIDER_NOTICE_TITLE}</h2>`));
-  assert.ok(html.includes(`<pre class="provider-notice-text">${long}</pre>`));
+  assert.ok(html.includes(`<pre class="ds-provider-notice-text">${long}</pre>`));
   assert.equal(count(html, "<pre "), 2);
   assert.ok(html.indexOf(long) < html.indexOf(">second</pre>"));
   assert.equal(count(html, "<section"), 1);
