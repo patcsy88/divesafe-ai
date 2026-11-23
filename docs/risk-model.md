@@ -317,18 +317,26 @@ marked):**
   GO (ADR 0024 A8, "Deploy of `d981a6a`").
 - No connection pooling for PostgreSQL (`postgres.py` ~297).
 
-**Known gap (owner decision #79a, 2026-11-24): the NO-GO outcome note can name a hard constraint
-that no rule found.** The outcome note is chosen by the final recommendation alone
-(`_OUTCOME_NOTES`, `api/schemas.py`). When the deterministic checks were less severe and an
-unverified model proposal raised the result to NO-GO (`llm_tightened`), the page still says "A
-hard constraint applies". Only a signed-off rule returns NO-GO (`DefinitionRule`, the MET range
-rule), so without a validated ruleset every NO-GO comes from a model proposal and every NO-GO
-page shows this sentence; with one, a model-raised NO-GO still does. The same note says "A human
-may override only with a rationale", but any override of NO-GO is less severe and also needs the
-`overrider` role (the decision form says so). The page also shows "Deterministic checks" and the
-model proposal, so the source is visible. The wording errs towards caution, so it is left
-unchanged for now (no API change). Found by risk review of the README sample pages, which use a
-NO-GO from a rule.
+**Fixed (owner decision #79b, 2026-11-24; was the #79a Known gap): the NO-GO outcome note named
+a hard constraint that no rule found.** The outcome note was chosen by the final recommendation
+alone (`_OUTCOME_NOTES`, `api/schemas.py`), so when an unverified model proposal raised a less
+severe deterministic result to NO-GO (`llm_tightened`), the page still said "A hard constraint
+applies". It now says "No rule found a hard constraint" in that case, after the existing
+"Deterministic checks: … An unverified LLM proposal raised this to NO-GO." prefix; a NO-GO from a
+rule keeps "A hard constraint applies". When the rules returned INSUFFICIENT EVIDENCE (the usual
+case without a validated threshold for every factor), the note adds that the rules could not
+assess the dive, so a hard constraint is not ruled out, and that it must not be treated as safe.
+Both NO-GO notes now say a less severe outcome needs a reason and the `overrider` role (previously
+"only with a rationale"). Pinned by `tests/safety/test_agent_safety.py` (rules at GO, CAUTION,
+INSUFFICIENT EVIDENCE and NO-GO, and the default pipeline). Wording only: the recommendation, the
+decision rules and what is stored are unchanged.
+
+**Known gap (2026-11-24, not owner-approved): a NO-GO from one reading of conflicting
+evidence.** When the most severe
+variant of conflicting evidence returns NO-GO (ADR 0026), the deterministic result is NO-GO and
+the note says "A hard constraint applies", although the constraint holds for only one reading of
+the evidence. The appended "Evidence problems" text names the conflict, and the wording errs
+towards caution, so it is left as it is.
 
 **Known gap (not owner-approved): a recorded decision can be reported as an error.** On
 `POST /decision` the decision is stored before the response view is built. If

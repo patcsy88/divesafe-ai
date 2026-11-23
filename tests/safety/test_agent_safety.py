@@ -266,6 +266,98 @@ def test_llm_forced_severity_is_attributed_not_presented_as_a_rule_result() -> N
     assert note.startswith(
         "Deterministic checks: GO. An unverified LLM proposal raised this to NO-GO."
     )
+    # Owner #79b: no rule found a hard constraint, so the note must not claim one.
+    assert "No rule found a hard constraint." in note
+    assert "A hard constraint applies" not in note
+    assert "reason and the overrider role" in note
+    # The note never depends on a decision or on what the caller may see.
+    assert AssessmentView.withheld(record).outcome_note == note
+
+
+class _FixedRule:
+    citation = "test fixture (synthetic, not a real safety source)"
+
+    def __init__(self, outcome: R) -> None:
+        self.outcome = outcome
+        self.rule_id = f"synthetic.fixed_{outcome.name.lower()}"
+
+    def evaluate(self, plan: Any, evidence: Any) -> Any:
+        from divesafe.domain import RuleResult
+
+        return RuleResult(
+            rule_id=self.rule_id,
+            outcome=self.outcome,
+            rationale="synthetic",
+            evidence_ids=tuple(e.id for e in evidence),
+        )
+
+
+def _engine_of(outcome: R) -> Any:
+    from tests.agent.scripted_llm import engine
+
+    from divesafe.risk import RiskRulesEngine
+
+    base = engine(with_warning_rule=False)
+    return RiskRulesEngine(
+        [_FixedRule(outcome)], base.policy, "synthetic", required_factors=frozenset()
+    )
+
+
+_UNASSESSED = (
+    "the rules could not assess this dive, so one is not ruled out. Do not treat it as safe."
+)
+
+
+@pytest.mark.parametrize("rules", [R.GO, R.CAUTION, R.INSUFFICIENT_EVIDENCE])
+def test_a_model_raised_no_go_never_claims_a_rule_found_a_hard_constraint(rules: R) -> None:
+    from divesafe.api.schemas import AssessmentView
+
+    record = run_pipeline(
+        fake(recommendation="NO-GO"), with_warning_rule=False, risk_engine=_engine_of(rules)
+    )
+    assert record.deterministic_recommendation is rules
+    assert record.llm_tightened is True
+    note = AssessmentView.of(record).outcome_note
+    assert note.startswith(
+        f"Deterministic checks: {rules.value}. An unverified LLM proposal raised this to NO-GO."
+    )
+    assert "No rule found a hard constraint" in note
+    assert "A hard constraint applies" not in note
+    assert "reason and the overrider role" in note
+    # Owner #79b, risk S1: rules that could not assess the dive have not cleared it.
+    assert (_UNASSESSED in note) is (rules is R.INSUFFICIENT_EVIDENCE)
+    assert AssessmentView.withheld(record).outcome_note == note
+
+
+def test_the_usual_production_path_says_a_hard_constraint_is_not_ruled_out() -> None:
+    # The default pipeline's warning rule leaves the rules at INSUFFICIENT EVIDENCE, as in
+    # production without a validated threshold for every factor.
+    from divesafe.api.schemas import AssessmentView
+
+    record = run_pipeline(fake(recommendation="NO-GO"))
+    assert record.deterministic_recommendation is R.INSUFFICIENT_EVIDENCE
+    assert record.final_recommendation is R.NO_GO
+    note = AssessmentView.of(record).outcome_note
+    assert _UNASSESSED in note
+    assert "A hard constraint applies" not in note
+    assert "reason and the overrider role" in note
+    assert AssessmentView.withheld(record).outcome_note == note
+
+
+def test_a_rule_no_go_names_the_hard_constraint_and_the_overrider_role() -> None:
+    from divesafe.api.schemas import AssessmentView
+
+    record = run_pipeline(
+        fake(recommendation="NO-GO"), with_warning_rule=False, risk_engine=_engine_of(R.NO_GO)
+    )
+    assert record.deterministic_recommendation is R.NO_GO
+    assert record.llm_tightened is False
+    note = AssessmentView.of(record).outcome_note
+    assert note.startswith("A hard constraint applies.")
+    assert "No rule found a hard constraint" not in note
+    assert "reason and the overrider role" in note
+    # The note never depends on a decision or on what the caller may see.
+    assert AssessmentView.withheld(record).outcome_note == note
 
 
 def test_missing_specialists_are_disclosed_to_later_prompts_and_to_the_user() -> None:
