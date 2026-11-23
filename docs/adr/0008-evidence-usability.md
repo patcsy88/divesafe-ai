@@ -191,12 +191,40 @@ page URLs of the 72-file comparison at 900 and 320 px, light and dark, the only 
 confirm text) or their ancestors, as at `fbad5a2`; React Aria's overlay code, which adds those
 attributes, is reachable from HeroUI's `Input` and is in the built browser chunks, but runs only
 inside a combo box or popover, which the app does not render. The confirm step and the error alerts
-were checked in restyle step 7 and again in step 9. Still to do at the web deploy:
+were checked in restyle step 7 and again in step 9.
+
+The deploy baseline moved from `web-baseline-20261123` (`30ebce7`, which stays as the record of the
+check above) to `web-baseline-20261123-2` (`1fe7311`) on 2026-11-23 (owner), without repeating the
+check: `git diff web-baseline-20261123 1fe7311 -- web/` adds only `web/tests/hiding.test.ts` (ADR
+0017), and the build output is the same. Each commit was built from a fresh `npm ci
+--ignore-scripts` of the same lock file (no package in it has an install script, which CI's `web`
+job checks for the whole lock file (ADR 0017), so this matches the plain `npm ci` below; Node
+26.13.0, npm 11.20.0, `NEXT_TELEMETRY_DISABLED=1`, on macOS 27.0 arm64; the list hash may differ on
+another OS or CPU, so a rerun there compares its own two builds) with one fixed
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (a scratch value, for the comparison only; never in a committed
+file, CI or an image, and those builds are never deployed). A script (`tools/web-build-compare.sh`,
+committed byte for byte as run (owner, 2026-11-23); run `bash tools/web-build-compare.sh <web>/.next
+<list>` on each build, then `diff` the lists; SHA-256
+`4fc9ba8744b1b18aa8dddb2da1061d074e42058ba484e0f222e88997d61bea0f`) hashed every file under `.next`
+except `cache/`, `trace*` and `diagnostics/` (256 files) after masking only what Next makes random
+or path-specific on every build: the build id, the 42-hex server action ids, the 32-hex hashes in
+`.nft.json` trace files, the preview mode id and keys, `server/preview-props.json` and the
+checkout's absolute path. The two lists are identical (`diff` exit 0, SHA-256 of each list
+`066e1fb790a92ea8193637f97a19ce6c75d94c13e01791656c5c66c2eb9aec04`, so a rerun can be checked
+without the lists, which are not kept), and so are two builds of `30ebce7`. Three positive controls
+on `30ebce7` each showed a difference: one word in `DegradedEvidenceNote.ts` (2 lines of the list),
+one CSS value in `globals.css` (13) and one word in the client component `DecisionForm.tsx` (4), so
+the masks did not hide any of those changes. The tag is made on the pushed, reviewed commit; a
+rebase before that means the comparison and this hash are redone. A later change touching only
+`web/tests/` moves the baseline only with the owner's approval, review by `risk-reviewer` and
+`security-reviewer`, the same comparison including all three positive controls, and a `git diff`
+from the current tag confined to `web/tests/`; the checklist is never narrowed to skip `web/tests/`.
+Still to do at the web deploy:
 
 - build with `NEXT_TELEMETRY_DISABLED=1` from a fresh `npm ci`;
-- confirm the bundle is built from a commit with no `web/` change since `30ebce7` (annotated tag
-  `web-baseline-20261123`: `git rev-parse 'web-baseline-20261123^{commit}'` is
-  `30ebce79ec378b7c5dd1fd3ba0eb7dc5c44748aa`, then `git diff web-baseline-20261123 <web commit> --
+- confirm the bundle is built from a commit with no `web/` change since `1fe7311` (annotated tag
+  `web-baseline-20261123-2`: `git rev-parse 'web-baseline-20261123-2^{commit}'` is
+  `1fe731101f5e5de9c9317e2239ceeb634eed90f4`, then `git diff web-baseline-20261123-2 <web commit> --
   web/` is empty), and that the API it talks to serves an assessment view unchanged since `fbad5a2`
   (`git diff fbad5a2 <API commit> -- src/divesafe/api/schemas.py` is empty); otherwise repeat this
   check against that build or API;
