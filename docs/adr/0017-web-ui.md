@@ -477,3 +477,111 @@ note's wording stays pinned to the API constant.
   'unsafe-inline'`; the restyle makes the style half of that gap harder to close. React Aria also
   injects one `<style>` element into `<head>` at runtime (a fixed `touch-action` rule); a nonce CSP
   without `'unsafe-inline'` in `style-src-elem` must allow it.
+
+## Amendment 2026-11-23: the web UI in the production compose file (PROPOSED)
+
+Owner decisions #14a–#18a, #42a, #43a and #47a–#56b. The web UI becomes the compose service `web`.
+Nothing under `web/` changes for it (#15b). It is defined, not deployed: the owner deploys it.
+
+- **Image (`docker/Dockerfile.web`, #17a+b, #42a).** Two stages on `node:24-bookworm-slim`. The
+  build stage runs `npm ci --ignore-scripts`, the normal `next build` and both build checks
+  (`check-no-spectrum.mjs`, `check-built-css.mjs`). The runtime stage installs with `npm ci
+  --omit=dev --omit=optional --ignore-scripts`, fails if `sharp` or `@img` is present, copies only
+  this platform's SWC binary, the `.next` output, `next.config.ts` and the launcher, and runs as
+  `node` (uid 1000). The build context is cut down by `docker/Dockerfile.web.dockerignore`.
+- **Secrets (#47a, #50a, #53a).** Two compose file secrets on `web` only:
+  `divesafe_web_session_secret` (64 lower-case hex characters) and `divesafe_web_actions_key` (32
+  bytes, base64). `docker/make-secrets.sh` creates both and never overwrites one. The launcher
+  `docker/web-start.cjs` refuses to start if either is set in the environment, missing or in the
+  wrong form, sets them for its own process, opens the API relay and then starts `next start` in
+  that process. No `env_file`. `make-secrets.sh` checks both files' forms after writing them.
+- **Path to the API (#48a, #52a, #55a).** `web` publishes `127.0.0.1:3100` only (#18a). Its own
+  code calls `http://127.0.0.1:8000`. The launcher listens there, in the same Node process as Next,
+  and forwards each connection to the API's fixed address `10.231.78.10` on the internal network
+  `web-api` (`10.231.78.0/24`, pool `.128/25`, so no other container gets that address). It never
+  looks a name up. Idle connections close after 120 s on either side, at most 64 are open at once,
+  the process exits if it cannot listen (#54a), and Next starts only once it listens. Because the
+  relay is part of the process, a restart of `web` restarts it too. The web code's own API timeout
+  (`API_TIMEOUT_MS`, 30 s) is shorter than the relay's idle timeout, so the relay never cuts a call
+  the web code is still waiting for; a reset connection is shown as an unknown outcome to check
+  before retrying, like any other unanswered call (#55a replaces the separate
+  `web-relay` service of #48a, which lost its network after a `web` restart). (The "API timeout
+  (120 s)" in the login-throttle Known gap above predates this amendment; `API_TIMEOUT_MS` is 30 s.
+  That gap's late-release sentence should be re-checked against 30 s.)
+- **Hardening (#54a).** `init: true` and `pull_policy: build` on `web`; a read-only root file
+  system, a small tmpfs, memory and process limits; a healthcheck that calls only loopback and
+  passes on 200 alone. `DIVESAFE_WEB_TRUST_PROXY` is fixed at `"0"`. The healthcheck covers Next
+  only, not the relay. Uptime Kuma watches the API's `/health` directly (ADR 0027 item 3), not
+  through the relay; a broken relay path shows as errors in the web UI, not as an alert.
+- **Deploying and rolling back.** Before each `--build`, keep the running image: `docker tag
+  divesafe-web:local divesafe-web:rollback-<date>`. Always name the services: a bare `C up -d`
+  starts `web` too. The first time, `C up -d --no-build --wait api` once, so the API joins `web-api`
+  at its fixed address, then `C up -d --build --wait web`. Roll back by tagging the old image as
+  `divesafe-web:local` and `C up -d --no-build --wait web` (checked in a scratch run: with
+  `--no-build`, `pull_policy: build` does not rebuild; a later `up` without it does).
+- **Tests and CI.** `tests/safety/test_production_compose.py` pins the services, networks,
+  secrets, every instruction of `Dockerfile.web`, the dockerignore, the launcher (relay included)
+  line by line and `make-secrets.sh`'s web lines (#51a: strengthen only). The CI job `web-image`
+  builds the image; checks it runs as `node` (uid 1000) with no `sharp`, `@img` or `.env` file;
+  checks that the built UI carries the degraded-evidence note; checks that the launcher refuses
+  either secret set in the environment, a missing secret file and a malformed one, each with its
+  fixed message; and starts it with throwaway secret files, no network, no capabilities, an init and
+  compose's limits until `/login` answers 200. It then checks that only one process runs besides the
+  init, that no process environment (Next's included) holds a secret name, and that Next still
+  prefers the runtime server-actions key. A last step starts it on an internal network with a stub
+  API at `10.231.78.10` and checks that the relay reaches it. `trivy.yml` scans the web image too;
+  its SARIF categories are now `trivy-api` and `trivy-web`.
+- **Deploy precondition (ADR 0008 Amendment 1, Open preconditions (2026-11-22), control 2).**
+  Before `web` is deployed, and before `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` is set to `true` while
+  `web` runs: (a) the image being deployed must include `DegradedEvidenceNote`. CI job `web-image`
+  checks this on every build, so deploy only an image built from a commit where that job passed.
+  The checks on `fbad5a2` and `30ebce7` were not deployed builds. Before `up`, run the same check
+  on the image that will run: `docker run --rm --network none --entrypoint sh divesafe-web:local -c
+  'grep -rqF --include="*.js" "based on model and forecast data, not observations"
+  /web/.next/server'` (exit 0 required). (b) Every client a decider uses
+  must be checked by hand to show `degraded_evidence_note`. Nothing enforces (b).
+- **Web has a route out.** `web-ingress` cannot be internal, because Docker cannot publish a port
+  from an internal network (#49a). Only the API path is fixed; a compromised Next process could
+  reach the internet. The relay is not a boundary: a compromised Next process can reach the API
+  directly at `10.231.78.10:8000` on `web-api`.
+- **The secrets are readable inside the web container.** The secret files stay mounted under
+  `/run/secrets` for the container's lifetime (mode 0444), and the launcher puts both values in the
+  `process.env` of the one Node process (Next and the relay). They are not in
+  `/proc/<pid>/environ`, because they are set after the process starts. Anything that runs code in
+  the container can read them: from the files, from the process, or from its memory (same uid,
+  subject to the host's Yama setting). A process Next starts with default options would inherit
+  them. The launcher starts none, and a test bans it from doing so. CI checks that Next has started
+  none after start-up and three page loads (job `web-image`). Other code paths are not checked.
+  Checked for Next 16.4.6; re-checked on every Next upgrade (CI tripwire, job `web-image`).
+- **The build bakes a random server-actions key** into the manifest. It is unused while the
+  runtime key is set (above), and the launcher refuses to start without one.
+- **Image supply chain.** The base image is pinned by tag, not digest. Trivy reports; it does not
+  block a merge.
+- **Plain HTTP and one shared bucket.** Until a TLS proxy is in front and
+  `DIVESAFE_WEB_TRUST_PROXY` and `allowedOrigins` are set, the web UI is for loopback use only, the
+  session cookie is `Secure` (so a browser over plain HTTP on another host drops it), and every
+  sign-in shares the web server's throttle bucket at the API.
+- **Next listens on 0.0.0.0 inside its container**; only the compose `ports` line keeps it on the
+  host's loopback. Docker Engine before 28 did not fully block other hosts on the LAN from a
+  loopback-published port; the host runs 29.8.2. It listens on `web-api` as well, so `api` can
+  also reach it there.
+- **The relay is plain TCP**, so it carries the bearer key in clear text on `web-api`, a network
+  only `api` and `web` join. No test can see a host route; on a new host check that nothing
+  (LAN, VPN) overlaps `10.231.78.0/24` with `netstat -rn`.
+- **npm, yarn and corepack are in the runtime image** (#56b). They come with the
+  `node:24-bookworm-slim` base image and Next does not need them at runtime. Code that runs in the
+  container could use them to fetch and install packages through web's route out. Removing them is
+  a later Dockerfile change.
+- **The Spectrum packages are on disk in the runtime image** (#43a). They are runtime
+  dependencies of `web/package.json`, so `npm ci --omit=dev` installs them under `node_modules`;
+  the build check keeps them out of what the browser loads. Dropping them is a later dependency
+  change.
+- **DNS rebinding to `127.0.0.1:3100`.** Next does not check `Host`. A page in the operator's
+  browser can rebind its own name to the loopback port and use the pages that need no session,
+  including the `login` action. It never gets the session cookie (that cookie belongs to
+  `127.0.0.1`), but with `DIVESAFE_WEB_TRUST_PROXY=0` its failed guesses fill the one shared
+  throttle bucket and lock everyone out of sign-in for a minute at a time. The API port
+  `127.0.0.1:8000` has the same exposure, behind bearer authentication. A Host allow-list belongs
+  in the TLS proxy (#18a); `web/` stays unchanged (#15b).
+- **The `Secure` cookie attribute is not yet checked with a real sign-in** in the container
+  (`NODE_ENV=production` is set in the image, which is what turns it on).

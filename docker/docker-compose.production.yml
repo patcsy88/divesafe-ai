@@ -15,9 +15,10 @@
 # Build only from the commit you deploy. Never use --build or `build` with --profile knowledge:
 # the loaders share the api image tag, so a build there would replace the running api's image.
 #
-# What is NOT here: TLS in front of the API (put your own reverse proxy in front of 127.0.0.1:8000),
-# the web UI, a backup schedule (docker/backup.sh and restore.sh exist: docs/backup-and-restore.md),
-# and the signed ruleset itself (a host file outside the repository, mounted read-only into the api).
+# What is NOT here: TLS in front of the API and the web UI (put your own reverse proxy in front of
+# 127.0.0.1:8000 and 127.0.0.1:3100), a backup schedule (docker/backup.sh and restore.sh exist:
+# docs/backup-and-restore.md), and the signed ruleset itself (a host file outside the repository,
+# mounted read-only into the api).
 # No secret is in this file or passed through the environment: each one is mounted as a file into
 # only the service that needs it.
 name: divesafe-prod
@@ -190,7 +191,13 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    networks: [data, egress, divesafe-trace]
+    # The web relay reaches the API at this fixed address, never by name (owner #52a).
+    networks:
+      data: {}
+      egress: {}
+      divesafe-trace: {}
+      web-api:
+        ipv4_address: 10.231.78.10
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -209,6 +216,61 @@ services:
     read_only: true
     tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
     mem_limit: 1g
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Web UI (ADR 0017). Always name the services: a bare `up` would start web too. The first time,
+  # recreate the API once so it joins web-api at its fixed address, then start web on its own:
+  #   C up -d --no-build --wait api
+  #   docker tag divesafe-web:local divesafe-web:rollback-<date>   # before each --build
+  #   C up -d --build --wait web
+  # Roll back by tagging the old image as divesafe-web:local and `C up -d --no-build --wait web`.
+  # Its two secrets are files, like every other secret (owner #50a); docker/web-start.cjs reads them
+  # at start, never at build (owner #47a). Published on 127.0.0.1 only; put your own TLS proxy in
+  # front (owner #18a).
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    image: divesafe-web:local
+    pull_policy: build
+    restart: unless-stopped
+    # A small init as PID 1, so `docker stop` ends Next promptly (owner #54a).
+    init: true
+    environment:
+      # The web server accepts http on loopback only; the launcher's relay forwards it to the API
+      # (owner #48a, #55a).
+      DIVESAFE_API_URL: http://127.0.0.1:8000
+      # Set to 1 only once a TLS proxy you control sets X-Forwarded-For (owner #18a).
+      DIVESAFE_WEB_TRUST_PROXY: "0"
+    secrets:
+      - source: web_session_secret
+        target: divesafe_web_session_secret
+      - source: web_actions_key
+        target: divesafe_web_actions_key
+    # web-ingress is not internal, because Docker cannot publish a port from an internal network,
+    # so this container has a route out (owner #49a, an ADR 0017 Known gap). Its own code calls
+    # only DIVESAFE_API_URL. If web-api were dropped here, the relay's connection to the API's
+    # address would leave through web-ingress instead, so the tests pin both networks.
+    networks: [web-ingress, web-api]
+    ports:
+      - "127.0.0.1:3100:3100"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch("http://127.0.0.1:3100/login",{signal:AbortSignal.timeout(3000)})
+          .then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    mem_limit: 512m
     pids_limit: 256
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -281,6 +343,19 @@ networks:
     internal: true
   # Outbound access for the API only (the model host and the data sources).
   egress: {}
+  # The web UI's published port (ADR 0017). Not internal: Docker cannot publish a port from an
+  # internal network (owner #49a).
+  web-ingress: {}
+  # No route out: the web launcher's relay to the API only. The API has the fixed address
+  # 10.231.78.10, outside `ip_range`, so no other container is ever given it (owner #52a). The
+  # subnet avoids the LAN, Tailscale, Docker Desktop's ranges and divesafe-trace; no test can see
+  # a host route, so check `netstat -rn` on a new host.
+  web-api:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.78.0/24
+          ip_range: 10.231.78.128/25
   # ADR 0027 amendment: spans to the local Langfuse only. No route out; joined only by the API
   # and Langfuse's web container (its own compose, `external: true`), which has the fixed
   # address 10.231.77.10, outside `ip_range`, so no other container is ever given it. The
@@ -325,3 +400,7 @@ secrets:
     file: ./secrets/divesafe_trace_public_key
   trace_secret_key:
     file: ./secrets/divesafe_trace_secret_key
+  web_session_secret:
+    file: ./secrets/divesafe_web_session_secret
+  web_actions_key:
+    file: ./secrets/divesafe_web_actions_key

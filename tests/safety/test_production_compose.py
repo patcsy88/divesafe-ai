@@ -18,6 +18,7 @@ COMPOSE = Path(__file__).resolve().parents[2] / "docker" / "docker-compose.produ
 SECRET_WORDS = ("PASSWORD", "API_KEY", "TOKEN", "KEY_HASHES", "DATABASE_URL")
 TOKEN_BUDGET_KEY = "DIVESAFE_LLM_MAX_OUTPUT_TOKENS"
 LOADERS = ("kb_load", "kb_withdraw")
+WEB = ("web",)
 
 
 def _blocks(text: str, top: str) -> dict[str, list[str]]:
@@ -54,7 +55,7 @@ def text() -> str:
 @pytest.fixture(scope="module")
 def services(text: str) -> dict[str, list[str]]:
     found = _blocks(text, "services")
-    assert set(found) == {"db-tls", "db", "db-init", "api", "kb_load", "kb_withdraw"}, (
+    assert set(found) == {"db-tls", "db", "db-init", "api", "kb_load", "kb_withdraw", *WEB}, (
         "a service was added or removed"
     )
     return found
@@ -195,15 +196,19 @@ def test_the_database_is_not_published_and_the_data_network_has_no_route_out(
     for name in ("db", "db-tls", "db-init", *LOADERS):
         assert not any(line.strip() == "ports:" for line in services[name]), name
     networks = _blocks(text, "networks")
-    assert set(networks) == {"data", "egress", "divesafe-trace"}
+    assert set(networks) == {"data", "egress", "divesafe-trace", "web-ingress", "web-api"}
     assert "internal: true" in "\n".join(networks["data"])
     assert "internal: true" not in "\n".join(networks["egress"])
     for name in ("db", "db-init", "db-tls", *LOADERS):
         assert "egress" not in "\n".join(services[name]), name
         assert "divesafe-trace" not in "\n".join(services[name]), name
+        assert "web-" not in "\n".join(services[name]), name
 
 
 TRACE_WEB_ADDRESS = ipaddress.IPv4Address("10.231.77.10")
+# The API's fixed address on web-api: the relay connects to it and never looks up a name
+# (owner #52a).
+WEB_API_ADDRESS = ipaddress.IPv4Address("10.231.78.10")
 
 
 def test_the_trace_network_is_internal_fixed_and_never_hands_out_the_langfuse_address(
@@ -429,7 +434,14 @@ def test_each_service_is_on_exactly_the_networks_it_should_be(
     assert _value(services["db-init"], "networks") == "[data]"
     for name in LOADERS:
         assert _value(services[name], "networks") == "[data]", name
-    assert _value(services["api"], "networks") == "[data, egress, divesafe-trace]"
+    assert _list(services["api"], "networks") == [
+        "      data: {}",
+        "      egress: {}",
+        "      divesafe-trace: {}",
+        "      web-api:",
+        f"        ipv4_address: {WEB_API_ADDRESS}",
+    ]
+    assert _value(services["web"], "networks") == "[web-ingress, web-api]"
     assert _value(services["db-tls"], "network_mode") == "none"
     assert _value(services["db-tls"], "networks") is None
 
@@ -767,6 +779,8 @@ def test_the_secret_names_point_at_the_files_they_are_named_for(text: str) -> No
         "loader_database_url": "divesafe_loader_database_url",
         "trace_public_key": "divesafe_trace_public_key",
         "trace_secret_key": "divesafe_trace_secret_key",
+        "web_session_secret": "divesafe_web_session_secret",
+        "web_actions_key": "divesafe_web_actions_key",
     }
 
 
@@ -955,9 +969,9 @@ def test_the_docker_build_context_excludes_env_files_and_keys_at_any_depth() -> 
     assert [line for line in ignore if line.startswith("!")] == ["!**/.env.example"]
 
 
-def _dockerfile_instructions() -> list[str]:
+def _dockerfile_instructions(name: str = "Dockerfile") -> list[str]:
     """Instruction lines with the keyword upper-cased, continuations joined, comments dropped."""
-    text = (COMPOSE.parent / "Dockerfile").read_text().replace("\\\n", " ")
+    text = (COMPOSE.parent / name).read_text().replace("\\\n", " ")
     out = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -1472,3 +1486,366 @@ def test_the_corpus_staging_location_is_ignored_by_git_and_the_build() -> None:
     # `**/corpus`: a directory named corpus at ANY depth (review nit 2026-11-09), not only the root.
     assert "**/corpus" in [x.strip() for x in (root / ".dockerignore").read_text().splitlines()]
     assert "**/corpus" in [x.strip() for x in (root / ".gitignore").read_text().splitlines()]
+
+
+# --- the web UI (ADR 0017; owner #48a, #49a, #50a, #51a) ------------------------------------------
+
+WEB_START = COMPOSE.parent / "web-start.cjs"
+# Every line of the launcher that is not blank or a comment, in order.
+WEB_START_LINES = [
+    '"use strict";',
+    'const fs = require("node:fs");',
+    'const net = require("node:net");',
+    'const path = require("node:path");',
+    "const SECRETS = [",
+    '  ["DIVESAFE_WEB_SESSION_SECRET", "/run/secrets/divesafe_web_session_secret", '
+    "/^[0-9a-f]{64}$/],",
+    "  [",
+    '    "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY",',
+    '    "/run/secrets/divesafe_web_actions_key",',
+    "    /^[A-Za-z0-9+/]{43}=$/,",
+    "  ],",
+    "];",
+    "function refuse(message) {",
+    "  process.stderr.write(`web-start: ${message}\\n`);",
+    "  process.exit(1);",
+    "}",
+    "for (const [name, file, shape] of SECRETS) {",
+    "  if (name in process.env) refuse(`${name} must not be set in the environment`);",
+    "  let raw;",
+    "  try {",
+    '    raw = fs.readFileSync(file, "utf8");',
+    "  } catch {",
+    "    refuse(`cannot read the secret file for ${name}`);",
+    "  }",
+    '  const value = raw.endsWith("\\n") ? raw.slice(0, -1) : raw;',
+    "  if (!shape.test(value)) refuse(`the secret file for ${name} is not in the expected form`);",
+    '  if (name === "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY" && '
+    'Buffer.from(value, "base64").length !== 32)',
+    "    refuse(`the secret file for ${name} is not 32 bytes of base64`);",
+    "  process.env[name] = value;",
+    "}",
+    "const relay = net.createServer((c) => {",
+    '  const u = net.connect(8000, "10.231.78.10");',
+    "  c.setTimeout(120000, () => c.destroy());",
+    "  u.setTimeout(120000, () => u.destroy());",
+    "  c.pipe(u).pipe(c);",
+    '  u.on("error", () => c.destroy());',
+    '  c.on("error", () => u.destroy());',
+    '  u.on("close", () => c.destroy());',
+    '  c.on("close", () => u.destroy());',
+    "});",
+    "relay.maxConnections = 64;",
+    'relay.on("error", () => refuse("the API relay failed"));',
+    'relay.listen(8000, "127.0.0.1", () => {',
+    '  const bin = path.join(__dirname, "node_modules", "next", "dist", "bin", "next");',
+    '  process.argv = [process.argv[0], bin, "start", "-H", "0.0.0.0", "-p", "3100"];',
+    "  require(bin);",
+    "});",
+]
+# The whole web Dockerfile, instruction by instruction, whitespace normalised (security review
+# round 2 S2, risk review round 2 should-fix 1 and 2): both stages, because the build stage's
+# output ships. A dropped NEXT_TELEMETRY_DISABLED (web has a route out), NODE_ENV=production (it
+# turns the cookie's Secure flag on), --ignore-scripts or a build check fails here.
+WEB_DOCKERFILE = [
+    "FROM node:24-bookworm-slim AS build",
+    "ENV NEXT_TELEMETRY_DISABLED=1",
+    "WORKDIR /web",
+    "COPY web/package.json web/package-lock.json ./",
+    "RUN npm ci --ignore-scripts --no-audit --no-fund",
+    "COPY web/ ./",
+    "RUN npm run build && node scripts/check-no-spectrum.mjs && node scripts/check-built-css.mjs"
+    " && rm -rf .next/cache",
+    'RUN set -- node_modules/@next/swc-linux-*-gnu && if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then'
+    ' echo "expected one SWC binary" >&2; exit 1; fi && mkdir /swc && cp -r "$1" /swc/',
+    "FROM node:24-bookworm-slim",
+    "ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1",
+    "WORKDIR /web",
+    "COPY web/package.json web/package-lock.json ./",
+    "RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund"
+    " && npm cache clean --force && if find node_modules -type d \\( -name sharp -o -path"
+    " '*/@img/*' -o -name '@img' \\) | grep -q .; then echo \"sharp or @img present\" >&2;"
+    " exit 1; fi",
+    "COPY --from=build /swc/ ./node_modules/@next/",
+    'RUN set -- node_modules/@next/swc-* && if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then echo'
+    ' "expected one SWC binary" >&2; exit 1; fi && if find node_modules -type d \\( -name sharp'
+    " -o -name '@img' \\) | grep -q .; then echo \"sharp or @img present\" >&2; exit 1; fi",
+    "COPY --from=build /web/.next ./.next",
+    "COPY --from=build /web/next.config.ts ./next.config.ts",
+    "COPY docker/web-start.cjs ./web-start.cjs",
+    "USER node",
+    "EXPOSE 3100",
+    'CMD ["node", "web-start.cjs"]',
+]
+
+
+def test_the_web_networks_are_these_and_only_web_api_has_no_route_out(text: str) -> None:
+    """web-api carries the relay to the API only and has no route out. web-ingress is not internal
+    because Docker cannot publish a port from an internal network (owner #49a)."""
+    networks = _blocks(text, "networks")
+    block = [x.strip() for x in networks["web-api"] if x.strip()]
+    assert block == [
+        "internal: true",
+        "ipam:",
+        "config:",
+        "- subnet: 10.231.78.0/24",
+        "ip_range: 10.231.78.128/25",
+    ]
+    assert networks["web-ingress"] == []
+    # A fixed /24 that holds the API's address outside the pool Docker hands out, and shares
+    # nothing with divesafe-trace (owner #52a).
+    subnet = ipaddress.IPv4Network(block[3].split(": ")[1])
+    pool = ipaddress.IPv4Network(block[4].split(": ")[1])
+    assert subnet.prefixlen == 24 and pool.subnet_of(subnet) and subnet.is_private
+    assert WEB_API_ADDRESS in subnet and WEB_API_ADDRESS not in pool
+    assert WEB_API_ADDRESS.packed[-1] not in (0, 1, 255)
+    assert not subnet.overlaps(ipaddress.IPv4Network("10.231.77.0/24"))
+    assert not subnet.overlaps(ipaddress.IPv4Network("100.64.0.0/10"))
+    # Only the API is given a fixed address there.
+    assert text.count("ipv4_address:") == 1
+
+
+def test_only_the_api_and_the_web_service_join_web_api(services: dict[str, list[str]]) -> None:
+    """If web lost web-api, the relay's connection to the API's address would leave through
+    web-ingress's default route instead, in clear text (security review round 2)."""
+    holders = {name for name, block in services.items() if "web-api" in "\n".join(block)}
+    assert holders == {"api", "web"}
+    holders = {name for name, block in services.items() if "web-ingress" in "\n".join(block)}
+    assert holders == {"web"}
+
+
+def test_the_web_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
+    assert _list(services["web"], "ports") == ['      - "127.0.0.1:3100:3100"']
+    for name in WEB:
+        assert _value(services[name], "expose") is None, name
+
+
+def test_the_web_secrets_are_files_on_the_web_service_only(services: dict[str, list[str]]) -> None:
+    """Owner #50a: mounted under /run/secrets like every other secret, never through the
+    environment, and never on any other service."""
+    assert _secret_targets(services["web"]) == {"web_session_secret", "web_actions_key"}
+    assert _list(services["web"], "secrets") == [
+        "      - source: web_session_secret",
+        "        target: divesafe_web_session_secret",
+        "      - source: web_actions_key",
+        "        target: divesafe_web_actions_key",
+    ]
+    for name, block in services.items():
+        if name != "web":
+            joined = "\n".join(block)
+            assert "web_session_secret" not in joined and "web_actions_key" not in joined, name
+
+
+def test_the_web_services_get_exactly_these_settings(services: dict[str, list[str]]) -> None:
+    assert _environment(services["web"]) == {
+        "DIVESAFE_API_URL": "http://127.0.0.1:8000",
+        "DIVESAFE_WEB_TRUST_PROXY": '"0"',
+    }
+    for name in WEB:
+        joined = "\n".join(services[name])
+        assert "SECRET" not in joined and "ENCRYPTION_KEY" not in joined, name
+
+
+def test_the_web_service_uses_the_web_image_and_is_locked_down(
+    services: dict[str, list[str]],
+) -> None:
+    web = services["web"]
+    build = [x.strip() for x in _list(web, "build") or []]
+    assert build == ["context: ..", "dockerfile: docker/Dockerfile.web"]
+    assert _value(web, "image") == "divesafe-web:local"
+    assert _value(web, "read_only") == "true"
+    assert _value(web, "user") is None
+    assert _value(web, "cap_add") is None
+    assert _value(web, "volumes") is None
+    assert _value(web, "cap_drop") == "[ALL]"
+    assert _value(web, "security_opt") == '["no-new-privileges:true"]'
+    assert (_value(web, "mem_limit"), _value(web, "pids_limit")) == ("512m", "256")
+    assert _value(web, "tmpfs") == '["/tmp:size=16m,noexec,nosuid,nodev"]'
+    assert _value(web, "entrypoint") is None and _value(web, "command") is None
+    assert _value(web, "network_mode") is None and _value(web, "depends_on") is None
+    # Owner #54a: web is only ever built here, never pulled; it has an init as PID 1.
+    assert _value(web, "pull_policy") == "build"
+    assert _value(web, "init") == "true"
+    assert _value(web, "restart") == "unless-stopped"
+
+
+def test_the_relay_runs_inside_the_launcher_and_reaches_only_the_fixed_api_address() -> None:
+    """Owner #55a: the relay is part of web-start.cjs, so a restart of web restarts it too. It
+    connects only to the API's fixed address (#52a; web has a route out, so a missing name could
+    resolve outside), listens only on loopback, and Next starts only once it listens."""
+    source = WEB_START.read_text()
+    code = "\n".join(x for x in source.splitlines() if not x.lstrip().startswith("//"))
+    assert f'net.connect(8000, "{WEB_API_ADDRESS}")' in code
+    assert len(re.findall(r"connect\(", code)) == 1
+    assert len(re.findall(r"\.listen\(", code)) == 1
+    assert '"api"' not in code and "lookup" not in code and "dns" not in code.lower()
+    assert 'relay.listen(8000, "127.0.0.1", () => {' in code
+    assert code.index("relay.listen(") < code.index("require(bin)")
+    assert code.index("process.env[name] = value;") < code.index("net.createServer(")
+
+
+def _web_dockerfile_instructions() -> list[str]:
+    return _dockerfile_instructions("Dockerfile.web")
+
+
+def test_the_web_dockerfile_is_exactly_these_instructions() -> None:
+    got = [" ".join(x.split()) for x in _web_dockerfile_instructions()]
+    assert got == WEB_DOCKERFILE
+
+
+def test_the_web_image_starts_through_the_launcher_as_the_node_user() -> None:
+    instructions = _web_dockerfile_instructions()
+    assert [x for x in instructions if x.startswith("CMD ")] == ['CMD ["node", "web-start.cjs"]']
+    assert not [x for x in instructions if x.startswith("ENTRYPOINT")]
+    assert [x for x in instructions if x.startswith("USER ")] == ["USER node"]
+    assert [x for x in instructions if x.startswith("FROM ")] == [
+        "FROM node:24-bookworm-slim AS build",
+        "FROM node:24-bookworm-slim",
+    ]
+    assert "COPY docker/web-start.cjs ./web-start.cjs" in instructions
+    # The runtime stage alone: it runs as node after its last RUN or COPY, takes only the SWC
+    # binary and the build output from the build stage (never its node_modules, which hold sharp
+    # and libvips), installs without optional packages and refuses sharp twice (owner #17, #42).
+    froms = [i for i, x in enumerate(instructions) if x.startswith("FROM ")]
+    final = instructions[froms[-1] :]
+    assert [x for x in final if x.startswith("USER ")] == ["USER node"]
+    last_write = max(i for i, x in enumerate(final) if x.startswith(("RUN ", "COPY ")))
+    assert final.index("USER node") > last_write
+    assert [x for x in final if x.startswith("COPY --from=")] == [
+        "COPY --from=build /swc/ ./node_modules/@next/",
+        "COPY --from=build /web/.next ./.next",
+        "COPY --from=build /web/next.config.ts ./next.config.ts",
+    ]
+    assert any(
+        x.startswith("RUN npm ci --omit=dev --omit=optional --ignore-scripts ") for x in final
+    )
+    assert sum("sharp" in x and "exit 1" in x for x in final) == 2
+    # The build-time checks it runs exist in the checkout, and both are run.
+    scripts = re.findall(r"node (scripts/[\w.-]+\.mjs)", " ".join(instructions))
+    assert scripts == ["scripts/check-no-spectrum.mjs", "scripts/check-built-css.mjs"]
+    for script in scripts:
+        assert (COMPOSE.parent.parent / "web" / script).is_file(), script
+    # The build stage never sees a real key (owner #47a).
+    assert not [x for x in instructions if "ENCRYPTION_KEY" in x or "SESSION_SECRET" in x]
+    ignore = (COMPOSE.parent / "Dockerfile.web.dockerignore").read_text().splitlines()
+    assert ignore[:3] == ["**", "!web/", "!docker/web-start.cjs"]
+    assert [x.strip() for x in ignore if x.strip()] == [
+        "**",
+        "!web/",
+        "!docker/web-start.cjs",
+        "web/node_modules",
+        "web/.next",
+        "web/tests",
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+    ]
+
+
+def test_the_web_launcher_reads_the_mounted_files_and_refuses_the_environment() -> None:
+    launcher = WEB_START.read_text()
+    for name, target in (
+        ("DIVESAFE_WEB_SESSION_SECRET", "divesafe_web_session_secret"),
+        ("NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "divesafe_web_actions_key"),
+    ):
+        assert f'"{name}", "/run/secrets/{target}"' in " ".join(launcher.split()), name
+    assert "if (name in process.env) refuse(" in launcher
+    assert "console." not in launcher
+    assert re.findall(r"process\.stderr\.write\(([^)]*)\)", launcher) == [
+        "`web-start: ${message}\\n`"
+    ]
+    assert "${value" not in launcher and "${raw" not in launcher
+
+
+def test_the_web_launcher_is_exactly_these_lines() -> None:
+    """Every line that is not blank or a comment, in order: a removed `process.exit`, a loosened
+    shape, a dropped 32-byte check or any other output of a value fails here."""
+    lines = [x.rstrip() for x in WEB_START.read_text().splitlines()]
+    assert [x for x in lines if x.strip() and not x.lstrip().startswith("//")] == WEB_START_LINES
+
+
+def test_the_web_launcher_starts_no_other_process() -> None:
+    """Security review S3: the secrets live in this one Node process. The launcher loads only
+    fs, net, path and Next, and never starts a child, a worker or a second Node with other
+    options."""
+    source = WEB_START.read_text()
+    for banned in ("child_process", "spawn", "fork", "exec", "Worker", "NODE_OPTIONS", "import("):
+        assert banned not in source, banned
+    assert len(re.findall(r"\brequire\(", source)) == 4
+
+
+def test_no_service_rewrites_name_resolution_or_shares_a_namespace(
+    services: dict[str, list[str]],
+) -> None:
+    """An `extra_hosts` or DNS setting on web could send API traffic somewhere else, and a shared
+    namespace would let another container reach the relay. Only db-tls sets a network mode."""
+    keys = ("extra_hosts", "dns", "dns_search", "dns_opt", "links", "external_links", "hostname")
+    for name, block in services.items():
+        for key in (*keys, "domainname"):
+            assert _value(block, key) is None, (name, key)
+        if name != "db-tls":
+            assert _value(block, "network_mode") is None, name
+
+
+def test_no_setting_is_named_like_a_web_secret(services: dict[str, list[str]]) -> None:
+    """Adds `SECRET` and `ENCRYPTION_KEY` to the secret-name scan, for every service. The one name
+    with `SECRET` in it is the secrets directory, and only as /run/secrets."""
+    for name, block in services.items():
+        for key, value in _environment(block).items():
+            if "SECRET" in key.upper() or "ENCRYPTION_KEY" in key.upper():
+                assert (key, value) == ("DIVESAFE_SECRETS_DIR", "/run/secrets"), (name, key)
+
+
+def test_the_secrets_script_creates_the_web_secrets_without_printing_them() -> None:
+    """Owner #53a: random, one line, written only through write_new (never overwritten, never in
+    a variable, so never echoed), in the forms docker/web-start.cjs accepts."""
+    script = (COMPOSE.parent / "make-secrets.sh").read_text()
+    assert (
+        '[ -e "$dir/divesafe_web_session_secret" ] ||\n'
+        "  openssl rand -hex 32 | tr -d '\\n' | write_new divesafe_web_session_secret || true\n"
+    ) in script
+    assert (
+        '[ -e "$dir/divesafe_web_actions_key" ] ||\n'
+        "  openssl rand -base64 32 | tr -d '\\n' | write_new divesafe_web_actions_key || true\n"
+    ) in script
+    assert script.count("openssl rand -hex 32") == 1 and script.count("openssl rand -base64") == 1
+    # sh has no pipefail: a failed openssl would leave an empty file that is kept forever, so the
+    # script checks both files' forms afterwards (security review round 2 S4).
+    assert (
+        '[ "$(grep -c \'\' "$dir/divesafe_web_session_secret")" -eq 1 ] &&\n'
+        "  grep -Eqx '[0-9a-f]{64}' \"$dir/divesafe_web_session_secret\" ||\n"
+        '  { echo "bad web session secret: delete $dir/divesafe_web_session_secret and rerun" >&2;'
+        " exit 1; }\n"
+    ) in script
+    assert (
+        '[ "$(grep -c \'\' "$dir/divesafe_web_actions_key")" -eq 1 ] &&\n'
+        "  grep -Eqx '[A-Za-z0-9+/]{43}=' \"$dir/divesafe_web_actions_key\" ||\n"
+        '  { echo "bad web actions key: delete $dir/divesafe_web_actions_key and rerun" >&2;'
+        " exit 1; }\n"
+    ) in script
+    assert "web_session" not in script.split("write_new() {")[0]
+
+
+def _healthcheck_test(block: list[str]) -> list[str]:
+    start = block.index("    healthcheck:")
+    assert block[start + 1] == "      test:"
+    out = []
+    for line in block[start + 2 :]:
+        if not line.startswith("        "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def test_the_web_healthcheck_is_exactly_this(services: dict[str, list[str]]) -> None:
+    """Security review nit: the check runs only node, calls only a loopback URL in its own
+    namespace with a timeout, and passes on 200 alone."""
+    assert _healthcheck_test(services["web"]) == [
+        "- CMD",
+        "- node",
+        "- -e",
+        "- >-",
+        'fetch("http://127.0.0.1:3100/login",{signal:AbortSignal.timeout(3000)})',
+        ".then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))",
+    ]

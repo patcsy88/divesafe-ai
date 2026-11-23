@@ -1,6 +1,7 @@
 #!/bin/sh
-# Creates the database secrets for docker-compose.production.yml (ADR 0024) in a directory that
-# only you can enter. It never overwrites a file and never prints a secret.
+# Creates the database, tracing and web UI secrets for docker-compose.production.yml (ADR 0024,
+# ADR 0017) in a directory that only you can enter. It never overwrites a file and never prints
+# a secret.
 #
 #   docker/make-secrets.sh docker/secrets
 #
@@ -63,6 +64,20 @@ fi
 # tracing on, start-up then refuses.
 [ -e "$dir/divesafe_trace_public_key" ] || { : | write_new divesafe_trace_public_key; }
 [ -e "$dir/divesafe_trace_secret_key" ] || { : | write_new divesafe_trace_secret_key; }
+# The web UI (ADR 0017, owner #50a, #53a): random, never printed, one line with no newline, read
+# by docker/web-start.cjs at start.
+[ -e "$dir/divesafe_web_session_secret" ] ||
+  openssl rand -hex 32 | tr -d '\n' | write_new divesafe_web_session_secret || true
+[ -e "$dir/divesafe_web_actions_key" ] ||
+  openssl rand -base64 32 | tr -d '\n' | write_new divesafe_web_actions_key || true
+# sh has no pipefail, so a failed openssl would leave an empty file that is then always kept.
+# One line, in the launcher's form (the launcher still checks again at start).
+[ "$(grep -c '' "$dir/divesafe_web_session_secret")" -eq 1 ] &&
+  grep -Eqx '[0-9a-f]{64}' "$dir/divesafe_web_session_secret" ||
+  { echo "bad web session secret: delete $dir/divesafe_web_session_secret and rerun" >&2; exit 1; }
+[ "$(grep -c '' "$dir/divesafe_web_actions_key")" -eq 1 ] &&
+  grep -Eqx '[A-Za-z0-9+/]{43}=' "$dir/divesafe_web_actions_key" ||
+  { echo "bad web actions key: delete $dir/divesafe_web_actions_key and rerun" >&2; exit 1; }
 
 for needed in divesafe_llm_api_key divesafe_api_key_hashes; do
   [ -e "$dir/$needed" ] || echo "still to add by hand: $dir/$needed" >&2

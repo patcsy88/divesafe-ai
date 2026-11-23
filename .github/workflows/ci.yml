@@ -134,3 +134,94 @@ jobs:
         run: node scripts/check-no-spectrum.mjs
       - name: The built CSS loads nothing from elsewhere (ADR 0017)
         run: node scripts/check-built-css.mjs
+
+  web-image:
+    name: web docker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build docker/Dockerfile.web (ADR 0017)
+        run: docker build -f docker/Dockerfile.web -t divesafe-web-ci .
+      - name: The web image runs as node and holds no sharp, @img or .env file (owner #17)
+        run: |
+          docker run --rm --network none --entrypoint sh divesafe-web-ci -c '
+          set -eu
+          [ "$(id -u)" = 1000 ] || { echo "not uid 1000" >&2; exit 1; }
+          [ "$(id -un)" = node ] || { echo "not the node user" >&2; exit 1; }
+          if find /web /usr/local/lib/node_modules \( -name sharp -o -name "@img" -o -name ".env*" \) | grep .; then exit 1; fi
+          '
+      - name: The built UI carries the degraded-evidence note (ADR 0008 Amendment 1, Open preconditions (a))
+        run: |
+          docker run --rm --network none --entrypoint sh divesafe-web-ci -c \
+            'grep -rqF --include="*.js" "based on model and forecast data, not observations" /web/.next/server'
+      - name: The launcher refuses a secret in the environment and a missing or malformed secret file
+        run: |
+          d="$RUNNER_TEMP/web-secrets"
+          mkdir -m 755 "$d"
+          printf '%064d' 0 | tr 0 c > "$d/divesafe_web_session_secret"
+          head -c 32 /dev/zero | base64 | tr -d '\n' > "$d/divesafe_web_actions_key"
+          chmod 444 "$d"/*
+          # Each run must refuse at once. If one starts Next instead, `timeout` ends it: the init passes
+          # the signal on to Node (as PID 1 Node would ignore it), and -k ends the client regardless.
+          if timeout -k 10 60 docker run --rm --init --network none -e NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=x -v "$d:/run/secrets:ro" divesafe-web-ci 2>"$RUNNER_TEMP/err"; then exit 1; fi
+          test "$(cat "$RUNNER_TEMP/err")" = "web-start: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY must not be set in the environment"
+          if timeout -k 10 60 docker run --rm --init --network none -e DIVESAFE_WEB_SESSION_SECRET=x -v "$d:/run/secrets:ro" divesafe-web-ci 2>"$RUNNER_TEMP/err"; then exit 1; fi
+          test "$(cat "$RUNNER_TEMP/err")" = "web-start: DIVESAFE_WEB_SESSION_SECRET must not be set in the environment"
+          if timeout -k 10 60 docker run --rm --init --network none divesafe-web-ci 2>"$RUNNER_TEMP/err"; then exit 1; fi
+          test "$(cat "$RUNNER_TEMP/err")" = "web-start: cannot read the secret file for DIVESAFE_WEB_SESSION_SECRET"
+          m="$RUNNER_TEMP/web-bad"
+          mkdir -m 755 "$m"
+          printf abc > "$m/divesafe_web_session_secret"
+          cp "$d/divesafe_web_actions_key" "$m/"
+          chmod 444 "$m"/*
+          if timeout -k 10 60 docker run --rm --init --network none -v "$m:/run/secrets:ro" divesafe-web-ci 2>"$RUNNER_TEMP/err"; then exit 1; fi
+          test "$(cat "$RUNNER_TEMP/err")" = "web-start: the secret file for DIVESAFE_WEB_SESSION_SECRET is not in the expected form"
+      - name: With throwaway secret files and no network, /login answers 200 from one process (owner #42, #55)
+        run: |
+          d="$RUNNER_TEMP/web-secrets"
+          trap 'docker rm -f web-ci >/dev/null 2>&1 || true' EXIT
+          docker run -d --name web-ci --network none --read-only --init \
+            --tmpfs /tmp:size=16m,noexec,nosuid,nodev --memory 512m --pids-limit 256 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -v "$d:/run/secrets:ro" divesafe-web-ci
+          ok=
+          for _ in $(seq 60); do
+            if docker exec web-ci node -e 'fetch("http://127.0.0.1:3100/login").then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))'; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs web-ci 2>&1 | tail -20
+          test -n "$ok"
+          if docker inspect web-ci --format '{{json .Config.Env}}' | grep -qE 'SESSION_SECRET|ENCRYPTION_KEY'; then exit 1; fi
+          # A few pages, then: one Node process besides the init (a child would inherit process.env),
+          # and no process environment holds a secret name. The launcher's own values are set after
+          # exec, so they never appear in /proc/<pid>/environ; this catches children and the image env.
+          docker exec web-ci node -e 'Promise.all(["/","/nope","/login"].map(p=>fetch("http://127.0.0.1:3100"+p,{redirect:"manual"}))).then(()=>process.exit(0),()=>process.exit(1))'
+          test "$(docker top web-ci -o pid,comm | tail -n +2 | grep -cv docker-init)" = 1
+          docker exec web-ci sh -c 'set -e; p=; for c in /proc/[0-9]*/comm; do case "$(cat "$c" 2>/dev/null)" in next-server*) p="${c%/comm}";; esac; done; [ -n "$p" ]; tr "\0" "\n" < "$p/environ"; for e in /proc/[0-9]*/environ; do tr "\0" "\n" < "$e" 2>/dev/null || true; done' > "$RUNNER_TEMP/env.txt"
+          grep -q '^NODE_ENV=production$' "$RUNNER_TEMP/env.txt"
+          if grep -qE 'SESSION_SECRET|ENCRYPTION_KEY' "$RUNNER_TEMP/env.txt"; then echo "secret name in a process environment" >&2; exit 1; fi
+          # The runtime key wins over the build manifest's.
+          docker exec web-ci grep -qF 'process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY || serverActionsManifest.encryptionKey' \
+            /web/node_modules/next/dist/server/app-render/encryption-utils.js
+      - name: The launcher's relay reaches a stub API at the fixed address on an internal network (owner #52, #55)
+        run: |
+          d="$RUNNER_TEMP/web-secrets"
+          trap 'docker rm -f web-relay-ci api-stub-ci >/dev/null 2>&1 || true; docker network rm web-api-ci >/dev/null 2>&1 || true' EXIT
+          docker network create --internal --subnet 10.231.78.0/24 --ip-range 10.231.78.128/25 web-api-ci
+          docker run -d --name api-stub-ci --network web-api-ci --ip 10.231.78.10 --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true --entrypoint node divesafe-web-ci \
+            -e 'require("http").createServer((q,r)=>{r.writeHead(q.url==="/health"?200:404);r.end()}).listen(8000,"0.0.0.0")'
+          docker run -d --name web-relay-ci --network web-api-ci --read-only --init \
+            --tmpfs /tmp:size=16m,noexec,nosuid,nodev --memory 512m --pids-limit 256 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -v "$d:/run/secrets:ro" divesafe-web-ci
+          ok=
+          for _ in $(seq 60); do
+            if docker exec web-relay-ci node -e 'fetch("http://127.0.0.1:8000/health",{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))'; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs web-relay-ci 2>&1 | tail -20
+          test -n "$ok"
