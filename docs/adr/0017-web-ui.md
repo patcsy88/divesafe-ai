@@ -313,6 +313,9 @@ failure on text that is not an attribute is fixed by rewording the text, not by 
 Adding the test changed `web/`, so it ends the `web-baseline-20261123` deploy baseline (ADR 0008
 Amendment 1 (a)): the deploy then needs a new reviewed baseline or the (a) check again; the
 checklist is never narrowed to skip `web/tests/`.
+Not checked (Known gaps, owner, 2026-11-23): `<details>`, which the app uses and which starts
+closed; `aria-live`, `aria-busy` and other live-region attributes; and hiding rules in
+`app/globals.css` (`classes.test.ts` bans the hiding utilities, not hand-written CSS).
 
 ### What must not change
 
