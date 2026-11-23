@@ -279,7 +279,9 @@ a solid outline. Tailwind scans only `app/`, `components/` and `lib/` (`source(n
 `web/scripts/check-built-css.mjs` after the build (owner, 2026-11-22): it fails if a built
 stylesheet keeps an `@import`, names an `http(s)` or protocol-relative address, has a `url()` or
 `image-set()` address that is not a `data:` URI or a `/_next/static/` file (a `..` step, an encoded
-dot or a backslash counts as leaving it), or if there is no stylesheet to check. `globals.css`
+dot or a backslash counts as leaving it), or if the build makes no stylesheet or more than one
+(owner, 2026-11-23: a second would hold CSS the source checks never read; a Next change that
+splits the CSS is reviewed before the rule changes, not met by raising the limit). `globals.css`
 imports HeroUI selectively, in its documented order (restyle step 8): `base/base.css`, the default
 theme, `utilities`, `variants` and the component files of the components in that test's list
 (`label`, `button`, `input`, `textarea`), not `@heroui/styles` as a whole and not `tw-animate-css`.
