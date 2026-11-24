@@ -162,6 +162,8 @@ from a test rule that returns `NO-GO`. No shipped rule returns `NO-GO`, so a rea
 from a signed-off rule in a deployed ruleset or from a model proposal; when a model raised it,
 "Deterministic checks" shows a less severe result. The `INSUFFICIENT EVIDENCE` form is the sample
 from section 2. The `CAUTION` and `GO` forms cannot occur without such a ruleset; see above.
+The `NO-GO` assessment in section 4 predates a wording change: the page now says a less severe
+outcome needs a reason and the overrider role, as the form does.
 
 <img src="docs/assets/screens/03-decision-no-go.png"
   alt="Synthetic example: decision form confirming NO-GO"

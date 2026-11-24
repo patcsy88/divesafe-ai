@@ -58,15 +58,28 @@ DISCLAIMER = (
 )
 
 
+_NO_GO_OVERRIDE = (
+    "A human may choose a less severe outcome only with a reason and the overrider role."
+)
+
 _OUTCOME_NOTES: dict[Recommendation, str] = {
     Recommendation.GO: "No hard constraint applied, but this is not a guarantee of safety.",
     Recommendation.CAUTION: "Conditions need careful human review.",
-    Recommendation.NO_GO: "A hard constraint applies. A human may override only with a rationale.",
+    Recommendation.NO_GO: "A hard constraint applies. " + _NO_GO_OVERRIDE,
     Recommendation.INSUFFICIENT_EVIDENCE: (
         "INSUFFICIENT EVIDENCE is not a green light: the system cannot assess this dive. "
         "Do not treat it as safe."
     ),
 }
+
+# Owner #79b: a NO-GO that only an unverified model proposal produced must not claim that a rule
+# found a hard constraint. The "Deterministic checks" prefix still names both results.
+_LLM_NO_GO_NOTE = "No rule found a hard constraint. " + _NO_GO_OVERRIDE
+# When the rules could not assess the dive, "no rule found" must not read as "the rules are clear".
+_LLM_NO_GO_UNASSESSED_NOTE = (
+    "No rule found a hard constraint, but the rules could not assess this dive, so one is not "
+    "ruled out. Do not treat it as safe. " + _NO_GO_OVERRIDE
+)
 
 
 _MAX_DEPTH = 6
@@ -503,7 +516,14 @@ class AssessmentView(BaseModel):
             for prefix, wording in RULE_PROBLEM_WORDING.items()
             if r.rule_id.startswith(prefix)
         ]
-        outcome_note = _OUTCOME_NOTES[record.final_recommendation]
+        if record.llm_tightened and record.final_recommendation is Recommendation.NO_GO:
+            outcome_note = (
+                _LLM_NO_GO_UNASSESSED_NOTE
+                if record.deterministic_recommendation is Recommendation.INSUFFICIENT_EVIDENCE
+                else _LLM_NO_GO_NOTE
+            )
+        else:
+            outcome_note = _OUTCOME_NOTES[record.final_recommendation]
         if any(r.rule_id == WINDOW_STARTED_RULE for r in record.rule_results):
             outcome_note += (
                 " The planned start passed before this assessment finished, so this dive window "
