@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.api_polling import started
 from tests.safety.kb_fakes import mutated_module
 from tests.safety.test_api_human_gate import AUTH_A, KEY_A, KEY_B, _build, _create, _hash
 
@@ -258,18 +259,22 @@ def test_mutation_the_role_check_is_removed() -> None:
             "and Role.OVERRIDER not in (Role.OVERRIDER,)",
         ),
     )
-    client, _, _ = _build_with(mutant)
+    client, repo = _build_with(mutant)
     rid, _ = _final(client, "bob")
     status = client.post(
         f"/v1/assessments/{rid}/decision",
         json={"decision": "GO", "rationale": "x"},
         headers=AUTH_BOB,
     ).status_code
-    assert status != 403
+    assert status == 200
+    stored = repo.get(rid)
+    assert stored is not None and stored.human_decision is not None
+    assert stored.human_decision.decision is Recommendation.GO
+    assert stored.human_decision.decided_by == "bob"
 
 
-def _build_with(module: Any) -> tuple[TestClient, None, None]:
-    client, _, _ = _build()
+def _build_with(module: Any) -> tuple[TestClient, Any]:
+    client, _, repo = _build(live=False)
     state = client.app.state.divesafe
     state.authenticator = ApiKeyAuthenticator(
         {
@@ -278,7 +283,7 @@ def _build_with(module: Any) -> tuple[TestClient, None, None]:
         }
     )
     app = module.create_app(state)
-    return TestClient(app), None, None
+    return started(TestClient(app)), repo
 
 
 def _identity_misses() -> list[str]:
