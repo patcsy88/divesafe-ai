@@ -218,9 +218,15 @@ plan fields leave the machine), and "no new dependency without an ADR".
 
    No notification channel (owner, 2026-11-17): alerts show on the dashboard only, so no alert
    text leaves the machine. The metric alerts stay deferred.
+
+   **Planned move (amendment 2026-11-24, not built):** Uptime Kuma and the backup move to the
+   Linux VM, where neither `host.docker.internal` nor the LaunchAgent exists. The path to
+   `/health` (#99b), the `crond` schedule, and the off-VM copy and external heartbeat (#107a,
+   the one exception to "no notification channel") are in that amendment.
 4. **Later and optional: tracing.** OpenTelemetry spans per stage and per model call with
    timings and the fixed codes only, **never prompt or reply text**, sent to a self-hosted
-   Langfuse on the same machine (Amendment 2026-11-15, which tightens these rules and states
+   Langfuse on the DiveSafe host (the Mac until the move, then the Linux VM; amendment
+   2026-11-24; Amendment 2026-11-15, which tightens these rules and states
    their exceptions: plain http on an internal Docker network, and plain http on loopback for
    development evaluation). Rules for any build of it:
    - A trace exporter is a **new egress destination**. ADR 0022 decision 15 and ADR 0023 allow
@@ -1201,7 +1207,7 @@ Settled 2026-11-15, each as the recommended default:
   the start-up check. Start-up still refuses before any metric or value file is created.
 - The scraper shares the Docker gateway address with every other local client, so one client's
   bad keys can 429 the scraper (decision 7); the alert then says "auth blocked" and someone has
-  to look.
+  to look. On the VM this depends on the path chosen for Uptime Kuma (amendment 2026-11-24).
 - Uptime Kuma has no notification channel (owner, 2026-11-17), so an alert is seen only when
   someone opens the dashboard.
 - Uptime Kuma's own data (its monitors, the 2FA secret and the push URL) has no regular backup;
@@ -1211,13 +1217,164 @@ Settled 2026-11-15, each as the recommended default:
 - The backup runs only while the owner is logged in and Docker Desktop is running. A run missed
   while the Mac sleeps runs once on wake (it can fail if Docker Desktop is not ready yet); a run
   missed while the Mac is off or logged out is skipped. Either way there is no retry, and the
-  monitor turns red 36 h after the last successful push.
+  monitor turns red 36 h after the last successful push. On the VM (amendment 2026-11-24) the
+  Mac's login and sleep no longer matter; a run missed while the VM is down is still skipped.
 - Uptime Kuma's container has outbound network access, and its update check stays on (owner,
   2026-11-17); no monitor data is sent.
 - The backup log (`~/Library/Logs/divesafe-backup.log`) grows by a few lines a day; the owner
-  trims it.
+  trims it. On the VM it moves (amendment 2026-11-24); it still grows and is trimmed by hand.
 - Built ahead of this ADR (2026-11-15, ADR 0018 amendment): one "model call finished" log line
   per model call, with task, outcome, `provider_reason` (2026-11-18), output-token limit and
   use, characters and duration. It is a log line, not a metric;
   `divesafe_model_calls_total{outcome}` counts its outcomes, and
   `divesafe_model_call_provider_failures_total{reason}` counts its provider failure labels.
+
+## Amendment 2026-11-24: Uptime Kuma, Langfuse and the backup on the Linux VM
+
+- Status: PROPOSED, design only (owner #84a, #89a, #99b, #104b, #107a, #113, #117a, #118b, #125b;
+  host facts #80b, #97a; ADR 0024 Amendment 2). Nothing here is built. The owner runs every
+  host command; the assistant writes the commands and checks (#88a).
+- **What moves.** Uptime Kuma, the self-hosted Langfuse and the daily backup move from the Mac to
+  the Alpine Linux VM together with DiveSafe (#84a). The VM's memory was raised to 15.6 GB so that
+  Langfuse (about 3.7 GB) and the backup's scratch check (up to 4 GB) fit beside the stack (#89a).
+- **What does not change.** Every rule of this ADR and its 2026-11-15 amendment: metadata-only
+  spans, the fixed endpoint on `divesafe-trace` (`10.231.77.10`), the `metrics`-only key, images
+  pinned by digest, Uptime Kuma rootless with `cap_drop: [ALL]` and never
+  `/var/run/docker.sock`. Each stays in its own compose project, as on the Mac. One rule changes:
+  "no notification channel" (item 3, 2026-11-17) gains one exception, the external heartbeat
+  below (#107a).
+- **Admin access.** The web UIs of Uptime Kuma (`127.0.0.1:3001`) and Langfuse (`127.0.0.1:3000`)
+  stay on the VM's loopback and are reached by SSH local forward only (#85b). Neither is a
+  Pangolin resource. The VM runs Docker Engine 29.8.2 or later (#97a, #121a), so the pre-28
+  loopback-publish risk no longer applies; re-check after any host change. Evaluation runs
+  (section 2) reach the evaluation project the same way: the sender still talks to
+  `http://127.0.0.1:3000`, which is then the SSH forward to the VM.
+
+### Langfuse (#104b)
+
+- **The Mac's Langfuse data moves to the VM over SSH** (owner #104b). Langfuse is stopped on the
+  Mac first; its volumes (PostgreSQL, ClickHouse, object storage) and its secrets (`langfuse.env`,
+  the Redis password file, the two DiveSafe key files under `docker/secrets/`) are copied by the
+  secrets procedure of ADR 0024 Amendment 2 (`umask 077`, SHA-256 compared on both machines,
+  modes and owners checked; #101b: no secret is regenerated). The move carries the evaluation
+  history and the old secrets with it; the Mac's copies stay valid until retirement.
+- **At retirement** (ADR 0024 Amendment 2, step 4, #112a) the Mac's Langfuse volumes, secrets,
+  compose folder and any Time Machine copies of them are deleted.
+- The step-5 build notes (`HOSTNAME=0.0.0.0`, the healthcheck, the network `10.231.77.0/24` with
+  `langfuse-web` at `10.231.77.10`) apply unchanged. `ip route` on the VM shows no overlap (#80b).
+- The first traced assessment on the VM is checked as on 2026-11-16 (the `events_*` tables), and
+  the moved `divesafe-prod` project still holds the earlier traces.
+
+### Uptime Kuma's path to `/health` (#99b)
+
+On Docker Desktop, `host.docker.internal` reached the API's port on the Mac's `127.0.0.1:8000`.
+On Linux that name does not exist unless a container is given it, and it then means the bridge
+gateway address, not the host's loopback. Two options were weighed:
+
+- **(a) `extra_hosts: ["host.docker.internal:host-gateway"]` on Uptime Kuma.** The smallest change
+  to its compose file, and the monitor URL stays the same. But a port published on `127.0.0.1` is
+  expected not to answer on the gateway address (to verify on the VM), so the API would also have
+  to be published on that gateway address, where every container on that bridge can reach it.
+  Every local client still shares one address for the failed-login limit (decision 7, Known gaps),
+  and a gateway address can never go in `DIVESAFE_TRUSTED_PROXIES`.
+- **(b) A dedicated internal network for health checks: decided (#99b).** A new `internal: true`
+  network, `divesafe-health`, on a new `10.231.x.0/24` checked against `ip route`, joined only by
+  the API (a fixed address outside `ip_range`, as on `web-api`) and Uptime Kuma (`external: true`
+  in its compose project). The monitor URL becomes `http://<API address>:8000/health`. No new
+  published port, and the limiter sees Uptime Kuma's own address, so another local client's bad
+  keys can no longer 429 it. Its costs: this reverses decision 7's "does not join the compose
+  network", so a future `metrics` bearer token crosses a bridge that only these two containers
+  join, in plain http; the API gets one more network; and Uptime Kuma's address must never be
+  listed in `DIVESAFE_TRUSTED_PROXIES`.
+
+It needs a reviewed change to the compose files and the compose tests.
+
+### The backup on `crond`
+
+The LaunchAgent `org.divesafe.backup` has no Linux equivalent here: Alpine has OpenRC and BusyBox
+`crond`, no systemd and no launchd.
+
+- **Schedule.** A line in the deploy account's crontab (`crontab -e`, BusyBox `crond` started by
+  OpenRC and added to the default runlevel), once a day, running the same kind of wrapper. The
+  time zone of the line is the VM's (Alpine defaults to UTC unless `tzdata` is set); the 36 h push
+  interval does not depend on it.
+- **The cron account is root-equivalent.** It is in the `docker` group of a rootful engine, so
+  whoever controls it, its crontab or the wrapper controls the host. The wrapper and the files it
+  reads are owned by that account, mode 0700 or 0600, outside the checkout.
+- **Wrapper.** Sets `umask 077` and a full `PATH` (`crond` starts jobs with a minimal one), runs
+  `docker/backup.sh`, and pushes only on exit 0 with `curl -q -K <file>`. The push URL stays in a
+  mode-600 file outside the checkout that also sets `noproxy`, never on the command line or in the
+  crontab. `curl` is installed with `apk`; BusyBox `wget` is not a substitute (it takes the URL as
+  an argument, visible in `ps`). The wrapper lives outside the repository, as on the Mac.
+- **Log.** A mode-600 file under the deploy account's home (not `~/Library/Logs`), holding no URL;
+  trimmed by hand. BusyBox `crond` may mail or log a job's output; the wrapper sends its own
+  output to the log so nothing goes elsewhere.
+- **BusyBox.** `backup.sh` and its helpers were written and run on macOS (`ls -lde` and a
+  Darwin-only ACL check; the Linux path is "not run there", `docs/backup-and-restore.md`). A
+  reviewed BusyBox pass and a synthetic round trip on the VM come before the production move
+  (ADR 0024 Amendment 2, steps 2 and 3).
+- **Checks, as on the Mac:** a `crond` run gives exit 0, a new archive and a push; a wrong token
+  (curl exit 22) and a stopped Uptime Kuma (exit 7) put no URL in the log or curl's error output.
+- Uptime Kuma's push monitor and token are new on the VM (its data from the Mac is not reused;
+  if it is, rotate the push token, as Known gaps already says).
+
+### The off-VM copy and the external heartbeat (#107a, #113)
+
+- **Where.** After a successful backup, the wrapper puts an encrypted copy of the archive and its
+  manifest on the owner's NAS on the home network, mounted on the VM (#113). The NAS is the
+  owner's own device, so the question of a third party holding the licensed corpus text in the
+  dumps (ADR 0024, condition 3) does not arise.
+- **Encrypted on the VM to a public key** (security S12), for example with `age`: the VM holds
+  only the recipient's public key; the private key is kept off the VM (and off the NAS), by the
+  owner. A copy the VM can read back cannot be decrypted on the VM. The tool is a host package,
+  installed with `apk` and recorded with its version in the host checklist; it is not a
+  DiveSafe dependency.
+- **Credentials.** Whatever the VM uses to write to the NAS is in a mode-600 file outside the
+  checkout; the share it writes to is the only one it can reach (#117a). The VM's NAS account is
+  not an administrator of the NAS and cannot delete its snapshots (confirmed by the owner,
+  2026-11-24); the NAS's admin credentials are never on the VM.
+- **How copies reach the NAS (#117a).** The VM writes the encrypted copies to the NAS mount;
+  the NAS takes read-only snapshots on a schedule and with a retention the VM cannot change, so a
+  compromised VM can damage the newest files on the share but not the snapshots. Confirmed by
+  the owner (2026-11-24): the share is on a file system with snapshots, and read-only snapshots
+  are scheduled. The VM itself runs on that NAS (Known gaps).
+- **External heartbeat (#107a, #118b).** Because Uptime Kuma stops with the VM, a second Uptime Kuma
+  push monitor off the VM expects a ping after each successful backup and raises an alert when none
+  comes. It runs on another host the owner chose, not the Mac and not the NAS: the VM runs on the
+  NAS, so a monitor there would share the VM's machine and the site's power (risk r6-n3). Its Uptime
+  Kuma is not a public resource and has its own sign-in; the push URL is the one secret it holds
+  (security N3). The ping carries nothing but its URL; that URL is `https` and a secret, kept in a
+  mode-600 file and read with `curl -K`, as the push URL is. This is the one exception to "no
+  notification channel": it sends no DiveSafe data, only the fact that a ping arrived.
+- **Verified before the Mac is retired (#112a):** a test restore from the NAS copy (decrypted
+  off the VM) into a scratch database, and a missed heartbeat seen to raise an alert.
+- **During a rollback** (ADR 0024 Amendment 2, step 4): once the Mac is serving, its LaunchAgent
+  backup and Uptime Kuma are turned back on, a backup is taken by hand, and the off-VM heartbeat
+  is paused or pointed at the Mac's backup, so a silent VM does not raise an alert that means
+  nothing.
+- **Rollback kit.** The NAS (or the migration record) also keeps the current ruleset file, its
+  hash and the non-secret `production.env` lines, updated at every ruleset replacement or
+  settings change (ADR 0024 Amendment 2, step 3), so
+  a rollback can start the Mac with the VM's settings when the VM is gone. The VM can write that
+  share, so the kit is checked against the A8 sign-off hash in the remote repository and the
+  recorded settings changes before use (ADR 0024 Amendment 2, step 4).
+
+### Known gaps (amendment 2026-11-24)
+
+- The monitor, the backups and DiveSafe share one VM and one disk; the external heartbeat (#107a)
+  is what notices the VM stopping, once it is built.
+- A share the VM can write to can be overwritten or deleted by a compromised VM; the NAS's
+  read-only snapshots (#117a), which the VM's account cannot delete, keep the earlier copies.
+- The VM runs on the NAS that holds its only off-VM copy (#125b, accepted by the owner): losing
+  or compromising that machine (its hypervisor or its administrator) loses the production
+  database and every copy, and the snapshots do not help there. A second copy off that machine
+  is an optional follow-up, a backup-script change only (ADR 0024 Amendment 2, Known gaps).
+- The NAS is on the same site as the VM: fire, theft or a site-wide fault can take both.
+- A backup missed while the VM is down is skipped, with no retry (as on the Mac).
+- Option (b) is chosen on reasoning, not observation: what address the API sees for Uptime Kuma,
+  and whether (a)'s gateway path reaches a loopback-published port, are to verify on the VM.
+- The Mac's Uptime Kuma, LaunchAgent and Langfuse are switched off at the move and kept with the
+  Mac as rollback (ADR 0024 Amendment 2, Migration step 4); running both backups at once would
+  push to two different monitors. After a rollback they are switched back on (above).
+- Every log of the stack uses Docker's default `json-file` driver with no size limit (ADR 0024
+  Amendment 2, Known gaps).

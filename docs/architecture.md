@@ -256,6 +256,12 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   reachable from off the machine (reverse proxy, tunnel, LAN binding), the owner must decide again
   on the `patcsy88` API key, which was sent to a third party on 2026-11-20 and kept by owner
   decision (ADR 0024 A8).
+  Planned (ADR 0024 Amendment 2, 2026-11-24, not built): the web UI behind Caddy on the home
+  network and as a Pangolin public resource. The owner's Pangolin server then ends TLS for the
+  public name and reads every page, the API key typed at sign-in and the session cookie in clear;
+  it is in the trust path. The owner accepted the A8 key again (#102b), resting on Pangolin
+  authentication (#110a) and the LAN; the preconditions before the public resource is enabled are
+  in that amendment.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
   egress flag exist (ADR 0007). An offline-tested evaluation harness (ADR 0016) and an OpenAI-compatible
   adapter (ADR 0018) exist; the Ollama adapter was removed (ADR 0016 amendment). Small live runs on
