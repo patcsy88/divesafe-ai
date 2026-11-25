@@ -40,6 +40,10 @@
   recorded designs (no blockers; the fourth is committed as `c0457ef`), and the fifth (committed as
   `6545bd7`) likewise; the sixth revision (small, text only) has not been seen by either (see the
   notes at its start).
+- **Amendment 2 (2026-11-24), remote Linux host,** is at the end of this ADR. It records the
+  owner's decisions (#80b–#128) to move production from the owner's Mac to a Linux VM on the home
+  network, with Caddy in front of the web UI and the web UI published through Pangolin. Design
+  only: nothing is built or deployed by it.
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
   compose file and ADR" gap recorded in ADR 0023.
 - **Started on the developer machine** (2026-10-18, four runs and a restart, throwaway secrets, a
@@ -192,6 +196,11 @@ results and the specialist findings** (the prompt layer's payload) to
   change), the agent stage fails for that assessment, is recorded as an agent issue, and the
   deterministic result stands. That is safe, but production would then be running without agent
   output while appearing configured for it.
+- **Planned (Amendment 2, not built):** once the web UI is a Pangolin public resource (#94b), every
+  page, form and sign-in of a person using the public name passes through the owner's Pangolin
+  server, which ends TLS and can read it in clear, including the API key typed at sign-in. What
+  goes to the model host and the data sources does not change. Pangolin authentication (#110a)
+  sits in front of that path; the preconditions are in Amendment 2 (security B1).
 
 ## How to run it
 
@@ -240,8 +249,12 @@ its limits); write the new file in place of the old path or at a new one; set
 `DIVESAFE_RULESET_FILE` and `DIVESAFE_RULESET_SHA256`; run `C up -d --no-build --wait api` (the
 changed setting recreates the container; an editor that saves by rename leaves a running container
 on the old file until then); check that the `ruleset_sha256` in the "ruleset loaded" start-up log
-line equals the sign-off record's hash, and record that in A8. A restart after the file changed but
-before the pin did refuses to start, which is the safe outcome. Rolling back is the same steps with
+line equals the sign-off record's hash, and record that in A8 (on the Linux VM the A8 record
+reaches the reviewed main branch before or with the deploy, risk c-n2); on the Linux VM, also
+update the off-VM rollback kit and record the sign-off hash off the NAS share (Amendment 2, step
+3). A
+restart after the file changed but before the pin did refuses to start, which is the safe
+outcome. Rolling back is the same steps with
 the archived file. Every compose command on the production file needs both variables, even `down`,
 `stop` and `run kb_withdraw`: add both lines to `docker/production.env` before pulling the commit
 that requires them.
@@ -2792,8 +2805,16 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   the proxy share one bucket, so one client's failures can lock out the others. Neither is solved
   here; a proxy on a fixed address of its own network would fix it. The start-up warning checks
   only that the list is empty.
+  **Planned (Amendment 2, 2026-11-24, not built):** the API port stays plain http on
+  `127.0.0.1:8000`, reached by the owner through an SSH tunnel only (#85b), and gets no TLS proxy.
+  TLS is planned for the web UI only: Caddy in the compose file (#91b), with its own fixed address
+  on a new internal network to web; the web UI, not Caddy, reaches the API, through the relay
+  (ADR 0017 amendment 2026-11-24). `DIVESAFE_TRUSTED_PROXIES` then lists only the web
+  container's fixed address on `web-api` (`10.231.78.0/24`), never a gateway, so host processes
+  stay untrusted.
 - **No deployed web UI, log shipping or monitoring.** The compose file defines `web` (ADR 0017
-  amendment 2026-11-23), not yet deployed. Backups are condition 3. Nothing checks that a recent
+  amendment 2026-11-23), not yet deployed; Caddy in front of it is planned (Amendment 2).
+  Backups are condition 3. Nothing checks that a recent
   backup exists, and the manifest sits next to its archive, so it detects damage, not tampering.
   A decision made after the last backup is lost and that assessment is `PENDING_HUMAN` again; an
   assessment created after it does not exist; whoever acted on either must be told, and a dive
@@ -2940,7 +2961,9 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   (`docs/backup-and-restore.md`; a restore into a newer major version has not been run).
 - **Port binding on older engines.** A port published to `127.0.0.1` was reachable from the local
   network on some older Docker Engine versions (recalled, not checked). State a minimum version
-  once one is chosen.
+  once one is chosen. Docker's documentation names 28.0.0 as the release that stopped hosts on
+  the same layer-2 segment from reaching such ports. The VM ran 27.3.1 until the owner upgraded
+  it; it now runs 29.8.2 or later (Amendment 2, #97a, #121a). Re-check after any host change.
 - **Base images float.** `python:3.14-slim` and `pgvector/pgvector:pg16` are tags, not digests.
   The Dockerfile installs from PyPI without a lock file.
 - **CI and supply chain (security review, 2026-11-06; partly closed the same day):** CI now builds
@@ -2970,9 +2993,646 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   was not seen), the 30-day certificate
   renewal, and the stack on Linux (the run was on Docker Desktop for macOS, where file ownership
   and port publishing differ). On Linux the host reaches the published port through the bridge
-  gateway too; what the API sees as the peer there was not observed.
+  gateway too; what the API sees as the peer there was not observed. Amendment 2 (2026-11-24)
+  plans the first Linux run: a synthetic first run on the Alpine VM before production moves.
 - **Whether the postgres entrypoint leaves a password in a process environment** after reading it
   from a file was not checked.
 - **`db_init` uses `print`** (AGENTS.md forbids it in `src`). It prints no secret.
 - **The `psycopg-3.3.6-py3-none-any.whl` file in the repository root** (committed on 2026-10-10)
   is unrelated to this ADR and not used by any file here. Its purpose is unknown to this ADR.
+
+## Amendment 2 (2026-11-24): remote Linux host
+
+- Status: PROPOSED, design only. Owner decisions #80b–#128 (2026-11-24/25); none open.
+  Reviewed eleven times by `risk-reviewer` and `security-reviewer`; both done (no blocker for the
+  text; security B1 blocks enabling the public resource,
+  see "Before the public resource is enabled"). Nothing is built or deployed by this amendment.
+  Later reviewed PRs implement it:
+  the Caddy PR (ADR 0017 amendment 2026-11-24), the backup PR for BusyBox, `crond`, the off-VM
+  copy and the heartbeat (ADR 0027 amendment 2026-11-24), and a host checklist. The owner runs
+  every host command; the assistant writes the commands and the checks and reads the output the
+  owner pastes back (#88a).
+- **#94b overrides #81a's "private only" for the web UI.** #81a, then #85b, kept every DiveSafe
+  surface private. #87b/#90b open the web UI to the home network, and #94b makes it a Pangolin
+  public resource: reachable from the internet, behind Pangolin authentication (#110a, which
+  replaces #105). Everything else stays private: the API, Uptime Kuma, Langfuse and SSH (#85b).
+- Closes nothing in "Not solved" by itself; it changes the plan for "TLS in front of the API is
+  the operator's", "Port binding on older engines" and "Not run ... the stack on Linux" (each
+  marked there).
+- Public repository: the public name, the Pangolin server's address, the allowed countries and
+  the sign-in method chosen are kept out of this file; `<public-name>`, `<name>.home.arpa` and
+  `<pangolin-server>` stand for them.
+
+### Host (#80b, #89a, #97a)
+
+| Fact | Value |
+| --- | --- |
+| Machine | a Linux VM on the owner's NAS, on the home network; x86_64, 4 CPUs |
+| OS | Alpine Linux 3.24 (#97a, #121a): virt kernel, musl, BusyBox, OpenRC |
+| Memory | 15.6 GB (#89a: raised from 3.8 GB) |
+| Disk | 88 GB free (#80b) |
+| Docker | Engine 29.8.2 or later (#121a), rootful; Compose 5.x |
+| OpenSSH | the fixed `openssh` package for 3.24 or later (step 0; #121a) |
+| Host routes | `172.17.0.0/16` and `192.168.1.0/24` only (#80b; checked again in step 1) |
+| Host firewall | none, apart from Newt's `DOCKER-USER` rule (#115a); no INPUT rule (#120b) |
+| Firewall backend | iptables, to confirm with `docker info` (see Newt, below) |
+| Address and name | fixed DHCP address on `192.168.1.0/24`; `<name>.home.arpa` (#93a) |
+
+- **Alpine upgraded (#97a).** The VM was found on Alpine 3.21, whose support ended on 2026-11-01;
+  the owner upgraded it to 3.24. Versions are stated as minimums (#121a); the exact ones are in
+  the owner's host checklist. The pre-28 loopback-publish risk (before Engine 28.0, hosts on
+  the same layer-2 segment could reach ports published to `127.0.0.1`) applied before the upgrade
+  (Engine 27.3.1) and no longer does; re-check `docker version` after any host change.
+- **Compose 5.x is new for this stack.** Every earlier run used Compose 2.x. The synthetic first
+  run (step 2) is its first check; nothing here assumes Compose 5 behaves as 2.x did.
+- **Memory (#89a).** Langfuse needs about 3.7 GB and the backup's scratch check up to 4 GB, on top
+  of the API (1 GiB limit), web (512 MiB), PostgreSQL (no limit) and Uptime Kuma. 3.8 GB could
+  not hold them; 15.6 GB should, with room for image builds. PostgreSQL and Langfuse's ClickHouse
+  have no memory limit, so this is a budget, not a bound.
+- **Networks.** The VM's routes do not overlap `10.231.77.0/24` (`divesafe-trace`) or
+  `10.231.78.0/24` (`web-api`), as the compose comments require on a new host. Each network the
+  later PRs add (`web-proxy`, `pangolin-edge`, `divesafe-health`) is a new `10.231.x.0/24`,
+  checked the same way with `ip route` on the VM (the compose comments say `netstat -rn`, a macOS
+  habit).
+- **The images do not change.** They stay Debian-based (`python:3.14-slim`,
+  `node:24-bookworm-slim`, `pgvector/pgvector:pg16`). What does change: the CPU architecture
+  (arm64 to x86_64), the clock, the address the connectors and the model host see, and the
+  shell. musl and BusyBox matter only to what runs in the host's shell: `backup.sh`,
+  `restore.sh`, `backup-common.sh` and the backup wrapper (BusyBox `sh`, `ls`, `find`, `date`,
+  `sha256sum`, `mktemp`). They were written and run on macOS only (`docs/backup-and-restore.md`:
+  the Linux ACL path was "not run there"). Their reviewed BusyBox pass is a precondition of step 3.
+- **The backup is logical.** `backup.sh` writes a `pg_dump` custom-format archive, which does not
+  depend on the CPU architecture, so an archive made on the arm64 Mac restores on the x86_64 VM.
+  Both sides run PostgreSQL 16 (`pgvector/pgvector:pg16`).
+- **Uptime Kuma and the backup.** `host.docker.internal` and the LaunchAgent do not exist here;
+  see the ADR 0027 amendment (2026-11-24).
+
+### Access model (#81a, #85b–#96a, #98a, #100a, #106a, #110a)
+
+| Surface | Reachable by | Path |
+| --- | --- | --- |
+| API `127.0.0.1:8000`, Uptime Kuma, Langfuse | the owner | SSH tunnel to the VM (#85b) |
+| SSH | the home network | the VM's LAN address |
+| Web UI, `https://<name>.home.arpa` | the home network | Caddy, 443 on the LAN address |
+| Web UI, `https://<public-name>` | the internet, after Pangolin auth | Pangolin, Newt, Caddy |
+
+- **No Tailscale (#85b, replacing #81a's tunnel).** The admin tools are reached only through an SSH
+  local forward, for example `ssh -L 8000:127.0.0.1:8000 <user>@<name>.home.arpa`. None is
+  published beyond the VM's `127.0.0.1`, and none is a Pangolin resource.
+- **Caddy is the single trusted proxy (#91b, #96a)**, a service in the DiveSafe compose file, in
+  front of `web` only. It publishes port 443 only (#106a), on the VM's LAN address only, with no
+  `DOCKER-USER` rule (#92c); on 443 it serves only `<name>.home.arpa`, with a certificate from its
+  local CA, whose root the owner installs on each device that uses the LAN name (#86b). The public
+  name is a separate plain-http site that listens only on Caddy's address on `pangolin-edge`.
+  There is no catch-all site, and Caddy's admin endpoint is never published. The names,
+  `DIVESAFE_WEB_TRUST_PROXY`, the fixed addresses and `allowedOrigins` are in ADR 0017 (amendment
+  2026-11-24).
+- **Pangolin (#94b, #95a, #96a, #110a).** The owner already runs a Pangolin server (#95a). In our
+  words: for a public resource, that server is an internet-facing reverse proxy. It holds the
+  public name and its certificate, asks for Pangolin authentication, and sends what passes down a
+  tunnel that the Newt connector on the VM opened outwards. The VM accepts no inbound connection
+  from the internet, but the tunnel still delivers requests to Caddy and, through it, to Next.
+- **Pangolin rules (#110a; Pangolin's documentation, paraphrased).** Rules are checked in priority
+  order and each does one of three things: let the request through with no Pangolin
+  authentication at all, refuse it, or send it on to authentication. A country rule uses an IP
+  location database, which is not always right. On this resource every rule either refuses or
+  sends on to authentication; none lets a request skip it. The country rules are a filter that
+  narrows who can reach the sign-in, not authentication.
+- **Newt (#96a, #100a, #115a).** A separate container outside the `divesafe-prod` compose project,
+  with its own credentials in a secret file the owner writes (never in a compose file,
+  `production.env` or the repository): mode 0600, owned by the deploy user. It joins two
+  networks:
+  - `pangolin-edge`: created by the `divesafe-prod` project, `internal: true`, joined there by
+    Caddy only, with a fixed Caddy address outside `ip_range`. Newt joins it as `external: true`,
+    with a fixed address outside `ip_range` (the only address Caddy trusts, #98a). The compose
+    tests can then check that the network is internal and that only Caddy joins it from the
+    project.
+  - its own egress network for the tunnel, with a fixed bridge name
+    (`com.docker.network.bridge.name`) and a fixed Newt address, so the host rules below match a
+    stable identifier, not an address Docker picks. It has no `enable_ipv6`: the rules below are
+    IPv4 (`iptables`) only, and an IPv6 network would need the same rules in `ip6tables`.
+  - Its only target is Caddy's plain-http site on `pangolin-edge` (#100a). Newt never uses
+    `network_mode: host`, never mounts `/var/run/docker.sock`, and joins none of `data`,
+    `web-api`, `web-proxy`, `divesafe-trace` or `divesafe-health`. Image pinned by digest,
+    `cap_drop: [ALL]`, `no-new-privileges`, read-only root file system and a non-root user, as
+    far as its image allows (to verify). Because Newt lives outside the tested compose project,
+    all of this except `pangolin-edge` itself is owner discipline until its compose file is
+    brought into the repository with tests.
+- **Newt's host rules (#115a, #120b; host checklist, kept across reboots and Docker restarts).**
+  - A `DOCKER-USER` rule lets Newt's egress bridge open new connections only to
+    `<pangolin-server>` (#115a). `DOCKER-USER` sees forwarded traffic only. That includes
+    connections to other machines and to a port Docker publishes on the VM's LAN address (such as
+    Caddy's 443): Docker rewrites their destination to the container (DNAT), so they take the
+    FORWARD path and this rule drops them. A connection from Newt to a service of the host
+    itself, such as sshd, goes through the host's INPUT chain instead, which has no rules: by
+    the owner's choice (#120b) there is no INPUT drop for Newt's bridges (Known gaps).
+  - The rule needs the engine's iptables firewall backend. In our words, Docker 29's release
+    notes make an nftables backend available as an opt-in, with its own way of filtering, so the
+    `DOCKER-USER` chain cannot be assumed there; the owner confirms the backend with `docker info`
+    and records it.
+  - Name lookup: Newt must reach `<pangolin-server>`. Simplest: Newt is given the server's fixed
+    address and needs no DNS. If it must resolve the name, the exception is port 53 on the one
+    resolver address only, and the negative check below tries another address on port 53. Which
+    one Newt needs is to verify; the checklist allows only that.
+  - **Negative check**, after every reboot and every Docker restart, from Newt's network
+    namespace (for example `nsenter -t <newt pid> -n` on the host): a connection to an address
+    on the home network and one to Caddy's 443 on the VM's LAN address both fail (and, if DNS is
+    allowed, port 53 on another address); one to `<pangolin-server>` succeeds. Whether the VM's
+    SSH port is reachable from Newt is recorded, not required (#120b). The owner pastes back the
+    results.
+- **Not Pangolin resources:** the API port 8000, Uptime Kuma, Langfuse, SSH, and any other address
+  on the VM or the home network. Only Caddy's public-name site is a target.
+- **What stands in front of an API key, in order.** (1) On the public path, Pangolin
+  authentication (#110a). (2) The API key's secrecy and randomness: every key is generated, at
+  least 128 bits (`openssl rand -hex 32`, `docs/first-run-on-the-real-host.md`), because the
+  stored hashes are unsalted. The host checklist records the owner's confirmation that every
+  existing key was made that way. (3) The per-source failure limits: the web throttle (5 a
+  minute) and the API's limit (ADR 0013). The limits slow one source; they do not bound guesses
+  spread across many addresses.
+
+### Before the public resource is enabled (security B1)
+
+The Pangolin resource stays disabled until each item holds and the owner has pasted back what he
+saw. Pangolin's behaviour below is from its documentation, to verify on the owner's server.
+
+| Pangolin sign-in method | Verdict |
+| --- | --- |
+| Named users with MFA: Pangolin accounts with 2FA required, or an IdP enforcing MFA | recommended |
+| A one-time code by email, to listed exact addresses (never a domain wildcard) | minimum |
+| A resource PIN alone, or a resource password alone | not acceptable |
+| Share links | not allowed |
+
+1. **Method (#111a).** A method meeting the B1 minimum, chosen by the owner (#111). The method
+   chosen and its users or addresses are recorded in the owner's host checklist, outside the
+   repository.
+2. **Rules.** Every rule on the resource refuses or sends on to authentication; no rule lets a
+   request skip it. No such rule is added "temporarily", for example when the owner travels and
+   the country filter refuses him.
+3. **Outside checks**, from off the home network: with no Pangolin session, the Pangolin sign-in
+   appears; from a disallowed country (a VPN exit), the request is refused; after Pangolin sign-in,
+   only the DiveSafe sign-in page is reachable, and no other address on the VM or the home network;
+   and a request with a forged `X-Forwarded-For`, sent through Pangolin, lands in the sender's
+   real throttle bucket, not the forged one (#98a; the live half of the check, which CI cannot
+   make). These checks need the resource enabled. They are first run during step 2, against the
+   synthetic stack with synthetic data and synthetic keys only, with items 1, 2 and 4 in place;
+   the resource is then disabled until the end of step 3, and the checks are run again when it
+   goes live, and after any change on the Pangolin server.
+4. **The Pangolin server is guarded:** MFA on its admin login; the server itself and Newt's
+   credentials treated as secrets of DiveSafe and of the home network, which the tunnel reaches.
+   Its logs keep no `Cookie` header and no request bodies (owner to check).
+5. **No inbound port forward** on the home router to the VM or the NAS (or its admin page), and
+   UPnP and NAT-PMP off on the router (step 0); Newt connects outwards only. Checked again before
+   the resource is enabled.
+6. **AGENTS.md updated (#122a):** the follow-up below (#116a's "local Langfuse" wording, and
+   section 12 naming the Pangolin server) is merged.
+7. **Recorded:** the host versions (#97a, above), `sshd -T` (step 0), the Pangolin and Newt
+   versions, and the Pangolin session lifetime. Signing out of DiveSafe does not end the Pangolin
+   session.
+
+### Image delivery (#82a)
+
+- Images are built on the VM from the reviewed commit, as on the Mac: a git checkout updated from a
+  shell with `umask 022` (ADR 0017, file modes), then `--build`. No registry; no image is moved
+  between machines. The VM's access to the remote repository is fetch-only: no push credential
+  is on the VM, and the host checklist records which credential it uses, if any (security N2).
+- These are the first production builds on x86_64 (the Mac is arm64). CI already builds both images
+  on x86_64 Linux. The web image copies the SWC binary for the build platform; the images are
+  Debian, so it is the glibc build, which CI checks.
+- Symbolic `COPY --chmod` needs a recent BuildKit Dockerfile frontend (ADR 0017, file modes). With
+  the VM's current buildx (#97a) this is expected to hold; the first build on the VM confirms it. No
+  `# syntax=` line is added.
+- Rollback images are tagged on the VM as on the Mac (`divesafe-web:rollback-<date>`).
+
+### Migration (#83c, #101b, #109a, #112a)
+
+0. **Preconditions on the VM** (host checklist PR, run by the owner, #88a), before step 1:
+   - **OpenSSH advisory (Alpine, 2026-11-05).** Alpine's `openssh-server` is built without PAM.
+     On it, with password login allowed, an account whose password field is `*` (an account
+     meant for keys only; root is one by default) accepts a login with no password once some
+     other account has a `$5$` or `$6$` password hash. The fixed package on 3.24 is
+     `10.3_p1-r2`; that or a later one is installed (#97a, #121a). `sshd` is restarted after any
+     `openssh` upgrade, since the running daemon keeps the old code until then.
+   - `sshd -T` reports `passwordauthentication no`, `kbdinteractiveauthentication no`,
+     `authenticationmethods publickey`, and `permitrootlogin no` (or `prohibit-password`). The
+     owner pastes back the package version and these lines.
+   - **SSH items done** on the owner's confirmation (2026-11-24): no password or
+     keyboard-interactive sign-in, root by key only, and no inbound port forward (below). They
+     are checked again after any `openssh` or router change.
+   - Time sync: `chronyd` (or BusyBox `ntpd`) running and in OpenRC's default runlevel.
+   - No inbound port forward on the home router to the VM or the NAS (or its admin page) (a past
+     inbound forward, now removed; #127b), and UPnP and NAT-PMP off on the router, so no device
+     opens a mapping itself; Newt connects outwards only. The owner checks the router and pastes
+     back the result.
+   - **Rule-out of the past exposure (#126b, #127b).** Before step 1 (which copies secrets) the
+     owner checks the VM and records the result in the host checklist, outside the repository
+     (security R7-S1):
+     - accounts with a password hash (names only); accounts with a login shell and any extra
+       UID 0; members of `docker` and `wheel`; `/etc/doas.conf`, `/etc/doas.d/`, `/etc/sudoers`
+       and `/etc/sudoers.d/` (the host checklist keeps one of `doas` and `sudo`);
+     - every `authorized_keys` fingerprint and any options on a key (`command=`, `from=`), and
+       `sshd -T`'s `authorizedkeysfile` and `authorizedkeyscommand`;
+     - crontabs, `/etc/periodic/*`, OpenRC services, `/etc/local.d/`, `/etc/profile`,
+       `/etc/profile.d/` and each account's shell start-up files; `/etc/modules` and `lsmod`;
+     - files changed from their packages (`apk audit --system`, which trusts the VM's own apk
+       database: Known gaps); `/etc/apk/repositories` and `/etc/apk/keys/` hold only the
+       official ones; `apk audit` sees only files that packages own, so also a search for
+       setuid and setgid files and a look at `/usr/local` (security N1);
+     - listening ports and established outbound connections; `/etc/docker/daemon.json`,
+       containers, images and volumes;
+     - the sign-in log (BusyBox `syslogd` keeps little, and rotated logs are gone).
+     The rule-out covers the VM only, so the owner also looks once at the NAS's admin sign-in
+     history for the exposure period (security N1). Any finding that cannot be explained means a
+     reinstall, with step 0 run on the fresh install (Known gaps). The SSH host keys are kept
+     (#128, Known gaps).
+1. **Prepare the VM** (host checklist PR, only after the #126b rule-out is recorded): `ip route`
+   checked; the checkout outside any synced folder; `docker/secrets/` (mode 0700, owned by the
+   deploy user) and the secrets copied from the Mac (#101b, below), except
+   `divesafe_api_key_hashes`: the production hash file is copied into a mode-0700 folder outside the
+   checkout and set aside until step 3, so no production key works on the VM before then;
+   `production.env` copied from the Mac, not retyped; the ruleset file and its archive copy (below);
+   `DIVESAFE_CORPUS_DIR`; Newt's `DOCKER-USER` rule and its negative check (#115a).
+   `withdrawal-log.csv`, `approval-record.csv` and `ruleset-signoff.txt` move to a records
+   folder on the VM (mode 700, outside the checkout), and after every change a copy goes beside
+   the newest archive on the NAS, as R1 requires (risk r7-n3). That copy is encrypted to the
+   same public key as the backup archives (#117a), never kept in plain text on the share, and
+   is decrypted only for a restore (security N2).
+2. **Synthetic first run** on the VM by `docs/first-run-on-the-real-host.md`, on an empty volume,
+   with no production data, extended here: that document stops at the API, and this step also
+   starts `web` and Caddy, so the Caddy PR (ADR 0017 amendment) is merged first. The hash file is
+   the first-run one, holding only a synthetic key. It is the first run of this stack on Linux
+   and on Compose 5.x; it also records what the API sees as the peer of a request from the host.
+   It makes live calls
+   with `production.env`'s sources (the owner confirmed the tides.today permission covers the VM,
+   #103). It ends with a synthetic backup-and-restore round trip by the BusyBox-reviewed scripts:
+   one decided and one pending synthetic record, counts and states equal after the restore. B1's
+   outside checks (item 3) are first run here, with Newt and the resource enabled for the
+   synthetic stack only; the resource is disabled again afterwards. Then the stack is stopped,
+   that volume removed (`down -v`, after checking the project name), because a production restore
+   needs a new, empty database, and the synthetic hash file deleted, so the synthetic key works
+   nowhere.
+3. **Short production stop.** Preconditions, each pasted back: the BusyBox pass of `backup.sh`,
+   `restore.sh` and `backup-common.sh` is reviewed and merged, and step 2's round trip passed; the
+   VM's clock is synchronised (`chronyc tracking`, or `date -u` against a reference) and agrees
+   with the Mac's. A slow clock is the unsafe direction: a started window looks unstarted and a
+   decision's age looks shorter.
+   - On the Mac: tell the deciders the stop window (a record whose decision age runs out during it
+     cannot be decided afterwards); stop `web`; check that no run is in flight
+     (`divesafe_runs_in_flight` is 0 on `/metrics`; `restore.sh` also lists runs left running);
+     stop `api` (the database stays up for the backup); run `docker/backup.sh`. Then remove the
+     Mac's `api` and `web` containers (`C rm -s -f api web`, with `C` as in the compose file's
+     comment) and stop its `db` (`C stop db`); the volume and images stay. Moving
+     `production.env` (below) does not stop a container started by `docker start` or Docker
+     Desktop, which is why the containers are removed first.
+   - Copy the archive, its manifest and the ruleset archive to the VM over SSH; compare SHA-256 on
+     both machines (`sha256sum` on the VM; `shasum -a 256` on the Mac).
+   - **Settings** (risk S5): the non-secret lines of the VM's `production.env` equal the Mac's line
+     by line (`diff` of the copied file against the Mac's), including
+     `DIVESAFE_EVIDENCE_MAX_AGE_MINUTES` and `DIVESAFE_DECISION_MAX_AGE_MINUTES` (both set in
+     production; values not written here), the model settings and the egress settings. Then
+     move `docker/production.env` out of the Mac checkout into a mode-0700 folder outside it, so
+     every production compose command on the Mac refuses (risk S1; it comes back only for a
+     rollback).
+   - On the VM: put the production `divesafe_api_key_hashes` set aside in step 1 into
+     `docker/secrets/` (mode as `make-secrets.sh` gives it) and compare its SHA-256 with the Mac's
+     (paste back "match" or "mismatch" only). Then `docker/restore.sh` into the new volume,
+     `db-init`, then `api`. Check `/health`,
+     the record count, one decided record (still decided) and one pending record (still pending).
+     Keep `restore.sh`'s printed output (`latest assessment created (UTC)` and the runs left
+     running) with the migration record; a rollback onto the Mac's kept volume needs it.
+   - **Ruleset** (risk S5): the `ruleset_sha256` in the API's "ruleset loaded" log line equals the
+     sign-off hash and the Mac's `DIVESAFE_RULESET_SHA256`, recorded in the A8 deploy record; the
+     ruleset file is mode 0444 and readable by uid 10001, and its folder is writable by the
+     deploy user only.
+   - **Off-VM rollback kit** (risk r3-S2): a copy of the current ruleset file, its
+     `DIVESAFE_RULESET_SHA256` and the non-secret lines of the VM's `production.env` is kept off the
+     VM, with the encrypted backups on the NAS or with the migration record, and updated at every
+     ruleset replacement or settings change. Each settings change, and each ruleset replacement's
+     sign-off hash, is recorded off the share (the A8 deploy record on the remote repository's
+     reviewed main branch, and the migration record; never the VM's checkout): the kit check in step
+     4 compares against that record. A rollback with the VM gone needs the kit (step 4). The kit,
+     the migration record and `restore.sh`'s output are the owner's, kept outside the repository,
+     never in this ADR. A rollback after the ruleset's definitions expire needs a re-reviewed
+     ruleset in the kit.
+   - Then `web` and Caddy, Uptime Kuma's monitors, and the `crond` backup, whose first run is
+     started by hand. Newt and the Pangolin resource come last, and only once B1 holds.
+4. **The Mac stays as a stopped rollback** (#109a, #112a): its volume and images kept, its
+   LaunchAgent backup switched off, `production.env` moved out of its checkout (step 3). Both
+   never run as production at once; that is owner discipline, made harder by the moved file and
+   by the fence below.
+   - **Rollback after the VM accepted writes** (`docs/backup-and-restore.md`, "After a restore").
+     During a rollback both web UI names stay down until the VM is production again; deciders use
+     the web UI on the Mac itself (#119a).
+   - **First, fence the VM: in every rollback, before the Mac's API starts** (risk r3-S1). Only
+     the names were #119's choice; the fence is not optional.
+     1. Disable the Pangolin resource on the Pangolin server; this works with the VM down.
+     2. If the VM is reachable: stop Newt; disable the VM's `crond` backup line; `docker compose
+        stop` the VM's stack (its `restart:
+        unless-stopped` would otherwise bring it back after a crash or reboot); move the VM's
+        `production.env` out of its checkout, as on the Mac in step 3. If the VM makes a final
+        backup (source 1 below), Newt, `web` and `api` stop first and the rest after the backup.
+     3. If the VM cannot be reached: power it off on its host and turn off its autostart. Before
+        it is next powered on with its network attached, it is fenced as in 2 (for example started
+        with its network detached first).
+     4. Tell the users that `<name>.home.arpa` and `<public-name>` are down until the VM returns.
+     5. **If a compromise of the VM is suspected** (risk r4-n1, security R4-S2), also before the
+        Mac's API starts: revoke Newt's site credentials on the Pangolin server (not only disable
+        the resource); skip source 1 below and the newest file on the share, since a compromised VM
+        can encrypt a forged archive (its manifest detects damage, not tampering); restore the
+        backup, the kit and the records copy (`withdrawal-log.csv`, `approval-record.csv`,
+        `ruleset-signoff.txt`) from the newest NAS snapshot taken before the suspected time (a
+        compromise of the NAS's own host side, which runs the VM, is outside what the snapshots
+        protect: Known gaps). Before knowledge is served again (security R8-S1, N1): every
+        withdrawal found in any source (the snapshot's log, the VM's current log, the API log, the
+        owner's own notes) is applied, since an extra withdrawal only withholds knowledge; a version
+        approved since the snapshot counts as not approved until the owner confirms it again from a
+        record kept off the VM. Rotate every API key used on the VM since the move, the web session
+        secret and the database passwords on the Mac. The web session secret matters because the
+        session cookie seals the API key itself (AES-256-GCM, keyed from that secret,
+        `web/lib/session.ts`): the secret and any captured cookie give the key. Also: remove the
+        VM's Caddy root from every device that trusts it; the owner rotates the provider credentials
+        (the model API key, the tides.today key, the MET token) at each provider (ADR 0032: no agent
+        does this); change the NAS write credential; remove any VM key from the Mac's
+        `authorized_keys`; replace any Git credential the VM held (security N2); and change the
+        lesser ones (Langfuse's secrets and trace keys, the heartbeat and push URLs). The ids in the
+        VM's API log are then a lower bound only (risk r5-n3): rely on the waiting rule, and tell
+        every decider. This is the cost of #101b (secrets shared with the Mac), stated, not
+        reopened.
+   - **Settings on the Mac.** The Mac runs the same commit as the VM (a newer migration on the VM
+     refuses older code) and uses the VM's current ruleset file, its `DIVESAFE_RULESET_SHA256` and
+     the VM's non-secret `production.env` lines, not the Mac's copies from before the move (risk
+     r2-n3): from the VM if it is reachable, otherwise from the off-VM rollback kit (step 3).
+     Without them the Mac's API is not started. A kit taken from the share is checked first
+     (security R4-S1): its `DIVESAFE_RULESET_SHA256` equals the latest sign-off hash in the A8
+     deploy record read from the remote repository's reviewed main branch, never
+     `ruleset-signoff.txt` from the share or the VM (security R8-S1), and not only the hash stored
+     beside it; its settings lines are compared with the Mac's own pre-move `production.env`, and
+     every difference matches a recorded settings change, above all the model base URL and
+     `DIVESAFE_LLM_KNOWLEDGE_HOST`, `DIVESAFE_ALLOW_EXTERNAL_LLM`,
+     `DIVESAFE_DEGRADED_MAY_SUPPORT_GO` and the two max-age settings. If either check fails with no
+     compromise suspected, the rollback stops until the owner finds out why; only when a compromise
+     is suspected is the kit taken from a NAS snapshot before the suspected time (risk c-n2).
+   - **Clocks.** Compare the Mac's clock with the VM's, or, if the VM is gone, with a reference
+     (`date -u` against a time server); if they cannot be compared, add a margin to the waiting
+     rule below (`docs/backup-and-restore.md`, "After a restore", step 2).
+   - **Which backup to restore, in order** (risk r3-S2, r6-n1). The source is picked first (a NAS
+     copy is tried by restoring it into a scratch project with no `api`). For sources 1 and 2,
+     `restore.sh` refuses a database that is not empty and compose fixes the volume name (`name:
+     divesafe-prod`), so (#123a): with the Mac's API stopped, back up its old volume with
+     `backup.sh`; keep that archive read-only off the Mac as the reconciliation evidence, queried
+     only after a restore into a scratch project with no `api`; remove `divesafe-prod_db-data`
+     with the owner's approval; then restore the chosen backup into the default `divesafe-prod`
+     project. The scratch project is stopped before that backup (the scripts refuse while two
+     compose `db` containers run); it holds real decisions, so it is removed only after the
+     restore into `divesafe-prod` has matched its manifest (risk r7-n2). Keep the list
+     `restore.sh` prints.
+     1. **The VM's final backup**, if the VM can make one, as in step 3 the other way round: tell
+        the deciders; on the VM stop `web`, check that `divesafe_runs_in_flight` is 0, stop
+        `api`; run `docker/backup.sh`; then fence the rest as above. Copy and compare it as in
+        step 3.
+     2. **Otherwise the latest NAS copy** (#107a, #117a), decrypted off the VM. Its printed
+        `latest assessment created (UTC)` starts the waiting rule, and the ids the VM logged after
+        that copy are listed.
+     3. **Only if no NAS copy restores, the Mac's pre-move data**: #123a does not apply; its old
+        volume is served as it is, not removed and not restored. The time is the one `restore.sh`
+        printed in step 3 (kept with the migration record), or the same query run read-only on the
+        Mac's database (`docs/backup-and-restore.md`, the statements `restore.sh` sends); the ids
+        are every one logged since the move. If no id list exists (for example the NAS is gone,
+        #125b), every decider is told that every decision since the move is lost (risk r7-n1).
+   - **If anything after the restored backup may be lost** (sources 2 and 3): first save the VM's
+     API log (mode 600) if the VM is reachable, and list the ids from it; keep every decider key
+     out of the Mac's API until `latest assessment created (UTC)` plus
+     `DIVESAFE_DECISION_MAX_AGE_MINUTES` (plus the clock margin) has passed; never decide again an
+     assessment for a dive that has already happened. Whoever acted on a lost decision is told.
+   - **Records in every rollback** (risk c-n1, f-n1): the Mac's own records folder is stale from
+     the move onward. The newest records copy, from the VM or from the NAS (decrypted with the
+     owner's key), replaces it, and for sources 2 and 3 every withdrawal in it is applied (R1)
+     before knowledge is served. After a suspected compromise, the compromise branch above applies.
+   - **Once the Mac is serving** (risk r3-n2): turn its LaunchAgent backup and Uptime Kuma back on;
+     take a backup by hand; pause the off-VM heartbeat (#118b), or point it at the Mac's backup,
+     so its alert means what it says.
+   - **Return to the VM** (risk r4-S1). Step 3 again, its preconditions included (the VM's clock
+     synchronised and agreeing with the Mac's, risk r5-n2), with the Mac as the source: tell the
+     deciders; stop `web`, check that `divesafe_runs_in_flight` is 0, stop `api`; run
+     `docker/backup.sh`; `C rm -s -f api web`, `C stop db`; move the Mac's `production.env` away.
+     - The Mac's current secrets are copied to the VM as in Secrets (at least
+       `divesafe_api_key_hashes`, the web session secret and the database passwords), "match" or
+       "mismatch" only, so no secret rotated during the rollback works again on the VM (risk
+       r5-S2). The Mac's records folder goes back to the VM's records folder with them (f-n1).
+     - The VM's old volume is never served again (#123a): back it up with `backup.sh` (its API
+       is already stopped); keep that archive read-only off the VM as the evidence for
+       reconciling rollback sources 2 and 3 (more complete than the API log), queried only after
+       a restore into a scratch project with no `api`; remove `divesafe-prod_db-data` with the
+       owner's approval; restore the Mac's final backup into the default `divesafe-prod`
+       project, with the ruleset and settings the Mac was running, and update the rollback kit
+       to match.
+     - The waiting rule applies only if the Mac's final backup was not taken with its API stopped.
+     - The Mac's LaunchAgent backup and Uptime Kuma are turned off again, and the off-VM heartbeat
+       points at the VM's backup again (risk r5-n1).
+     - B1's outside checks are run again before the Pangolin resource is enabled. The VM's `crond`
+       backup and Newt are turned back on last.
+     - **After a suspected compromise** (security R5-S2), the return is only to a fresh VM or a
+       clean reinstall: step 0 again, new Newt credentials, a new Caddy local CA (its new root
+       installed on each device), the rotated secrets, Newt's `DOCKER-USER` rule and negative
+       check again, then B1 re-run. The old volume's evidence archive is then taken with the VM's
+       network detached, labelled untrusted and treated as a lower bound; it is kept off the NAS
+       share and restored only into a scratch project with no `api`, never into `divesafe-prod`
+       (risk r6-n2, security N3).
+   - **Retirement (#112a):** only after the off-VM copy (#107a) is verified, by a test restore from
+     it and by a missed heartbeat seen to raise an alert, **and** at least 14 days after the move,
+     with no second copy off the NAS required (#125b, Known gaps). Then delete on the Mac: the
+     DiveSafe volume and images, `docker/secrets/`, `production.env`, the Langfuse and Uptime Kuma
+     volumes, secrets and compose folders, the push-URL file, the LaunchAgent and its wrapper,
+     backup archives and logs, the ruleset copy and its archive, and the Time Machine copies of any
+     of them. Any #123a evidence archive is kept until its reconciliation is done (risk r7-n3).
+     Any CA root installed for the Mac is removed from devices. The Mac's copies of the
+     secrets stay valid until then (#101b).
+
+### Secrets (#101b)
+
+- **Owner choice:** every secret is copied from the Mac over SSH; none is regenerated (the
+  assistant had recommended new database, web and Langfuse secrets). New anyway: Newt's
+  credentials, Caddy's CA key and the Uptime Kuma push token.
+- **Procedure** (security S6): on the VM, in a shell with `umask 077`, copy each file over SSH
+  straight into its final place (never through a chat, a ticket, a temporary folder or the
+  repository). Compare each file's SHA-256 on both machines on the owner's screen; paste back only
+  "match" or "mismatch", never a hash. Then set and check modes and owners: `docker/secrets/` 0700
+  owned by the deploy user, each file with the mode `make-secrets.sh` gives it; Langfuse's
+  `langfuse.env` and Redis password file 0600.
+- Whatever access the VM used to reach the Mac for the copy (a key in the Mac's
+  `authorized_keys`, a Remote Login permission) is removed once the copy is done (security R5-S1).
+- The copies on the Mac stay valid credentials until retirement (step 4).
+
+### Known gaps (Amendment 2)
+
+- **The publish address is the only limit on Caddy (#92c).** No `DOCKER-USER` rule covers Caddy,
+  so every device on the home network can reach it and the DiveSafe sign-in page. With rootful
+  Docker a published port is forwarded before the host's INPUT rules are read, so a host firewall
+  added later does not cover Caddy unless its rules are in the `DOCKER-USER` chain (as Newt's is,
+  #115a).
+- **The sign-in page is on the internet, behind Pangolin authentication (#110a).** Anyone who
+  passes Pangolin's sign-in can try API keys there; the layers above are what stand in front.
+  Pangolin authentication is configured on the owner's server, not part of DiveSafe; B1's outside
+  checks are its only test. A country filter blocks the owner when abroad, by design.
+- **Pangolin is in the trust path.** The Pangolin server ends TLS for the public name, so it can see
+  every request and reply through it in full, not only metadata (addresses, times, paths, sizes):
+  the API key typed at sign-in, the session cookie, assessments, decisions and rationales.
+  Whoever controls that server, or the machine it runs on, can read or change that traffic and
+  could reuse a captured key or cookie.
+- **The human gate on the public path** (risk S6). A decision made with a captured key or cookie is
+  write-once and recorded under that key's actor, so on the public path the authenticated actor is
+  only as trustworthy as the Pangolin server. An `overrider` key could record a less severe
+  outcome than a NO-GO. Overrider keys are used only over the LAN name (#108a, #114a): owner
+  discipline, not enforced. Any overrider key ever typed on the public name is rotated.
+- **The A8 key is kept, accepted again (#102b).** The tides.today incident's accepted gap (A8,
+  deploy of 2026-11-20: the key sent to a third party is kept) rested on the API being reachable
+  only on the host. The web UI through Caddy and Pangolin reopens that path; the owner accepts it
+  again, resting on Pangolin authentication (#110a) and on the LAN. Weakening the sign-in method,
+  a share link, or a rule that skips authentication reopens it again. `docs/architecture.md`
+  Known gaps says the same.
+- **Newt can reach the VM's own services (#120b, accepted).** The `DOCKER-USER` rule (#115a)
+  limits Newt's forwarded connections to `<pangolin-server>`; nothing limits its connections to
+  the VM itself. Whoever controls the Pangolin server or Newt can reach the host's services on
+  any address of the host (the LAN address, `docker0` and every bridge gateway), sshd included,
+  so a host service added later and bound to one bridge address is reachable too; the
+  key-only `sshd` settings of step 0 are then the only control there. Revisiting #120 later is a
+  host-rule change only. The rule is a host rule, not in the repository and not tested; it needs
+  the iptables backend and must survive reboots and Docker restarts, which the negative check
+  shows. What is
+  a Pangolin resource is the owner's discipline on the Pangolin server; nothing on the VM
+  enforces it.
+- **Client address behind Newt (#98a).** Caddy trusts the forwarded address only from Newt's fixed
+  address and reads it right to left, so the address Pangolin appended is the one used. Two
+  checks: (a) a CI test in the Caddy PR, from the simulated trusted Newt address, shows a forged
+  header is read right to left; (b) the live check in B1 item 3 shows that a forged
+  `X-Forwarded-For` sent through Pangolin lands in the sender's real bucket. CI cannot reach
+  Pangolin, so only (b) covers Pangolin's own handling; if that changes, the buckets are wrong
+  until (b) is run again.
+- **Caddy's local CA can sign any name (#86b).** A device that trusts its root trusts any
+  certificate it signs. The CA's root key is online, in Caddy's data volume on the VM: whoever can
+  read it can impersonate any site to those devices. The volume is a secret store, outside synced
+  folders and outside DiveSafe's backups. Install the root only on the devices that need it, and
+  remove it from them when the VM is retired.
+- **One VM holds everything; the copy is on the same site.** DiveSafe, its backups, Uptime Kuma and
+  Langfuse share one VM and one disk, and whoever administers the machine that runs the VM can read
+  its disk and memory. The off-VM copy (#107a, #113) goes to the owner's NAS on the home network.
+  A compromised VM can overwrite or delete the newest files on the share; the NAS's scheduled
+  read-only snapshots (#117a), which the VM's account cannot delete (confirmed by the owner,
+  2026-11-24), keep the earlier copies. The NAS is on the same site, so fire, theft or a
+  site-wide fault can take both.
+- **The VM runs on the NAS that holds its only off-VM copy (#125b, accepted by the owner).** One
+  failure or compromise of that machine (its disks, its hypervisor or its administrator) loses
+  the production database and every copy: all assessments, decisions, override rationales and
+  actual conditions. The snapshots do not help there. Once the Mac is retired, nothing else
+  holds them. A second copy off that machine stays an optional Follow-up; revisiting this is a
+  change to the backup script only.
+- **The rule-out cannot prove a clean host (#126b, accepted by the owner).** A check run on a
+  possibly compromised host relies on that host's own tools and logs, so it can show a
+  compromise but cannot prove there was none (`apk audit` trusts the VM's own apk database); the
+  logs cover the exposure window only in part. It covers the VM only; for the NAS there is one
+  look at its admin sign-in history.
+- **The VM keeps its SSH host keys from before the rule-out (#128, accepted by the owner).** They
+  are the keys it had during the past exposure (#127b); if one leaked, a device on the LAN could
+  impersonate the VM during step 1's secrets copy or any later SSH session to the VM. The #126b
+  rule-out is the only mitigation. The image and build-cache half of that reset is moot: the
+  rule-out found no images, containers or volumes, and the first build on the VM runs with
+  `--pull --no-cache`, so no earlier base image or build cache is used (security, final round).
+- **A rollback takes both names down** (#119a). The fence stops the only service behind
+  `<name>.home.arpa` and `<public-name>`; until the VM is production again, deciders use the web
+  UI on the Mac itself, and other users have none.
+- **A rollback with the VM gone rests on the off-VM kit and the NAS.** If the rollback kit (step
+  3) is stale, the Mac cannot start with the VM's ruleset and settings; if no NAS copy restores,
+  everything since the move is at risk and only the API log, if saved, lists it. The kit sits on
+  the share a compromised VM can write, so it is only as trustworthy as the checks in step 4
+  (the A8 hash and the recorded settings changes) and the NAS snapshots behind it.
+- **No host firewall.** SSH and anything else on the VM's LAN address is reachable from the whole
+  home network. That is why the key-only `sshd` settings and the patched `openssh` are
+  preconditions (step 0), not later hardening. The only host rule is Newt's (#115a, #120b).
+- **Time.** Evidence freshness and decision age use the host clock. A stopped sync daemon is not
+  alerted on; the daemon must stay in OpenRC's default runlevel.
+- **Container logs do not rotate.** Docker's default `json-file` log driver keeps growing; the API
+  log is also the evidence for a rollback (step 4). A size limit (compose `logging` options or the
+  daemon's default) is a later change; until then the owner watches disk use.
+- **The cron account is root-equivalent.** The account that runs the backup is in the `docker`
+  group of a rootful engine (ADR 0027 amendment 2026-11-24).
+
+### Decided (owner, 2026-11-24)
+
+- #97a: Alpine upgraded to 3.24; host facts above.
+- #98a: Caddy trusts the forwarded client address only from Newt's fixed address, read right to
+  left, with a test in the Caddy PR.
+- #99b: Uptime Kuma reaches `/health` over a dedicated internal network (ADR 0027 amendment).
+- #100a: Newt to Caddy is plain http on `pangolin-edge`, an internal network of those two only.
+- #101b: every secret copied from the Mac over SSH, none regenerated (owner choice; see Secrets).
+- #102b: the A8 key is not rotated; the reopened gap is accepted again (Known gaps).
+- #103: the tides.today permission covers the VM.
+- #104b: the Mac's Langfuse data moves to the VM over SSH (ADR 0027 amendment).
+- #105, replaced by #110a: Pangolin authentication in front of the public resource; country
+  filtering kept as an extra filter, not authentication.
+- #106a: Caddy publishes 443 only.
+- #107a: an encrypted copy of each backup off the VM, plus an external heartbeat (ADR 0027
+  amendment).
+- #108a, confirmed by #114a: overrider keys are used only over the LAN name; discipline, not
+  enforced in the web UI; any overrider key typed on the public name is rotated.
+- #109a, #112a: the Mac stays a stopped rollback; it is retired only after #107a is verified and at
+  least 14 days have passed; then the retirement list of step 4 applies (#125b: no second copy
+  off the NAS is required).
+- #111a: a method meeting the B1 minimum, chosen by the owner (#111).
+- #113: the off-VM copy goes to the owner's NAS on the home network, mounted on the VM. It is the
+  owner's own device, so the question of a third party holding licensed corpus text does not
+  arise; the copy is still encrypted to a public key (ADR 0027 amendment).
+- #115a: a `DOCKER-USER` rule limits Newt's forwarded connections to the Pangolin server's
+  address (connections to the VM itself: #120b).
+- #116a: AGENTS.md's "local Langfuse" covers Langfuse self-hosted on the DiveSafe host; AGENTS.md
+  is reworded in a later PR (Follow-ups).
+- #117a: the VM writes the encrypted copies to the NAS mount; the NAS takes read-only snapshots
+  on a schedule and with a retention the VM cannot change (ADR 0027 amendment). Confirmed by the
+  owner (2026-11-24): the share is on a file system with snapshots, read-only snapshots are
+  scheduled, the VM's account cannot delete them and is not a NAS administrator. The VM itself
+  runs on that NAS (Known gaps).
+- #118b: the external heartbeat is an Uptime Kuma push monitor off the VM, on another host the
+  owner chose (not named here). Not the Mac and not the NAS: the VM runs on it (risk r6-n3; ADR
+  0027 amendment).
+- #119a: during a rollback both web UI names stay down until the VM is production again;
+  deciders use the web UI on the Mac itself. Fencing the VM is part of every rollback, before
+  the Mac's API starts (step 4).
+- #120b (owner's choice; the assistant and `security-reviewer` recommended an INPUT drop): no
+  INPUT drop for Newt's bridges; the gap is accepted (Known gaps).
+- #121a: the A8 key's account name stays as written; host versions are stated as minimums; the
+  Known gaps stay.
+- #122a: the AGENTS.md follow-up lands before the Pangolin resource is enabled (B1 item 6).
+- #123a: when a machine takes production back (the Mac in a rollback, the VM on return), its old
+  volume is backed up with `backup.sh`, that archive kept read-only off the host as the
+  reconciliation evidence (queried only through a scratch project with no `api`),
+  `divesafe-prod_db-data` removed with the owner's approval, and the restore made into the
+  default `divesafe-prod` project, so every existing command keeps working (step 4).
+- #124a: the real model host in `docker/production.env.example` is replaced by a placeholder in a
+  separate small PR (Follow-ups).
+- #125b (owner's choice; the assistant and `risk-reviewer` recommended a second copy off the NAS):
+  the gap that the VM runs on the NAS holding its only off-VM copy is accepted; the Mac may be
+  retired under #112a without a second copy (Known gaps).
+- #126b: a rule-out is run on the VM before step 1 and recorded outside the repository; any
+  finding that cannot be explained means a reinstall and step 0 again (Known gaps).
+- #127b: the past exposure is described only in general terms in this public document; the full
+  record is in the owner's host checklist.
+- #128: the VM's SSH host keys are not regenerated before step 1, and no separate image or build
+  cache reset is made (Known gaps).
+
+### Follow-ups (later PRs, not this one)
+
+- AGENTS.md: sections 3, 4 and 12's "local Langfuse" reworded to "self-hosted on the DiveSafe
+  host" (#116a); section 12 names the Pangolin server as a reader of web UI traffic in clear
+  (security S7). Must land before the Pangolin resource is enabled (#122a, B1 item 6).
+- The host checklist (owner-side, outside the repository): the router (no inbound forward to
+  the VM or the NAS, UPnP and NAT-PMP off), the exact host versions, Newt's
+  `DOCKER-USER` rule and its negative check, the firewall backend, the chosen sign-in method and
+  its users, the production overrider keys, and the confirmation that every existing key is
+  random and at least 128 bits.
+- `docs/backup-and-restore.md`, `docs/first-run-on-the-real-host.md` and the compose comments:
+  Linux paths, `sha256sum`, `ip route`, `crond`.
+- Newt's compose file brought into the repository with tests, or kept as owner discipline.
+- `docker/production.env.example`: the real host is replaced by a placeholder (#124a), in a
+  separate small PR; earlier commits still show it.
+- Optional: a second backup copy off the machine that runs the VM (#125b); a backup-script
+  change only.
+- A web check that refuses an overrider session on the public name (#114a keeps discipline now;
+  it would need the session's roles from the API).

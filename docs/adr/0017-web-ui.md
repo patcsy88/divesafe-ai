@@ -563,7 +563,8 @@ Nothing under `web/` changes for it (#15b). It is defined, not deployed: the own
   runtime key is set (above), and the launcher refuses to start without one.
 - **Image supply chain.** The base image is pinned by tag, not digest. Trivy reports; it does not
   block a merge.
-- **Plain HTTP and one shared bucket.** Until a TLS proxy is in front and
+- **Plain HTTP and one shared bucket** (planned fix: amendment 2026-11-24). Until a TLS proxy is in
+  front and
   `DIVESAFE_WEB_TRUST_PROXY` and `allowedOrigins` are set, the web UI is for loopback use only, the
   session cookie is `Secure` (so a browser over plain HTTP on another host drops it), and every
   sign-in shares the web server's throttle bucket at the API.
@@ -712,3 +713,86 @@ uses normal modes, so CI did not catch it.
   by default (for example `RUN uv sync`) would pass, and a `RUN set -e` line would be refused by
   mistake. Neither line exists today. Closing it means pinning the whole API Dockerfile as
   `Dockerfile.web` is pinned, in a later reviewed change.
+
+## Amendment 2026-11-24: Caddy in front of the web UI (owner #67a, #68a, #70b, #86b, #91b–#114a)
+
+PROPOSED, design only; the Caddy PR builds it (ADR 0024 Amendment 2, the move to the Linux VM).
+It carries out the TLS proxy change that #18a, #67a and #68a left for later. Nothing under `web/`
+or `docker/` changes in this amendment.
+
+- **Caddy is the single trusted proxy (#91b).** A `caddy` service in the production compose file,
+  image pinned by digest, in front of `web` only. It forwards plain http to `web:3100` over a new
+  internal network, `web-proxy` (a new `10.231.x.0/24`, checked with `ip route` on the VM), where
+  Caddy has a fixed address outside `ip_range`, as the API has on `web-api` (#52a).
+- **Two sites, no catch-all (#106a, security S9).** Caddy publishes port 443 only, on the VM's LAN
+  address only (#87b/#90b), with no `DOCKER-USER` rule (#92c). On 443 it serves only
+  `<name>.home.arpa`, with `tls internal` (#86b). The public name is an explicit
+  `http://<public-name>` site bound only to Caddy's fixed address on `pangolin-edge` (outside
+  `ip_range`), the internal network it shares with Newt alone (#100a). `pangolin-edge` is created
+  by the `divesafe-prod` project and Newt joins it as `external`, so the compose tests check that
+  it is `internal: true` and that Caddy is the only service of the project on it. Any other name
+  gets no site. Caddy's admin endpoint stays inside its container and is never published.
+- **web's only way in is Caddy.** `web` drops `web-ingress` and its `127.0.0.1:3100` port and joins
+  `web-proxy` and `web-api` only. Without this, any local process could reach web directly and
+  send its own `X-Forwarded-For`, which `TRUST_PROXY=1` would believe; Next cannot check which
+  peer sent a request. It also closes #49a's gap (web's route out), since both its networks are
+  internal. `api` can still reach web on `web-api` (Known gap above); the API is trusted code.
+- **Forwarded headers (#98a, security S2).** By Caddy's documentation, it ignores a client's
+  `X-Forwarded-For` unless the peer is in its `trusted_proxies`. On the LAN path the peer is the
+  device, so its own address is used. On the Pangolin path the peer is Newt; Caddy trusts the
+  header from Newt's fixed address on `pangolin-edge` only (#98a), and reads it right to left
+  (Caddy's strict mode, `trusted_proxies_strict`, or its equivalent; the PR checks the option),
+  so the first untrusted address from the right, the one Pangolin appended, is the client. Caddy
+  then sets the header web reads to that one address, since web takes the last entry
+  (`web/lib/throttle.ts`). **Two checks** (security R3-S2): (a) a CI test in the Caddy PR sends a
+  forged `X-Forwarded-For` from the simulated trusted Newt address and shows it is read right to
+  left, so the request lands in the right bucket; (b) CI cannot reach Pangolin, so a live check in
+  ADR 0024 Amendment 2, B1 item 3, shows that a forged header sent through Pangolin lands in the
+  sender's real bucket, run in step 2, at go-live and after any change on the Pangolin server.
+- **`DIVESAFE_WEB_TRUST_PROXY=1`** is set in the same change that makes Caddy web's only ingress,
+  never before. Web gets a fixed address on `web-api` outside `ip_range`, and the API's
+  `DIVESAFE_TRUSTED_PROXIES` lists that address only: never a subnet, never a gateway, and never
+  any address on `divesafe-trace` or `divesafe-health` (the setting accepts single IP addresses
+  only and refuses anything else, `src/divesafe/config/settings.py`), so the address forwarded at
+  sign-in counts per client at the API too (ADR 0013).
+- **One host allow-list (#70b).** `DIVESAFE_WEB_ALLOWED_HOSTS` replaces the two names written in
+  `web/lib/hosts.ts`, as #70b planned. It holds `<name>.home.arpa` (#93a) and the Pangolin public
+  name (#94b), and `127.0.0.1:3100` for web's own healthcheck, which calls loopback inside the
+  container. `localhost:3100` goes. A missing or empty list stops start-up, as the other start-up
+  checks do. `serverActions.allowedOrigins` holds the same public names, read from the same
+  setting, so one list decides both. No wildcard.
+- **TLS (#86b, #100a).** Caddy's local CA issues the certificate for `<name>.home.arpa`; the owner
+  installs its root certificate on each device that uses that name. The public name's
+  certificate is held by the Pangolin server, which ends TLS there (#94b, #95a). Newt to Caddy is
+  plain http on `pangolin-edge`, which no other container joins (#100a).
+- **Cookie and HSTS (#68a, #71a).** With TLS on every path the browser sees, the cookie becomes
+  `__Host-` prefixed (`Secure`, `Path=/`, no `Domain`), and `Strict-Transport-Security` is sent.
+  Both are in the Caddy PR, with tests of the cookie attributes and headers (a Known gap above).
+- **Overrider keys over the LAN name only (#108a, #114a).** Owner discipline, not enforced by the
+  web UI; any overrider key typed on the public name is rotated. A later option: web refuses an
+  overrider session when the `Host` is the public name (it would need the session's roles).
+- **L1–L4 move to the Caddy PR.** The owner's instruction names L1–L4; no item with those labels
+  is defined in this repository. The Caddy PR lists them, in the owner's words, in its
+  description.
+- **Not a Pangolin target:** only Caddy's public-name site is. The API port, Uptime Kuma, Langfuse
+  and SSH are not (#85b, #96a).
+
+### Known gaps changed by this amendment
+
+- **Plain HTTP and one shared bucket** (above) stays true until the Caddy PR is deployed. After
+  it, the LAN path has per-device buckets, and the Pangolin path has per-client buckets as far as
+  the address Pangolin appends is right (#98a; ADR 0024 Amendment 2, Known gaps).
+- **DNS rebinding to `127.0.0.1:3100`** goes away with the published port. The host allow-list
+  still refuses any other `Host`. The API port `127.0.0.1:8000` keeps its exposure.
+- **Next listens on 0.0.0.0 inside its container** stays. The VM runs Docker Engine 29.8.2 or
+  later (#97a, #121a, the VM's one minimum), so the "host runs 29.8.2 or later" basis holds
+  there; re-check after any host change.
+- **Check routes with `ip route`.** The relay gap above says `netstat -rn`; on the Alpine VM use
+  `ip route` (BusyBox may not provide `netstat`).
+- **New:** every device on the home network, and anyone past Pangolin authentication (#110a),
+  reaches the DiveSafe sign-in page (#92c, #94b). What stands in front of an API key there, in
+  order, is in ADR 0024 Amendment 2 (Access model): Pangolin authentication on the public path,
+  the key's secrecy and randomness, then the per-source failure limits.
+- **New:** the Pangolin server sees every page, the API key typed at sign-in and the session cookie
+  in clear (ADR 0024 Amendment 2, Known gaps). Signing out of DiveSafe does not end the Pangolin
+  session.
