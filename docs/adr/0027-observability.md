@@ -1232,8 +1232,9 @@ Settled 2026-11-15, each as the recommended default:
 ## Amendment 2026-11-24: Uptime Kuma, Langfuse and the backup on the Linux VM
 
 - Status: PROPOSED, design only (owner #84a, #89a, #99b, #104b, #107a, #113, #117a, #118b, #125b;
-  host facts #80b, #97a; ADR 0024 Amendment 2). Nothing here is built. The owner runs every
-  host command; the assistant writes the commands and checks (#88a).
+  host facts #80b, #97a; ADR 0024 Amendment 2). Nothing here is built. The assistant may run
+  read-only checks on the VM as the deploy user; changes need the owner's OK, and root tasks stay
+  with the owner (ADR 0024 Amendment 2, #132a; #88a superseded for the VM).
 - **What moves.** Uptime Kuma, the self-hosted Langfuse and the daily backup move from the Mac to
   the Alpine Linux VM together with DiveSafe (#84a). The VM's memory was raised to 15.6 GB so that
   Langfuse (about 3.7 GB) and the backup's scratch check (up to 4 GB) fit beside the stack (#89a).
@@ -1340,12 +1341,12 @@ The LaunchAgent `org.divesafe.backup` has no Linux equivalent here: Alpine has O
   are scheduled. The VM itself runs on that NAS (Known gaps).
 - **External heartbeat (#107a, #118b).** Because Uptime Kuma stops with the VM, a second Uptime Kuma
   push monitor off the VM expects a ping after each successful backup and raises an alert when none
-  comes. It runs on another host the owner chose, not the Mac and not the NAS: the VM runs on the
-  NAS, so a monitor there would share the VM's machine and the site's power (risk r6-n3). Its Uptime
-  Kuma is not a public resource and has its own sign-in; the push URL is the one secret it holds
-  (security N3). The ping carries nothing but its URL; that URL is `https` and a secret, kept in a
-  mode-600 file and read with `curl -K`, as the push URL is. This is the one exception to "no
-  notification channel": it sends no DiveSafe data, only the fact that a ping arrived.
+  comes. It runs on another always-on machine at home (#131a), not the Mac and not the NAS: the NAS
+  is the VM's own machine (risk r6-n3). Its Uptime Kuma is not a public resource and has its own
+  sign-in; the push URL is the one secret it holds (security N3). The ping carries nothing but its
+  URL; that URL is `https` and a secret, kept in a mode-600 file and read with `curl -K`, as the
+  push URL is. This is the one exception to "no notification channel": it sends no DiveSafe data,
+  only the fact that a ping arrived.
 - **Verified before the Mac is retired (#112a):** a test restore from the NAS copy (decrypted
   off the VM) into a scratch database, and a missed heartbeat seen to raise an alert.
 - **During a rollback** (ADR 0024 Amendment 2, step 4): once the Mac is serving, its LaunchAgent
@@ -1370,6 +1371,9 @@ The LaunchAgent `org.divesafe.backup` has no Linux equivalent here: Alpine has O
   database and every copy, and the snapshots do not help there. A second copy off that machine
   is an optional follow-up, a backup-script change only (ADR 0024 Amendment 2, Known gaps).
 - The NAS is on the same site as the VM: fire, theft or a site-wide fault can take both.
+- A site-wide power or internet outage stops both the VM and the heartbeat's host, and its alert
+  cannot leave the site: the heartbeat notices a stopped VM or a missed backup, not a site
+  outage (security S4).
 - A backup missed while the VM is down is skipped, with no retry (as on the Mac).
 - Option (b) is chosen on reasoning, not observation: what address the API sees for Uptime Kuma,
   and whether (a)'s gateway path reaches a loopback-published port, are to verify on the VM.
