@@ -41,7 +41,7 @@
   `6545bd7`) likewise; the sixth revision (small, text only) has not been seen by either (see the
   notes at its start).
 - **Amendment 2 (2026-11-24), remote Linux host,** is at the end of this ADR. It records the
-  owner's decisions (#80b–#128) to move production from the owner's Mac to a Linux VM on the home
+  owner's decisions (#80b–#132) to move production from the owner's Mac to a Linux VM on the home
   network, with Caddy in front of the web UI and the web UI published through Pangolin. Design
   only: nothing is built or deployed by it.
 - Builds on ADR 0012 (roles), 0015 (migrations), 0023 (model egress). Closes the "needs its own
@@ -3003,15 +3003,19 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 
 ## Amendment 2 (2026-11-24): remote Linux host
 
-- Status: PROPOSED, design only. Owner decisions #80b–#128 (2026-11-24/25); none open.
+- Status: PROPOSED, design only. Owner decisions #80b–#132 (2026-11-24/25); none open.
   Reviewed eleven times by `risk-reviewer` and `security-reviewer`; both done (no blocker for the
-  text; security B1 blocks enabling the public resource,
-  see "Before the public resource is enabled"). Nothing is built or deployed by this amendment.
-  Later reviewed PRs implement it:
+  text; the #132a text is reviewed by `security-reviewer`, and by `risk-reviewer` only if it
+  touches the human gate, which it does not: the assistant never writes records, decisions,
+  actual conditions or the knowledge base on the VM ("Assistant access to the VM", absolute
+  rules);
+  security B1 blocks enabling the public resource, see "Before the public resource is
+  enabled"). Nothing is built or deployed by this amendment. Later reviewed PRs implement it:
   the Caddy PR (ADR 0017 amendment 2026-11-24), the backup PR for BusyBox, `crond`, the off-VM
-  copy and the heartbeat (ADR 0027 amendment 2026-11-24), and a host checklist. The owner runs
-  every host command; the assistant writes the commands and the checks and reads the output the
-  owner pastes back (#88a).
+  copy and the heartbeat (ADR 0027 amendment 2026-11-24), and a host checklist. The assistant
+  may sign in to the VM as the deploy user with its own key and run read-only checks; anything
+  that changes the VM runs only after the owner's OK, and root tasks stay with the owner (#132a,
+  "Assistant access to the VM"; #88a, owner-run host commands only, is superseded by #132a).
 - **#94b overrides #81a's "private only" for the web UI.** #81a, then #85b, kept every DiveSafe
   surface private. #87b/#90b open the web UI to the home network, and #94b makes it a Pangolin
   public resource: reachable from the internet, behind Pangolin authentication (#110a, which
@@ -3205,7 +3209,8 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
 
 ### Migration (#83c, #101b, #109a, #112a)
 
-0. **Preconditions on the VM** (host checklist PR, run by the owner, #88a), before step 1:
+0. **Preconditions on the VM** (host checklist PR, run by the owner: root tasks, #132a), before
+   step 1:
    - **OpenSSH advisory (Alpine, 2026-11-05).** Alpine's `openssh-server` is built without PAM.
      On it, with password login allowed, an account whose password field is `*` (an account
      meant for keys only; root is one by default) accepts a login with no password once some
@@ -3352,7 +3357,9 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
         VM's Caddy root from every device that trusts it; the owner rotates the provider credentials
         (the model API key, the tides.today key, the MET token) at each provider (ADR 0032: no agent
         does this); change the NAS write credential; remove any VM key from the Mac's
-        `authorized_keys`; replace any Git credential the VM held (security N2); and change the
+        `authorized_keys`; revoke the assistant's key on the VM as in "Assistant access to the
+        VM" (#132a; a suspected compromise of the Mac starts this branch too, security S1);
+        replace any Git credential the VM held (security N2); and change the
         lesser ones (Langfuse's secrets and trace keys, the heartbeat and push URLs). The ids in the
         VM's API log are then a lower bound only (risk r5-n3): rely on the waiting rule, and tell
         every decider. This is the cost of #101b (secrets shared with the Mac), stated, not
@@ -3447,6 +3454,68 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
      Any CA root installed for the Mac is removed from devices. The Mac's copies of the
      secrets stay valid until then (#101b).
 
+### Assistant access to the VM (#132a)
+
+The assistant (the coding agent) may sign in to the VM over SSH as the deploy user (the owner's
+existing account, in `wheel` and `docker`), from the Mac only.
+
+- **The key.** A separate key used only by the assistant from the Mac, never the owner's own key.
+  It has no passphrase, because the agent cannot type one, and is stored only on the Mac, mode
+  600, outside any synced folder. It is added after the #126b rule-out (done, clean), so that
+  list predates it. Its line in the deploy user's `authorized_keys` starts
+  `restrict,from="<mac-address>",expiry-time="<YYYYMMDD>Z"` (`restrict` turns off forwarding,
+  the pty, the user rc, X11 and any later such option). The expiry is UTC and is checked only at
+  sign-in; it relies on step 0's time sync. A date-only value ends at 00:00 UTC on that date, so
+  the owner sets the day after the intended last day (suggested: the end of the move);
+  renewing it is an owner edit. `from=` needs a DHCP reservation for the Mac with a fixed, not
+  a private or randomised, Wi-Fi address; a changed address or IPv6 makes the key fail, which
+  fails closed. Newt's traffic arrives from a bridge address, so the key cannot be used through
+  the tunnel. The deploy user owns its `authorized_keys`, so only the rules stop the assistant
+  changing its own line; the host checklist re-checks the line's options and expiry at each
+  visit.
+- **The Mac's SSH config:** its own `Host` alias with `HostName <vm-address>`, `User` the deploy
+  user, `IdentityFile <key>`, `IdentitiesOnly yes`, `ForwardAgent no`, `AddressFamily inet` and
+  `StrictHostKeyChecking yes` (the host key is already known); no `ControlMaster` or
+  `ControlPersist`.
+- **OpenCode:** every shell command is `ask` in the project configuration, so each `ssh` needs
+  the owner's approval in the interface, the one mechanical check. Each `ssh` is approved once,
+  never with "always" (which would allow the pattern for the rest of the session). No `allow`
+  rule is added for `ssh`: a pattern cannot tell a read from a change.
+- **Revocation:** (1) delete the line; (2) end the deploy user's open sessions from that key
+  (`who`, the `sshd` processes); (3) nothing to close on the Mac, since no multiplexing is used.
+  At expiry, at the latest when the Mac is retired (#112a), and at once on any suspected
+  compromise of the Mac or the VM (step 4). After a suspected compromise the owner also checks
+  the deploy user's crontab and the places the #126b rule-out checked, for persistence.
+- **Rules (the main control).**
+  - Read-only checks run directly.
+  - Any command that changes the VM (install, edit, file write, compose `up` or `down`,
+    `git pull`, `crond`) is shown in full first and runs only after the owner's OK in the
+    conversation.
+  - Never `doas`, `sudo` or `su`; root tasks stay with the owner.
+  - Never reads or prints secret contents (`production.env`, `docker/secrets/`, keys, the
+    backups' passphrase material). Secrets are compared on the VM, printing only "match" or
+    "mismatch" and the byte length, never a hash (as in Secrets).
+  - Never runs the read-only commands that print secrets: `docker inspect` (the environment),
+    `docker compose config` (it fills in `production.env`), `env` or `printenv` in a container,
+    `/proc/*/environ`, Langfuse's environment values.
+  - Database reads only as counts, ids, timestamps, statuses and fixed codes; never record,
+    decision, rationale, notes, actor or plan free text (the same limits apply to its reads of
+    the Mac's production database), since what it reads reaches its model provider. Logs are read
+    through fixed codes, status lines and counts; no full request dumps.
+  - Never changes `authorized_keys`, `sshd_config`, the firewall, the apk repositories or keys,
+    the router or the NAS.
+  - No `docker run` or `docker exec` that mounts the host file system or the Docker socket, or
+    uses `--privileged`, `--pid=host`, `--net=host`, `--ipc=host`, `--userns=host`,
+    `--cap-add` or `--device`, and no compose file that uses any of these.
+  - **Absolute, even with the owner's OK** (audit integrity): no writes of records, decisions,
+    actual conditions or knowledge outside the reviewed scripts; no use of the decision or
+    actual-conditions API; no `kb_load approve` or `kb_withdraw`; no edit of the ruleset or
+    `production.env`. The restore scripts (step 3, a rollback, the backup's scratch restore)
+    stay owner-run; migrations at `compose up` run only with the owner's OK.
+  - Steps 1 to 4 and any rollback stay owner-run where they copy or move secrets (step 1's
+    secrets copy, the fence's move of `production.env`), unless the owner says otherwise in the
+    conversation.
+
 ### Secrets (#101b)
 
 - **Owner choice:** every secret is copied from the Mac over SSH; none is regenerated (the
@@ -3464,6 +3533,29 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
 
 ### Known gaps (Amendment 2)
 
+- **The assistant's access is root-equivalent (#132a, accepted by the owner).** Membership of
+  `docker` is root-equivalent, so the rules above, not the key options, are what keep the
+  assistant to the deploy user. A mistake, or a prompt injection that reaches the agent's shell,
+  could act as root on the host that holds the production secrets. The key options limit where
+  the key works from and stop a terminal and forwarding, not what it can run: `ssh <alias> sh`
+  still gives a shell, and stdin and stdout can still relay traffic (`nc`, `socat`). The
+  narrower option not chosen was #132d: a root-owned forced-command gate allowing only listed
+  read-only commands.
+- **The Mac side (#132a, security S1).** The key has no passphrase, so anything running as the
+  owner's Mac user (the agent's shell, other agent sessions, development tools and their
+  dependencies) can read it; with `docker` root-equivalent, a compromise of the Mac user is a
+  compromise of the VM. The owner's own unrestricted key and any loaded `ssh-agent` are
+  reachable from the same shell, so "its own key only" is a rule, not a control. Mitigation:
+  the owner's key has a passphrase and is not loaded in an agent the assistant's shell can
+  reach. On macOS any process of the user can reach the login `ssh-agent`, and `UseKeychain` or
+  `AddKeysToAgent` unlock the key without asking, so for the owner's key both are off and it is
+  not loaded into that agent while the assistant runs.
+- **Output read from the VM is untrusted (#132a, security S2).** Once the public resource is on,
+  the Caddy and API logs hold text from the internet; anything read from the VM can carry a
+  prompt injection towards a root-equivalent shell.
+- **The heartbeat cannot report a site outage** (ADR 0027 amendment). A site-wide power or
+  internet outage stops both the VM and the heartbeat's host, and its alert cannot leave the
+  site; the heartbeat notices a stopped VM or a missed backup, not a site outage.
 - **The publish address is the only limit on Caddy (#92c).** No `DOCKER-USER` rule covers Caddy,
   so every device on the home network can reach it and the DiveSafe sign-in page. With rootful
   Docker a published port is forwarded before the host's INPUT rules are read, so a host firewall
@@ -3590,8 +3682,8 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
   scheduled, the VM's account cannot delete them and is not a NAS administrator. The VM itself
   runs on that NAS (Known gaps).
 - #118b: the external heartbeat is an Uptime Kuma push monitor off the VM, on another host the
-  owner chose (not named here). Not the Mac and not the NAS: the VM runs on it (risk r6-n3; ADR
-  0027 amendment).
+  owner chose (not named here): another always-on machine at home (#131a). Not the Mac and not
+  the NAS: the NAS is the VM's own machine (risk r6-n3; ADR 0027 amendment).
 - #119a: during a rollback both web UI names stay down until the VM is production again;
   deciders use the web UI on the Mac itself. Fencing the VM is part of every rollback, before
   the Mac's API starts (step 4).
@@ -3616,17 +3708,24 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
   record is in the owner's host checklist.
 - #128: the VM's SSH host keys are not regenerated before step 1, and no separate image or build
   cache reset is made (Known gaps).
+- #132a (owner, 2026-11-25; the options were (a) SSH as the deploy user under rules, (c) keep
+  #88a, and (d) a key forced to a root-owned read-only gate; the assistant recommended (d); the
+  owner chose (a), briefly considered (d), and returned to (a)): the assistant may sign in to the
+  VM as the deploy user with its own key, under the rules in "Assistant access to the VM";
+  supersedes #88a for the VM (Known gaps).
 
 ### Follow-ups (later PRs, not this one)
 
 - AGENTS.md: sections 3, 4 and 12's "local Langfuse" reworded to "self-hosted on the DiveSafe
   host" (#116a); section 12 names the Pangolin server as a reader of web UI traffic in clear
   (security S7). Must land before the Pangolin resource is enabled (#122a, B1 item 6).
-- The host checklist (owner-side, outside the repository): the router (no inbound forward to
-  the VM or the NAS, UPnP and NAT-PMP off), the exact host versions, Newt's
-  `DOCKER-USER` rule and its negative check, the firewall backend, the chosen sign-in method and
-  its users, the production overrider keys, and the confirmation that every existing key is
-  random and at least 128 bits.
+- The host checklist (owner-side, outside the repository): the assistant's key line in the deploy
+  user's `authorized_keys` (#132a), its options and expiry re-checked at each visit, and when it
+  is removed; the Mac's DHCP reservation; the router (no
+  inbound forward to the VM or the NAS, UPnP and NAT-PMP off), the exact host versions, Newt's
+  `DOCKER-USER` rule and its negative check, the firewall backend, the chosen sign-in method and its
+  users, the production overrider keys, and the confirmation that every existing key is random and
+  at least 128 bits.
 - `docs/backup-and-restore.md`, `docs/first-run-on-the-real-host.md` and the compose comments:
   Linux paths, `sha256sum`, `ip route`, `crond`.
 - Newt's compose file brought into the repository with tests, or kept as owner discipline.
