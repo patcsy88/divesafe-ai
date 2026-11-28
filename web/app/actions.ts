@@ -24,7 +24,7 @@ import {
 import { RECOMMENDATIONS } from "../lib/present.ts";
 import type { AssessmentView } from "../lib/types.ts";
 import { parsePositive, toAwareIso } from "../lib/time.ts";
-import { forwardedAddress, LoginThrottle, sourceOf } from "../lib/throttle.ts";
+import { LoginThrottle, sourceOf } from "../lib/throttle.ts";
 
 export interface FormState {
   error: string | null;
@@ -56,7 +56,7 @@ export async function login(_prev: FormState, data: FormData): Promise<FormState
     return { error: `Too many failed sign-ins. Wait ${wait} seconds and try again.` };
   }
   try {
-    await checkKey(key, forwardedAddress(forwarded, trustProxy()) ?? undefined);
+    await checkKey(key);
   } catch (error) {
     // Only a rejected key stays counted. An unreachable service or a 429 is not the person's mistake.
     if (!(error instanceof ApiError && error.status === 401)) throttle.release(source);

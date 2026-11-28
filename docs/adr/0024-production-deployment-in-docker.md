@@ -2805,15 +2805,17 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   the proxy share one bucket, so one client's failures can lock out the others. Neither is solved
   here; a proxy on a fixed address of its own network would fix it. The start-up warning checks
   only that the list is empty.
-  **Planned (Amendment 2, 2026-11-24, not built):** the API port stays plain http on
+  **Planned (Amendment 2, 2026-11-24; built in code by the Caddy PR, 2026-11-28, not deployed):**
+  the API port stays plain http on
   `127.0.0.1:8000`, reached by the owner through an SSH tunnel only (#85b), and gets no TLS proxy.
   TLS is planned for the web UI only: Caddy in the compose file (#91b), with its own fixed address
   on a new internal network to web; the web UI, not Caddy, reaches the API, through the relay
   (ADR 0017 amendment 2026-11-24). `DIVESAFE_TRUSTED_PROXIES` then lists only the web
-  container's fixed address on `web-api` (`10.231.78.0/24`), never a gateway, so host processes
-  stay untrusted.
+  container's fixed address on `web-api`, `10.231.78.20`, never a gateway, so host processes
+  stay untrusted; it is fixed in the compose file and no longer read from `production.env`.
 - **No deployed web UI, log shipping or monitoring.** The compose file defines `web` (ADR 0017
-  amendment 2026-11-23), not yet deployed; Caddy in front of it is planned (Amendment 2).
+  amendment 2026-11-23), not yet deployed; Caddy in front of it is built in code, not deployed
+  (Amendment 2).
   Backups are condition 3. Nothing checks that a recent
   backup exists, and the manifest sits next to its archive, so it detects damage, not tampering.
   A decision made after the last backup is lost and that assessment is `PENDING_HUMAN` again; an
@@ -3011,7 +3013,8 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   rules);
   security B1 blocks enabling the public resource, see "Before the public resource is
   enabled"). Nothing is built or deployed by this amendment. Later reviewed PRs implement it:
-  the Caddy PR (ADR 0017 amendment 2026-11-24), the backup PR for BusyBox, `crond`, the off-VM
+  the Caddy PR (ADR 0017 amendment 2026-11-24; built in code on 2026-11-28, not deployed), the
+  backup PR for BusyBox, `crond`, the off-VM
   copy and the heartbeat (ADR 0027 amendment 2026-11-24), and a host checklist. The assistant
   may sign in to the VM as the deploy user with its own key and run read-only checks; anything
   that changes the VM runs only after the owner's OK, and root tasks stay with the owner (#132a,
@@ -3037,10 +3040,10 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
 | Disk | 88 GB free (#80b) |
 | Docker | Engine 29.8.2 or later (#121a), rootful; Compose 5.x |
 | OpenSSH | the fixed `openssh` package for 3.24 or later (step 0; #121a) |
-| Host routes | `172.17.0.0/16` and `192.168.1.0/24` only (#80b; checked again in step 1) |
+| Host routes | `172.17.0.0/16` and `<lan-subnet>` only (#80b; checked again in step 1) |
 | Host firewall | none, apart from Newt's `DOCKER-USER` rule (#115a); no INPUT rule (#120b) |
 | Firewall backend | iptables, to confirm with `docker info` (see Newt, below) |
-| Address and name | fixed DHCP address on `192.168.1.0/24`; `<name>.home.arpa` (#93a) |
+| Address and name | fixed DHCP address on `<lan-subnet>`; `<name>.home.arpa` (#93a) |
 
 - **Alpine upgraded (#97a).** The VM was found on Alpine 3.21, whose support ended on 2026-11-01;
   the owner upgraded it to 3.24. Versions are stated as minimums (#121a); the exact ones are in
@@ -3055,9 +3058,14 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   have no memory limit, so this is a budget, not a bound.
 - **Networks.** The VM's routes do not overlap `10.231.77.0/24` (`divesafe-trace`) or
   `10.231.78.0/24` (`web-api`), as the compose comments require on a new host. Each network the
-  later PRs add (`web-proxy`, `pangolin-edge`, `divesafe-health`) is a new `10.231.x.0/24`,
-  checked the same way with `ip route` on the VM (the compose comments say `netstat -rn`, a macOS
-  habit).
+  later PRs add is a new `10.231.x.0/24`, checked the same way with `ip route` on the VM (the
+  compose comments say `netstat -rn`, a macOS habit). The Caddy PR (built in code, not deployed)
+  uses `10.231.79.0/24` (`web-proxy`), `10.231.80.0/24` (`pangolin-edge`) and `10.231.81.0/24`
+  (`web-ingress`, until then a Docker-chosen `172.x` subnet); `divesafe-health` is still to come.
+  Docker does not change an existing network's subnet in place: a host that already has the old
+  `web-ingress` removes it (nothing attached) and lets compose recreate it. The VM is a fresh
+  project; this matters on a host that ran `web` before (a Mac rollback runs the VM's commit,
+  step 4).
 - **The images do not change.** They stay Debian-based (`python:3.14-slim`,
   `node:24-bookworm-slim`, `pgvector/pgvector:pg16`). What does change: the CPU architecture
   (arm64 to x86_64), the clock, the address the connectors and the model host see, and the
@@ -3088,9 +3096,21 @@ count). The dumps will also hold the **licensed corpus text** (ADR 0022 decision
   `DOCKER-USER` rule (#92c); on 443 it serves only `<name>.home.arpa`, with a certificate from its
   local CA, whose root the owner installs on each device that uses the LAN name (#86b). The public
   name is a separate plain-http site that listens only on Caddy's address on `pangolin-edge`.
-  There is no catch-all site, and Caddy's admin endpoint is never published. The names,
-  `DIVESAFE_WEB_TRUST_PROXY`, the fixed addresses and `allowedOrigins` are in ADR 0017 (amendment
-  2026-11-24).
+  There is no catch-all site, and Caddy's admin endpoint is off (`admin off`). Built in code by
+  the Caddy PR, not deployed: the LAN site listens on `10.231.81.10:8443` (published as
+  `<vm-address>:443`), the public site on `10.231.80.10:8080`, and Caddy trusts a forwarded
+  address only from Newt's `10.231.80.20` (strict). The names, `DIVESAFE_WEB_TRUST_PROXY`, the
+  fixed addresses, the access log, the limits and why `allowedOrigins` stays unset are in ADR 0017
+  (amendment 2026-11-24).
+- **Owner setup: trust Caddy's local CA root (#86b).** Each device that uses
+  `https://<name>.home.arpa` must trust the root of Caddy's local CA, or the browser refuses the
+  site. The root is in the `caddy-data` volume at `caddy/pki/authorities/local/root.crt`; the
+  owner copies that file (the certificate only, never the CA's key beside it, `root.key`) off the
+  VM and installs it as a trusted root on each such device. The leaf certificate lasts about 12
+  hours and Caddy renews it itself; the root changes only if the volume is lost or a new CA is
+  made (after a suspected compromise, step 4), and then every device needs the new root. Which
+  devices hold it is recorded in the owner's host checklist (#148a), so it can be removed at
+  retirement.
 - **Pangolin (#94b, #95a, #96a, #110a).** The owner already runs a Pangolin server (#95a). In our
   words: for a public resource, that server is an internet-facing reverse proxy. It holds the
   public name and its certificate, asks for Pangolin authentication, and sends what passes down a
@@ -3177,8 +3197,11 @@ saw. Pangolin's behaviour below is from its documentation, to verify on the owne
    only the DiveSafe sign-in page is reachable, and no other address on the VM or the home network;
    and a request with a forged `X-Forwarded-For`, sent through Pangolin, lands in the sender's
    real throttle bucket, not the forged one (#98a; the live half of the check, which CI cannot
-   make). These checks need the resource enabled. They are first run during step 2, against the
-   synthetic stack with synthetic data and synthetic keys only, with items 1, 2 and 4 in place;
+   make); and the response carries exactly one `Strict-Transport-Security` header,
+   `max-age=31536000`, so the Pangolin server adds no second one (web's own single header is
+   pinned by `web/tests/origin.e2e.ts`). These checks need the resource enabled. They are first
+   run during step 2, against the synthetic stack with synthetic data and synthetic keys only,
+   with items 1, 2 and 4 in place;
    the resource is then disabled until the end of step 3, and the checks are run again when it
    goes live, and after any change on the Pangolin server.
 4. **The Pangolin server is guarded:** MFA on its admin login; the server itself and Newt's
@@ -3556,6 +3579,13 @@ existing account, in `wheel` and `docker`), from the Mac only.
 - **The heartbeat cannot report a site outage** (ADR 0027 amendment). A site-wide power or
   internet outage stops both the VM and the heartbeat's host, and its alert cannot leave the
   site; the heartbeat notices a stopped VM or a missed backup, not a site outage.
+- **Caddy has a route out (#49a).** `web-ingress` carries the published port, so it cannot be
+  internal; with the Caddy PR it is caddy's network only, and web has none (ADR 0017 amendment
+  2026-11-24). A compromised Caddy could reach the internet, and web on `web-proxy`.
+- **Caddy's access log is not yet seen to rotate.** The log is kept 14 days (`roll_keep_for
+  336h`) in `caddy-data`; that old files go is a host-checklist item, not yet observed. It holds
+  client addresses, paths and times (credential headers redacted), and it shares the volume with
+  the CA key, outside DiveSafe's backups (#146a; revisited with the backup PR).
 - **The publish address is the only limit on Caddy (#92c).** No `DOCKER-USER` rule covers Caddy,
   so every device on the home network can reach it and the DiveSafe sign-in page. With rootful
   Docker a published port is forwarded before the host's INPUT rules are read, so a host firewall
@@ -3593,12 +3623,14 @@ existing account, in `wheel` and `docker`), from the Mac only.
   a Pangolin resource is the owner's discipline on the Pangolin server; nothing on the VM
   enforces it.
 - **Client address behind Newt (#98a).** Caddy trusts the forwarded address only from Newt's fixed
-  address and reads it right to left, so the address Pangolin appended is the one used. Two
-  checks: (a) a CI test in the Caddy PR, from the simulated trusted Newt address, shows a forged
-  header is read right to left; (b) the live check in B1 item 3 shows that a forged
-  `X-Forwarded-For` sent through Pangolin lands in the sender's real bucket. CI cannot reach
-  Pangolin, so only (b) covers Pangolin's own handling; if that changes, the buckets are wrong
-  until (b) is run again.
+  address (`10.231.80.20/32`, `trusted_proxies_strict`) and reads it right to left, so the address
+  Pangolin appended is the one used; Caddy then sends web exactly that one address (R1). Two
+  checks: (a) `tests/integration/test_caddy_forwarding_live.py`, from the simulated trusted Newt
+  address, shows a forged header is read right to left (it runs in CI with the images pulled by
+  digest, and CI fails if it skips, #149b; `tests/safety/test_caddyfile.py` pins the file offline);
+  (b) the live check in B1 item 3 shows that a forged `X-Forwarded-For` sent through Pangolin
+  lands in the sender's real bucket. CI cannot reach Pangolin, so only (b) covers Pangolin's own
+  handling; if that changes, the buckets are wrong until (b) is run again.
 - **Caddy's local CA can sign any name (#86b).** A device that trusts its root trusts any
   certificate it signs. The CA's root key is online, in Caddy's data volume on the VM: whoever can
   read it can impersonate any site to those devices. The volume is a secret store, outside synced
@@ -3725,7 +3757,18 @@ existing account, in `wheel` and `docker`), from the Mac only.
   inbound forward to the VM or the NAS, UPnP and NAT-PMP off), the exact host versions, Newt's
   `DOCKER-USER` rule and its negative check, the firewall backend, the chosen sign-in method and its
   users, the production overrider keys, and the confirmation that every existing key is random and
-  at least 128 bits.
+  at least 128 bits. From the Caddy PR (ADR 0017 amendment 2026-11-24): two LAN devices that fail
+  a sign-in land in different throttle buckets (R7, #142a); Caddy's access log files older than
+  14 days are gone (R4, #140b); which LAN devices trust Caddy's local CA root (#148a); from
+  the VM itself, a connection to web's `web-proxy` address on port 3100, expected to fail (a host
+  process could otherwise set its own `X-Forwarded-For`). On a rootful Linux Docker host, host
+  processes may reach container addresses on an internal bridge, so it may succeed: the result
+  is recorded in the host checklist, and if it succeeds it is a Known gap (ADR 0017 amendment),
+  and a host firewall rule is a later owner decision (the assistant never changes the VM's
+  firewall); and, before the first start,
+  `DIVESAFE_WEB_LAN_NAME` and `DIVESAFE_WEB_PUBLIC_NAME` compared with web's
+  `DIVESAFE_WEB_ALLOWED_HOSTS`, each a single host name with no spaces, commas or braces (Caddy
+  inserts them into the Caddyfile as raw text; ADR 0017 amendment Known gaps).
 - `docs/backup-and-restore.md`, `docs/first-run-on-the-real-host.md` and the compose comments:
   Linux paths, `sha256sum`, `ip route`, `crond`.
 - Newt's compose file brought into the repository with tests, or kept as owner discipline.

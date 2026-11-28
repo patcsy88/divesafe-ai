@@ -51,6 +51,14 @@ jobs:
       - name: Fail if a safety test was skipped (only the case-sensitive-volume check may skip on Linux)
         run: |
           awk '/SKIPPED/ && !/^SKIPPED \[[0-9]+\] tests\/evaluation\/test_capture_item6_offline\.py:[0-9]+: this volume is case-sensitive;/ {bad=1} END {exit bad}' safety.log
+      - name: Pull the pinned Caddy and Node images for the Caddy forwarding test (owner #149b)
+        run: |
+          caddy=$(sed -n 's/^    image: \(caddy:[^ ]*@sha256:[0-9a-f]\{64\}\)$/\1/p' docker/docker-compose.production.yml)
+          node=$(sed -n 's/^NODE_IMAGE = "\(node:[^"]*@sha256:[0-9a-f]\{64\}\)"$/\1/p' tests/integration/test_caddy_forwarding_live.py)
+          test "$(printf '%s\n' "$caddy" | grep -c .)" = 1
+          test "$(printf '%s\n' "$node" | grep -c .)" = 1
+          docker pull --quiet "$caddy"
+          docker pull --quiet "$node"
       - name: Full suite (the PostgreSQL tests must run, not skip)
         shell: bash # explicit bash enables pipefail, so a failing pytest is not hidden by tee
         run: pytest -rs | tee pytest.log
@@ -58,6 +66,8 @@ jobs:
         run: "! grep -q 'DIVESAFE_TEST_DATABASE_URL not set' pytest.log"
       - name: Fail if the restore round-trip test (pg_dump / pg_restore in the service) was skipped
         run: "! grep -q 'restore round trip cannot run:' pytest.log"
+      - name: Fail if the Caddy forwarding test (real Caddyfile in the pinned image) was skipped
+        run: "! grep -q 'caddy forwarding cannot run:' pytest.log"
       - name: Known vulnerabilities in Python dependencies (pip-audit, CI only)
         run: |
           python -m venv --clear /tmp/audit
@@ -130,6 +140,8 @@ jobs:
       - run: npm test
       - name: Build (no secret is needed to build)
         run: npm run build
+      - name: Against the built server, a foreign Origin, a foreign host and the cookie (review R3, R5, R6)
+        run: npm run test:e2e
       - name: No Adobe React Spectrum code in the build (ADR 0017)
         run: node scripts/check-no-spectrum.mjs
       - name: The built CSS loads nothing from elsewhere (ADR 0017)
@@ -201,6 +213,7 @@ jobs:
           d="$RUNNER_TEMP/web-secrets"
           trap 'docker rm -f web-ci >/dev/null 2>&1 || true' EXIT
           docker run -d --name web-ci --network none --read-only --init \
+            -e DIVESAFE_WEB_ALLOWED_HOSTS=127.0.0.1:3100 \
             --tmpfs /tmp:size=16m,noexec,nosuid,nodev --memory 512m --pids-limit 256 \
             --cap-drop ALL --security-opt no-new-privileges:true \
             -v "$d:/run/secrets:ro" divesafe-web-ci
@@ -232,6 +245,7 @@ jobs:
             --cap-drop ALL --security-opt no-new-privileges:true --entrypoint node divesafe-web-ci \
             -e 'require("http").createServer((q,r)=>{r.writeHead(q.url==="/health"?200:404);r.end()}).listen(8000,"0.0.0.0")'
           docker run -d --name web-relay-ci --network web-api-ci --read-only --init \
+            -e DIVESAFE_WEB_ALLOWED_HOSTS=127.0.0.1:3100 \
             --tmpfs /tmp:size=16m,noexec,nosuid,nodev --memory 512m --pids-limit 256 \
             --cap-drop ALL --security-opt no-new-privileges:true \
             -v "$d:/run/secrets:ro" divesafe-web-ci

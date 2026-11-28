@@ -1,9 +1,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_MAX_AGE_SECONDS, sessionSecret } from "./config.ts";
+import { COOKIE, COOKIE_OPTIONS } from "./cookie.ts";
 import { seal, unseal } from "./session.ts";
-
-const COOKIE = "divesafe_session";
 
 export async function readKey(): Promise<string | null> {
   const token = (await cookies()).get(COOKIE)?.value;
@@ -17,15 +16,14 @@ export async function requireKey(): Promise<string> {
 }
 
 export async function startSession(apiKey: string): Promise<void> {
-  (await cookies()).set(COOKIE, seal(apiKey, sessionSecret(), Date.now(), SESSION_MAX_AGE_SECONDS), {
-    httpOnly: true,
-    sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  (await cookies()).set(
+    COOKIE,
+    seal(apiKey, sessionSecret(), Date.now(), SESSION_MAX_AGE_SECONDS),
+    COOKIE_OPTIONS,
+  );
 }
 
+// A browser refuses any `__Host-` cookie, the clearing one included, without Secure and Path=/.
 export async function endSession(): Promise<void> {
-  (await cookies()).delete(COOKIE);
+  (await cookies()).delete({ name: COOKIE, ...COOKIE_OPTIONS });
 }

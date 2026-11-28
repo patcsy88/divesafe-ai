@@ -27,6 +27,8 @@ const config: NextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           { key: "Cache-Control", value: "no-store" },
+          // Every path the browser sees is https (Caddy on the LAN name, Pangolin on the public one).
+          { key: "Strict-Transport-Security", value: "max-age=31536000" },
         ],
       },
     ];

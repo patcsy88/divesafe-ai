@@ -1,0 +1,104 @@
+# Caddy in front of the web UI (ADR 0017 Amendment 2026-11-24, ADR 0024 Amendment 2).
+# Two sites that reach web, and one that only refuses. The refusal site sits on the public
+# listener: any request there whose Host is not the public name (another name, an address, or
+# no Host) has its connection closed with no response (`abort`), and it never proxies. Caddy
+# tries the site with a host first, so the public name still reaches web. The LAN listener has
+# no refusal site. It requires the Host to equal the TLS SNI name (`strict_sni_host`, 421
+# otherwise, never proxied), so no SNI, or a Host other than the SNI name, never reaches web;
+# and TLS itself fails for an SNI name other than the LAN name. Both names come
+# from docker/production.env through compose, where both are required, so neither can be empty
+# here (an empty name would make that site reach web for every name). The addresses are the
+# fixed ones in
+# docker-compose.production.yml; change both files together:
+#   10.231.81.10  caddy on web-ingress (the published LAN port, <LAN address>:443, lands on 8443)
+#   10.231.80.10  caddy on pangolin-edge (Newt, 10.231.80.20, is the only other member)
+#   10.231.79.20  web on web-proxy (never looked up by name: this container has a route out)
+{
+	# No admin endpoint at all, so nothing can change or read the running config.
+	admin off
+	persist_config off
+	# Runs unprivileged in a read-only container: never try to install the local CA root.
+	skip_install_trust
+	http_port 8080
+	https_port 8443
+	# No http-to-https redirect listener: the public site is plain http on purpose (Pangolin ends
+	# TLS), and the LAN is reached on 443 only.
+	auto_https disable_redirects
+
+	# LAN listener: the peer is the device itself. No trusted proxy, so a client's own
+	# X-Forwarded-For is never believed.
+	servers 10.231.81.10:8443 {
+		name lan
+		# No HTTP/3: only TCP 443 is published, and Caddy would advertise h3 on its inside port.
+		protocols h1 h2
+		# The Host must equal the TLS SNI name, or 421 and nothing is proxied: a client that sends
+		# no SNI, or another name, never reaches web even if the handshake succeeds.
+		strict_sni_host on
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 60s
+			idle 2m
+		}
+	}
+
+	# Public listener: the only peer is Newt. X-Forwarded-For from Newt is read right to left, so
+	# the first untrusted address from the right, the one Pangolin appended, is the client.
+	servers 10.231.80.10:8080 {
+		name public
+		trusted_proxies static 10.231.80.20/32
+		trusted_proxies_strict
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 60s
+			idle 2m
+		}
+	}
+}
+
+# {args[0]} names the log file per site.
+(to_web) {
+	request_body {
+		max_size 1MB
+	}
+	# Cookie, Set-Cookie, Authorization and Proxy-Authorization are logged as REDACTED;
+	# log_credentials is never set. Rolled at midnight, so old files are removed daily.
+	log {
+		output file /data/caddy/logs/access-{args[0]}.log {
+			roll_at 00:00
+			roll_keep -1
+			roll_keep_for 336h
+		}
+		format json
+	}
+	# No header directive: web sends Strict-Transport-Security itself (web/next.config.ts).
+	# Host passes through unchanged (reverse_proxy's default); web checks it against its list.
+	reverse_proxy 10.231.79.20:3100 {
+		# Exactly one address, the client's: web takes the last entry (review R1). Belt and
+		# braces on the LAN site: with no trusted proxies Caddy already replaces a client's
+		# X-Forwarded-For, so this line pins that behaviour, and the tests require it.
+		header_up X-Forwarded-For {client_ip}
+		# The site's own name without a port, never one the client sent (review R5). Caddy warns
+		# at start-up that this line is unnecessary; it is kept so web's Origin check and host
+		# allow-list never depend on Caddy's default.
+		header_up X-Forwarded-Host {host}
+	}
+}
+
+https://{$DIVESAFE_WEB_LAN_NAME}:8443 {
+	bind 10.231.81.10
+	tls internal
+	import to_web lan
+}
+
+http://{$DIVESAFE_WEB_PUBLIC_NAME}:8080 {
+	bind 10.231.80.10
+	import to_web public
+}
+
+# Every other Host on the public listener: close the connection, never proxy.
+http://:8080 {
+	bind 10.231.80.10
+	abort
+}

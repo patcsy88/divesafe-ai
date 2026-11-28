@@ -19,6 +19,7 @@ SECRET_WORDS = ("PASSWORD", "API_KEY", "TOKEN", "KEY_HASHES", "DATABASE_URL")
 TOKEN_BUDGET_KEY = "DIVESAFE_LLM_MAX_OUTPUT_TOKENS"
 LOADERS = ("kb_load", "kb_withdraw")
 WEB = ("web",)
+CADDY = "caddy"
 
 
 def _blocks(text: str, top: str) -> dict[str, list[str]]:
@@ -55,9 +56,16 @@ def text() -> str:
 @pytest.fixture(scope="module")
 def services(text: str) -> dict[str, list[str]]:
     found = _blocks(text, "services")
-    assert set(found) == {"db-tls", "db", "db-init", "api", "kb_load", "kb_withdraw", *WEB}, (
-        "a service was added or removed"
-    )
+    assert set(found) == {
+        "db-tls",
+        "db",
+        "db-init",
+        "api",
+        "kb_load",
+        "kb_withdraw",
+        *WEB,
+        CADDY,
+    }, "a service was added or removed"
     return found
 
 
@@ -196,7 +204,15 @@ def test_the_database_is_not_published_and_the_data_network_has_no_route_out(
     for name in ("db", "db-tls", "db-init", *LOADERS):
         assert not any(line.strip() == "ports:" for line in services[name]), name
     networks = _blocks(text, "networks")
-    assert set(networks) == {"data", "egress", "divesafe-trace", "web-ingress", "web-api"}
+    assert set(networks) == {
+        "data",
+        "egress",
+        "divesafe-trace",
+        "web-ingress",
+        "web-api",
+        "web-proxy",
+        "pangolin-edge",
+    }
     assert "internal: true" in "\n".join(networks["data"])
     assert "internal: true" not in "\n".join(networks["egress"])
     for name in ("db", "db-init", "db-tls", *LOADERS):
@@ -209,6 +225,16 @@ TRACE_WEB_ADDRESS = ipaddress.IPv4Address("10.231.77.10")
 # The API's fixed address on web-api: the relay connects to it and never looks up a name
 # (owner #52a).
 WEB_API_ADDRESS = ipaddress.IPv4Address("10.231.78.10")
+# ADR 0017 Amendment 2026-11-24: web's fixed address on web-api, the only proxy the API trusts.
+WEB_API_WEB_ADDRESS = ipaddress.IPv4Address("10.231.78.20")
+# web and caddy on web-proxy; caddy dials web by this address, never by name.
+WEB_PROXY_WEB_ADDRESS = ipaddress.IPv4Address("10.231.79.20")
+WEB_PROXY_CADDY_ADDRESS = ipaddress.IPv4Address("10.231.79.10")
+# caddy on pangolin-edge (the public site) and Newt's address there (the one trusted proxy).
+EDGE_CADDY_ADDRESS = ipaddress.IPv4Address("10.231.80.10")
+NEWT_ADDRESS = ipaddress.IPv4Address("10.231.80.20")
+# caddy on web-ingress (the published LAN port).
+INGRESS_CADDY_ADDRESS = ipaddress.IPv4Address("10.231.81.10")
 
 
 def test_the_trace_network_is_internal_fixed_and_never_hands_out_the_langfuse_address(
@@ -441,7 +467,20 @@ def test_each_service_is_on_exactly_the_networks_it_should_be(
         "      web-api:",
         f"        ipv4_address: {WEB_API_ADDRESS}",
     ]
-    assert _value(services["web"], "networks") == "[web-ingress, web-api]"
+    assert _list(services["web"], "networks") == [
+        "      web-proxy:",
+        f"        ipv4_address: {WEB_PROXY_WEB_ADDRESS}",
+        "      web-api:",
+        f"        ipv4_address: {WEB_API_WEB_ADDRESS}",
+    ]
+    assert _list(services[CADDY], "networks") == [
+        "      web-ingress:",
+        f"        ipv4_address: {INGRESS_CADDY_ADDRESS}",
+        "      pangolin-edge:",
+        f"        ipv4_address: {EDGE_CADDY_ADDRESS}",
+        "      web-proxy:",
+        f"        ipv4_address: {WEB_PROXY_CADDY_ADDRESS}",
+    ]
     assert _value(services["db-tls"], "network_mode") == "none"
     assert _value(services["db-tls"], "networks") is None
 
@@ -659,10 +698,14 @@ def test_every_setting_in_the_env_example_reaches_the_compose_file() -> None:
     assert names
     compose = COMPOSE.read_text()
     passed = set(re.findall(r"(?m)^ +([A-Z][A-Z0-9_]*): \$\{\1:", compose))
-    # Used only to fill in compose itself (the corpus and ruleset host paths), never a setting.
-    interpolation_only = {"DIVESAFE_CORPUS_DIR", "DIVESAFE_RULESET_FILE"}
+    # Used only to fill in compose itself (the corpus and ruleset host paths, and caddy's published
+    # LAN address), never a setting.
+    interpolation_only = {"DIVESAFE_CORPUS_DIR", "DIVESAFE_RULESET_FILE", "DIVESAFE_LAN_ADDRESS"}
     for name in interpolation_only:
         assert "${" + name + ":" in compose, name
+    # The LAN address fills in caddy's one published port and nothing else.
+    lan = [x for x in _strip_comments(compose).splitlines() if "DIVESAFE_LAN_ADDRESS" in x]
+    assert lan == [f"      - {CADDY_PORT}"], lan
     assert [name for name in names if name not in passed | interpolation_only] == []
 
 
@@ -1599,45 +1642,189 @@ WEB_DOCKERFILE = [
 ]
 
 
-def test_the_web_networks_are_these_and_only_web_api_has_no_route_out(text: str) -> None:
-    """web-api carries the relay to the API only and has no route out. web-ingress is not internal
-    because Docker cannot publish a port from an internal network (owner #49a)."""
-    networks = _blocks(text, "networks")
-    block = [x.strip() for x in networks["web-api"] if x.strip()]
-    assert block == [
-        "internal: true",
-        "ipam:",
-        "config:",
-        "- subnet: 10.231.78.0/24",
-        "ip_range: 10.231.78.128/25",
+# Each fixed /24 of the web path: subnet, ip_range, internal, {fixed address: service}.
+WEB_NETWORKS = {
+    "web-api": (
+        "10.231.78.0/24",
+        "10.231.78.128/25",
+        True,
+        {WEB_API_ADDRESS: "api", WEB_API_WEB_ADDRESS: "web"},
+    ),
+    "web-proxy": (
+        "10.231.79.0/24",
+        "10.231.79.128/25",
+        True,
+        {WEB_PROXY_CADDY_ADDRESS: CADDY, WEB_PROXY_WEB_ADDRESS: "web"},
+    ),
+    "pangolin-edge": ("10.231.80.0/24", "10.231.80.128/25", True, {EDGE_CADDY_ADDRESS: CADDY}),
+    "web-ingress": ("10.231.81.0/24", "10.231.81.128/25", False, {INGRESS_CADDY_ADDRESS: CADDY}),
+}
+
+
+def _member_networks(block: list[str]) -> list[str]:
+    """The networks a service joins, from its networks key (map form or flow list)."""
+    flow = _value(block, "networks")
+    names = [x.strip() for x in flow.strip("[]").split(",") if x.strip()] if flow else []
+    names += [
+        m.group(1)
+        for line in _list(block, "networks") or []
+        if (m := re.fullmatch(r"      ([a-z0-9-]+):.*", line))
     ]
-    assert networks["web-ingress"] == []
-    # A fixed /24 that holds the API's address outside the pool Docker hands out, and shares
-    # nothing with divesafe-trace (owner #52a).
-    subnet = ipaddress.IPv4Network(block[3].split(": ")[1])
-    pool = ipaddress.IPv4Network(block[4].split(": ")[1])
-    assert subnet.prefixlen == 24 and pool.subnet_of(subnet) and subnet.is_private
-    assert WEB_API_ADDRESS in subnet and WEB_API_ADDRESS not in pool
-    assert WEB_API_ADDRESS.packed[-1] not in (0, 1, 255)
-    assert not subnet.overlaps(ipaddress.IPv4Network("10.231.77.0/24"))
-    assert not subnet.overlaps(ipaddress.IPv4Network("100.64.0.0/10"))
-    # Only the API is given a fixed address there.
-    assert text.count("ipv4_address:") == 1
+    return names
 
 
-def test_only_the_api_and_the_web_service_join_web_api(services: dict[str, list[str]]) -> None:
-    """If web lost web-api, the relay's connection to the API's address would leave through
-    web-ingress's default route instead, in clear text (security review round 2)."""
-    holders = {name for name, block in services.items() if "web-api" in "\n".join(block)}
-    assert holders == {"api", "web"}
-    holders = {name for name, block in services.items() if "web-ingress" in "\n".join(block)}
-    assert holders == {"web"}
+def _fixed_addresses(services: dict[str, list[str]]) -> dict[tuple[str, str], str]:
+    """(service, network) -> the fixed ipv4_address the service has there."""
+    out: dict[tuple[str, str], str] = {}
+    for name, block in services.items():
+        network: str | None = None
+        for line in _list(block, "networks") or []:
+            head = re.fullmatch(r"      ([a-z0-9-]+):.*", line)
+            if head:
+                network = head.group(1)
+            address = re.fullmatch(r"        ipv4_address: (\S+)", line)
+            if address and network is not None:
+                out[(name, network)] = address.group(1)
+    return out
 
 
-def test_the_web_port_is_bound_to_loopback_only(services: dict[str, list[str]]) -> None:
-    assert _list(services["web"], "ports") == ['      - "127.0.0.1:3100:3100"']
+def test_the_web_networks_are_these_and_only_web_ingress_has_a_route_out(
+    text: str, services: dict[str, list[str]]
+) -> None:
+    """ADR 0017 Amendment 2026-11-24 (was: only web-api internal, web-ingress `{}` for web).
+    web-api (the relay), web-proxy (caddy to web) and pangolin-edge (Newt to caddy) have no route
+    out; pangolin-edge has a fixed name so Newt's compose can join it. web-ingress carries caddy's
+    published LAN port and is not internal, because Docker cannot publish a port from an internal
+    network (owner #49a). Each is a fixed private /24 whose ip_range excludes every fixed address
+    in it (Newt's included), and none overlaps divesafe-trace, another of them or Tailscale."""
+    networks = _blocks(text, "networks")
+    seen: list[ipaddress.IPv4Network] = [ipaddress.IPv4Network("10.231.77.0/24")]
+    for name, (subnet_text, pool_text, internal, fixed) in WEB_NETWORKS.items():
+        block = [x.strip() for x in networks[name] if x.strip()]
+        assert block == [
+            *(["name: pangolin-edge"] if name == "pangolin-edge" else []),
+            *(["internal: true"] if internal else []),
+            "ipam:",
+            "config:",
+            f"- subnet: {subnet_text}",
+            f"ip_range: {pool_text}",
+        ], name
+        subnet = ipaddress.IPv4Network(subnet_text)
+        pool = ipaddress.IPv4Network(pool_text)
+        assert subnet.prefixlen == 24 and pool.subnet_of(subnet) and subnet.is_private, name
+        assert not subnet.overlaps(ipaddress.IPv4Network("100.64.0.0/10")), name
+        assert not any(subnet.overlaps(other) for other in seen), name
+        seen.append(subnet)
+        for address in [*fixed, *([NEWT_ADDRESS] if name == "pangolin-edge" else [])]:
+            assert address in subnet and address not in pool, (name, address)
+            assert address.packed[-1] not in (0, 1, 255), (name, address)
+    # Exactly these fixed addresses, on exactly these services and networks, and no other.
+    assert _fixed_addresses(services) == {
+        (service, name): str(address)
+        for name, (_, _, _, fixed) in WEB_NETWORKS.items()
+        for address, service in fixed.items()
+    }
+    assert text.count("ipv4_address:") == 6
+    # Newt is not a service here, and its address is never given to one of ours.
+    assert str(NEWT_ADDRESS) not in text
+
+
+def test_only_the_expected_services_join_each_web_network(
+    services: dict[str, list[str]],
+) -> None:
+    """If web lost web-api, the relay would have no network to reach the API on; a third service
+    on web-api could reach the API's relay port or pose as web. caddy alone holds the published LAN
+    port and the Pangolin edge (was: web on web-ingress), and web is reachable only from caddy
+    (security review round 2; ADR 0017 Amendment 2026-11-24)."""
+    expected = {
+        "web-api": {"api", "web"},
+        "web-proxy": {"web", CADDY},
+        "web-ingress": {CADDY},
+        "pangolin-edge": {CADDY},
+    }
+    for network, holders in expected.items():
+        assert {n for n, b in services.items() if network in _member_networks(b)} == holders
+        # A text scan too, so a reference outside the networks key is also caught.
+        assert {n for n, b in services.items() if network in "\n".join(b)} == holders, network
+    # web and caddy are on no other network: no egress, data or trace.
+    assert sorted(_member_networks(services["web"])) == ["web-api", "web-proxy"]
+    assert sorted(_member_networks(services[CADDY])) == [
+        "pangolin-edge",
+        "web-ingress",
+        "web-proxy",
+    ]
+
+
+CADDY_PORT = '"${DIVESAFE_LAN_ADDRESS:?set DIVESAFE_LAN_ADDRESS in docker/production.env}:443:8443"'
+
+
+def test_web_publishes_no_port_and_caddy_publishes_only_the_lan_address(
+    services: dict[str, list[str]],
+) -> None:
+    """Replaces "web on loopback 127.0.0.1:3100" (ADR 0017 Amendment 2026-11-24): web publishes
+    nothing in any form, so caddy is its only way in, and caddy publishes exactly one port, 443
+    on the required LAN address, never 0.0.0.0, a default or a second port."""
     for name in WEB:
+        assert _value(services[name], "ports") is None, name
         assert _value(services[name], "expose") is None, name
+        assert not [x for x in services[name] if x.lstrip().startswith(("ports", "expose"))]
+    assert _list(services[CADDY], "ports") == [f"      - {CADDY_PORT}"]
+    assert [x for x in services[CADDY] if x.lstrip().startswith(("ports", "expose"))] == [
+        "    ports:"
+    ]
+    assert "0.0.0.0" not in "\n".join(services[CADDY])
+    # Only caddy and the api publish anything; the api stays on loopback (pinned above).
+    assert {n for n, b in services.items() if _value(b, "ports") is not None} == {"api", CADDY}
+
+
+def _web_trust_problems(block: list[str]) -> list[str]:
+    """DIVESAFE_WEB_TRUST_PROXY is a quoted 0 or 1, and 1 only while web publishes no port, has no
+    network mode, and is on exactly web-proxy and web-api."""
+    trust = _environment(block).get("DIVESAFE_WEB_TRUST_PROXY")
+    if trust not in ('"0"', '"1"'):
+        return [f"DIVESAFE_WEB_TRUST_PROXY is {trust!r}"]
+    if trust == '"1"' and (
+        _value(block, "ports") is not None
+        or _value(block, "expose") is not None
+        or _value(block, "network_mode") is not None
+        or sorted(_member_networks(block)) != ["web-api", "web-proxy"]
+    ):
+        return ["web trusts X-Forwarded-For but can be reached around caddy"]
+    return []
+
+
+def test_web_trusts_the_proxy_only_while_caddy_is_its_only_way_in(
+    services: dict[str, list[str]],
+) -> None:
+    """web believes X-Forwarded-For with "1". That is safe only while caddy, which sets it to
+    exactly one address: the device's on the home network, or the one Pangolin reports, is the
+    only way in."""
+    assert _environment(services["web"])["DIVESAFE_WEB_TRUST_PROXY"] == '"1"'
+    assert _web_trust_problems(services["web"]) == []
+
+
+def test_the_web_trust_check_rejects_each_way_in_around_caddy() -> None:
+    raw = COMPOSE.read_text()
+    assert _web_trust_problems(_blocks(_strip_comments(raw), "services")["web"]) == []
+    anchor = "    networks:\n      web-proxy:\n        ipv4_address: 10.231.79.20\n"
+    assert raw.count(anchor) == 1
+    bad = {
+        "a loopback port": anchor.replace(
+            "    networks:", '    ports:\n      - "127.0.0.1:3100:3100"\n    networks:'
+        ),
+        "an expose": anchor.replace("    networks:", '    expose: ["3100"]\n    networks:'),
+        "web-ingress too": anchor + "      web-ingress: {}\n",
+        "egress too": anchor + "      egress: {}\n",
+        "host network": anchor.replace("    networks:", "    network_mode: host\n    networks:"),
+    }
+    for label, replacement in bad.items():
+        block = _blocks(_strip_comments(raw.replace(anchor, replacement)), "services")["web"]
+        assert _web_trust_problems(block), label
+    old = 'DIVESAFE_WEB_TRUST_PROXY: "1"'
+    assert raw.count(old) == 1
+    for value in ('"true"', "1", '"yes"', ""):
+        mutated = _strip_comments(raw.replace(old, f"DIVESAFE_WEB_TRUST_PROXY: {value}"))
+        assert _web_trust_problems(_blocks(mutated, "services")["web"]), value
 
 
 def test_the_web_secrets_are_files_on_the_web_service_only(services: dict[str, list[str]]) -> None:
@@ -1656,14 +1843,187 @@ def test_the_web_secrets_are_files_on_the_web_service_only(services: dict[str, l
             assert "web_session_secret" not in joined and "web_actions_key" not in joined, name
 
 
+WEB_ALLOWED_HOSTS = (
+    '"${DIVESAFE_WEB_LAN_NAME:?set DIVESAFE_WEB_LAN_NAME in docker/production.env},'
+    "${DIVESAFE_WEB_PUBLIC_NAME:?set DIVESAFE_WEB_PUBLIC_NAME in docker/production.env},"
+    '127.0.0.1:3100"'
+)
+
+
 def test_the_web_services_get_exactly_these_settings(services: dict[str, list[str]]) -> None:
+    """ADR 0017 Amendment 2026-11-24 (was: TRUST_PROXY "0" and no host list). The proxy is trusted
+    (web publishes no port, pinned above) and the host list is exactly the two required names and
+    the healthcheck's loopback name: never a default, a wildcard or another name."""
     assert _environment(services["web"]) == {
         "DIVESAFE_API_URL": "http://127.0.0.1:8000",
-        "DIVESAFE_WEB_TRUST_PROXY": '"0"',
+        "DIVESAFE_WEB_TRUST_PROXY": '"1"',
+        "DIVESAFE_WEB_ALLOWED_HOSTS": WEB_ALLOWED_HOSTS,
     }
     for name in WEB:
         joined = "\n".join(services[name])
         assert "SECRET" not in joined and "ENCRYPTION_KEY" not in joined, name
+
+
+def test_the_api_trusts_x_forwarded_for_from_webs_fixed_address_only(
+    services: dict[str, list[str]],
+) -> None:
+    """ADR 0017 Amendment 2026-11-24 (was: `${DIVESAFE_TRUSTED_PROXIES:-}` from production.env).
+    A literal in this file, so production.env cannot widen it; the example no longer offers it."""
+    assert _environment(services["api"])["DIVESAFE_TRUSTED_PROXIES"] == f'"{WEB_API_WEB_ADDRESS}"'
+    assert _fixed_addresses(services)[("web", "web-api")] == str(WEB_API_WEB_ADDRESS)
+    for name, block in services.items():
+        if name != "api":
+            assert "TRUSTED_PROXIES" not in "\n".join(block), name
+    lines = (COMPOSE.parent / "production.env.example").read_text().splitlines()
+    assert not [x for x in lines if "DIVESAFE_TRUSTED_PROXIES" in x and not x.startswith("#")]
+    assert not [x for x in lines if re.match(r"#?\s*DIVESAFE_TRUSTED_PROXIES\s*=", x)]
+
+
+CADDY_IMAGE = re.compile(r"caddy:2\.11\.9-alpine@sha256:[0-9a-f]{64}")
+CADDY_VOLUMES = [
+    "      - type: bind",
+    "        source: ./Caddyfile",
+    "        target: /etc/caddy/Caddyfile",
+    "        read_only: true",
+    "        bind:",
+    "          create_host_path: false",
+    "      - caddy-data:/data",
+    "      - caddy-config:/config",
+]
+
+
+def _caddy_problems(block: list[str]) -> list[str]:
+    """caddy: the official image pinned by tag and digest, unprivileged, read-only, no
+    capabilities, limited, the Caddyfile bind-mounted read-only (never creating the host path),
+    two named volumes and nothing else, the two site names only, one LAN port, no docker socket."""
+    problems: list[str] = []
+    joined = "\n".join(block)
+    image = _value(block, "image") or ""
+    if not CADDY_IMAGE.fullmatch(image):
+        problems.append(f"image {image!r}")
+    checks = {
+        "user": '"65534:65534"',
+        "read_only": "true",
+        "cap_drop": "[ALL]",
+        "security_opt": '["no-new-privileges:true"]',
+        "mem_limit": "256m",
+        "pids_limit": "256",
+        "tmpfs": '["/tmp:size=16m,noexec,nosuid,nodev"]',
+        "restart": "unless-stopped",
+    }
+    for key, value in checks.items():
+        if _value(block, key) != value:
+            problems.append(key)
+    for key in (
+        "cap_add",
+        "privileged",
+        "build",
+        "entrypoint",
+        "command",
+        "network_mode",
+        "secrets",
+        "group_add",
+        "devices",
+        "expose",
+        "env_file",
+        "working_dir",
+    ):
+        if _value(block, key) is not None:
+            problems.append(f"has {key}")
+    if _list(block, "volumes") != CADDY_VOLUMES:
+        problems.append("volumes")
+    if [x for x in block if x.startswith("    volumes")] != ["    volumes:"]:
+        problems.append("a second volumes key")
+    if _list(block, "ports") != [f"      - {CADDY_PORT}"]:
+        problems.append("ports")
+    if "docker.sock" in joined or "/var/run" in joined:
+        problems.append("docker socket")
+    if _environment(block) != {
+        "DIVESAFE_WEB_LAN_NAME": "${DIVESAFE_WEB_LAN_NAME:?set DIVESAFE_WEB_LAN_NAME in "
+        "docker/production.env}",
+        "DIVESAFE_WEB_PUBLIC_NAME": "${DIVESAFE_WEB_PUBLIC_NAME:?set DIVESAFE_WEB_PUBLIC_NAME in "
+        "docker/production.env}",
+    }:
+        problems.append("environment")
+    return problems
+
+
+def test_caddy_is_pinned_unprivileged_and_locked_down(services: dict[str, list[str]]) -> None:
+    assert _caddy_problems(services[CADDY]) == []
+
+
+def test_the_caddy_check_rejects_each_weaker_form() -> None:
+    raw = COMPOSE.read_text()
+    image = re.search(r"image: (caddy:\S+)", raw)
+    assert image is not None
+    good = image.group(1)
+    bad = {
+        "no digest": (good, "caddy:2.11.9-alpine"),
+        "short digest": (good, good[:-1]),
+        "another tag": (good, good.replace("2.11.9-alpine", "2-alpine")),
+        "latest": (good, "caddy:latest"),
+        "root": ('user: "65534:65534"', 'user: "0:0"'),
+        "writable": (
+            '    read_only: true\n    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]\n'
+            "    mem_limit: 256m",
+            '    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]\n    mem_limit: 256m',
+        ),
+        "no mem limit": ("    mem_limit: 256m\n", ""),
+        "a capability": (
+            "    mem_limit: 256m\n",
+            "    mem_limit: 256m\n    cap_add: [NET_BIND_SERVICE]\n",
+        ),
+        "Caddyfile writable": (
+            "        target: /etc/caddy/Caddyfile\n        read_only: true",
+            "        target: /etc/caddy/Caddyfile\n        read_only: false",
+        ),
+        "creates host path": (
+            "        target: /etc/caddy/Caddyfile\n        read_only: true\n        bind:\n"
+            "          create_host_path: false",
+            "        target: /etc/caddy/Caddyfile\n        read_only: true\n        bind:\n"
+            "          create_host_path: true",
+        ),
+        "docker socket": (
+            "      - caddy-config:/config\n",
+            "      - caddy-config:/config\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n",
+        ),
+        "all interfaces": (
+            '- "${DIVESAFE_LAN_ADDRESS:?',
+            '- "0.0.0.0:443:8443"\n      - "${DIVESAFE_LAN_ADDRESS:?',
+        ),
+        "a second port": (
+            'docker/production.env}:443:8443"\n',
+            'docker/production.env}:443:8443"\n      - "127.0.0.1:2019:2019"\n',
+        ),
+        "a default address": (
+            "${DIVESAFE_LAN_ADDRESS:?set DIVESAFE_LAN_ADDRESS in docker/production.env}",
+            "${DIVESAFE_LAN_ADDRESS:-0.0.0.0}",
+        ),
+        "a name default": (
+            "      DIVESAFE_WEB_LAN_NAME: ${DIVESAFE_WEB_LAN_NAME:?set",
+            "      DIVESAFE_WEB_LAN_NAME: ${DIVESAFE_WEB_LAN_NAME:-x.home.arpa}\n      X: ${X:?set",
+        ),
+    }
+    for label, (old, new) in bad.items():
+        assert raw.count(old) == 1, label
+        block = _blocks(_strip_comments(raw.replace(old, new)), "services")[CADDY]
+        assert _caddy_problems(block), label
+
+
+def test_the_caddy_healthcheck_is_exactly_this(services: dict[str, list[str]]) -> None:
+    """Only nc to caddy's two listeners: no admin API, no outbound call."""
+    block = services[CADDY]
+    start = block.index("    healthcheck:")
+    assert block[start + 1] == (
+        '      test: ["CMD-SHELL", "nc -z -w 2 10.231.81.10 8443 && nc -z -w 2 10.231.80.10 8080"]'
+    )
+
+
+def test_the_caddyfile_is_mounted_only_into_caddy(services: dict[str, list[str]]) -> None:
+    holders = {n for n, b in services.items() if "Caddyfile" in "\n".join(b)}
+    assert holders == {CADDY}
+    holders = {n for n, b in services.items() if "caddy-" in "\n".join(b)}
+    assert holders == {CADDY}
 
 
 def test_the_web_service_uses_the_web_image_and_is_locked_down(
@@ -1883,3 +2243,169 @@ def test_the_web_healthcheck_is_exactly_this(services: dict[str, list[str]]) -> 
         'fetch("http://127.0.0.1:3100/login",{signal:AbortSignal.timeout(3000)})',
         ".then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))",
     ]
+
+
+def _caddy_agreement_problems(compose_raw: str, caddyfile_raw: str) -> list[str]:
+    """Risk review: the Caddyfile and compose name the same addresses. Every address is read from
+    both files (compose without comments, the Caddyfile through the offline parser), never from a
+    constant, except Newt's: compose holds it only in a comment, so it comes from NEWT_ADDRESS,
+    which the networks test pins inside pangolin-edge and outside its ip_range. web's port comes
+    from its healthcheck URL, the one place compose names the port web listens on. The relay pair
+    is checked too: the api trusts exactly web's web-api address."""
+    from tests.safety.test_caddyfile import (
+        LAN_SITE,
+        PUBLIC_SITE,
+        REFUSAL_SITE,
+        _all_nodes,
+        _servers,
+        parse,
+    )
+
+    stripped = _strip_comments(compose_raw)
+    services = _blocks(stripped, "services")
+    fixed = _fixed_addresses(services)
+    edge_subnets = re.findall(
+        r"- subnet: (\S+)", "\n".join(_blocks(stripped, "networks").get("pangolin-edge", []))
+    )
+    web_ports = re.findall(
+        r'fetch\("http://127\.0\.0\.1:(\d+)/', "\n".join(services.get("web", []))
+    )
+    ingress = fixed.get((CADDY, "web-ingress"))
+    edge = fixed.get((CADDY, "pangolin-edge"))
+    web = fixed.get(("web", "web-proxy"))
+    parsed = parse(caddyfile_raw)
+    problems: list[str] = []
+
+    def binds(site: str) -> list[tuple[str, ...]]:
+        return [n.tokens for n in parsed.sites.get(site, []) if n.name == "bind"]
+
+    if binds(LAN_SITE) != [("bind", ingress)]:
+        problems.append(f"LAN site {binds(LAN_SITE)} is not caddy's web-ingress {ingress}")
+    for site in (PUBLIC_SITE, REFUSAL_SITE):
+        if binds(site) != [("bind", edge)]:
+            problems.append(f"{site} {binds(site)} is not caddy's pangolin-edge {edge}")
+    servers = _servers(parsed)
+    if set(servers) != {f"{ingress}:8443", f"{edge}:8080"}:
+        problems.append(f"servers {sorted(servers)} are not on caddy's addresses")
+    trusted = [t for t in servers.get(f"{edge}:8080", []) if t[0] == "trusted_proxies"]
+    if trusted != [("trusted_proxies", "static", f"{NEWT_ADDRESS}/32")]:
+        problems.append(f"trusted_proxies {trusted} is not Newt's {NEWT_ADDRESS}/32")
+    if len(edge_subnets) != 1:
+        problems.append(f"pangolin-edge subnets {edge_subnets} are not exactly one")
+    elif ipaddress.IPv4Address(edge or "0.0.0.0") not in ipaddress.IPv4Network(edge_subnets[0]):
+        problems.append(f"caddy's edge address {edge} is not on pangolin-edge {edge_subnets}")
+    elif ipaddress.IPv4Address(NEWT_ADDRESS) not in ipaddress.IPv4Network(edge_subnets[0]):
+        problems.append(f"Newt's {NEWT_ADDRESS} is not on pangolin-edge {edge_subnets}")
+    every = _all_nodes([n for site in parsed.sites.values() for n in site])
+    upstreams = {n.tokens[1:] for n in every if n.name == "reverse_proxy"}
+    port = web_ports[0] if len(web_ports) == 1 else None
+    if port is None or upstreams != {(f"{web}:{port}",)}:
+        problems.append(f"upstreams {upstreams} are not web's web-proxy {web}:{port}")
+    relay = fixed.get(("web", "web-api"))
+    trusted_by_api = _environment(services.get("api", [])).get("DIVESAFE_TRUSTED_PROXIES")
+    if relay is None or trusted_by_api != f'"{relay}"':
+        problems.append(f"the api trusts {trusted_by_api}, not web's web-api address {relay}")
+    block = services.get(CADDY, [])
+    tests = [x for x in block if x.lstrip().startswith("test:")]
+    probes = re.findall(r"nc -z -w 2 (\S+) (\d+)", tests[0]) if len(tests) == 1 else []
+    if sorted(probes) != sorted([(ingress, "8443"), (edge, "8080")]):
+        problems.append(f"healthcheck probes {probes} are not the two listeners")
+    return problems
+
+
+CADDYFILE_PATH = COMPOSE.parent / "Caddyfile"
+
+
+def test_the_caddyfile_and_compose_agree_on_every_address() -> None:
+    assert _caddy_agreement_problems(COMPOSE.read_text(), CADDYFILE_PATH.read_text()) == []
+
+
+# One address changed on one side only; each must be caught.
+AGREEMENT_MUTATIONS = {
+    "compose: caddy web-ingress": (
+        "compose",
+        "ipv4_address: 10.231.81.10",
+        "ipv4_address: 10.231.81.11",
+    ),
+    "compose: caddy pangolin-edge": (
+        "compose",
+        "ipv4_address: 10.231.80.10",
+        "ipv4_address: 10.231.80.11",
+    ),
+    "compose: web on web-proxy": (
+        "compose",
+        "ipv4_address: 10.231.79.20",
+        "ipv4_address: 10.231.79.21",
+    ),
+    "compose: healthcheck LAN": (
+        "compose",
+        "nc -z -w 2 10.231.81.10 8443",
+        "nc -z -w 2 10.231.81.12 8443",
+    ),
+    "compose: healthcheck edge": (
+        "compose",
+        "nc -z -w 2 10.231.80.10 8080",
+        "nc -z -w 2 10.231.80.12 8080",
+    ),
+    "caddyfile: LAN bind": ("caddyfile", "\tbind 10.231.81.10\n", "\tbind 10.231.81.11\n"),
+    "caddyfile: LAN server": (
+        "caddyfile",
+        "servers 10.231.81.10:8443",
+        "servers 10.231.81.11:8443",
+    ),
+    "caddyfile: public bind": (
+        "caddyfile",
+        "\tbind 10.231.80.10\n\timport to_web public",
+        "\tbind 10.231.80.11\n\timport to_web public",
+    ),
+    "caddyfile: refusal bind": (
+        "caddyfile",
+        "\tbind 10.231.80.10\n\tabort",
+        "\tbind 10.231.80.11\n\tabort",
+    ),
+    "caddyfile: trusted Newt": ("caddyfile", "static 10.231.80.20/32", "static 10.231.80.21/32"),
+    "compose: web on web-api": (
+        "compose",
+        "ipv4_address: 10.231.78.20",
+        "ipv4_address: 10.231.78.21",
+    ),
+    "compose: the api's trusted proxy": (
+        "compose",
+        'DIVESAFE_TRUSTED_PROXIES: "10.231.78.20"',
+        'DIVESAFE_TRUSTED_PROXIES: "10.231.78.21"',
+    ),
+    "compose: pangolin-edge subnet": (
+        "compose",
+        "- subnet: 10.231.80.0/24",
+        "- subnet: 10.231.82.0/24",
+    ),
+    "compose: web's port": (
+        "compose",
+        'fetch("http://127.0.0.1:3100/login"',
+        'fetch("http://127.0.0.1:3101/login"',
+    ),
+    "caddyfile: upstream port": (
+        "caddyfile",
+        "reverse_proxy 10.231.79.20:3100",
+        "reverse_proxy 10.231.79.20:3101",
+    ),
+    "caddyfile: upstream": (
+        "caddyfile",
+        "reverse_proxy 10.231.79.20:3100",
+        "reverse_proxy 10.231.79.21:3100",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("side", "old", "new"), list(AGREEMENT_MUTATIONS.values()), ids=list(AGREEMENT_MUTATIONS)
+)
+def test_the_agreement_check_catches_one_side_changed(side: str, old: str, new: str) -> None:
+    compose, caddyfile = COMPOSE.read_text(), CADDYFILE_PATH.read_text()
+    if side == "compose":
+        assert compose.count(old) == 1, old
+        compose = compose.replace(old, new)
+    else:
+        assert caddyfile.count(old) == 1, old
+        caddyfile = caddyfile.replace(old, new)
+    assert _caddy_agreement_problems(compose, caddyfile) != []

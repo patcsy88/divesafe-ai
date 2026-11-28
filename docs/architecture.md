@@ -251,17 +251,24 @@ Tracked items not yet built (each needs an ADR or design before implementation):
   `decided_by_creator`. `admin` moves a pending assessment to another decider (ADR 0026, built,
   migration 5). `groups` scope what a viewer key may read (ADR 0026, built). Key rotation and revocation are manual (edit the
   configured hashes).
-- **TLS and deployment hardening:** the app speaks plain HTTP; run it behind a TLS terminator. No
-  request-size or per-client rate limits beyond the provider-limit guard. Before the API is made
-  reachable from off the machine (reverse proxy, tunnel, LAN binding), the owner must decide again
-  on the `patcsy88` API key, which was sent to a third party on 2026-11-20 and kept by owner
-  decision (ADR 0024 A8).
-  Planned (ADR 0024 Amendment 2, 2026-11-24, not built): the web UI behind Caddy on the home
-  network and as a Pangolin public resource. The owner's Pangolin server then ends TLS for the
-  public name and reads every page, the API key typed at sign-in and the session cookie in clear;
-  it is in the trust path. The owner accepted the A8 key again (#102b), resting on Pangolin
-  authentication (#110a) and the LAN; the preconditions before the public resource is enabled are
-  in that amendment.
+- **TLS and deployment hardening:** the API speaks plain HTTP; run it behind a TLS terminator. No
+  request-size or per-client rate limits at the API beyond the provider-limit guard. Before the
+  API is made reachable from off the machine (reverse proxy, tunnel, LAN binding), the owner must
+  decide again on the `patcsy88` API key, which was sent to a third party on 2026-11-20 and kept
+  by owner decision (ADR 0024 A8).
+  Built in code by the Caddy PR (2026-11-28), not yet deployed (ADR 0017 amendment 2026-11-24,
+  ADR 0024 Amendment 2): the web UI behind Caddy, `https://<name>.home.arpa` on the home network
+  with Caddy's local CA, and plain http to Newt for the Pangolin public resource; web has no
+  published port and no route out, and trusts `X-Forwarded-For` from Caddy, which sets exactly
+  one address: the device's on the home network, or the one Pangolin reports on the public path
+  (so Pangolin is trusted there); the API trusts web's fixed address only; a `__Host-` session
+  cookie, HSTS from web, request-size and timeout limits, and a 14-day access log with credential
+  headers redacted. Caddy now has the route out. Still open: the nonce CSP, per-session
+  revocation and relay fairness (ADR 0017, R8 and R9). The owner's Pangolin server then ends TLS
+  for the public name and reads every page, the API key typed at sign-in and the session cookie
+  in clear; it is in the trust path. The owner accepted the A8 key again (#102b), resting on
+  Pangolin authentication (#110a) and the LAN; the preconditions before the public resource is
+  enabled are in that amendment.
 - **Real LLM adapters and their evaluation:** the prompt layer, strict output validation and the
   egress flag exist (ADR 0007). An offline-tested evaluation harness (ADR 0016) and an OpenAI-compatible
   adapter (ADR 0018) exist; the Ollama adapter was removed (ADR 0016 amendment). Small live runs on
