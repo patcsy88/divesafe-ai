@@ -17,8 +17,8 @@
 # Build only from the commit you deploy. Never use --build or `build` with --profile knowledge:
 # the loaders share the api image tag, so a build there would replace the running api's image.
 #
-# What is NOT here: TLS in front of the API and the web UI (put your own reverse proxy in front of
-# 127.0.0.1:8000 and 127.0.0.1:3100), a backup schedule (docker/backup.sh and restore.sh exist:
+# What is NOT here: TLS in front of the API (put your own reverse proxy in front of 127.0.0.1:8000;
+# the web UI is behind the caddy service, ADR 0017 Amendment 2026-11-24), a backup schedule (docker/backup.sh and restore.sh exist:
 # docs/backup-and-restore.md), and the signed ruleset itself (a host file outside the repository,
 # mounted read-only into the api).
 # No secret is in this file or passed through the environment: each one is mounted as a file into
@@ -147,7 +147,12 @@ services:
       DIVESAFE_EVIDENCE_MAX_AGE_MINUTES: ${DIVESAFE_EVIDENCE_MAX_AGE_MINUTES:?set DIVESAFE_EVIDENCE_MAX_AGE_MINUTES in docker/production.env}
       # Owner decision 2026-10-18: 180 minutes. Overriding the default needs a recorded reason.
       DIVESAFE_DECISION_MAX_AGE_MINUTES: ${DIVESAFE_DECISION_MAX_AGE_MINUTES:-180}
-      DIVESAFE_TRUSTED_PROXIES: ${DIVESAFE_TRUSTED_PROXIES:-}
+      # web's fixed address on web-api, and nothing else (ADR 0017 Amendment 2026-11-24). Not read
+      # from production.env, so it cannot be widened there.
+      # The API keeps an X-Request-ID from a trusted proxy, and web never forwards a client's: it
+      # sends only Accept, Authorization, X-Forwarded-For, Content-Type and Idempotency-Key
+      # (pinned by web/tests/login.test.ts).
+      DIVESAFE_TRUSTED_PROXIES: "10.231.78.20"
       # ADR 0027 item 2: scrapes of /metrics per key per minute (operational, not a safety limit).
       DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE: ${DIVESAFE_RATE_LIMIT_METRICS_PER_MINUTE:-30}
       # ADR 0027 amendment: off unless production.env sets both; start-up refuses either alone,
@@ -229,8 +234,8 @@ services:
   #   C up -d --build --wait web
   # Roll back by tagging the old image as divesafe-web:local and `C up -d --no-build --wait web`.
   # Its two secrets are files, like every other secret (owner #50a); docker/web-start.cjs reads them
-  # at start, never at build (owner #47a). Published on 127.0.0.1 only; put your own TLS proxy in
-  # front (owner #18a).
+  # at start, never at build (owner #47a). Not published: its only way in is the caddy service
+  # (ADR 0017 Amendment 2026-11-24).
   web:
     build:
       context: ..
@@ -244,20 +249,26 @@ services:
       # The web server accepts http on loopback only; the launcher's relay forwards it to the API
       # (owner #48a, #55a).
       DIVESAFE_API_URL: http://127.0.0.1:8000
-      # Set to 1 only once a TLS proxy you control sets X-Forwarded-For (owner #18a).
-      DIVESAFE_WEB_TRUST_PROXY: "0"
+      # Caddy is web's only way in and sets X-Forwarded-For to exactly one address: the device's on
+      # the home network, or the one Pangolin reports on the public path (so Pangolin is trusted
+      # there). web believes it. Never 1 while anything else can reach web's port.
+      DIVESAFE_WEB_TRUST_PROXY: "1"
+      # The Host names web answers to: the two Caddy sites and the healthcheck's loopback name.
+      # web refuses to start if this is missing or empty.
+      DIVESAFE_WEB_ALLOWED_HOSTS: "${DIVESAFE_WEB_LAN_NAME:?set DIVESAFE_WEB_LAN_NAME in docker/production.env},${DIVESAFE_WEB_PUBLIC_NAME:?set DIVESAFE_WEB_PUBLIC_NAME in docker/production.env},127.0.0.1:3100"
     secrets:
       - source: web_session_secret
         target: divesafe_web_session_secret
       - source: web_actions_key
         target: divesafe_web_actions_key
-    # web-ingress is not internal, because Docker cannot publish a port from an internal network,
-    # so this container has a route out (owner #49a, an ADR 0017 Known gap). Its own code calls
-    # only DIVESAFE_API_URL. If web-api were dropped here, the relay's connection to the API's
-    # address would leave through web-ingress instead, so the tests pin both networks.
-    networks: [web-ingress, web-api]
-    ports:
-      - "127.0.0.1:3100:3100"
+    # Both networks are internal, so web has no route out. Fixed addresses outside each ip_range:
+    # caddy dials 10.231.79.20 (never the name `web`, since caddy has a route out), and the API
+    # trusts X-Forwarded-For from 10.231.78.20 only.
+    networks:
+      web-proxy:
+        ipv4_address: 10.231.79.20
+      web-api:
+        ipv4_address: 10.231.78.20
     healthcheck:
       test:
         - CMD
@@ -273,6 +284,58 @@ services:
     read_only: true
     tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
     mem_limit: 512m
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The TLS proxy in front of web, and web's only way in (ADR 0017 Amendment 2026-11-24, ADR 0024
+  # Amendment 2). Two sites, no catch-all (docker/Caddyfile): <name>.home.arpa with Caddy's local
+  # CA on the published LAN port, and the public name as plain http for Newt on pangolin-edge.
+  # The admin endpoint is off. Start it on its own after web:
+  #   C up -d --wait caddy
+  # The local CA's root is in the caddy-data volume (pki/authorities/local/root.crt): install it on
+  # each device that uses the LAN name. Access logs are in the same volume (logs/), 14 days.
+  caddy:
+    # The official image, pinned by digest (multi-arch index of caddy:2.11.9-alpine).
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    restart: unless-stopped
+    # Unprivileged: it listens on 8443 and 8080 only. The image's /data/caddy and /config/caddy
+    # are mode 1777, and Docker copies that into a new volume, so nobody can write there.
+    user: "65534:65534"
+    environment:
+      DIVESAFE_WEB_LAN_NAME: ${DIVESAFE_WEB_LAN_NAME:?set DIVESAFE_WEB_LAN_NAME in docker/production.env}
+      DIVESAFE_WEB_PUBLIC_NAME: ${DIVESAFE_WEB_PUBLIC_NAME:?set DIVESAFE_WEB_PUBLIC_NAME in docker/production.env}
+    # The long form refuses a missing host file; the short form would create a directory there.
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - caddy-data:/data
+      - caddy-config:/config
+    # Fixed addresses, each outside its network's ip_range; the two sites bind to the first two.
+    networks:
+      web-ingress:
+        ipv4_address: 10.231.81.10
+      pangolin-edge:
+        ipv4_address: 10.231.80.10
+      web-proxy:
+        ipv4_address: 10.231.79.10
+    # The VM's LAN address only; never 0.0.0.0, and no other port.
+    ports:
+      - "${DIVESAFE_LAN_ADDRESS:?set DIVESAFE_LAN_ADDRESS in docker/production.env}:443:8443"
+    # Both listeners accept connections. No admin API is needed.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z -w 2 10.231.81.10 8443 && nc -z -w 2 10.231.80.10 8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid,nodev"]
+    mem_limit: 256m
     pids_limit: 256
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -345,11 +408,35 @@ networks:
     internal: true
   # Outbound access for the API only (the model host and the data sources).
   egress: {}
-  # The web UI's published port (ADR 0017). Not internal: Docker cannot publish a port from an
-  # internal network (owner #49a).
-  web-ingress: {}
+  # Caddy's published LAN port, and caddy only (ADR 0017 Amendment 2026-11-24). Not internal:
+  # Docker cannot publish a port from an internal network (owner #49a), so caddy has a route out.
+  # caddy has the fixed address 10.231.81.10, outside `ip_range`, and the LAN site binds to it.
+  web-ingress:
+    ipam:
+      config:
+        - subnet: 10.231.81.0/24
+          ip_range: 10.231.81.128/25
+  # No route out: caddy to web only. caddy has 10.231.79.10 and web 10.231.79.20, both outside
+  # `ip_range`.
+  web-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.79.0/24
+          ip_range: 10.231.79.128/25
+  # No route out: Newt to caddy's plain-http public site only (#100a). caddy (10.231.80.10) is the
+  # only service of this project on it; Newt joins it from its own compose as `external: true`,
+  # at 10.231.80.20, the one address caddy's public listener trusts. Both are outside `ip_range`.
+  pangolin-edge:
+    name: pangolin-edge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.80.0/24
+          ip_range: 10.231.80.128/25
   # No route out: the web launcher's relay to the API only. The API has the fixed address
-  # 10.231.78.10, outside `ip_range`, so no other container is ever given it (owner #52a). The
+  # 10.231.78.10 and web 10.231.78.20, both outside `ip_range`, so no other container is ever
+  # given them (owner #52a); the API trusts X-Forwarded-For from 10.231.78.20 only. The
   # subnet avoids the LAN, Tailscale, Docker Desktop's ranges and divesafe-trace; no test can see
   # a host route, so check `netstat -rn` on a new host.
   web-api:
@@ -374,6 +461,9 @@ networks:
 volumes:
   db-data:
   db-tls:
+  # Caddy's local CA (its key included), its certificates and the access logs.
+  caddy-data:
+  caddy-config:
 
 secrets:
   db_bootstrap_password:

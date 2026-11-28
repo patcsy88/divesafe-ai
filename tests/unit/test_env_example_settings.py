@@ -34,8 +34,17 @@ def test_a_removed_setting_in_the_example_would_be_caught() -> None:
 
 PRODUCTION_EXAMPLE = EXAMPLE.parent / "docker" / "production.env.example"
 COMPOSE = EXAMPLE.parent / "docker" / "docker-compose.production.yml"
-# Read by Docker Compose (bind-mount sources), never by `Settings`.
-COMPOSE_ONLY = frozenset({"DIVESAFE_CORPUS_DIR", "DIVESAFE_RULESET_FILE"})
+# Read by Docker Compose (bind-mount sources, caddy's published address, and the two site names
+# that caddy and web's host list are filled in from), never by `Settings`.
+COMPOSE_ONLY = frozenset(
+    {
+        "DIVESAFE_CORPUS_DIR",
+        "DIVESAFE_RULESET_FILE",
+        "DIVESAFE_LAN_ADDRESS",
+        "DIVESAFE_WEB_LAN_NAME",
+        "DIVESAFE_WEB_PUBLIC_NAME",
+    }
+)
 
 
 def test_every_setting_in_the_production_env_example_is_a_settings_field_or_compose_only() -> None:

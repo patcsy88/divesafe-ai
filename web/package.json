@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3100",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:e2e": "node --experimental-strip-types --test tests/*.e2e.ts"
   },
   "dependencies": {
     "@heroui/react": "3.2.7",

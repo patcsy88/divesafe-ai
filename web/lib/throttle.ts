@@ -2,8 +2,8 @@ import { isIP } from "node:net";
 
 // A failed-sign-in limit for the web server, in this process only (one instance; counters are not
 // shared across replicas or restarts). It must trip before the API's own failed-authentication
-// limit (10 a minute by default), because behind this server every person reaches the API from one
-// address and the API would otherwise refuse them all.
+// limit (10 a minute by default): without a trusted proxy every person reaches the API from this
+// server's one address, and the API would otherwise refuse them all.
 export const MAX_FAILURES = 5;
 export const WINDOW_MS = 60_000;
 export const MAX_TRACKED = 5_000;

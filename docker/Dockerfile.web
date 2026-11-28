@@ -41,6 +41,7 @@ COPY --chmod=u=rwX,go=rX docker/web-start.cjs ./web-start.cjs
 
 USER node
 EXPOSE 3100
-# Inside the container it listens on all of its own interfaces; compose publishes it on
-# 127.0.0.1 only (owner #18). web-start.cjs runs `next start -H 0.0.0.0 -p 3100`.
+# Inside the container it listens on all of its own interfaces; compose publishes no port, so it
+# is reachable only from Caddy (web-proxy) and the API network (web-api). web-start.cjs runs
+# `next start -H 0.0.0.0 -p 3100`.
 CMD ["node", "web-start.cjs"]

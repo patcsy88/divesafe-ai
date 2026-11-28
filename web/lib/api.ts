@@ -1,3 +1,4 @@
+import { clientAddress } from "./client.ts";
 import { API_TIMEOUT_MS, apiBaseUrl } from "./config.ts";
 import { plain } from "./present.ts";
 import { classify, idOf, type Fetched } from "./status.ts";
@@ -70,14 +71,16 @@ export function isRead(init: RequestInit): boolean {
   return init.body === undefined && (init.method ?? "GET").toUpperCase() === "GET";
 }
 
+// Every call to the API goes through here, so every one carries the person's address when the proxy
+// is trusted; the API believes it only if it is configured to trust this server.
 async function call(
   path: string,
   key: string,
   init: RequestInit = {},
-  source?: string,
   idempotencyKey?: string,
 ): Promise<unknown> {
   const read = isRead(init);
+  const source = await clientAddress();
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl()}${path}`, {
@@ -115,13 +118,11 @@ async function call(
   return body;
 }
 
-// `source` is the person's address, passed on so the API counts failures against them and not
-// against this server. The API believes it only if it is configured to trust this server.
-export async function checkKey(key: string, source?: string): Promise<void> {
+export async function checkKey(key: string): Promise<void> {
   // 401 means the key is unknown. 403 means it is valid but lacks the viewer role, which is
   // acceptable here: roles are independent and an assessor may not be able to read.
   try {
-    await call("/v1/sites", key, {}, source);
+    await call("/v1/sites", key);
   } catch (error) {
     if (error instanceof ApiError && error.status === 403 && error.refused) return;
     throw error;
@@ -156,7 +157,6 @@ export async function createAssessment(
       "/v1/assessments",
       key,
       { method: "POST", body: JSON.stringify(body) },
-      undefined,
       retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
     ),
   );
@@ -210,7 +210,6 @@ export async function recordDecision(
     `/v1/assessments/${encodeURIComponent(id)}/decision`,
     key,
     { method: "POST", body: JSON.stringify(body) },
-    undefined,
     retryKey && RETRY_KEY.test(retryKey) ? retryKey : undefined,
   )) as AssessmentView;
 }

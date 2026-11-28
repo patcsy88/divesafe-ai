@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { checkKey } from "../lib/api.ts";
+import { readHeadersWith } from "../lib/client.ts";
 
 const real = globalThis.fetch;
 afterEach(() => {
@@ -38,15 +39,33 @@ test("an unknown key and an unreachable API do not sign in", async () => {
   await assert.rejects(() => checkKey("wrong-key-xxxx"), /did not answer/);
 });
 
-test("the person's address is passed on only when there is one", async () => {
+// Security review R2: the address goes with every API call, and only when the proxy is trusted.
+test("the person's address is passed on only when the proxy is trusted and there is one", async () => {
   const seen: Array<string | null> = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     seen.push(new Headers(init?.headers).get("x-forwarded-for"));
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
-  await checkKey("a-valid-key-123", "203.0.113.9");
-  await checkKey("a-valid-key-123");
-  assert.deepEqual(seen, ["203.0.113.9", null]);
+  const before = process.env.DIVESAFE_WEB_TRUST_PROXY;
+  try {
+    readHeadersWith(async () => "203.0.113.9");
+    process.env.DIVESAFE_WEB_TRUST_PROXY = "1";
+    await checkKey("a-valid-key-123");
+    readHeadersWith(async () => null);
+    await checkKey("a-valid-key-123");
+    readHeadersWith(async () => "not-an-address");
+    await checkKey("a-valid-key-123");
+    readHeadersWith(async () => "203.0.113.9");
+    delete process.env.DIVESAFE_WEB_TRUST_PROXY;
+    await checkKey("a-valid-key-123");
+    process.env.DIVESAFE_WEB_TRUST_PROXY = "0";
+    await checkKey("a-valid-key-123");
+  } finally {
+    readHeadersWith(null);
+    if (before === undefined) delete process.env.DIVESAFE_WEB_TRUST_PROXY;
+    else process.env.DIVESAFE_WEB_TRUST_PROXY = before;
+  }
+  assert.deepEqual(seen, ["203.0.113.9", null, null, null, null]);
 });
 
 test("a rate-limit answer from the API is not shown as a wrong key", async () => {
@@ -67,4 +86,47 @@ test("a server error at sign-in says neither that nothing was recorded nor that 
     throw new Error("down");
   }) as typeof fetch;
   await assert.rejects(() => checkKey("a-valid-key-123"), fair);
+});
+
+// Security review R2, and risk review round 2: every call carries the person's address, and web
+// sends only these headers, so a client's own X-Request-ID (which the API keeps from a trusted
+// proxy) or anything else it sent never reaches the API.
+test("every API call sends exactly the expected headers, with the person's address", async () => {
+  const { createAssessment, getAssessment, getEvidence, listSites, recordDecision, recordActualConditions } =
+    await import("../lib/api.ts");
+  const id = "0123456789abcdef0123456789abcdef";
+  const retry = "00000000-0000-4000-8000-000000000000";
+  const seen: Array<[string, Record<string, string>]> = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    seen.push([String(url).replace(/^https?:\/\/[^/]+/, ""), Object.fromEntries(new Headers(init?.headers))]);
+    const path = String(url);
+    const body = path.endsWith("/evidence") ? { assessment_id: id } : { id, status: "PENDING_HUMAN" };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const before = process.env.DIVESAFE_WEB_TRUST_PROXY;
+  try {
+    readHeadersWith(async (name) => (name === "x-forwarded-for" ? "203.0.113.9" : "attacker-value"));
+    process.env.DIVESAFE_WEB_TRUST_PROXY = "1";
+    const calls: Array<() => Promise<unknown>> = [
+      () => checkKey("a-valid-key-123"),
+      () => listSites("a-valid-key-123"),
+      () => getAssessment("a-valid-key-123", id),
+      () => getEvidence("a-valid-key-123", id),
+      () => createAssessment("a-valid-key-123", {} as never, retry),
+      () => recordDecision("a-valid-key-123", id, { decision: "NO-GO" }, retry),
+      () => recordActualConditions("a-valid-key-123", id, { wave_height_m: 1 }),
+    ];
+    for (const run of calls) await run().catch(() => undefined);
+  } finally {
+    readHeadersWith(null);
+    if (before === undefined) delete process.env.DIVESAFE_WEB_TRUST_PROXY;
+    else process.env.DIVESAFE_WEB_TRUST_PROXY = before;
+  }
+  assert.equal(seen.length, 7, seen.map(([p]) => p).join(" "));
+  const read = { accept: "application/json", authorization: "Bearer a-valid-key-123", "x-forwarded-for": "203.0.113.9" };
+  const write = { ...read, "content-type": "application/json" };
+  assert.deepEqual(
+    seen.map(([, h]) => h),
+    [read, read, read, read, { ...write, "idempotency-key": retry }, { ...write, "idempotency-key": retry }, write],
+  );
 });
